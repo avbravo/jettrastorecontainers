@@ -2,6 +2,7 @@ package io.jettra.store.core;
 
 import io.jettra.store.cluster.ClusterNode;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 import java.io.InputStream;
@@ -12,8 +13,10 @@ import java.util.Properties;
 
 public final class JettraStoreConfig {
     private final String nodeId;
+    private final String nodeIp;
     private final ClusterNode.Role nodeRole;
     private final String clusterPeers;
+    private final List<ClusterNode> parsedPeers;
     private final String rawConfiguredPath;
     private final String storagePath;
     private final int memTableSizeMb;
@@ -44,7 +47,6 @@ public final class JettraStoreConfig {
     private final int queryMaxLimit;
     private final int queryPageSize;
 
-
     private static String getPropOrEnv(Properties props, String sysProp, String envVar, String defaultVal) {
         String sys = System.getProperty(sysProp);
         if (sys != null && !sys.isBlank()) return sys;
@@ -54,15 +56,50 @@ public final class JettraStoreConfig {
     }
 
     public JettraStoreConfig(Properties props) {
+        this(props, new Properties());
+    }
+
+    public JettraStoreConfig(Properties props, Properties clusterProps) {
+        Properties effectiveClusterProps = clusterProps != null ? clusterProps : new Properties();
+        List<JettraConfigValidator.ClusterNodeInfo> clusterNodes = JettraConfigValidator.parseClusterNodes(effectiveClusterProps);
+
         this.nodeId = getPropOrEnv(props, "jettra.cluster.node.id", "JETTRA_NODE_ID", "node-01");
-        String roleStr = getPropOrEnv(props, "jettra.cluster.node.role", "JETTRA_NODE_ROLE", "PRIMARY");
+
+        // Sincronizar con el nodo correspondiente en jettra.config si existe
+        JettraConfigValidator.ClusterNodeInfo currentNode = null;
+        for (JettraConfigValidator.ClusterNodeInfo n : clusterNodes) {
+            if (n.id().equalsIgnoreCase(this.nodeId)) {
+                currentNode = n;
+                break;
+            }
+        }
+
+        String defaultRole = (currentNode != null && currentNode.role() != null) ? currentNode.role() : "PRIMARY";
+        String roleStr = getPropOrEnv(props, "jettra.cluster.node.role", "JETTRA_NODE_ROLE", defaultRole);
         this.nodeRole = "PRIMARY".equalsIgnoreCase(roleStr) ? ClusterNode.Role.PRIMARY : ClusterNode.Role.SECONDARY;
+
+        String defaultIp = (currentNode != null && currentNode.ip() != null && !currentNode.ip().isBlank())
+            ? currentNode.ip() : "127.0.0.1";
+        this.nodeIp = getPropOrEnv(props, "jettra.network.ip", "JETTRA_NODE_IP",
+            getPropOrEnv(props, "jettra.cluster.node.ip", "JETTRA_IP", defaultIp));
+
+        int defaultGrpc = (currentNode != null) ? currentNode.grpcPort() : 9091;
+        this.grpcPort = Integer.parseInt(getPropOrEnv(props, "jettra.network.grpc.port", "JETTRA_GRPC_PORT", String.valueOf(defaultGrpc)));
+
+        int defaultRest = (currentNode != null) ? currentNode.restPort() : 8080;
+        this.restPort = Integer.parseInt(getPropOrEnv(props, "jettra.network.rest.port", "JETTRA_REST_PORT", String.valueOf(defaultRest)));
+
         this.clusterPeers = getPropOrEnv(props, "jettra.cluster.peers", "JETTRA_CLUSTER_PEERS", "");
-        String multinodeStr = getPropOrEnv(props, "cluster.multinode.active", "JETTRA_CLUSTER_MULTINODE_ACTIVE", "on").trim();
+
+        String defaultMultinode = (clusterProps != null && clusterProps.containsKey("cluster.multinode.active"))
+            ? clusterProps.getProperty("cluster.multinode.active", "on") : "on";
+        String multinodeStr = getPropOrEnv(props, "cluster.multinode.active", "JETTRA_CLUSTER_MULTINODE_ACTIVE", defaultMultinode).trim();
         this.clusterMultinodeActive = "on".equalsIgnoreCase(multinodeStr) || "true".equalsIgnoreCase(multinodeStr);
 
+        String defaultStorage = (currentNode != null && currentNode.storagePath() != null && !currentNode.storagePath().isBlank())
+            ? currentNode.storagePath() : "/jettra/data";
         String configuredPath = getPropOrEnv(props, "jettra.storage.path", "JETTRA_STORAGE_PATH", 
-            props.getProperty("jettra.storage.path", "/jettra/data"));
+            props.getProperty("jettra.storage.path", defaultStorage));
         this.rawConfiguredPath = configuredPath;
         
         String resolvedPath = configuredPath;
@@ -118,8 +155,6 @@ public final class JettraStoreConfig {
         this.jwtExpirationSeconds = Long.parseLong(props.getProperty("jettra.security.jwt.expiration.seconds", "86400"));
         this.defaultAdminUsername = getPropOrEnv(props, "jettra.security.default.admin.username", "JETTRA_ADMIN_USERNAME", "admin");
         this.defaultAdminPassword = getPropOrEnv(props, "jettra.security.default.admin.password", "JETTRA_ADMIN_PASSWORD", "admin-jettra");
-        this.grpcPort = Integer.parseInt(getPropOrEnv(props, "jettra.network.grpc.port", "JETTRA_GRPC_PORT", "9091"));
-        this.restPort = Integer.parseInt(getPropOrEnv(props, "jettra.network.rest.port", "JETTRA_REST_PORT", "8080"));
 
         this.indexInitialCapacity = Integer.parseInt(props.getProperty("jettra.index.initial.capacity", "65536"));
         this.indexMaxInMemoryKeys = Integer.parseInt(props.getProperty("jettra.index.max.inmemory.keys", "100000"));
@@ -134,34 +169,55 @@ public final class JettraStoreConfig {
         this.queryDefaultLimit = Integer.parseInt(props.getProperty("jettra.query.default.limit", "50"));
         this.queryMaxLimit = Integer.parseInt(props.getProperty("jettra.query.max.limit", "5000"));
         this.queryPageSize = Integer.parseInt(props.getProperty("jettra.query.pagesize", "50"));
+
+        // Resolver pares del clúster con IPs y puertos configurados
+        List<ClusterNode> peersList = new ArrayList<>();
+        if (this.clusterPeers != null && !this.clusterPeers.isBlank()) {
+            for (String entry : this.clusterPeers.split(",")) {
+                String[] p = entry.trim().split(":");
+                if (p.length >= 3) {
+                    String id = p[0].trim();
+                    String host = p[1].trim();
+                    int port = Integer.parseInt(p[2].trim());
+                    ClusterNode.Role role = (p.length >= 4 && "PRIMARY".equalsIgnoreCase(p[3].trim())) 
+                        ? ClusterNode.Role.PRIMARY : ClusterNode.Role.SECONDARY;
+                    peersList.add(new ClusterNode(id, host, port, role));
+                }
+            }
+        } else if (!clusterNodes.isEmpty()) {
+            for (JettraConfigValidator.ClusterNodeInfo node : clusterNodes) {
+                if (!node.id().equalsIgnoreCase(this.nodeId)) {
+                    ClusterNode.Role peerRole = "PRIMARY".equalsIgnoreCase(node.role()) 
+                        ? ClusterNode.Role.PRIMARY : ClusterNode.Role.SECONDARY;
+                    peersList.add(new ClusterNode(node.id(), node.ip(), node.grpcPort(), peerRole));
+                }
+            }
+        }
+        if (peersList.isEmpty()) {
+            if ("node-01".equalsIgnoreCase(this.nodeId)) {
+                peersList.add(new ClusterNode("node-02", "127.0.0.1", 9091, ClusterNode.Role.SECONDARY));
+                peersList.add(new ClusterNode("node-03", "127.0.0.1", 9091, ClusterNode.Role.SECONDARY));
+            } else if ("node-02".equalsIgnoreCase(this.nodeId)) {
+                peersList.add(new ClusterNode("node-01", "127.0.0.1", 9091, ClusterNode.Role.PRIMARY));
+                peersList.add(new ClusterNode("node-03", "127.0.0.1", 9091, ClusterNode.Role.SECONDARY));
+            } else if ("node-03".equalsIgnoreCase(this.nodeId)) {
+                peersList.add(new ClusterNode("node-01", "127.0.0.1", 9091, ClusterNode.Role.PRIMARY));
+                peersList.add(new ClusterNode("node-02", "127.0.0.1", 9091, ClusterNode.Role.SECONDARY));
+            }
+        }
+        this.parsedPeers = Collections.unmodifiableList(peersList);
     }
 
     public static JettraStoreConfig load() {
         JettraConfigValidator.ensureConfigFilesExist();
-        Properties props = new Properties();
-        // 1. Cargar defaults de resources del classpath
-        try (InputStream is = JettraStoreConfig.class.getResourceAsStream("/database.properties")) {
-            if (is != null) {
-                props.load(is);
-            }
-        } catch (IOException ignored) {}
 
-        // 2. Sobrescribir con archivo externo config/database.properties o database.properties si existe
-        Path externalConfig = Path.of("config/database.properties");
-        if (Files.exists(externalConfig)) {
-            try (InputStream is = Files.newInputStream(externalConfig)) {
-                props.load(is);
-            } catch (IOException ignored) {}
-        } else {
-            Path currentConfig = Path.of("database.properties");
-            if (Files.exists(currentConfig)) {
-                try (InputStream is = Files.newInputStream(currentConfig)) {
-                    props.load(is);
-                } catch (IOException ignored) {}
-            }
-        }
+        Path dbPath = JettraConfigValidator.locateDatabasePropertiesFile();
+        Path clusterPath = JettraConfigValidator.locateJettraConfigFile();
 
-        return new JettraStoreConfig(props);
+        Properties dbProps = JettraConfigValidator.loadProperties(dbPath, "/database.properties");
+        Properties clusterProps = JettraConfigValidator.loadProperties(clusterPath, "/jettra.config");
+
+        return new JettraStoreConfig(dbProps, clusterProps);
     }
 
     public String getConfiguredStoragePath() { return rawConfiguredPath; }
@@ -182,6 +238,7 @@ public final class JettraStoreConfig {
     public String getDefaultAdminPassword() { return defaultAdminPassword; }
     public int getGrpcPort() { return grpcPort; }
     public int getRestPort() { return restPort; }
+    public String getNodeIp() { return nodeIp; }
 
     public int getIndexInitialCapacity() { return indexInitialCapacity; }
     public int getIndexMaxInMemoryKeys() { return indexMaxInMemoryKeys; }
@@ -200,32 +257,6 @@ public final class JettraStoreConfig {
     public String getClusterPeers() { return clusterPeers; }
 
     public List<ClusterNode> getParsedPeers() {
-        List<ClusterNode> list = new ArrayList<>();
-        if (clusterPeers != null && !clusterPeers.isBlank()) {
-            for (String entry : clusterPeers.split(",")) {
-                String[] p = entry.trim().split(":");
-                if (p.length >= 3) {
-                    String id = p[0].trim();
-                    String host = p[1].trim();
-                    int port = Integer.parseInt(p[2].trim());
-                    ClusterNode.Role role = (p.length >= 4 && "PRIMARY".equalsIgnoreCase(p[3].trim())) 
-                        ? ClusterNode.Role.PRIMARY : ClusterNode.Role.SECONDARY;
-                    list.add(new ClusterNode(id, host, port, role));
-                }
-            }
-        }
-        if (list.isEmpty()) {
-            if ("node-01".equalsIgnoreCase(nodeId)) {
-                list.add(new ClusterNode("node-02", "jettra-node-02", 9091, ClusterNode.Role.SECONDARY));
-                list.add(new ClusterNode("node-03", "jettra-node-03", 9091, ClusterNode.Role.SECONDARY));
-            } else if ("node-02".equalsIgnoreCase(nodeId)) {
-                list.add(new ClusterNode("node-01", "jettra-node-01", 9091, ClusterNode.Role.PRIMARY));
-                list.add(new ClusterNode("node-03", "jettra-node-03", 9091, ClusterNode.Role.SECONDARY));
-            } else if ("node-03".equalsIgnoreCase(nodeId)) {
-                list.add(new ClusterNode("node-01", "jettra-node-01", 9091, ClusterNode.Role.PRIMARY));
-                list.add(new ClusterNode("node-02", "jettra-node-02", 9091, ClusterNode.Role.SECONDARY));
-            }
-        }
-        return list;
+        return parsedPeers;
     }
 }

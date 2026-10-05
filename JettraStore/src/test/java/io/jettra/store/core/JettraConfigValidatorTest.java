@@ -22,21 +22,21 @@ public class JettraConfigValidatorTest {
         props.setProperty("cluster.node.1.ip", "127.0.0.1");
         props.setProperty("cluster.node.1.grpc.port", "9091");
         props.setProperty("cluster.node.1.rest.port", "8080");
-        props.setProperty("cluster.node.1.storage.path", "~/jettra/node-01/data");
+        props.setProperty("cluster.node.1.storage.path", "~/jettra/data");
 
         props.setProperty("cluster.node.2.id", "node-02");
         props.setProperty("cluster.node.2.role", "SECONDARY");
         props.setProperty("cluster.node.2.ip", "127.0.0.1");
         props.setProperty("cluster.node.2.grpc.port", "9092");
         props.setProperty("cluster.node.2.rest.port", "8082");
-        props.setProperty("cluster.node.2.storage.path", "~/jettra/node-02/data");
+        props.setProperty("cluster.node.2.storage.path", "~/jettra/data");
 
         props.setProperty("cluster.node.3.id", "node-03");
         props.setProperty("cluster.node.3.role", "SECONDARY");
         props.setProperty("cluster.node.3.ip", "127.0.0.1");
         props.setProperty("cluster.node.3.grpc.port", "9093");
         props.setProperty("cluster.node.3.rest.port", "8083");
-        props.setProperty("cluster.node.3.storage.path", "~/jettra/node-03/data");
+        props.setProperty("cluster.node.3.storage.path", "~/jettra/data");
 
         return props;
     }
@@ -44,10 +44,10 @@ public class JettraConfigValidatorTest {
     private Properties createValidDatabaseProperties() {
         Properties props = new Properties();
         props.setProperty("jettra.cluster.node.id", "node-01");
-        props.setProperty("jettra.storage.path", "~/jettra/node-01/data");
+        props.setProperty("jettra.storage.path", "~/jettra/data");
         props.setProperty("jettra.network.grpc.port", "9091");
         props.setProperty("jettra.network.rest.port", "8080");
-        props.setProperty("jettra.index.storage.path", "~/jettra/node-01/data/indexes");
+        props.setProperty("jettra.index.storage.path", "~/jettra/data/indexes");
         return props;
     }
 
@@ -67,8 +67,8 @@ public class JettraConfigValidatorTest {
     public void testStoragePathMismatchFails() {
         Properties clusterProps = createValidClusterProperties();
         Properties dbProps = createValidDatabaseProperties();
-        dbProps.setProperty("jettra.storage.path", "~/jettra/node-99/data");
-        dbProps.setProperty("jettra.index.storage.path", "~/jettra/node-99/data/indexes");
+        dbProps.setProperty("jettra.storage.path", "/var/other/jettra/data");
+        dbProps.setProperty("jettra.index.storage.path", "/var/other/jettra/data/indexes");
 
         JettraConfigValidator.ValidationResult result = JettraConfigValidator.validate(dbProps, clusterProps);
         assertFalse(result.isValid());
@@ -78,13 +78,13 @@ public class JettraConfigValidatorTest {
     }
 
     @Test
-    @DisplayName("Debe fallar si jettra.storage.path no cumple la sintaxis recomendada <path>/jettra/<id-node>/data")
+    @DisplayName("Debe fallar si jettra.storage.path no cumple la sintaxis recomendada <path>/jettra/data")
     public void testStoragePathInvalidSyntaxFails() {
         Properties clusterProps = createValidClusterProperties();
         Properties dbProps = createValidDatabaseProperties();
-        // Ruta sin el id de nodo
-        dbProps.setProperty("jettra.storage.path", "~/jettra/data");
-        clusterProps.setProperty("cluster.node.1.storage.path", "~/jettra/data");
+        // Ruta que no cumple la sintaxis recomendada
+        dbProps.setProperty("jettra.storage.path", "~/misdatos/almacen");
+        clusterProps.setProperty("cluster.node.1.storage.path", "~/misdatos/almacen");
 
         JettraConfigValidator.ValidationResult result = JettraConfigValidator.validate(dbProps, clusterProps);
         assertFalse(result.isValid());
@@ -122,12 +122,12 @@ public class JettraConfigValidatorTest {
     }
 
     @Test
-    @DisplayName("Debe fallar si jettra.index.storage.path no implementa la sintaxis <path>/jettra/<id-node>/data/indexes")
+    @DisplayName("Debe fallar si jettra.index.storage.path no implementa la sintaxis <path>/jettra/data/indexes")
     public void testIndexStoragePathInvalidSyntaxFails() {
         Properties clusterProps = createValidClusterProperties();
         Properties dbProps = createValidDatabaseProperties();
-        // Le falta el <id-node>
-        dbProps.setProperty("jettra.index.storage.path", "~/jettra/data/indexes");
+        // Ruta que no cumple la sintaxis requerida
+        dbProps.setProperty("jettra.index.storage.path", "~/jettra/indices");
 
         JettraConfigValidator.ValidationResult result = JettraConfigValidator.validate(dbProps, clusterProps);
         assertFalse(result.isValid());
@@ -198,5 +198,73 @@ public class JettraConfigValidatorTest {
         boolean hasMultinodeError = result.getErrors().stream()
             .anyMatch(err -> err.contains("cluster.multinode.active") && err.contains("inválido"));
         assertTrue(hasMultinodeError);
+    }
+
+    @Test
+    @DisplayName("Debe cargar IP, puertos y peers desde jettra.config y database.properties en JettraStoreConfig")
+    public void testJettraStoreConfigLoadsClusterTopology() {
+        Properties clusterProps = new Properties();
+        clusterProps.setProperty("cluster.multinode.active", "on");
+        clusterProps.setProperty("cluster.node.1.id", "node-01");
+        clusterProps.setProperty("cluster.node.1.role", "PRIMARY");
+        clusterProps.setProperty("cluster.node.1.ip", "192.168.1.101");
+        clusterProps.setProperty("cluster.node.1.grpc.port", "9091");
+        clusterProps.setProperty("cluster.node.1.rest.port", "8080");
+        clusterProps.setProperty("cluster.node.1.storage.path", "~/jettra/data");
+
+        clusterProps.setProperty("cluster.node.2.id", "node-02");
+        clusterProps.setProperty("cluster.node.2.role", "SECONDARY");
+        clusterProps.setProperty("cluster.node.2.ip", "192.168.1.102");
+        clusterProps.setProperty("cluster.node.2.grpc.port", "9092");
+        clusterProps.setProperty("cluster.node.2.rest.port", "8082");
+        clusterProps.setProperty("cluster.node.2.storage.path", "~/jettra/data");
+
+        Properties dbProps = new Properties();
+        dbProps.setProperty("jettra.cluster.node.id", "node-01");
+        dbProps.setProperty("jettra.storage.path", "~/jettra/data");
+
+        JettraStoreConfig config = new JettraStoreConfig(dbProps, clusterProps);
+
+        assertEquals("node-01", config.getNodeId());
+        assertEquals("192.168.1.101", config.getNodeIp());
+        assertEquals(9091, config.getGrpcPort());
+        assertEquals(8080, config.getRestPort());
+        assertTrue(config.isClusterMultinodeActive());
+
+        var peers = config.getParsedPeers();
+        assertEquals(1, peers.size());
+        var peer = peers.get(0);
+        assertEquals("node-02", peer.getId());
+        assertEquals("192.168.1.102", peer.getIp());
+        assertEquals(9092, peer.getPort());
+        assertEquals(io.jettra.store.cluster.ClusterNode.Role.SECONDARY, peer.getRole());
+    }
+
+    @Test
+    @DisplayName("Debe ubicar database.properties en la misma carpeta que jettra.config mediante sibling resolution")
+    public void testLocateDatabasePropertiesSibling() throws IOException {
+        Path tempDir = Files.createTempDirectory("jettra_sibling_test");
+        Path cfgFile = tempDir.resolve("jettra.config");
+        Path dbFile = tempDir.resolve("database.properties");
+
+        Files.writeString(cfgFile, "cluster.node.1.id=node-01\n");
+        Files.writeString(dbFile, "jettra.cluster.node.id=node-01\n");
+
+        String prev = System.getProperty("jettra.config.path");
+        try {
+            System.setProperty("jettra.config.path", cfgFile.toString());
+            Path locatedDb = JettraConfigValidator.locateDatabasePropertiesFile();
+            assertNotNull(locatedDb);
+            assertEquals(dbFile.toAbsolutePath().normalize(), locatedDb.toAbsolutePath().normalize());
+        } finally {
+            if (prev != null) {
+                System.setProperty("jettra.config.path", prev);
+            } else {
+                System.clearProperty("jettra.config.path");
+            }
+            Files.deleteIfExists(cfgFile);
+            Files.deleteIfExists(dbFile);
+            Files.deleteIfExists(tempDir);
+        }
     }
 }

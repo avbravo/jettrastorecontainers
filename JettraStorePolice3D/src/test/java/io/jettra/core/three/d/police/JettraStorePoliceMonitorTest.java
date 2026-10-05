@@ -112,7 +112,7 @@ public class JettraStorePoliceMonitorTest {
             // Verificar que los objetos procesados avanzaron de acuerdo al throughput
             assertTrue(monitor.getProcessedObjectsTotal() > initialTotal, "Los objetos procesados acumulados deben incrementarse");
 
-            // Verificar que los camiones transportan batches proporcionales a las ops/sec
+            // Verificar que los camiones transportan batches proporcionales a las ops/sec o reportan el estado del lote
             for (var tr : monitor.getActiveTraffic()) {
                 assertNotNull(tr.getPayloadSummary());
                 assertTrue(tr.getPayloadSummary().contains("Batch"), "El resumen del camión debe reportar el lote de objetos procesados");

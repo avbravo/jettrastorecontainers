@@ -565,7 +565,7 @@ public class JettraStorePoliceMonitor implements AutoCloseable {
         if (!isMultinodeActive()) {
             for (ClusterDataTraffic tr : activeTraffic) {
                 tr.setTransmitting(false);
-                tr.updateBatch(0, 0f, "Distribución Desactivada (cluster.multinode.active=off) - Servidor Local Único");
+                tr.updateBatch(0, 0f, "Batch 0 ops | Distribución Desactivada (cluster.multinode.active=off) - Servidor Local Único");
             }
         } else if (leader != null && follower != null) {
             long batchSize = (processedObjectsPerSecond * 2);

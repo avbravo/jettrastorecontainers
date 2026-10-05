@@ -61,8 +61,8 @@ public final class JettraStoreServer {
         System.out.println("================================================================================");
         System.out.println("            JETTRASTORE DISTRIBUTED MULTI-MODEL DATABASE (JAVA 25+)            ");
         System.out.println("================================================================================");
-        System.out.printf("Node ID: %s | Role: %s | Storage Path: %s%n",
-            config.getNodeId(), config.getNodeRole(), config.getStoragePath());
+        System.out.printf("Node ID: %s (IP: %s, REST: %d, gRPC: %d) | Role: %s | Storage Path: %s%n",
+            config.getNodeId(), config.getNodeIp(), config.getRestPort(), config.getGrpcPort(), config.getNodeRole(), config.getStoragePath());
         System.out.printf("Project Panama Off-Heap Direct: %s | MemTable: %d MB%n",
             config.isOffHeapDirect(), config.getMemTableSizeMb());
         System.out.printf("Cluster Multi-Node Active: %s (%s)%n",

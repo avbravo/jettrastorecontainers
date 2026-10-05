@@ -11,12 +11,12 @@ import java.util.regex.Pattern;
  * 
  * Funcionalidades:
  * 1. Verifica que 'jettra.storage.path' en database.properties coincida con al menos
- *    uno de cluster.node.X.storage.path en jettra.config y use la sintaxis <path>/jettra/<id-node>/data.
+ *    uno de cluster.node.X.storage.path en jettra.config y use la sintaxis <path>/jettra/data.
  * 2. Verifica que 'jettra.network.grpc.port' en database.properties coincida con al menos
  *    un cluster.node.X.grpc.port en jettra.config.
  * 3. Verifica que 'jettra.network.rest.port' en database.properties coincida con al menos
  *    un cluster.node.X.rest.port en jettra.config.
- * 4. Verifica que 'jettra.index.storage.path' implemente la sintaxis <path>/jettra/<id-node>/data/indexes.
+ * 4. Verifica que 'jettra.index.storage.path' implemente la sintaxis <path>/jettra/data/indexes.
  * 5. Genera automáticamente database.properties con plantilla recomendada si no existe en disco.
  * 6. Genera automáticamente jettra.config con topología recomendada si no existe en disco.
  * 7. Si se ejecuta en entorno Docker / Docker Compose, reconoce la configuración de los contenedores
@@ -28,11 +28,11 @@ public final class JettraConfigValidator {
     public static final String DEFAULT_DATABASE_PROPERTIES_PATH = "config/database.properties";
     public static final String DEFAULT_JETTRA_CONFIG_PATH = "config/jettra.config";
 
-    // Sintaxis recomendada: <path>/jettra/<id-node>/data
-    private static final Pattern STORAGE_PATH_PATTERN = Pattern.compile("^.+[/\\\\]jettra[/\\\\][^/\\\\]+[/\\\\]data[/\\\\]?$");
+    // Sintaxis recomendada: <path>/jettra/data
+    private static final Pattern STORAGE_PATH_PATTERN = Pattern.compile("^(?:.*[/\\\\])?jettra[/\\\\]data[/\\\\]?$");
 
-    // Sintaxis recomendada de índices: <path>/jettra/<id-node>/data/indexes
-    private static final Pattern INDEX_STORAGE_PATH_PATTERN = Pattern.compile("^.+[/\\\\]jettra[/\\\\][^/\\\\]+[/\\\\]data[/\\\\]indexes[/\\\\]?$");
+    // Sintaxis recomendada de índices: <path>/jettra/data/indexes
+    private static final Pattern INDEX_STORAGE_PATH_PATTERN = Pattern.compile("^(?:.*[/\\\\])?jettra[/\\\\]data[/\\\\]indexes[/\\\\]?$");
 
     public record ClusterNodeInfo(
         String id,
@@ -94,15 +94,62 @@ public final class JettraConfigValidator {
      * Localiza el archivo database.properties en las rutas estándar o configuradas.
      */
     public static Path locateDatabasePropertiesFile() {
-        String sysProp = System.getProperty("database.properties.path");
-        if (sysProp != null && !sysProp.isBlank()) {
-            Path p = Path.of(sysProp);
-            if (Files.exists(p)) return p;
+        String[] sysKeys = {
+            "database.properties.path",
+            "jettra.database.properties.path",
+            "jettra.database.path",
+            "database.properties"
+        };
+        for (String k : sysKeys) {
+            String sysProp = System.getProperty(k);
+            if (sysProp != null && !sysProp.isBlank()) {
+                Path p = Path.of(sysProp.trim());
+                if (Files.exists(p)) return p;
+            }
         }
+
+        String[] envKeys = {
+            "DATABASE_PROPERTIES_PATH",
+            "JETTRA_DATABASE_PROPERTIES_PATH"
+        };
+        for (String k : envKeys) {
+            String env = System.getenv(k);
+            if (env != null && !env.isBlank()) {
+                Path p = Path.of(env.trim());
+                if (Files.exists(p)) return p;
+            }
+        }
+
+        // Si se especificó jettra.config.path, buscar database.properties en la misma carpeta
+        String cfgPathStr = System.getProperty("jettra.config.path");
+        if (cfgPathStr == null || cfgPathStr.isBlank()) {
+            cfgPathStr = System.getProperty("jettra.config");
+        }
+        if (cfgPathStr == null || cfgPathStr.isBlank()) {
+            cfgPathStr = System.getenv("JETTRA_CONFIG_PATH");
+        }
+        if (cfgPathStr != null && !cfgPathStr.isBlank()) {
+            try {
+                Path cfgPath = Path.of(cfgPathStr.trim()).toAbsolutePath().normalize();
+                Path parent = cfgPath.getParent();
+                if (parent != null) {
+                    Path sibling = parent.resolve("database.properties");
+                    if (Files.exists(sibling)) return sibling;
+                    Path siblingCfg = parent.resolve("config/database.properties");
+                    if (Files.exists(siblingCfg)) return siblingCfg;
+                }
+            } catch (Exception ignored) {}
+        }
+
         Path p1 = Path.of(DEFAULT_DATABASE_PROPERTIES_PATH);
         if (Files.exists(p1)) return p1;
         Path p2 = Path.of("database.properties");
         if (Files.exists(p2)) return p2;
+        Path p3 = Path.of("../config/database.properties");
+        if (Files.exists(p3)) return p3;
+        Path p4 = Path.of("../database.properties");
+        if (Files.exists(p4)) return p4;
+
         return null;
     }
 
@@ -110,15 +157,57 @@ public final class JettraConfigValidator {
      * Localiza el archivo jettra.config en las rutas estándar o configuradas.
      */
     public static Path locateJettraConfigFile() {
-        String sysProp = System.getProperty("jettra.config.path");
-        if (sysProp != null && !sysProp.isBlank()) {
-            Path p = Path.of(sysProp);
-            if (Files.exists(p)) return p;
+        String[] sysKeys = {
+            "jettra.config.path",
+            "jettra.config"
+        };
+        for (String k : sysKeys) {
+            String sysProp = System.getProperty(k);
+            if (sysProp != null && !sysProp.isBlank()) {
+                Path p = Path.of(sysProp.trim());
+                if (Files.exists(p)) return p;
+            }
         }
+
+        String[] envKeys = {
+            "JETTRA_CONFIG_PATH",
+            "JETTRA_CONFIG"
+        };
+        for (String k : envKeys) {
+            String env = System.getenv(k);
+            if (env != null && !env.isBlank()) {
+                Path p = Path.of(env.trim());
+                if (Files.exists(p)) return p;
+            }
+        }
+
+        // Si se especificó database.properties.path, buscar jettra.config en la misma carpeta
+        String dbPathStr = System.getProperty("database.properties.path");
+        if (dbPathStr == null || dbPathStr.isBlank()) {
+            dbPathStr = System.getProperty("jettra.database.properties.path");
+        }
+        if (dbPathStr != null && !dbPathStr.isBlank()) {
+            try {
+                Path dbPath = Path.of(dbPathStr.trim()).toAbsolutePath().normalize();
+                Path parent = dbPath.getParent();
+                if (parent != null) {
+                    Path sibling = parent.resolve("jettra.config");
+                    if (Files.exists(sibling)) return sibling;
+                    Path siblingCfg = parent.resolve("config/jettra.config");
+                    if (Files.exists(siblingCfg)) return siblingCfg;
+                }
+            } catch (Exception ignored) {}
+        }
+
         Path p1 = Path.of(DEFAULT_JETTRA_CONFIG_PATH);
         if (Files.exists(p1)) return p1;
         Path p2 = Path.of("jettra.config");
         if (Files.exists(p2)) return p2;
+        Path p3 = Path.of("../config/jettra.config");
+        if (Files.exists(p3)) return p3;
+        Path p4 = Path.of("../jettra.config");
+        if (Files.exists(p4)) return p4;
+
         return null;
     }
 
@@ -165,8 +254,8 @@ jettra.cluster.node.role = PRIMARY
 cluster.multinode.active = on
 
 # Ubicación explícita del path del directorio de la base de datos en disco físico
-# Sintaxis recomendada: <path>/jettra/<id-node>/data
-jettra.storage.path = ~/jettra/node-01/data
+# Sintaxis recomendada: <path>/jettra/data
+jettra.storage.path = ~/jettra/data
 
 # Estructura LSM y Memoria Off-Heap con Project Panama
 jettra.storage.memtable.size.mb = 128
@@ -208,8 +297,8 @@ jettra.index.initial.capacity = 65536
 jettra.index.max.inmemory.keys = 100000
 jettra.index.compact.storage = true
 
-# Sintaxis recomendada de índices: <path>/jettra/<id-node>/data/indexes
-jettra.index.storage.path = ~/jettra/node-01/data/indexes
+# Sintaxis recomendada de índices: <path>/jettra/data/indexes
+jettra.index.storage.path = ~/jettra/data/indexes
 jettra.storage.autoflush.batch.size = 50000
 
 # Límites de Consulta y Prevención de OOM
@@ -252,7 +341,7 @@ cluster.node.1.role = PRIMARY
 cluster.node.1.ip = 127.0.0.1
 cluster.node.1.grpc.port = 9091
 cluster.node.1.rest.port = 8080
-cluster.node.1.storage.path = ~/jettra/node-01/data
+cluster.node.1.storage.path = ~/jettra/data
 
 # ==============================================================================
 # NODO 2: NODO SECUNDARIO / SEGUIDOR 1 (Secondary)
@@ -262,7 +351,7 @@ cluster.node.2.role = SECONDARY
 cluster.node.2.ip = 127.0.0.1
 cluster.node.2.grpc.port = 9091
 cluster.node.2.rest.port = 8080
-cluster.node.2.storage.path = ~/jettra/node-02/data
+cluster.node.2.storage.path = ~/jettra/data
 
 # ==============================================================================
 # NODO 3: NODO SECUNDARIO / SEGUIDOR 2 (Secondary)
@@ -272,7 +361,7 @@ cluster.node.3.role = SECONDARY
 cluster.node.3.ip = 127.0.0.1
 cluster.node.3.grpc.port = 9091
 cluster.node.3.rest.port = 8080
-cluster.node.3.storage.path = ~/jettra/node-03/data
+cluster.node.3.storage.path = ~/jettra/data
 
 # Asignación de Capacidad de Índices y Buffers en Clúster
 cluster.index.initial.capacity = 65536
@@ -330,10 +419,10 @@ cluster.index.max.inmemory.keys = 100000
                 ));
             }
 
-            // Verificar sintaxis recomendada: <path>/jettra/<id-node>/data
+            // Verificar sintaxis recomendada: <path>/jettra/data
             if (!STORAGE_PATH_PATTERN.matcher(dbStoragePath).matches()) {
                 errors.add(String.format(
-                    "La propiedad 'jettra.storage.path' ('%s') no sigue la sintaxis recomendada: <path>/jettra/<id-node>/data (ejemplo: ~/jettra/node-01/data).",
+                    "La propiedad 'jettra.storage.path' ('%s') no sigue la sintaxis recomendada: <path>/jettra/data (ejemplo: ~/jettra/data o /opt/jettra/data).",
                     dbStoragePath
                 ));
             }
@@ -382,7 +471,7 @@ cluster.index.max.inmemory.keys = 100000
         } else {
             if (!INDEX_STORAGE_PATH_PATTERN.matcher(dbIndexPath).matches()) {
                 errors.add(String.format(
-                    "La propiedad 'jettra.index.storage.path' ('%s') no implementa la sintaxis requerida: <path>/jettra/<id-node>/data/indexes (ejemplo: ~/jettra/node-01/data/indexes).",
+                    "La propiedad 'jettra.index.storage.path' ('%s') no implementa la sintaxis requerida: <path>/jettra/data/indexes (ejemplo: ~/jettra/data/indexes o /opt/jettra/data/indexes).",
                     dbIndexPath
                 ));
             }
@@ -425,10 +514,10 @@ cluster.index.max.inmemory.keys = 100000
         sb.append("DIRECTIVAS DE CORRECCIÓN:\n");
         sb.append(" 1. Verifique que 'jettra.storage.path' en database.properties coincida con\n");
         sb.append("    al menos uno de los valores cluster.node.[1|2|3].storage.path de jettra.config.\n");
-        sb.append("    Sintaxis recomendada: <path>/jettra/<id-node>/data\n");
+        sb.append("    Sintaxis recomendada: <path>/jettra/data\n");
         sb.append(" 2. Verifique que 'jettra.network.grpc.port' coincida con cluster.node.[1|2|3].grpc.port\n");
         sb.append(" 3. Verifique que 'jettra.network.rest.port' coincida con cluster.node.[1|2|3].rest.port\n");
-        sb.append(" 4. Verifique que 'jettra.index.storage.path' cumpla: <path>/jettra/<id-node>/data/indexes\n");
+        sb.append(" 4. Verifique que 'jettra.index.storage.path' cumpla: <path>/jettra/data/indexes\n");
         sb.append(" 5. Verifique que 'cluster.multinode.active' sea 'on' u 'off' (on=consenso distribuido, off=servidor local).\n");
         sb.append("────────────────────────────────────────────────────────────────────────────────\n");
         sb.append("[JettraStore] La ejecución se detiene de forma preventiva. Corrija los archivos para iniciar.\n");
@@ -503,7 +592,7 @@ cluster.index.max.inmemory.keys = 100000
             String ip = props.getProperty(prefix + "ip", "127.0.0.1").trim();
             int grpcPort = parseInt(props.getProperty(prefix + "grpc.port"), 9091);
             int restPort = parseInt(props.getProperty(prefix + "rest.port"), 8080);
-            String storagePath = props.getProperty(prefix + "storage.path", "~/jettra/" + id + "/data").trim();
+            String storagePath = props.getProperty(prefix + "storage.path", "~/jettra/data").trim();
 
             list.add(new ClusterNodeInfo(id, role, ip, grpcPort, restPort, storagePath));
             idx++;
@@ -527,15 +616,15 @@ cluster.index.max.inmemory.keys = 100000
                 String ip = props.getProperty(prefix + "ip", "127.0.0.1").trim();
                 int grpcPort = parseInt(props.getProperty(prefix + "grpc.port"), 9091);
                 int restPort = parseInt(props.getProperty(prefix + "rest.port"), 8080);
-                String storagePath = props.getProperty(prefix + "storage.path", "~/jettra/" + id + "/data").trim();
+                String storagePath = props.getProperty(prefix + "storage.path", "~/jettra/data").trim();
                 list.add(new ClusterNodeInfo(id, role, ip, grpcPort, restPort, storagePath));
             }
         }
 
         if (list.isEmpty()) {
-            list.add(new ClusterNodeInfo("node-01", "PRIMARY", "127.0.0.1", 9091, 8080, "~/jettra/node-01/data"));
-            list.add(new ClusterNodeInfo("node-02", "SECONDARY", "127.0.0.1", 9091, 8080, "~/jettra/node-02/data"));
-            list.add(new ClusterNodeInfo("node-03", "SECONDARY", "127.0.0.1", 9091, 8080, "~/jettra/node-03/data"));
+            list.add(new ClusterNodeInfo("node-01", "PRIMARY", "127.0.0.1", 9091, 8080, "~/jettra/data"));
+            list.add(new ClusterNodeInfo("node-02", "SECONDARY", "127.0.0.1", 9091, 8080, "~/jettra/data"));
+            list.add(new ClusterNodeInfo("node-03", "SECONDARY", "127.0.0.1", 9091, 8080, "~/jettra/data"));
         }
 
         return list;
@@ -584,6 +673,13 @@ cluster.index.max.inmemory.keys = 100000
         // 2. Cargar configuraciones
         Path dbPath = locateDatabasePropertiesFile();
         Path clusterPath = locateJettraConfigFile();
+
+        System.out.println("[JettraStore] ================================================================================");
+        System.out.printf("[JettraStore] Leyendo configuración de nodo (database.properties): %s%n", 
+            dbPath != null ? dbPath.toAbsolutePath().normalize() : "classpath:/database.properties");
+        System.out.printf("[JettraStore] Leyendo topología de clúster (jettra.config):      %s%n", 
+            clusterPath != null ? clusterPath.toAbsolutePath().normalize() : "classpath:/jettra.config");
+        System.out.println("[JettraStore] ================================================================================");
 
         Properties dbProps = loadProperties(dbPath, "/database.properties");
         Properties clusterProps = loadProperties(clusterPath, "/jettra.config");

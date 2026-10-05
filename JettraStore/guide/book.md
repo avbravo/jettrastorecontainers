@@ -691,12 +691,12 @@ El orden de resolución de parámetros en tiempo de ejecución es:
 #### 13.1.2 Sintaxis Recomendada de Rutas de Almacenamiento
 * **Ruta de Almacenamiento Principal (`jettra.storage.path`):**  
   Debe seguir obligatoriamente la sintaxis jerárquica por nodo:
-  $$\text{Sintaxis:} \quad \langle\text{path}\rangle/\text{jettra}/\langle\text{id-node}\rangle/\text{data}$$
-  *Ejemplo:* `~/jettra/node-01/data` o `/opt/jettra/node-01/data`
+  $$\text{Sintaxis:} \quad \langle\text{path}\rangle/\text{jettra}/\text{data}$$
+  *Ejemplo:* `~/jettra/data` o `/opt/jettra/data`
 * **Ruta de Almacenamiento de Índices (`jettra.index.storage.path`):**  
   Debe implementar la sintaxis estructurada:
-  $$\text{Sintaxis:} \quad \langle\text{path}\rangle/\text{jettra}/\langle\text{id-node}\rangle/\text{data}/\text{indexes}$$
-  *Ejemplo:* `~/jettra/node-01/data/indexes` o `/opt/jettra/node-01/data/indexes`
+  $$\text{Sintaxis:} \quad \langle\text{path}\rangle/\text{jettra}/\text{data}/\text{indexes}$$
+  *Ejemplo:* `~/jettra/data/indexes` o `/opt/jettra/data/indexes`
 
 #### 13.1.3 Parámetro `cluster.multinode.active` (Activación del Algoritmo de Consenso Distribuido)
 
@@ -734,8 +734,8 @@ jettra.cluster.node.role = PRIMARY
 cluster.multinode.active = on
 
 # Ubicación física explícita del directorio de almacenamiento de datos (.jettra)
-# Sintaxis requerida: <path>/jettra/<id-node>/data
-jettra.storage.path = ~/jettra/node-01/data
+# Sintaxis requerida: <path>/jettra/data
+jettra.storage.path = ~/jettra/data
 
 # Estructura LSM y Memoria Off-Heap con Project Panama FFM (Java 25+)
 jettra.storage.memtable.size.mb = 128
@@ -783,8 +783,8 @@ jettra.index.initial.capacity = 65536
 jettra.index.max.inmemory.keys = 100000
 jettra.index.compact.storage = true
 
-# Sintaxis requerida: <path>/jettra/<id-node>/data/indexes
-jettra.index.storage.path = ~/jettra/node-01/data/indexes
+# Sintaxis requerida: <path>/jettra/data/indexes
+jettra.index.storage.path = ~/jettra/data/indexes
 jettra.storage.autoflush.batch.size = 50000
 
 # Directivas de Consulta y Límites de Seguridad de Memoria (SQL & LQL Anti-OOM)
@@ -820,7 +820,7 @@ cluster.node.1.role = PRIMARY
 cluster.node.1.ip = 127.0.0.1
 cluster.node.1.grpc.port = 9091
 cluster.node.1.rest.port = 8080
-cluster.node.1.storage.path = ~/jettra/node-01/data
+cluster.node.1.storage.path = ~/jettra/data
 
 # ==============================================================================
 # NODO 2: NODO SECUNDARIO / SEGUIDOR 1 (Secondary)
@@ -830,7 +830,7 @@ cluster.node.2.role = SECONDARY
 cluster.node.2.ip = 127.0.0.1
 cluster.node.2.grpc.port = 9091
 cluster.node.2.rest.port = 8080
-cluster.node.2.storage.path = ~/jettra/node-02/data
+cluster.node.2.storage.path = ~/jettra/data
 
 # ==============================================================================
 # NODO 3: NODO SECUNDARIO / SEGUIDOR 2 (Secondary)
@@ -840,7 +840,7 @@ cluster.node.3.role = SECONDARY
 cluster.node.3.ip = 127.0.0.1
 cluster.node.3.grpc.port = 9091
 cluster.node.3.rest.port = 8080
-cluster.node.3.storage.path = ~/jettra/node-03/data
+cluster.node.3.storage.path = ~/jettra/data
 
 # Asignación de Capacidad de Índices y Buffers en Clúster
 cluster.index.initial.capacity = 65536
@@ -857,10 +857,10 @@ Las 4 reglas de validación obligatorias son:
 
 | Regla | Parámetro en `database.properties` | Validación frente a `jettra.config` | Sintaxis Requerida |
 | :--- | :--- | :--- | :--- |
-| **Regla 1** | `jettra.storage.path` | Debe coincidir con al menos un `cluster.node.X.storage.path` configurado en `jettra.config` (admitiendo normalización de tildes `~` y rutas canónicas absolutas). | `<path>/jettra/<id-node>/data` |
+| **Regla 1** | `jettra.storage.path` | Debe coincidir con al menos un `cluster.node.X.storage.path` configurado en `jettra.config` (admitiendo normalización de tildes `~` y rutas canónicas absolutas). | `<path>/jettra/data` |
 | **Regla 2** | `jettra.network.grpc.port` | Debe coincidir con al menos un valor de `cluster.node.X.grpc.port` de `jettra.config`. | Puerto entero válido (ej. `9091`). |
 | **Regla 3** | `jettra.network.rest.port` | Debe coincidir con al menos un valor de `cluster.node.X.rest.port` de `jettra.config`. | Puerto entero válido (ej. `8080`). |
-| **Regla 4** | `jettra.index.storage.path` | Debe implementar la sintaxis estructurada de índices subordinada al nodo correspondiente. | `<path>/jettra/<id-node>/data/indexes` |
+| **Regla 4** | `jettra.index.storage.path` | Debe implementar la sintaxis estructurada de índices subordinada al nodo correspondiente. | `<path>/jettra/data/indexes` |
 | **Regla 5** | `cluster.multinode.active` | Determina si se activa la distribución por consenso (`on`) o servidor único local (`off`). Debe ser estrictamente `on` u `off`. | `on` u `off` |
 
 #### Acción Preventiva y Detención de la Ejecución
@@ -875,7 +875,7 @@ Si cualquiera de estas 4 reglas no se cumple:
 Si al ejecutar JettraStore mediante `java -jar` no existen los archivos `config/database.properties` o `config/jettra.config` en el sistema de archivos:
 
 1. **Creación Automática de Directorios:** El sistema crea la carpeta `config/` si no está presente.
-2. **Generación de `database.properties`:** Se crea un archivo con la plantilla estándar recomendada para el nodo primario (`node-01`), con `jettra.storage.path = ~/jettra/node-01/data`, `jettra.index.storage.path = ~/jettra/node-01/data/indexes`, gRPC `9091` y REST `8080`.
+2. **Generación de `database.properties`:** Se crea un archivo con la plantilla estándar recomendada para el nodo primario (`node-01`), con `jettra.storage.path = ~/jettra/data`, `jettra.index.storage.path = ~/jettra/data/indexes`, gRPC `9091` y REST `8080`.
 3. **Generación de `jettra.config`:** Se crea la topología clúster completa de 3 nodos (`node-01`, `node-02`, `node-03`) con sus respectivos puertos y rutas de datos.
 4. **Coherencia Inmediata:** Ambos archivos autogenerados satisfacen de inmediato las 4 reglas de validación cruzada, permitiendo al usuario poner en marcha el sistema sin configuración manual previa.
 
@@ -963,9 +963,8 @@ WORKDIR /app
 RUN mkdir -p /app/data /app/config /app/logs \
     && chown -R jettra:jettra /app
 
-# Copiar artefacto ejecutable y dependencias construidas por Maven
-COPY --chown=jettra:jettra target/JettraStore-1.0-SNAPSHOT.jar /app/jettra-store.jar
-COPY --chown=jettra:jettra target/lib /app/lib
+# Copiar el Uber JAR autónomo (Fat JAR con todas las librerías integradas)
+COPY --chown=jettra:jettra target/JettraStore-*-uber.jar /app/JettraStore.jar
 
 # Exponer puertos: REST API (8080) y Clúster Raft/gRPC (9091)
 EXPOSE 8080 9091
@@ -986,7 +985,7 @@ ENV JAVA_OPTS="-Xms512m -Xmx2g \
 HEALTHCHECK --interval=10s --timeout=5s --start-period=15s --retries=3 \
   CMD curl -f http://localhost:8080/api/v1/cluster/health || exit 1
 
-ENTRYPOINT ["sh", "-c", "exec java $JAVA_OPTS -cp /app/jettra-store.jar:/app/lib/* io.jettra.store.JettraStoreServer"]
+ENTRYPOINT ["sh", "-c", "exec java $JAVA_OPTS -jar /app/JettraStore.jar"]
 ```
 
 > [!TIP]
@@ -1401,13 +1400,7 @@ En cada máquina donde se ejecutará un nodo de JettraStore, cree un directorio 
 ```text
 /opt/jettra/
 ├── bin/
-│   └── JettraStore-1.0-SNAPSHOT.jar        # Binario compilado del servidor JettraStore
-├── lib/                                     # Dependencias JAR del ecosistema Jettra
-│   ├── JettraMemory-1.0-SNAPSHOT.jar        # Motor Off-Heap LSM Panama
-│   ├── JettraCollections-1.0.0-SNAPSHOT.jar # Colecciones defensivas Anti-OOM
-│   ├── JettraJSON-1.0.0-SNAPSHOT.jar        # Serializador JSON ultrarrápido
-│   ├── JettraJWT-1.0.0-SNAPSHOT.jar         # Autenticación criptográfica
-│   └── ...                                  # Resto de bibliotecas requeridas
+│   └── JettraStore-1.0-SNAPSHOT-uber.jar    # Uber JAR autónomo (Fat JAR con todas las dependencias)
 ├── config/
 │   ├── jettra.config                        # Topología de red del clúster Raft
 │   └── database.properties                  # Parámetros del motor y persistencia
@@ -1415,10 +1408,11 @@ En cada máquina donde se ejecutará un nodo de JettraStore, cree un directorio 
 └── start-node.sh                            # Script de arranque con flags JVM Java 25
 ```
 
-> **Generación del paquete:** Para generar el JAR y su directorio de dependencias ejecute en el proyecto:
+> **Generación del paquete:** Para generar el Uber JAR autónomo ejecute en el proyecto:
 > ```bash
-> mvn clean package dependency:copy-dependencies -DincludeScope=runtime -DoutputDirectory=target/lib
+> mvn clean package
 > ```
+> El plugin `maven-shade-plugin` compila y empaqueta automáticamente el artefacto autónomo `target/JettraStore-1.0-SNAPSHOT-uber.jar`. No se requiere transferir un directorio `lib/` ni copiar dependencias por separado, ya que el artefacto contiene todo el ecosistema de librerías embebido y listo para ejecución.
 
 ---
 
@@ -1428,67 +1422,163 @@ El archivo `jettra.config` define la topología de consenso del clúster. Debe c
 
 ```properties
 # /opt/jettra/config/jettra.config
+################################################################################
+# JettraStore Cluster Topology Configuration (jettra.config)
+# Centralized 3-Node Topology for Raft Consensus and Dynamic Ring Discovery
+################################################################################
+
 cluster.name = jettra-production-cluster
 cluster.consensus.protocol = RAFT
 cluster.ring.enabled = true
 cluster.heartbeat.interval.ms = 150
 cluster.election.timeout.ms = 300
-
 # ==============================================================================
-# NODO 1: NODO PRINCIPAL / LÍDER (Servidor A: 192.168.1.101)
+# NODO 1: NODO PRINCIPAL / LÍDER (Primary)
 # ==============================================================================
 cluster.node.1.id = node-01
 cluster.node.1.role = PRIMARY
 cluster.node.1.ip = 192.168.1.101
 cluster.node.1.grpc.port = 9091
 cluster.node.1.rest.port = 8080
-cluster.node.1.storage.path = /opt/jettra/node-01/data
+cluster.node.1.storage.path = ~/jettra/data
 
 # ==============================================================================
-# NODO 2: SEGUIDOR 1 (Servidor B: 192.168.1.102)
+# NODO 2: NODO SECUNDARIO / SEGUIDOR 1 (Secondary)
 # ==============================================================================
 cluster.node.2.id = node-02
 cluster.node.2.role = SECONDARY
 cluster.node.2.ip = 192.168.1.102
 cluster.node.2.grpc.port = 9091
 cluster.node.2.rest.port = 8080
-cluster.node.2.storage.path = /opt/jettra/node-02/data
+cluster.node.2.storage.path = ~/jettra/data
 
 # ==============================================================================
-# NODO 3: SEGUIDOR 2 (Servidor C: 192.168.1.103)
+# NODO 3: NODO SECUNDARIO / SEGUIDOR 2 (Secondary)
 # ==============================================================================
 cluster.node.3.id = node-03
 cluster.node.3.role = SECONDARY
 cluster.node.3.ip = 192.168.1.103
 cluster.node.3.grpc.port = 9091
 cluster.node.3.rest.port = 8080
-cluster.node.3.storage.path = /opt/jettra/node-03/data
+cluster.node.3.storage.path = ~/jettra/data
 
+# Asignación de Capacidad de Índices y Buffers en Clúster
 cluster.index.initial.capacity = 65536
 cluster.index.max.inmemory.keys = 100000
-```
 
 ---
 
 #### 18.1.3 Configuración de `database.properties` en Cada Servidor
 
+
 ```properties
 # /opt/jettra/config/database.properties
+################################################################################
+# JettraStore Core Engine Configuration (database.properties)
+# Low-level JVM tuning, Panama FFM settings, JettraPolice, and Storage Paths
+################################################################################
+
+# UbicaciÃ³n explÃ­cita del path del directorio de la base de datos en disco fÃ­sico
+## ==============================================================================
+# TopologÃ­a Multinodo y Algoritmo de Consenso Distribuido
+# ==============================================================================
+# cluster.multinode.active:
+#   on:  Activa el sistema de distribuciÃ³n de datos mediante algoritmo de consenso integrado en JettraStore.
+#   off: Desactiva el comportamiento de distribuciÃ³n y asume que todas las operaciones se realizarÃ¡n
+#        solamente en el servidor local donde se estÃ¡ ejecutando JettraStore sin distribuir los datos.
+#cluster.multinode.active = on
 cluster.multinode.active = on
-jettra.storage.mode = DISK_MEMORY
-jettra.storage.path = /opt/jettra/node-01/data
-jettra.index.storage.path = /opt/jettra/node-01/data/indexes
-jettra.memtable.max.mb = 128
-jettra.flush.interval.seconds = 30
+
+jettra.storage.path = /var/jettra/data
+jettra.storage.path = ~/jettra/data
+# Almacenamiento fÃ­sico de Ã­ndices persistidos en formato .jettra
+jettra.index.storage.path = ~/jettra/data/indexes
+# Red y Puertos de Escucha
+jettra.network.grpc.port = 9091
+jettra.network.rest.port = 8080
+jettra.network.virtualthreads.enabled = true
+
+
+# Estructura LSM y Memoria Off-Heap con Project Panama
+jettra.storage.memtable.size.mb = 128
+jettra.storage.ram.global.limit.mb = 2048
+jettra.storage.offheap.direct = true
+# Modo de almacenamiento: JVM_RAM (Memoria RAM Heap/Stack) o DISK_MEMORY (JettraMemory Off-Heap LSM)
+jettra.storage.mode = JVM_RAM
+jettra.storage.file.extension = .jettra
+
+# Umbrales para la TransiciÃ³n DinÃ¡mica a Motor de Anillo Distribuido
+# Cuando la RAM ocupada alcanza el 85%, el nodo principal descarga carga a los secundarios
+jettra.ring.saturation.threshold.percent = 85
+jettra.ring.release.target.percent = 45
+
+# Componente AutÃ³nomo de SupervisiÃ³n Preventiva (JettraPolice)
+# Habilitado por defecto en hilo demonio de bajo consumo
 jettrapolice.active = true
 jettrapolice.interval.ms = 500
-jettra.admin.user = admin
-jettra.admin.password = admin-jettra
+jettrapolice.ram.warning.threshold = 75
+jettrapolice.disk.warning.threshold = 90
+
+# MÃ©tricas de Rendimiento y Microbenchmarking con JMH
+# true para habilitar en pruebas/diagnÃ³stico, false para producciÃ³n de mÃ¡xima velocidad
+jmh.metrics.active = false
+
+# Seguridad y AutenticaciÃ³n CriptogrÃ¡fica con JettraJWT
+jettra.security.jwt.algorithm = Ed25519
+jettra.security.jwt.expiration.seconds = 86400
+jettra.security.jwt.issuer = jettra-store-authority
+
+# Superusuario por Defecto (Provisionamiento Obligatorio Inicial)
+# Credenciales: admin / admin-jettra (MÃ¡xima prioridad y privilegios absolutos inmutables)
+jettra.security.default.admin.username = admin
+jettra.security.default.admin.password = admin-jettra
+
+
+# ==============================================================================
+# OptimizaciÃ³n de Almacenamiento de Ãndices y Ahorro de Memoria Heap (Anti-OOM)
+# ==============================================================================
+# Capacidad inicial optimizada para mapas de Ã­ndices secundarios (evita rehashes costosos)
+jettra.index.initial.capacity = 65536
+
+# LÃ­mite mÃ¡ximo de claves de Ã­ndice almacenadas en memoria antes de muestreo disperso
+jettra.index.max.inmemory.keys = 100000
+
+# Uso de almacenamiento compacto para Ã­ndices secundarios (Singletons sin Set)
+jettra.index.compact.storage = true
+
+
+
+# Umbral de descarga periÃ³dica de MemTable durante cargas masivas (Auto-Flush)
+jettra.storage.autoflush.batch.size = 50000
+
+# ==============================================================================
+# Directivas de Consulta y LÃ­mites de Seguridad de Memoria (SQL & LQL Anti-OOM)
+# ==============================================================================
+# LÃ­mite por defecto para SELECT / FROM sin clÃ¡usula LIMIT explÃ­cita
+jettra.query.default.limit = 50
+
+# LÃ­mite mÃ¡ximo absoluto permitido por consulta en memoria para proteger el Heap
+jettra.query.max.limit = 5000
+
+# TamaÃ±o de pÃ¡gina para visualizaciÃ³n en consola interactiva (Shell / FX)
+jettra.query.pagesize = 50
+
+# Directivas de Estabilidad y Control de Memoria Heap de JettraPolice (Anti-OOM)
+jettrapolice.ram.critical.threshold = 85
+jettrapolice.auto.pagination.enabled = true
+jettrapolice.max.safe.batch.size = 100
+
 ```
 
 ---
 
 #### 18.1.4 Banderas JVM de Java 25 y Comandos de Ejecución por Servidor
+
+JettraStore implementa la lectura unificada y validación cruzada automática de **ambos** archivos de configuración:
+1. **`jettra.config`**: Provee la topología completa del clúster (IPs, puertos gRPC y REST de todos los nodos, y pares de replicación Raft).
+2. **`database.properties`**: Provee la identidad del nodo local (`nodeId`, `role`), límites de memoria, parámetros de motor y persistencia física.
+
+Al pasar `-Djettra.config.path=jettra.config`, JettraStore localiza de forma inteligente el archivo `database.properties` (vía resolución de carpetas hermanas, `-Ddatabase.properties.path=...`, `config/database.properties` o en el directorio de trabajo). Los IPs y puertos definidos en `jettra.config` y `database.properties` se sincronizan automáticamente para el nodo actual y sus pares distribuidos.
 
 Cada máquina arranca con su identificador de nodo y su rol correspondiente:
 
@@ -1498,7 +1588,7 @@ export JETTRA_NODE_ID=node-01
 export JETTRA_NODE_ROLE=PRIMARY
 export JETTRA_REST_PORT=8080
 export JETTRA_GRPC_PORT=9091
-export JETTRA_STORAGE_PATH=/opt/jettra/data
+export JETTRA_STORAGE_PATH=~/jettra/data
 
 java --enable-preview \
      --enable-native-access=ALL-UNNAMED \
@@ -1506,9 +1596,8 @@ java --enable-preview \
      -XX:+UseCompactObjectHeaders \
      -XX:+UseZGC \
      -Xms2g -Xmx6g \
-     -Djettra.config.path=/opt/jettra/config/jettra.config \
-     -cp "bin/JettraStore-1.0-SNAPSHOT.jar:lib/*" \
-     io.jettra.store.JettraStoreServer
+     -Djettra.config.path=jettra.config \
+     -jar JettraStore-1.0-SNAPSHOT-uber.jar
 ```
 
 **En Servidor 2 (IP `192.168.1.102` - Nodo Secundario 1):**
@@ -1517,7 +1606,7 @@ export JETTRA_NODE_ID=node-02
 export JETTRA_NODE_ROLE=SECONDARY
 export JETTRA_REST_PORT=8080
 export JETTRA_GRPC_PORT=9091
-export JETTRA_STORAGE_PATH=/opt/jettra/data
+export JETTRA_STORAGE_PATH=~/jettra/data
 
 java --enable-preview \
      --enable-native-access=ALL-UNNAMED \
@@ -1525,9 +1614,8 @@ java --enable-preview \
      -XX:+UseCompactObjectHeaders \
      -XX:+UseZGC \
      -Xms2g -Xmx6g \
-     -Djettra.config.path=/opt/jettra/config/jettra.config \
-     -cp "bin/JettraStore-1.0-SNAPSHOT.jar:lib/*" \
-     io.jettra.store.JettraStoreServer
+     -Djettra.config.path=jettra.config \
+     -jar JettraStore-1.0-SNAPSHOT-uber.jar
 ```
 
 **En Servidor 3 (IP `192.168.1.103` - Nodo Secundario 2):**
@@ -1536,7 +1624,7 @@ export JETTRA_NODE_ID=node-03
 export JETTRA_NODE_ROLE=SECONDARY
 export JETTRA_REST_PORT=8080
 export JETTRA_GRPC_PORT=9091
-export JETTRA_STORAGE_PATH=/opt/jettra/data
+export JETTRA_STORAGE_PATH=~/jettra/data
 
 java --enable-preview \
      --enable-native-access=ALL-UNNAMED \
@@ -1544,9 +1632,8 @@ java --enable-preview \
      -XX:+UseCompactObjectHeaders \
      -XX:+UseZGC \
      -Xms2g -Xmx6g \
-     -Djettra.config.path=/opt/jettra/config/jettra.config \
-     -cp "bin/JettraStore-1.0-SNAPSHOT.jar:lib/*" \
-     io.jettra.store.JettraStoreServer
+      -Djettra.config.path=jettra.config \
+     -jar JettraStore-1.0-SNAPSHOT-uber.jar
 ```
 
 **Secuencia y Verificación:**
