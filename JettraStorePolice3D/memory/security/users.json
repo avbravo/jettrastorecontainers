@@ -1,0 +1,91 @@
+[ {
+  "id" : "a4821636-a59a-4f1d-9a6f-f635756644e4",
+  "username" : "admin",
+  "password" : "admin123",
+  "description" : "Superadministrador del Clúster JettraStore",
+  "globalRole" : "ADMIN",
+  "enabled" : true,
+  "createdAt" : 1790903338981,
+  "databasePermissions" : [ {
+    "databaseId" : "example_factura_db",
+    "role" : "ADMIN"
+  }, {
+    "databaseId" : "samples_hostipal_db",
+    "role" : "ADMIN"
+  }, {
+    "databaseId" : "samples_ambiental_db",
+    "role" : "ADMIN"
+  }, {
+    "databaseId" : "system_metadata_db",
+    "role" : "ADMIN"
+  } ]
+}, {
+  "id" : "224cb304-af0c-4ca8-981e-d19f5415c685",
+  "username" : "usr_facturacion_01",
+  "password" : "facturaPass2026",
+  "description" : "Operador Fiscal y Facturación",
+  "globalRole" : "OPERATOR",
+  "enabled" : true,
+  "createdAt" : 1790903338981,
+  "databasePermissions" : [ {
+    "databaseId" : "example_factura_db",
+    "role" : "READ_WRITE"
+  }, {
+    "databaseId" : "samples_hostipal_db",
+    "role" : "NONE"
+  }, {
+    "databaseId" : "samples_ambiental_db",
+    "role" : "NONE"
+  } ]
+}, {
+  "id" : "e69f1ee9-1373-4899-ab32-daaf9c291428",
+  "username" : "dr_gonzalez_01",
+  "password" : "medicoSeguro99",
+  "description" : "Especialista Clínico y UCI",
+  "globalRole" : "DEVELOPER",
+  "enabled" : true,
+  "createdAt" : 1790903338981,
+  "databasePermissions" : [ {
+    "databaseId" : "samples_hostipal_db",
+    "role" : "READ_WRITE"
+  }, {
+    "databaseId" : "example_factura_db",
+    "role" : "READ_ONLY"
+  } ]
+}, {
+  "id" : "c315db2a-b505-441a-b926-7619071538ee",
+  "username" : "sensor_co2_norte",
+  "password" : "iotTokenStream",
+  "description" : "Agente de Ingesta TimeSeries IoT",
+  "globalRole" : "ANALYST",
+  "enabled" : true,
+  "createdAt" : 1790903338981,
+  "databasePermissions" : [ {
+    "databaseId" : "samples_ambiental_db",
+    "role" : "READ_WRITE"
+  }, {
+    "databaseId" : "samples_hostipal_db",
+    "role" : "NONE"
+  } ]
+}, {
+  "id" : "787b26a0-dd65-4acc-846d-cc699ff49f1e",
+  "username" : "sec_auditor_02",
+  "password" : "auditKeyCompliance",
+  "description" : "Auditor de Registros y Políticas Raft",
+  "globalRole" : "AUDITOR",
+  "enabled" : true,
+  "createdAt" : 1790903338982,
+  "databasePermissions" : [ {
+    "databaseId" : "system_metadata_db",
+    "role" : "READ_ONLY"
+  }, {
+    "databaseId" : "example_factura_db",
+    "role" : "READ_ONLY"
+  }, {
+    "databaseId" : "samples_hostipal_db",
+    "role" : "READ_ONLY"
+  }, {
+    "databaseId" : "samples_ambiental_db",
+    "role" : "READ_ONLY"
+  } ]
+} ]

@@ -1,0 +1,30 @@
+services:
+  # ==============================================================================
+  # JETTRASTORE POLICE 3D - MONITOR VISUAL MULTIMODELO (RAYLIB & JAVA 25)
+  # ==============================================================================
+  jettra-police-3d:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: jettrastorepolice3d:1.0
+    container_name: jettra-police-3d
+    restart: unless-stopped
+    environment:
+      - DISPLAY=${DISPLAY:-:0}
+      - HEADLESS=false
+      - JETTRA_DOCKER_COMPOSE=false
+      - JAVA_OPTS=-Xms512m -Xmx2g -XX:+UnlockExperimentalVMOptions -XX:+UseCompactObjectHeaders --enable-preview --enable-native-access=ALL-UNNAMED -Djettra.config.path=/app/config/jettra.config
+    volumes:
+      # Acceso a servidor X11 del host para renderizado en pantalla
+      - /tmp/.X11-unix:/tmp/.X11-unix
+      # Configuración de topología de clúster JettraStore
+      - ./config/jettra.config:/app/config/jettra.config:ro
+    # Aceleración GPU física (opcional en Linux para acelerar Mesa/OpenGL):
+    # devices:
+    #   - /dev/dri:/dev/dri
+    networks:
+      - jettra-cluster-net
+
+networks:
+  jettra-cluster-net:
+    name: jettra-cluster-net

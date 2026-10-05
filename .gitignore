@@ -1,0 +1,10 @@
+/JettraStore/target/
+/JettraStoreDriver/target/
+/JettraStorePoliceFX/target/
+/JettraStoreFX/target/
+/JettraStoreMeter/target/
+/JettraStoreShell/target/
+/JettraMemory/target/
+/JettraStorePolice3D/target/
+*dependency-reduced-pom.xml
+/JettraStoreExplorer/target/

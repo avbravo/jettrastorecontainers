@@ -1,0 +1,133 @@
+services:
+  # ==============================================================================
+  # NODO 01: NODO PRINCIPAL / LÍDER (Primary Raft Master)
+  # ==============================================================================
+  jettra-node-01:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: jettrastore:1.0
+    container_name: jettra-node-01
+    hostname: jettra-node-01
+    restart: unless-stopped
+    ports:
+      - "8081:8080"   # API REST / Autenticación JettraJWT en Host
+      - "9091:9091"   # Protocolo de Clúster / Raft Sync
+    environment:
+      - JETTRA_NODE_ID=node-01
+      - JETTRA_NODE_ROLE=PRIMARY
+      - JETTRA_STORAGE_PATH=/jettra/data
+      - JETTRA_REST_PORT=8080
+      - JETTRA_GRPC_PORT=9091
+      - JETTRA_ADMIN_USERNAME=admin
+      - JETTRA_ADMIN_PASSWORD=admin-jettra
+      - JETTRA_CLUSTER_PEERS=node-02:jettra-node-02:9091:SECONDARY,node-03:jettra-node-03:9091:SECONDARY
+      - JAVA_OPTS=-Xms512m -Xmx2g -XX:+UseZGC -XX:+UseCompactObjectHeaders --enable-preview --enable-native-access=ALL-UNNAMED
+    volumes:
+      - jettra_data_node01:/jettra/data
+    networks:
+      - jettra-cluster-net
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/api/v1/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+  # ==============================================================================
+  # NODO 02: PRIMER NODO SECUNDARIO (Secondary Raft Replica 1)
+  # ==============================================================================
+  jettra-node-02:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: jettrastore:1.0
+    container_name: jettra-node-02
+    hostname: jettra-node-02
+    restart: unless-stopped
+    depends_on:
+      jettra-node-01:
+        condition: service_healthy
+    ports:
+      - "8082:8080"   # API REST Nodo 2
+      - "9092:9091"   # Protocolo de Clúster Nodo 2
+    environment:
+      - JETTRA_NODE_ID=node-02
+      - JETTRA_NODE_ROLE=SECONDARY
+      - JETTRA_STORAGE_PATH=/jettra/data
+      - JETTRA_REST_PORT=8080
+      - JETTRA_GRPC_PORT=9091
+      - JETTRA_ADMIN_USERNAME=admin
+      - JETTRA_ADMIN_PASSWORD=admin-jettra
+      - JETTRA_CLUSTER_PEERS=node-01:jettra-node-01:9091:PRIMARY,node-03:jettra-node-03:9091:SECONDARY
+      - JAVA_OPTS=-Xms512m -Xmx2g -XX:+UseZGC -XX:+UseCompactObjectHeaders --enable-preview --enable-native-access=ALL-UNNAMED
+    volumes:
+      - jettra_data_node02:/jettra/data
+    networks:
+      - jettra-cluster-net
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/api/v1/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+  # ==============================================================================
+  # NODO 03: SEGUNDO NODO SECUNDARIO (Secondary Raft Replica 2)
+  # ==============================================================================
+  jettra-node-03:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: jettrastore:1.0
+    container_name: jettra-node-03
+    hostname: jettra-node-03
+    restart: unless-stopped
+    depends_on:
+      jettra-node-01:
+        condition: service_healthy
+    ports:
+      - "8083:8080"   # API REST Nodo 3
+      - "9093:9091"   # Protocolo de Clúster Nodo 3
+    environment:
+      - JETTRA_NODE_ID=node-03
+      - JETTRA_NODE_ROLE=SECONDARY
+      - JETTRA_STORAGE_PATH=/jettra/data
+      - JETTRA_REST_PORT=8080
+      - JETTRA_GRPC_PORT=9091
+      - JETTRA_ADMIN_USERNAME=admin
+      - JETTRA_ADMIN_PASSWORD=admin-jettra
+      - JETTRA_CLUSTER_PEERS=node-01:jettra-node-01:9091:PRIMARY,node-02:jettra-node-02:9091:SECONDARY
+      - JAVA_OPTS=-Xms512m -Xmx2g -XX:+UseZGC -XX:+UseCompactObjectHeaders --enable-preview --enable-native-access=ALL-UNNAMED
+    volumes:
+      - jettra_data_node03:/jettra/data
+    networks:
+      - jettra-cluster-net
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/api/v1/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+# ==============================================================================
+# VOLÚMENES PERSISTENTES PARA CADA NODO (Almacenamiento de archivos .jettra)
+# ==============================================================================
+volumes:
+  jettra_data_node01:
+    name: jettra_data_node01
+    driver: local
+  jettra_data_node02:
+    name: jettra_data_node02
+    driver: local
+  jettra_data_node03:
+    name: jettra_data_node03
+    driver: local
+
+# ==============================================================================
+# RED BRIDGE PRIVADA PARA EL CLÚSTER RAFT DISTRIBUIDO
+# ==============================================================================
+networks:
+  jettra-cluster-net:
+    name: jettra-cluster-net
+    driver: bridge

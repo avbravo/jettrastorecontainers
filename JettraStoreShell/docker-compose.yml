@@ -1,0 +1,31 @@
+services:
+  # ==============================================================================
+  # JETTRASTORE SHELL - CONSOLA INTERACTIVA CLI
+  # ==============================================================================
+  jettra-shell:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: jettrastoreshell:1.0
+    container_name: jettra-shell
+    stdin_open: true
+    tty: true
+    restart: "no"
+    environment:
+      - JETTRA_HOST=jettra-node-01
+      - JETTRA_PORT=9091
+      - JAVA_OPTS=-XX:+UnlockExperimentalVMOptions -XX:+UseCompactObjectHeaders --enable-preview --enable-native-access=ALL-UNNAMED
+    volumes:
+      - jettra_shell_data:/home/jettra/.jettra
+    networks:
+      - jettra-cluster-net
+
+volumes:
+  jettra_shell_data:
+    name: jettra_shell_data
+    driver: local
+
+networks:
+  jettra-cluster-net:
+    name: jettra-cluster-net
+    external: true

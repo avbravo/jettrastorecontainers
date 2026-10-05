@@ -1,0 +1,167 @@
+services:
+  jettra-node-01:
+    build:
+      context: ./JettraStore
+      dockerfile: Dockerfile
+    image: jettrastore:1.0
+    container_name: jettra-node-01
+    hostname: jettra-node-01
+    restart: unless-stopped
+    ports:
+      - "8081:8080"
+      - "9091:9091"
+    environment:
+      - JETTRA_NODE_ID=node-01
+      - JETTRA_NODE_ROLE=PRIMARY
+      - JETTRA_STORAGE_PATH=/jettra/data
+      - JETTRA_REST_PORT=8080
+      - JETTRA_GRPC_PORT=9091
+      - JETTRA_ADMIN_USERNAME=admin
+      - JETTRA_ADMIN_PASSWORD=admin-jettra
+      - JETTRA_CLUSTER_PEERS=node-02:jettra-node-02:9091:SECONDARY,node-03:jettra-node-03:9091:SECONDARY
+      - JAVA_OPTS=-Xms512m -Xmx2g -XX:+UseZGC -XX:+UseCompactObjectHeaders --enable-preview --enable-native-access=ALL-UNNAMED
+    volumes:
+      - jettra_data_node01:/jettra/data
+    networks:
+      - jettra-cluster-net
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/api/v1/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+  jettra-node-02:
+    build:
+      context: ./JettraStore
+      dockerfile: Dockerfile
+    image: jettrastore:1.0
+    container_name: jettra-node-02
+    hostname: jettra-node-02
+    restart: unless-stopped
+    depends_on:
+      jettra-node-01:
+        condition: service_healthy
+    ports:
+      - "8082:8080"
+      - "9092:9091"
+    environment:
+      - JETTRA_NODE_ID=node-02
+      - JETTRA_NODE_ROLE=SECONDARY
+      - JETTRA_STORAGE_PATH=/jettra/data
+      - JETTRA_REST_PORT=8080
+      - JETTRA_GRPC_PORT=9091
+      - JETTRA_ADMIN_USERNAME=admin
+      - JETTRA_ADMIN_PASSWORD=admin-jettra
+      - JETTRA_CLUSTER_PEERS=node-01:jettra-node-01:9091:PRIMARY,node-03:jettra-node-03:9091:SECONDARY
+      - JAVA_OPTS=-Xms512m -Xmx2g -XX:+UseZGC -XX:+UseCompactObjectHeaders --enable-preview --enable-native-access=ALL-UNNAMED
+    volumes:
+      - jettra_data_node02:/jettra/data
+    networks:
+      - jettra-cluster-net
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/api/v1/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+  jettra-node-03:
+    build:
+      context: ./JettraStore
+      dockerfile: Dockerfile
+    image: jettrastore:1.0
+    container_name: jettra-node-03
+    hostname: jettra-node-03
+    restart: unless-stopped
+    depends_on:
+      jettra-node-01:
+        condition: service_healthy
+    ports:
+      - "8083:8080"
+      - "9093:9091"
+    environment:
+      - JETTRA_NODE_ID=node-03
+      - JETTRA_NODE_ROLE=SECONDARY
+      - JETTRA_STORAGE_PATH=/jettra/data
+      - JETTRA_REST_PORT=8080
+      - JETTRA_GRPC_PORT=9091
+      - JETTRA_ADMIN_USERNAME=admin
+      - JETTRA_ADMIN_PASSWORD=admin-jettra
+      - JETTRA_CLUSTER_PEERS=node-01:jettra-node-01:9091:PRIMARY,node-02:jettra-node-02:9091:SECONDARY
+      - JAVA_OPTS=-Xms512m -Xmx2g -XX:+UseZGC -XX:+UseCompactObjectHeaders --enable-preview --enable-native-access=ALL-UNNAMED
+    volumes:
+      - jettra_data_node03:/jettra/data
+    networks:
+      - jettra-cluster-net
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/api/v1/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+  # ==============================================================================
+  # HERRAMIENTAS ADICIONALES (CLI INTERACTIVO Y MONITOR VISUAL 3D)
+  # ==============================================================================
+  jettra-shell:
+    build:
+      context: ./JettraStoreShell
+      dockerfile: Dockerfile
+    image: jettrastoreshell:1.0
+    container_name: jettra-shell
+    stdin_open: true
+    tty: true
+    depends_on:
+      jettra-node-01:
+        condition: service_healthy
+    environment:
+      - JETTRA_HOST=jettra-node-01
+      - JETTRA_PORT=9091
+      - JAVA_OPTS=-XX:+UnlockExperimentalVMOptions -XX:+UseCompactObjectHeaders --enable-preview --enable-native-access=ALL-UNNAMED
+    volumes:
+      - jettra_shell_data:/home/jettra/.jettra
+    networks:
+      - jettra-cluster-net
+    profiles: ["tools", "shell", "all"]
+
+  jettra-police-3d:
+    build:
+      context: ./JettraStorePolice3D
+      dockerfile: Dockerfile
+    image: jettrastorepolice3d:1.0
+    container_name: jettra-police-3d
+    restart: unless-stopped
+    depends_on:
+      jettra-node-01:
+        condition: service_healthy
+    environment:
+      - DISPLAY=${DISPLAY:-:0}
+      - HEADLESS=false
+      - JETTRA_DOCKER_COMPOSE=false
+      - JAVA_OPTS=-Xms512m -Xmx2g -XX:+UnlockExperimentalVMOptions -XX:+UseCompactObjectHeaders --enable-preview --enable-native-access=ALL-UNNAMED -Djettra.config.path=/app/config/jettra.config
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix
+      - ./JettraStorePolice3D/config/jettra.config:/app/config/jettra.config:ro
+    networks:
+      - jettra-cluster-net
+    profiles: ["tools", "police", "all"]
+
+volumes:
+  jettra_shell_data:
+    name: jettra_shell_data
+    driver: local
+  jettra_data_node01:
+    name: jettra_data_node01
+    driver: local
+  jettra_data_node02:
+    name: jettra_data_node02
+    driver: local
+  jettra_data_node03:
+    name: jettra_data_node03
+    driver: local
+
+networks:
+  jettra-cluster-net:
+    name: jettra-cluster-net
+    driver: bridge

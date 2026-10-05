@@ -1,0 +1,19 @@
+[ {
+  "id" : "conn_local",
+  "name" : "JettraStore Local Master",
+  "url" : "tcp://127.0.0.1:8765",
+  "username" : "admin",
+  "password" : "admin123",
+  "default" : true,
+  "host" : "tcp",
+  "port" : 9091
+}, {
+  "id" : "conn_replica",
+  "name" : "JettraStore Cluster Node 2",
+  "url" : "tcp://192.168.1.102:8765",
+  "username" : "operator",
+  "password" : "jettraPass!",
+  "default" : false,
+  "host" : "tcp",
+  "port" : 9091
+} ]

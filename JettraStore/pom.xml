@@ -1,0 +1,236 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" 
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" 
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>io.jettra</groupId>
+    <artifactId>JettraStore</artifactId>
+    <version>1.0-SNAPSHOT</version>
+    <packaging>jar</packaging>
+    <name>JettraStore</name>
+    <description>Motor de Base de Datos Multimodelo Distribuido en Java 25+ con Project Panama y Anillo por Saturación de RAM</description>
+
+    <properties>
+        <maven.compiler.release>25</maven.compiler.release>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <mainClass>io.jettra.store.JettraStoreServer</mainClass>
+        <jettra.frameworks.version>1.0.0-SNAPSHOT</jettra.frameworks.version>
+        <jmh.version>1.37</jmh.version>
+    </properties>
+
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>io.jettra</groupId>
+                <artifactId>jettraframeworks</artifactId>
+                <version>${jettra.frameworks.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <dependency>
+            <groupId>io.jettra</groupId>
+            <artifactId>JettraMemory</artifactId>
+            <version>1.0-SNAPSHOT</version>
+        </dependency>
+    </dependencies>
+    </dependencyManagement>
+
+    <dependencies>
+        <!-- Ecosistema Jettra Frameworks -->
+        <dependency>
+            <groupId>io.jettra</groupId>
+            <artifactId>JettraCollections</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.jettra</groupId>
+            <artifactId>JettraJWT</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.jettra</groupId>
+            <artifactId>JettraJSON</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.jettra</groupId>
+            <artifactId>JettraRules</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.jettra</groupId>
+            <artifactId>JettraRest</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.jettra</groupId>
+            <artifactId>JettraGRPC</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.jettra</groupId>
+            <artifactId>JettraAnnotation</artifactId>
+        </dependency>
+
+        <!-- Framework de Pruebas Propio JettraTest (Reemplaza JUnit) -->
+        <dependency>
+            <groupId>io.jettra</groupId>
+            <artifactId>JettraTest</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- JMH Microbenchmark Suite -->
+        <dependency>
+            <groupId>org.openjdk.jmh</groupId>
+            <artifactId>jmh-core</artifactId>
+            <version>${jmh.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.openjdk.jmh</groupId>
+            <artifactId>jmh-generator-annprocess</artifactId>
+            <version>${jmh.version}</version>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.jettra</groupId>
+            <artifactId>JettraMemory</artifactId>
+            <version>1.0-SNAPSHOT</version>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <version>3.13.0</version>
+                <configuration>
+                    <release>25</release>
+                    <compilerArgs>
+                        <arg>--enable-preview</arg>
+                    </compilerArgs>
+                </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-jar-plugin</artifactId>
+                <version>3.4.1</version>
+                <configuration>
+                    <archive>
+                        <manifest>
+                            <mainClass>${mainClass}</mainClass>
+                            <addClasspath>true</addClasspath>
+                            <classpathPrefix>lib/</classpathPrefix>
+                        </manifest>
+                    </archive>
+                </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-dependency-plugin</artifactId>
+                <version>3.7.1</version>
+                <executions>
+                    <execution>
+                        <id>copy-dependencies</id>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>copy-dependencies</goal>
+                        </goals>
+                        <configuration>
+                            <outputDirectory>${project.build.directory}/lib</outputDirectory>
+                            <includeScope>runtime</includeScope>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+
+            <!-- Generación de Uber JAR (Fat JAR con todas las librerías embebidas) adicional al JAR normal -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-shade-plugin</artifactId>
+                <version>3.6.0</version>
+                <executions>
+                    <execution>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>shade</goal>
+                        </goals>
+                        <configuration>
+                            <createDependencyReducedPom>false</createDependencyReducedPom>
+                            <shadedArtifactAttached>true</shadedArtifactAttached>
+                            <shadedClassifierName>uber</shadedClassifierName>
+                            <transformers>
+                                <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+                                    <mainClass>${mainClass}</mainClass>
+                                </transformer>
+                                <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
+                            </transformers>
+                            <filters>
+                                <filter>
+                                    <artifact>*:*</artifact>
+                                    <excludes>
+                                        <exclude>META-INF/*.SF</exclude>
+                                        <exclude>META-INF/*.DSA</exclude>
+                                        <exclude>META-INF/*.RSA</exclude>
+                                    </excludes>
+                                </filter>
+                            </filters>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+
+
+            <!-- Desactivamos Surefire tradicional para delegar a JettraTestRunner -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <version>3.5.2</version>
+                <configuration>
+                    <skipTests>true</skipTests>
+                </configuration>
+            </plugin>
+
+            <!-- Configuración de Ejecución Exec Maven Plugin (JVM 25 ZGC + Compact Object Headers + JettraTestRunner) -->
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>exec-maven-plugin</artifactId>
+                <version>3.1.1</version>
+                <executions>
+                    <execution>
+                        <id>default-cli</id>
+                        <goals>
+                            <goal>exec</goal>
+                        </goals>
+                        <configuration>
+                            <mainClass>${mainClass}</mainClass>
+                            <executable>java</executable>
+                            <arguments>
+                                <!--<argument>-Xms512m</argument>-->
+                                <argument>-Xms2g</argument>
+                                <argument>-Xmx4g</argument>
+                                <argument>-XX:+UseZGC</argument>
+                                <argument>-XX:+UseCompactObjectHeaders</argument>
+                                <argument>--enable-preview</argument>
+                                <argument>-classpath</argument>
+                                <classpath/>
+                                <argument>${mainClass}</argument>
+                            </arguments>
+                        </configuration>
+                    </execution>
+                    <execution>
+                        <id>jettra-test</id>
+                        <phase>test</phase>
+                        <goals>
+                            <goal>java</goal>
+                        </goals>
+                        <configuration>
+                            <mainClass>io.jettra.test.runner.JettraTestRunner</mainClass>
+                            <classpathScope>test</classpathScope>
+                            <cleanupDaemonThreads>false</cleanupDaemonThreads>
+                            <arguments>
+                                <argument>${project.build.testOutputDirectory}</argument>
+                                <argument>${project.build.outputDirectory}</argument>
+                            </arguments>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+</project>

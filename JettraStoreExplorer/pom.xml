@@ -1,0 +1,235 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>io.jettra</groupId>
+    <artifactId>JettraStoreExplorer</artifactId>
+    <version>1.0.0-SNAPSHOT</version>
+    <packaging>jar</packaging>
+
+    <name>JettraStoreExplorer</name>
+    <description>JettraStore Explorer - Web Management and Telemetry Suite powered by JettraFlux and JettraStorePlugin</description>
+
+    <properties>
+        <maven.compiler.release>25</maven.compiler.release>
+        <maven.compiler.source>25</maven.compiler.source>
+        <maven.compiler.target>25</maven.compiler.target>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <main.class.path>io.jettra.store.explorer.App</main.class.path>
+        <jettra.frameworks.version>1.0.0-SNAPSHOT</jettra.frameworks.version>
+        <jettra.store.version>1.0-SNAPSHOT</jettra.store.version>
+        <jackson.version>2.18.2</jackson.version>
+        <skipTests>true</skipTests>
+    </properties>
+
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>io.jettra</groupId>
+                <artifactId>jettraframeworks</artifactId>
+                <version>${jettra.frameworks.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+    <dependencies>
+        <!-- Servidor backend JettraEE empotrado -->
+        <dependency>
+            <groupId>io.jettra</groupId>
+            <artifactId>JettraEE</artifactId>
+            <version>${jettra.frameworks.version}</version>
+        </dependency>
+
+        <!-- Framework reactivo UI JettraFlux -->
+        <dependency>
+            <groupId>io.jettra</groupId>
+            <artifactId>JettraFlux</artifactId>
+            <version>${jettra.frameworks.version}</version>
+        </dependency>
+
+        <!-- Anotaciones y procesador @Page, @Discovered -->
+        <dependency>
+            <groupId>io.jettra</groupId>
+            <artifactId>JettraAnnotation</artifactId>
+            <version>${jettra.frameworks.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>io.jettra</groupId>
+            <artifactId>JettraCDI</artifactId>
+            <version>${jettra.frameworks.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>io.jettra</groupId>
+            <artifactId>JettraRest</artifactId>
+            <version>${jettra.frameworks.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>io.jettra</groupId>
+            <artifactId>JettraJSON</artifactId>
+            <version>${jettra.frameworks.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>io.jettra</groupId>
+            <artifactId>JettraRules</artifactId>
+            <version>${jettra.frameworks.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>io.jettra</groupId>
+            <artifactId>JettraJWT</artifactId>
+            <version>${jettra.frameworks.version}</version>
+        </dependency>
+
+        <!-- Dependencias JettraStore y Driver -->
+        <dependency>
+            <groupId>io.jettra</groupId>
+            <artifactId>JettraStoreDriver</artifactId>
+            <version>${jettra.store.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>io.jettra</groupId>
+            <artifactId>JettraStore</artifactId>
+            <version>${jettra.store.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>io.jettra</groupId>
+            <artifactId>JettraMemory</artifactId>
+            <version>${jettra.store.version}</version>
+        </dependency>
+
+        <!-- Temas de JettraFlux -->
+        <dependency>
+            <groupId>io.jettra.theme</groupId>
+            <artifactId>metropolis</artifactId>
+            <version>1.0.0</version>
+        </dependency>
+        <dependency>
+            <groupId>io.jettra.theme</groupId>
+            <artifactId>bit</artifactId>
+            <version>1.0.0</version>
+        </dependency>
+        <dependency>
+            <groupId>io.jettra.theme</groupId>
+            <artifactId>tail</artifactId>
+            <version>1.0.0</version>
+        </dependency>
+
+        <!-- Serialización JSON -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+            <version>${jackson.version}</version>
+        </dependency>
+
+        <!-- Testing con JettraTest -->
+        <dependency>
+            <groupId>io.jettra</groupId>
+            <artifactId>JettraTest</artifactId>
+            <version>${jettra.frameworks.version}</version>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <version>3.13.0</version>
+                <configuration>
+                    <release>25</release>
+                    <compilerArgs>
+                        <arg>--enable-preview</arg>
+                    </compilerArgs>
+                    <annotationProcessorPaths>
+                        <path>
+                            <groupId>io.jettra</groupId>
+                            <artifactId>JettraAnnotation</artifactId>
+                            <version>${jettra.frameworks.version}</version>
+                        </path>
+                        <path>
+                            <groupId>io.jettra</groupId>
+                            <artifactId>JettraFlux</artifactId>
+                            <version>${jettra.frameworks.version}</version>
+                        </path>
+                    </annotationProcessorPaths>
+                </configuration>
+            </plugin>
+
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-jar-plugin</artifactId>
+                <version>3.4.1</version>
+                <configuration>
+                    <archive>
+                        <manifest>
+                            <mainClass>${main.class.path}</mainClass>
+                        </manifest>
+                    </archive>
+                </configuration>
+            </plugin>
+
+            <!-- Generación de Fat JAR / Shaded JAR -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-shade-plugin</artifactId>
+                <version>3.6.0</version>
+                <executions>
+                    <execution>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>shade</goal>
+                        </goals>
+                        <configuration>
+                            <createDependencyReducedPom>false</createDependencyReducedPom>
+                            <transformers>
+                                <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+                                    <mainClass>${main.class.path}</mainClass>
+                                </transformer>
+                                <transformer implementation="org.apache.maven.plugins.shade.resource.AppendingTransformer">
+                                    <resource>META-INF/jettra/discovered.classes</resource>
+                                </transformer>
+                            </transformers>
+                            <filters>
+                                <filter>
+                                    <artifact>*:*</artifact>
+                                    <excludes>
+                                        <exclude>META-INF/*.SF</exclude>
+                                        <exclude>META-INF/*.DSA</exclude>
+                                        <exclude>META-INF/*.RSA</exclude>
+                                    </excludes>
+                                </filter>
+                            </filters>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>exec-maven-plugin</artifactId>
+                <version>3.5.1</version>
+                <configuration>
+                    <mainClass>${main.class.path}</mainClass>
+                    <executable>java</executable>
+                    <arguments>
+                        <argument>--enable-preview</argument>
+                        <argument>-classpath</argument>
+                        <classpath/>
+                        <argument>${main.class.path}</argument>
+                    </arguments>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>

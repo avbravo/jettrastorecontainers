@@ -1,0 +1,67 @@
+[
+  {
+    "id": "u_admin",
+    "username": "admin",
+    "password": "admin123",
+    "description": "Superadministrador del Clúster JettraStore",
+    "globalRole": "ADMIN",
+    "databaseRoles": {
+      "example_factura_db": "ADMIN",
+      "samples_hostipal_db": "ADMIN",
+      "samples_ambiental_db": "ADMIN",
+      "system_metadata_db": "ADMIN"
+    }
+  },
+  {
+    "id": "u_factura",
+    "username": "usr_facturacion_01",
+    "password": "facturaPass2026",
+    "description": "Operador Fiscal y Facturación",
+    "globalRole": "OPERATOR",
+    "databaseRoles": {
+      "example_factura_db": "READ_WRITE",
+      "samples_hostipal_db": "NONE",
+      "samples_ambiental_db": "NONE",
+      "system_metadata_db": "READ_ONLY"
+    }
+  },
+  {
+    "id": "u_med",
+    "username": "dr_gonzalez_01",
+    "password": "medicoSeguro99",
+    "description": "Especialista Clínico y UCI",
+    "globalRole": "DEVELOPER",
+    "databaseRoles": {
+      "samples_hostipal_db": "READ_WRITE",
+      "example_factura_db": "READ_ONLY",
+      "samples_ambiental_db": "NONE",
+      "system_metadata_db": "NONE"
+    }
+  },
+  {
+    "id": "u_iot",
+    "username": "sensor_co2_norte",
+    "password": "iotTokenStream",
+    "description": "Agente de Ingesta TimeSeries IoT",
+    "globalRole": "ANALYST",
+    "databaseRoles": {
+      "samples_ambiental_db": "READ_WRITE",
+      "samples_hostipal_db": "NONE",
+      "example_factura_db": "NONE",
+      "system_metadata_db": "NONE"
+    }
+  },
+  {
+    "id": "u_auditor",
+    "username": "sec_auditor_02",
+    "password": "auditKeyCompliance",
+    "description": "Auditor de Registros y Políticas Raft",
+    "globalRole": "AUDITOR",
+    "databaseRoles": {
+      "system_metadata_db": "READ_ONLY",
+      "example_factura_db": "READ_ONLY",
+      "samples_hostipal_db": "READ_ONLY",
+      "samples_ambiental_db": "READ_ONLY"
+    }
+  }
+]
