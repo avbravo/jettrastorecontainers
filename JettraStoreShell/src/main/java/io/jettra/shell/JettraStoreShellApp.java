@@ -852,8 +852,25 @@ Seleccione una conexión para iniciar:
         sb.append("+----------+----------------------+-------+-----------+------------+----------+--------------+\n");
         sb.append("| Nodo ID  | Dirección IP         | Puerto| Rol       | Estado Raft| Estado   | Offload Bytes|\n");
         sb.append("+----------+----------------------+-------+-----------+------------+----------+--------------+\n");
+        JettraStoreConfig storeCfg = null;
+        try {
+            storeCfg = JettraStoreConfig.load();
+        } catch (Exception ignored) {}
+
+        String leaderIp = currentHost;
+        int leaderPort = currentPort;
+        if (storeCfg != null) {
+            if (("127.0.0.1".equals(currentHost) || "localhost".equalsIgnoreCase(currentHost))
+                && storeCfg.getNodeIp() != null && !storeCfg.getNodeIp().isBlank()) {
+                leaderIp = storeCfg.getNodeIp();
+            }
+            if (storeCfg.getGrpcPort() > 0) {
+                leaderPort = storeCfg.getGrpcPort();
+            }
+        }
+
         sb.append(String.format("| %-8s | %-20s | %-5d | %-9s | %-10s | %-8s | %-12d |\n",
-            ring.getNodeId(), currentHost, currentPort, "PRIMARY", "LEADER", "RUNNING", 0));
+            ring.getNodeId(), leaderIp, leaderPort, "PRIMARY", "LEADER", "RUNNING", 0));
 
         for (ClusterNode peer : ring.getPeers()) {
             sb.append(String.format("| %-8s | %-20s | %-5d | %-9s | %-10s | %-8s | %-12d |\n",
@@ -1056,12 +1073,18 @@ Seleccione una conexión para iniciar:
         this.currentDatabase = dbName;
 
         if (db.isDistributedRingActive() || client.getRingEngine().isRingActive()) {
+            String peersDesc = client.getRingEngine().getPeers().stream()
+                .map(p -> p.getId() + ": " + p.getIp() + ":" + p.getPort())
+                .collect(java.util.stream.Collectors.joining(", "));
+            if (peersDesc.isBlank()) {
+                peersDesc = "nodos secundarios";
+            }
             return String.format("""
                 [RING TRANSITION ACTIVE] Supervisión preventiva JettraPolice: Saturación de RAM prevenida (Umbral >= 85%%).
                 [CLUSTER] Activada Transición Dinámica a Motor de Anillo Distribuido (Consistent Ring Topology).
-                [OFFLOAD] Carga y particiones delegadas a nodos secundarios (node-02: 192.168.1.102:9091, node-03: 192.168.1.103:9091).
+                [OFFLOAD] Carga y particiones delegadas a nodos secundarios (%s).
                 [SUCCESS] Conmutado a base de datos activa: '%s' [MODO ANILLO DISTRIBUIDO].
-                """, dbName).trim();
+                """, peersDesc, dbName).trim();
         }
 
         return "[SUCCESS] Conmutado a base de datos activa: '" + dbName + "'.";

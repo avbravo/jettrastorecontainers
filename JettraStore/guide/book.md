@@ -1665,6 +1665,19 @@ java --enable-preview \
    curl http://192.168.1.103:8080/api/v1/health
    ```
 
+
+
+#### Alternativa ejecutando start-node.sh
+
+```bash
+
+# Ejemplos:
+#   ./start-node.sh node-01 PRIMARY
+#   ./start-node.sh node-02 SECONDARY
+#   ./start-node.sh node-03 SECONDARY
+
+```
+
 ---
 
 ### 18.2 Despliegue Mediante Docker Compose Monolítico (Todos los Nodos en la Misma Máquina)

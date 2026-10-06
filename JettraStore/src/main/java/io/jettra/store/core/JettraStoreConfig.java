@@ -17,6 +17,7 @@ public final class JettraStoreConfig {
     private final ClusterNode.Role nodeRole;
     private final String clusterPeers;
     private final List<ClusterNode> parsedPeers;
+    private final List<JettraConfigValidator.ClusterNodeInfo> allClusterNodes;
     private final String rawConfiguredPath;
     private final String storagePath;
     private final int memTableSizeMb;
@@ -80,6 +81,7 @@ public final class JettraStoreConfig {
     public JettraStoreConfig(Properties props, Properties clusterProps) {
         Properties effectiveClusterProps = clusterProps != null ? clusterProps : new Properties();
         List<JettraConfigValidator.ClusterNodeInfo> clusterNodes = JettraConfigValidator.parseClusterNodes(effectiveClusterProps);
+        this.allClusterNodes = Collections.unmodifiableList(clusterNodes);
 
         this.nodeId = getPropOrEnv(props, 
             new String[]{"jettra.node.id", "jettra.cluster.node.id", "node.id"}, 
@@ -298,5 +300,9 @@ public final class JettraStoreConfig {
 
     public List<ClusterNode> getParsedPeers() {
         return parsedPeers;
+    }
+
+    public List<JettraConfigValidator.ClusterNodeInfo> getAllClusterNodes() {
+        return allClusterNodes;
     }
 }

@@ -191,8 +191,11 @@ public final class JettraStoreServer {
             peersJson.append("]");
 
             String response = String.format(
-                "{\"node_id\":\"%s\",\"role\":\"%s\",\"cluster_multinode_active\":\"%s\",\"raft_state\":\"%s\",\"ring_active\":%b,\"memory_usage_pct\":%.2f,\"storage_path\":\"%s\",\"peers\":%s}",
+                "{\"node_id\":\"%s\",\"node_ip\":\"%s\",\"grpc_port\":%d,\"rest_port\":%d,\"role\":\"%s\",\"cluster_multinode_active\":\"%s\",\"raft_state\":\"%s\",\"ring_active\":%b,\"memory_usage_pct\":%.2f,\"storage_path\":\"%s\",\"peers\":%s}",
                 config.getNodeId(),
+                config.getNodeIp(),
+                config.getGrpcPort(),
+                config.getRestPort(),
                 config.getNodeRole(),
                 config.getClusterMultinodeActive(),
                 (config.getNodeRole() == ClusterNode.Role.PRIMARY) ? "LEADER" : "FOLLOWER",

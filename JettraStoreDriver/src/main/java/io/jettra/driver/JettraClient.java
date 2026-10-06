@@ -37,12 +37,26 @@ public final class JettraClient implements AutoCloseable {
         this.config = config;
         this.sessionToken = securityManager.authenticate(config.getUsername(), config.getPassword());
         this.adminClient = new JettraAdminClient(sessionToken);
-        this.ringEngine = new DynamicRingEngine("node-01", 0.85, 0.45, config.isClusterMultinodeActive());
+        JettraStoreConfig storeCfg = null;
+        try {
+            storeCfg = JettraStoreConfig.load();
+        } catch (Exception ignored) {}
 
-        // Registrar nodos pares solo si cluster.multinode.active está habilitado (on)
+        String localNodeId = (storeCfg != null) ? storeCfg.getNodeId() : "node-01";
+        double satThreshold = (storeCfg != null) ? (storeCfg.getRingSaturationThresholdPercent() / 100.0) : 0.85;
+        double relThreshold = (storeCfg != null) ? (storeCfg.getRingReleaseTargetPercent() / 100.0) : 0.45;
+        this.ringEngine = new DynamicRingEngine(localNodeId, satThreshold, relThreshold, config.isClusterMultinodeActive());
+
+        // Registrar nodos pares desde jettra.config si cluster.multinode.active está habilitado (on)
         if (config.isClusterMultinodeActive()) {
-            this.ringEngine.registerPeer(new ClusterNode("node-02", "192.168.1.102", 9091, ClusterNode.Role.SECONDARY));
-            this.ringEngine.registerPeer(new ClusterNode("node-03", "192.168.1.103", 9091, ClusterNode.Role.SECONDARY));
+            if (storeCfg != null && !storeCfg.getParsedPeers().isEmpty()) {
+                for (ClusterNode peer : storeCfg.getParsedPeers()) {
+                    this.ringEngine.registerPeer(peer);
+                }
+            } else {
+                this.ringEngine.registerPeer(new ClusterNode("node-02", "127.0.0.1", 9091, ClusterNode.Role.SECONDARY));
+                this.ringEngine.registerPeer(new ClusterNode("node-03", "127.0.0.1", 9091, ClusterNode.Role.SECONDARY));
+            }
         }
 
         this.policeNotificationListener = this::dispatchPoliceEvent;

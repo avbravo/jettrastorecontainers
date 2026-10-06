@@ -59,7 +59,7 @@ public final class JettraDatabase implements AutoCloseable {
         this.indexManager = new JettraIndexManager(databaseName, this.config);
         long memTableBytes = this.config.getMemTableSizeMb() * 1024L * 1024L;
         this.memTable = new NativeMemTable(memTableBytes);
-        this.ringEngine = (ringEngine != null) ? ringEngine : new DynamicRingEngine("node-01", 
+        this.ringEngine = (ringEngine != null) ? ringEngine : new DynamicRingEngine(this.config.getNodeId(), 
             this.config.getRingSaturationThresholdPercent() / 100.0, 
             this.config.getRingReleaseTargetPercent() / 100.0,
             this.config.isClusterMultinodeActive());
@@ -82,8 +82,9 @@ public final class JettraDatabase implements AutoCloseable {
         this.storageMode = (this.config != null && this.config.getStorageMode() != null) ? this.config.getStorageMode() : StorageMode.JVM_RAM;
 
         if (this.config.isClusterMultinodeActive() && this.ringEngine.getPeers().isEmpty()) {
-            this.ringEngine.registerPeer(new ClusterNode("node-02", "192.168.1.102", 9091, ClusterNode.Role.SECONDARY));
-            this.ringEngine.registerPeer(new ClusterNode("node-03", "192.168.1.103", 9091, ClusterNode.Role.SECONDARY));
+            for (ClusterNode peer : this.config.getParsedPeers()) {
+                this.ringEngine.registerPeer(peer);
+            }
         }
 
         // 1. Cargar estado previo de disco si existe
