@@ -55,6 +55,13 @@
             <version>1.0-SNAPSHOT</version>
         </dependency>
 
+        <!-- Terminal interactiva con historial y autocompletado nativo (JLine) -->
+        <dependency>
+            <groupId>org.jline</groupId>
+            <artifactId>jline</artifactId>
+            <version>3.25.1</version>
+        </dependency>
+
         <!-- Framework de Pruebas Propio JettraTest (Reemplaza JUnit) -->
         <dependency>
             <groupId>io.jettra</groupId>

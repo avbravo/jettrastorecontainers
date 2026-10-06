@@ -5,6 +5,8 @@ import com.sun.net.httpserver.HttpHandler;
 import com.sun.net.httpserver.HttpServer;
 import io.jettra.store.cluster.ClusterNode;
 import io.jettra.store.cluster.DynamicRingEngine;
+import io.jettra.store.cluster.JettraClusterTransportServer;
+import io.jettra.store.cluster.JettraClusterReplicationClient;
 import io.jettra.store.core.JettraDatabase;
 import io.jettra.store.core.JettraStoreConfig;
 import io.jettra.store.core.JettraConfigValidator;
@@ -17,7 +19,11 @@ import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
+import java.util.Set;
+import java.util.TreeSet;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 
@@ -27,11 +33,14 @@ import java.util.concurrent.Executors;
  * y autenticación criptográfica obligatoria mediante tokens JettraJWT.
  */
 public final class JettraStoreServer {
+    private static volatile JettraStoreServer activeInstance;
     private final JettraStoreConfig config;
     private final JettraSecurityManager securityManager;
     private final DynamicRingEngine ringEngine;
     private final ConcurrentHashMap<String, JettraDatabase> databases = new ConcurrentHashMap<>();
     private HttpServer httpServer;
+    private JettraClusterTransportServer transportServer;
+    private JettraClusterReplicationClient replicationClient;
 
     public JettraStoreServer(JettraStoreConfig config) {
         this.config = config;
@@ -91,14 +100,78 @@ public final class JettraStoreServer {
         httpServer.createContext("/api/v1/auth/token", new AuthHandler());
         httpServer.createContext("/api/v1/health", new HealthHandler());
         httpServer.createContext("/api/v1/cluster/status", new StatusHandler());
+        httpServer.createContext("/api/v1/cluster/databases", new DatabasesHandler());
+        httpServer.createContext("/api/v1/cluster/replicate", new ReplicateHandler());
         httpServer.createContext("/api/v1/police/alerts", new PoliceHandler());
         httpServer.start();
+
+        activeInstance = this;
+
+        // Iniciar Servidor de Transporte Raft Inter-Nodo (puerto gRPC/TCP) si multinodo está activo
+        if (config.isClusterMultinodeActive()) {
+            try {
+                this.transportServer = new JettraClusterTransportServer(config.getGrpcPort(), this);
+                this.transportServer.start();
+            } catch (Exception e) {
+                System.err.printf("[JettraStoreServer] Aviso: No se pudo iniciar transporte Raft en puerto %d: %s%n",
+                    config.getGrpcPort(), e.getMessage());
+            }
+
+            this.replicationClient = new JettraClusterReplicationClient(config.getNodeId(), ringEngine.getPeers());
+
+            // Tarea periódica de latidos Raft (Heartbeats) si es PRIMARY
+            if (config.getNodeRole() == ClusterNode.Role.PRIMARY) {
+                Thread.ofVirtual().name("jettra-raft-heartbeat").start(() -> {
+                    while (httpServer != null && (transportServer == null || transportServer.isRunning())) {
+                        try {
+                            Thread.sleep(150);
+                            if (replicationClient != null) {
+                                replicationClient.sendHeartbeats();
+                            }
+                        } catch (InterruptedException e) {
+                            break;
+                        } catch (Exception ignored) {}
+                    }
+                });
+            } else {
+                // Si es SECONDARY, sincronizar catálogo y datos iniciales con el PRIMARY
+                Thread.ofVirtual().name("jettra-catalog-sync").start(() -> {
+                    try {
+                        Thread.sleep(600);
+                        for (ClusterNode peer : ringEngine.getPeers()) {
+                            if (peer.getRole() == ClusterNode.Role.PRIMARY) {
+                                List<String> primaryDbs = replicationClient.requestCatalogSync(peer.getIp(), peer.getPort());
+                                for (String db : primaryDbs) {
+                                    if (!db.isBlank()) {
+                                        byte[] metaBytes = replicationClient.requestDataSync(peer.getIp(), peer.getPort(), db);
+                                        if (metaBytes != null && metaBytes.length > 0) {
+                                            Path targetMeta = Path.of(config.getStoragePath(), db + "_meta.json");
+                                            if (targetMeta.getParent() != null) {
+                                                Files.createDirectories(targetMeta.getParent());
+                                            }
+                                            Files.write(targetMeta, metaBytes);
+                                        }
+                                        getOrCreateDatabaseInternal(db, false);
+                                    }
+                                }
+                            }
+                        }
+                    } catch (Exception ignored) {}
+                });
+            }
+        }
 
         System.out.printf("REST Service running with Virtual Threads on http://0.0.0.0:%d/%n", config.getRestPort());
         System.out.println("JettraStore Server is fully ready for high-performance transactions.");
     }
 
     public void stop() {
+        if (transportServer != null) {
+            transportServer.stop();
+        }
+        if (replicationClient != null) {
+            replicationClient.close();
+        }
         if (httpServer != null) {
             httpServer.stop(0);
         }
@@ -271,6 +344,171 @@ public final class JettraStoreServer {
         try (OutputStream os = exchange.getResponseBody()) {
             os.write(bytes);
         }
+    }
+
+    private class DatabasesHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
+            try {
+                validateAuthToken(exchange);
+            } catch (SecurityException ex) {
+                sendResponse(exchange, 401, String.format("{\"error\":\"Unauthorized: %s\"}", ex.getMessage()));
+                return;
+            }
+
+            String method = exchange.getRequestMethod();
+            if ("GET".equalsIgnoreCase(method)) {
+                List<String> dbs = listDatabaseNames();
+                StringBuilder sb = new StringBuilder("[");
+                for (int i = 0; i < dbs.size(); i++) {
+                    sb.append("\"").append(dbs.get(i)).append("\"");
+                    if (i < dbs.size() - 1) sb.append(",");
+                }
+                sb.append("]");
+                sendResponse(exchange, 200, sb.toString());
+            } else if ("POST".equalsIgnoreCase(method)) {
+                String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+                String name = extractJsonField(body, "name");
+                if (name == null || name.isBlank()) {
+                    name = extractJsonField(body, "database");
+                }
+                if (name == null || name.isBlank()) {
+                    sendResponse(exchange, 400, "{\"error\":\"Missing 'name' field in request\"}");
+                    return;
+                }
+                getOrCreateDatabase(name.trim());
+                sendResponse(exchange, 200, String.format("{\"status\":\"CREATED\",\"database\":\"%s\"}", name.trim()));
+            } else if ("DELETE".equalsIgnoreCase(method)) {
+                String query = exchange.getRequestURI().getQuery();
+                String name = null;
+                if (query != null && query.startsWith("name=")) {
+                    name = query.substring(5);
+                }
+                if (name != null && !name.isBlank()) {
+                    dropDatabase(name.trim());
+                    sendResponse(exchange, 200, String.format("{\"status\":\"DROPPED\",\"database\":\"%s\"}", name.trim()));
+                } else {
+                    sendResponse(exchange, 400, "{\"error\":\"Missing 'name' query parameter\"}");
+                }
+            } else {
+                sendResponse(exchange, 405, "{\"error\":\"Method not allowed\"}");
+            }
+        }
+    }
+
+    private class ReplicateHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
+            try {
+                validateAuthToken(exchange);
+            } catch (SecurityException ex) {
+                sendResponse(exchange, 401, String.format("{\"error\":\"Unauthorized: %s\"}", ex.getMessage()));
+                return;
+            }
+
+            if ("POST".equalsIgnoreCase(exchange.getRequestMethod())) {
+                String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+                String op = extractJsonField(body, "op");
+                String db = extractJsonField(body, "database");
+                if ("CREATE_DATABASE".equalsIgnoreCase(op) && db != null) {
+                    getOrCreateDatabaseInternal(db.trim(), false);
+                    sendResponse(exchange, 200, "{\"status\":\"ACK\",\"op\":\"CREATE_DATABASE\"}");
+                    return;
+                } else if ("DROP_DATABASE".equalsIgnoreCase(op) && db != null) {
+                    dropDatabaseInternal(db.trim(), false);
+                    sendResponse(exchange, 200, "{\"status\":\"ACK\",\"op\":\"DROP_DATABASE\"}");
+                    return;
+                }
+            }
+            sendResponse(exchange, 400, "{\"error\":\"Invalid replication operation\"}");
+        }
+    }
+
+    public static JettraStoreServer getActiveInstance() {
+        return activeInstance;
+    }
+
+    public JettraDatabase getOrCreateDatabase(String name) {
+        return getOrCreateDatabaseInternal(name, true);
+    }
+
+    public JettraDatabase getOrCreateDatabaseInternal(String name, boolean broadcast) {
+        if (name == null || name.isBlank()) return null;
+        JettraDatabase db = databases.computeIfAbsent(name, k -> new JettraDatabase(k, config, ringEngine));
+        if (broadcast && config.isClusterMultinodeActive() && config.getNodeRole() == ClusterNode.Role.PRIMARY) {
+            if (replicationClient != null) {
+                replicationClient.broadcastCreateDatabase(name);
+            }
+        }
+        return db;
+    }
+
+    public boolean dropDatabase(String name) {
+        return dropDatabaseInternal(name, true);
+    }
+
+    public boolean dropDatabaseInternal(String name, boolean broadcast) {
+        if (name == null || name.isBlank()) return false;
+        JettraDatabase db = databases.remove(name);
+        if (db != null) {
+            try { db.drop(); } catch (Exception ignored) {}
+        }
+        Path dbDir = Path.of(config.getStoragePath(), name);
+        if (Files.exists(dbDir)) {
+            try (var s = Files.walk(dbDir)) {
+                s.sorted(Comparator.reverseOrder()).forEach(p -> {
+                    try { Files.deleteIfExists(p); } catch (Exception ignored) {}
+                });
+            } catch (Exception ignored) {}
+        }
+        if (broadcast && config.isClusterMultinodeActive() && config.getNodeRole() == ClusterNode.Role.PRIMARY) {
+            if (replicationClient != null) {
+                replicationClient.broadcastDropDatabase(name);
+            }
+        }
+        return true;
+    }
+
+    public void replicatePutDocument(String dbName, String colName, String id, byte[] jsonBytes) {
+        if (config.isClusterMultinodeActive() && config.getNodeRole() == ClusterNode.Role.PRIMARY && replicationClient != null) {
+            replicationClient.broadcastPutDocument(dbName, colName, id, jsonBytes);
+        }
+    }
+
+    public void replicateDeleteDocument(String dbName, String colName, String id) {
+        if (config.isClusterMultinodeActive() && config.getNodeRole() == ClusterNode.Role.PRIMARY && replicationClient != null) {
+            replicationClient.broadcastDeleteDocument(dbName, colName, id);
+        }
+    }
+
+    public void replicateCreateIndex(String dbName, String colName, String indexName, String field, String type, boolean unique) {
+        if (config.isClusterMultinodeActive() && config.getNodeRole() == ClusterNode.Role.PRIMARY && replicationClient != null) {
+            replicationClient.broadcastCreateIndex(dbName, colName, indexName, field, type, unique);
+        }
+    }
+
+    public void replicateDropIndex(String dbName, String indexName) {
+        if (config.isClusterMultinodeActive() && config.getNodeRole() == ClusterNode.Role.PRIMARY && replicationClient != null) {
+            replicationClient.broadcastDropIndex(dbName, indexName);
+        }
+    }
+
+    public List<String> listDatabaseNames() {
+        Set<String> set = new TreeSet<>(databases.keySet());
+        Path p = Path.of(config.getStoragePath());
+        if (Files.exists(p) && Files.isDirectory(p)) {
+            try (var stream = Files.list(p)) {
+                stream.filter(Files::isDirectory).forEach(dir -> {
+                    String fn = dir.getFileName().toString();
+                    if (!fn.startsWith(".")) set.add(fn);
+                });
+            } catch (Exception ignored) {}
+        }
+        return new ArrayList<>(set);
+    }
+
+    public JettraClusterReplicationClient getReplicationClient() {
+        return replicationClient;
     }
 
     public static void main(String[] args) throws IOException {

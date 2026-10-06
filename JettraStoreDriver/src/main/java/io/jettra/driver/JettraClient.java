@@ -122,6 +122,13 @@ public final class JettraClient implements AutoCloseable {
 
     public boolean dropDatabase(String name) {
         if (name == null || name.isBlank()) return false;
+        JettraStoreConfig scfg = JettraStoreConfig.load();
+        if (scfg.isClusterMultinodeActive() && scfg.getNodeRole() == io.jettra.store.cluster.ClusterNode.Role.SECONDARY) {
+            throw new UnsupportedOperationException(String.format(
+                "[READ-ONLY REPLICA] El nodo actual '%s' tiene rol SECUNDARIO. No se permite eliminar bases de datos.",
+                scfg.getNodeId()
+            ));
+        }
         boolean inMemory = false;
         JettraDatabase db = databases.remove(name);
         if (db != null) {
@@ -132,6 +139,18 @@ public final class JettraClient implements AutoCloseable {
         }
 
         boolean onDisk = deletePhysicalDatabase(name.trim());
+        if (io.jettra.store.JettraStoreServer.getActiveInstance() != null) {
+            io.jettra.store.JettraStoreServer.getActiveInstance().dropDatabase(name);
+        } else if (config.isClusterMultinodeActive()) {
+            try {
+                var peers = ringEngine.getPeers();
+                if (!peers.isEmpty()) {
+                    try (var replClient = new io.jettra.store.cluster.JettraClusterReplicationClient(ringEngine.getNodeId(), peers)) {
+                        replClient.broadcastDropDatabase(name);
+                    }
+                }
+            } catch (Exception ignored) {}
+        }
         return inMemory || onDisk;
     }
 
@@ -201,7 +220,88 @@ public final class JettraClient implements AutoCloseable {
     }
 
     public JettraDatabase getDatabase(String name) {
-        return databases.computeIfAbsent(name, k -> new JettraDatabase(k, JettraStoreConfig.load(), ringEngine));
+        boolean isNew = !databases.containsKey(name);
+        JettraDatabase db = databases.computeIfAbsent(name, k -> new JettraDatabase(k, JettraStoreConfig.load(), ringEngine));
+        if (isNew && config.isClusterMultinodeActive()) {
+            if (io.jettra.store.JettraStoreServer.getActiveInstance() != null) {
+                io.jettra.store.JettraStoreServer.getActiveInstance().getOrCreateDatabase(name);
+            } else {
+                try {
+                    var peers = ringEngine.getPeers();
+                    if (!peers.isEmpty()) {
+                        try (var replClient = new io.jettra.store.cluster.JettraClusterReplicationClient(ringEngine.getNodeId(), peers)) {
+                            replClient.broadcastCreateDatabase(name);
+                        }
+                    }
+                } catch (Exception ignored) {}
+            }
+        }
+        return db;
+    }
+
+    public void replicatePutDocument(String dbName, String colName, String id, Map<String, Object> doc) {
+        if (!config.isClusterMultinodeActive()) return;
+        byte[] jsonBytes = new io.jettra.json.JettraJson().toJson(doc).getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        if (io.jettra.store.JettraStoreServer.getActiveInstance() != null) {
+            io.jettra.store.JettraStoreServer.getActiveInstance().replicatePutDocument(dbName, colName, id, jsonBytes);
+        } else {
+            try {
+                var peers = ringEngine.getPeers();
+                if (!peers.isEmpty()) {
+                    try (var repl = new io.jettra.store.cluster.JettraClusterReplicationClient(ringEngine.getNodeId(), peers)) {
+                        repl.broadcastPutDocument(dbName, colName, id, jsonBytes);
+                    }
+                }
+            } catch (Exception ignored) {}
+        }
+    }
+
+    public void replicateDeleteDocument(String dbName, String colName, String id) {
+        if (!config.isClusterMultinodeActive()) return;
+        if (io.jettra.store.JettraStoreServer.getActiveInstance() != null) {
+            io.jettra.store.JettraStoreServer.getActiveInstance().replicateDeleteDocument(dbName, colName, id);
+        } else {
+            try {
+                var peers = ringEngine.getPeers();
+                if (!peers.isEmpty()) {
+                    try (var repl = new io.jettra.store.cluster.JettraClusterReplicationClient(ringEngine.getNodeId(), peers)) {
+                        repl.broadcastDeleteDocument(dbName, colName, id);
+                    }
+                }
+            } catch (Exception ignored) {}
+        }
+    }
+
+    public void replicateCreateIndex(String dbName, String colName, String indexName, String field, String type, boolean unique) {
+        if (!config.isClusterMultinodeActive()) return;
+        if (io.jettra.store.JettraStoreServer.getActiveInstance() != null) {
+            io.jettra.store.JettraStoreServer.getActiveInstance().replicateCreateIndex(dbName, colName, indexName, field, type, unique);
+        } else {
+            try {
+                var peers = ringEngine.getPeers();
+                if (!peers.isEmpty()) {
+                    try (var repl = new io.jettra.store.cluster.JettraClusterReplicationClient(ringEngine.getNodeId(), peers)) {
+                        repl.broadcastCreateIndex(dbName, colName, indexName, field, type, unique);
+                    }
+                }
+            } catch (Exception ignored) {}
+        }
+    }
+
+    public void replicateDropIndex(String dbName, String indexName) {
+        if (!config.isClusterMultinodeActive()) return;
+        if (io.jettra.store.JettraStoreServer.getActiveInstance() != null) {
+            io.jettra.store.JettraStoreServer.getActiveInstance().replicateDropIndex(dbName, indexName);
+        } else {
+            try {
+                var peers = ringEngine.getPeers();
+                if (!peers.isEmpty()) {
+                    try (var repl = new io.jettra.store.cluster.JettraClusterReplicationClient(ringEngine.getNodeId(), peers)) {
+                        repl.broadcastDropIndex(dbName, indexName);
+                    }
+                }
+            } catch (Exception ignored) {}
+        }
     }
 
     public io.jettra.store.engine.query.JettraQLProcessor.JQLResult jql(String databaseName, String query) {

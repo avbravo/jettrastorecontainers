@@ -90,12 +90,35 @@ public final class JettraDatabase implements AutoCloseable {
         // 1. Cargar estado previo de disco si existe
         boolean loaded = loadFromDisk();
 
-        // 2. Si es una base de datos de muestra y no tiene datos, cargar muestra automáticamente
+        // 2. Si es una base de datos de muestra y no tiene datos, cargar muestra automáticamente (sólo en modo writable)
         if (!loaded && getAllCollectionNames().isEmpty() && JettraStoreSamples.isSampleDatabase(databaseName)) {
-            JettraStoreSamples.installSample(databaseName, this);
-            try {
-                flushMemTable();
-            } catch (Exception ignored) {}
+            if (!isReadOnlyNode()) {
+                JettraStoreSamples.installSample(databaseName, this);
+                try {
+                    flushMemTable();
+                } catch (Exception ignored) {}
+            }
+        }
+    }
+
+    /**
+     * Determina si el nodo actual opera en modo de solo lectura (SECONDARY en modo multinodo).
+     */
+    public boolean isReadOnlyNode() {
+        return config != null && config.isClusterMultinodeActive() && config.getNodeRole() == ClusterNode.Role.SECONDARY;
+    }
+
+    /**
+     * Valida que el nodo actual permita mutaciones (escrituras, actualizaciones, eliminaciones).
+     * En nodos SECUNDARIOS se lanza una excepción explícita que bloquea la mutación.
+     */
+    public void assertWritable() {
+        if (isReadOnlyNode()) {
+            throw new UnsupportedOperationException(String.format(
+                "[READ-ONLY REPLICA] El nodo actual '%s' tiene rol SECUNDARIO (SECONDARY). " +
+                "Las operaciones de inserción, actualización y eliminación sólo están permitidas en el nodo PRIMARIO (PRIMARY).",
+                config != null ? config.getNodeId() : "secondary"
+            ));
         }
     }
 

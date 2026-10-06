@@ -35,6 +35,9 @@ public final class DocumentEngine implements Iterable<Map<String, Object>> {
     }
 
     public void insert(String id, Map<String, Object> document) {
+        if (database != null) {
+            database.assertWritable();
+        }
         wLock.lock();
         try {
             Map<String, Object> copy = UnifiedMap.newMap(Math.max(4, document.size() + 1));
@@ -44,6 +47,40 @@ public final class DocumentEngine implements Iterable<Map<String, Object>> {
             if (database != null && database.getStorageMode().isDiskMemory()) {
                 persistToDiskMemory(id, copy);
             }
+        } finally {
+            wLock.unlock();
+        }
+    }
+
+    /**
+     * Aplica la inserción de un documento recibido mediante replicación Raft.
+     */
+    public void applyReplicatedInsert(String id, Map<String, Object> document) {
+        wLock.lock();
+        try {
+            Map<String, Object> copy = UnifiedMap.newMap(Math.max(4, document.size() + 1));
+            copy.putAll(document);
+            copy.put("_id", id);
+            documents.put(id, copy);
+            if (database != null && database.getStorageMode().isDiskMemory()) {
+                persistToDiskMemory(id, copy);
+            }
+        } finally {
+            wLock.unlock();
+        }
+    }
+
+    /**
+     * Aplica la eliminación de un documento recibido mediante replicación Raft.
+     */
+    public boolean applyReplicatedDelete(String id) {
+        wLock.lock();
+        try {
+            boolean removed = documents.remove(id) != null;
+            if (database != null && database.getStorageMode().isDiskMemory()) {
+                removeFromDiskMemory(id);
+            }
+            return removed;
         } finally {
             wLock.unlock();
         }
@@ -214,6 +251,9 @@ public final class DocumentEngine implements Iterable<Map<String, Object>> {
     }
 
     public void update(String id, Map<String, Object> updates) {
+        if (database != null) {
+            database.assertWritable();
+        }
         wLock.lock();
         try {
             Map<String, Object> existing = documents.get(id);
@@ -229,6 +269,9 @@ public final class DocumentEngine implements Iterable<Map<String, Object>> {
     }
 
     public boolean delete(String id) {
+        if (database != null) {
+            database.assertWritable();
+        }
         wLock.lock();
         try {
             boolean removed = documents.remove(id) != null;
@@ -260,6 +303,9 @@ public final class DocumentEngine implements Iterable<Map<String, Object>> {
     }
 
     public void clear() {
+        if (database != null) {
+            database.assertWritable();
+        }
         wLock.lock();
         try {
             documents.clear();
@@ -273,6 +319,9 @@ public final class DocumentEngine implements Iterable<Map<String, Object>> {
     }
 
     public void insertBatch(Map<String, Map<String, Object>> batch) {
+        if (database != null) {
+            database.assertWritable();
+        }
         wLock.lock();
         try {
             for (Map.Entry<String, Map<String, Object>> entry : batch.entrySet()) {

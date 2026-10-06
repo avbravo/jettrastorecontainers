@@ -1043,21 +1043,32 @@ Seleccione una conexión para iniciar:
     private String handleCreateDatabase(String command) {
         String dbName = cleanQuotes(command.replaceAll("(?i)^(CREATE\\s+DATABASE|CREATE\\s+DB)\\s+", "").trim());
         if (dbName.isBlank()) return "[ERROR] Nombre de base de datos requerido. Uso: CREATE DATABASE <nombre> o CREATE DB <nombre>";
-        this.client.getDatabase(dbName);
-        this.currentDatabase = dbName;
-        return "[SUCCESS] Base de datos '" + dbName + "' creada exitosamente y seleccionada como activa.";
+        try {
+            var db = this.client.getDatabase(dbName);
+            if (db != null) {
+                db.assertWritable();
+            }
+            this.currentDatabase = dbName;
+            return "[SUCCESS] Base de datos '" + dbName + "' creada exitosamente y seleccionada como activa.";
+        } catch (UnsupportedOperationException e) {
+            return "[ERROR] " + e.getMessage();
+        }
     }
 
     private String handleDropDatabase(String command) {
         String dbName = cleanQuotes(command.replaceAll("(?i)^(DROP\\s+DATABASE|DROP\\s+DB)\\s+", "").trim());
         if (dbName.isBlank()) return "[ERROR] Nombre de base de datos requerido. Uso: DROP DATABASE <nombre> o DROP DB <nombre>";
-        boolean dropped = client.dropDatabase(dbName);
-        if (dbName.equalsIgnoreCase(currentDatabase)) {
-            this.currentDatabase = "default_db";
-            this.client.getDatabase(currentDatabase);
+        try {
+            boolean dropped = client.dropDatabase(dbName);
+            if (dbName.equalsIgnoreCase(currentDatabase)) {
+                this.currentDatabase = "default_db";
+                this.client.getDatabase(currentDatabase);
+            }
+            return dropped ? "[SUCCESS] Base de datos '" + dbName + "' eliminada correctamente."
+                           : "[INFO] La base de datos '" + dbName + "' no existía o ya fue eliminada.";
+        } catch (UnsupportedOperationException e) {
+            return "[ERROR] " + e.getMessage();
         }
-        return dropped ? "[SUCCESS] Base de datos '" + dbName + "' eliminada correctamente."
-                       : "[INFO] La base de datos '" + dbName + "' no existía o ya fue eliminada.";
     }
 
     private String handleUseDatabase(String command) {
@@ -1146,8 +1157,11 @@ Seleccione una conexión para iniciar:
 
             JettraDatabase db = client.getDatabase(currentDatabase);
             var info = db.getIndexManager().createIndex(col, indexName, field, type, unique, db.getDocumentEngine(col));
+            client.replicateCreateIndex(currentDatabase, col, indexName, field, type, unique);
             return String.format("[SUCCESS] Índice '%s' creado sobre '%s'(%s) tipo %s (Entradas indexadas: %d).",
                 info.name(), info.collection(), info.field(), info.type(), info.entriesCount());
+        } catch (UnsupportedOperationException e) {
+            return "[ERROR] " + e.getMessage();
         } catch (Exception e) {
             return "[ERROR] Error al crear índice: " + e.getMessage();
         }
@@ -1156,10 +1170,17 @@ Seleccione una conexión para iniciar:
     private String handleDropIndex(String command) {
         String clean = cleanQuotes(command.substring("DROP INDEX ".length()).trim());
         String indexName = clean.split("\\s+")[0];
-        JettraDatabase db = client.getDatabase(currentDatabase);
-        boolean ok = db.getIndexManager().dropIndex(indexName);
-        return ok ? "[SUCCESS] Índice '" + indexName + "' eliminado correctamente."
-                  : "[WARN] El índice '" + indexName + "' no existe en la base de datos '" + currentDatabase + "'.";
+        try {
+            JettraDatabase db = client.getDatabase(currentDatabase);
+            boolean ok = db.getIndexManager().dropIndex(indexName);
+            if (ok) {
+                client.replicateDropIndex(currentDatabase, indexName);
+            }
+            return ok ? "[SUCCESS] Índice '" + indexName + "' eliminado correctamente."
+                      : "[WARN] El índice '" + indexName + "' no existe en la base de datos '" + currentDatabase + "'.";
+        } catch (UnsupportedOperationException e) {
+            return "[ERROR] " + e.getMessage();
+        }
     }
 
     private String handleRebuildIndex(String command) {
@@ -1657,6 +1678,7 @@ Seleccione una conexión para iniciar:
                 JettraDatabase db = client.getDatabase(currentDatabase);
                 db.getDocumentEngine(col).insert(id, data);
                 db.getIndexManager().onDocumentInsert(col, id, data);
+                client.replicatePutDocument(currentDatabase, col, id, data);
                 return String.format("[SUCCESS] Registro con _id '%s' insertado en la colección '%s'.", id, col);
             }
             int valIdx = after.toUpperCase().indexOf(" VALUES");
@@ -1674,8 +1696,11 @@ Seleccione una conexión para iniciar:
                 JettraDatabase db = client.getDatabase(currentDatabase);
                 db.getDocumentEngine(col).insert(id, data);
                 db.getIndexManager().onDocumentInsert(col, id, data);
+                client.replicatePutDocument(currentDatabase, col, id, data);
                 return String.format("[SUCCESS] Registro con _id '%s' insertado en la colección '%s'.", id, col);
             }
+        } catch (UnsupportedOperationException e) {
+            return "[ERROR] " + e.getMessage();
         } catch (Exception ignored) {}
         return "[ERROR] Formato inválido. Uso: INSERT INTO <col> ID <id> JSON {...} o INSERT INTO <col> VALUES ('<id>', '{...}')";
     }
@@ -1754,16 +1779,22 @@ Seleccione una conexión para iniciar:
                 if (id != null) {
                     JettraDatabase db = client.getDatabase(currentDatabase);
                     db.getDocumentEngine(col).update(id, updates);
+                    Map<String, Object> full = db.getDocumentEngine(col).findById(id);
+                    if (full != null) {
+                        client.replicatePutDocument(currentDatabase, col, id, full);
+                    }
                     return String.format("[SUCCESS] Registro con _id '%s' actualizado en '%s'.", id, col);
                 }
             }
+        } catch (UnsupportedOperationException e) {
+            return "[ERROR] " + e.getMessage();
         } catch (Exception ignored) {}
         return "[ERROR] Formato inválido. Uso: UPDATE <colección> SET {campo:valor} WHERE _id = '<id>'";
     }
 
     private String handleDeleteRecord(String command) {
         try {
-            String clean = command.replaceAll("(?i)^(DELETE FROM|DELETE|REMOVE)\s+", "").trim();
+            String clean = command.replaceAll("(?i)^(DELETE FROM|DELETE|REMOVE)\\s+", "").trim();
             if (clean.toUpperCase().contains(" WHERE ")) {
                 int whereIdx = clean.toUpperCase().indexOf(" WHERE ");
                 String col = cleanQuotes(clean.substring(0, whereIdx).trim());
@@ -1774,23 +1805,31 @@ Seleccione una conexión para iniciar:
                     JettraDatabase db = client.getDatabase(currentDatabase);
                     boolean deleted = db.getDocumentEngine(col).delete(id);
                     db.getIndexManager().onDocumentDelete(col, id, null);
+                    if (deleted) {
+                        client.replicateDeleteDocument(currentDatabase, col, id);
+                    }
                     return deleted 
                         ? String.format("[SUCCESS] Registro con _id '%s' eliminado de '%s'.", id, col)
                         : String.format("[WARN] No se encontró el registro con _id '%s' para eliminar.", id);
                 }
             } else {
-                String[] parts = clean.split("\s+");
+                String[] parts = clean.split("\\s+");
                 if (parts.length >= 2) {
                     String col = cleanQuotes(parts[0]);
                     String id = cleanQuotes(parts[1]);
                     JettraDatabase db = client.getDatabase(currentDatabase);
                     boolean deleted = db.getDocumentEngine(col).delete(id);
                     db.getIndexManager().onDocumentDelete(col, id, null);
+                    if (deleted) {
+                        client.replicateDeleteDocument(currentDatabase, col, id);
+                    }
                     return deleted 
                         ? String.format("[SUCCESS] Registro con _id '%s' eliminado de '%s'.", id, col)
                         : String.format("[WARN] No se encontró el registro con _id '%s' para eliminar.", id);
                 }
             }
+        } catch (UnsupportedOperationException e) {
+            return "[ERROR] " + e.getMessage();
         } catch (Exception ignored) {}
         return "[ERROR] Formato inválido. Uso: DELETE <col> <id> o DELETE FROM <col> WHERE _id = '<id>'";
     }
@@ -3205,15 +3244,50 @@ Ejecute el comando 'connect <host> <puerto>' (o presione Enter para [127.0.0.1 9
 
         System.out.println("\nEscriba 'help' o '?' para ver los comandos disponibles, 'menu' para el menú interactivo, o 'exit' para salir.\n");
 
-        // 3. Ciclo interactivo de comandos
+        // 3. Ciclo interactivo de comandos con soporte avanzado de JLine (Historial con flechas y Autocompletado con TAB)
+        org.jline.reader.LineReader lineReader = null;
+        try {
+            org.jline.terminal.Terminal terminal = org.jline.terminal.TerminalBuilder.builder()
+                .system(true)
+                .dumb(false)
+                .build();
+
+            org.jline.reader.Completer completer = (reader, parsedLine, candidates) -> {
+                String word = parsedLine.word();
+                String line = parsedLine.line();
+                String toComplete = (word != null && !word.isEmpty()) ? word : line;
+                List<String> suggestions = shell.autocomplete(line);
+                for (String s : suggestions) {
+                    candidates.add(new org.jline.reader.Candidate(s));
+                }
+            };
+
+            lineReader = org.jline.reader.LineReaderBuilder.builder()
+                .terminal(terminal)
+                .completer(completer)
+                .variable(org.jline.reader.LineReader.HISTORY_FILE, HISTORY_FILE)
+                .build();
+        } catch (Throwable t) {
+            // Fallback elegante a System.console o Scanner si la terminal interactiva no está disponible (ej. entornos de test o redirección)
+            lineReader = null;
+        }
+
         while (true) {
             String prompt = String.format("jettra-shell [%s@%s:%d/%s]> ", 
                 shell.getCurrentUser(), shell.getCurrentHost(), shell.getCurrentPort(), shell.getCurrentDatabase());
-            System.out.print(prompt);
-            String line;
-            if (console != null) {
+            String line = null;
+            if (lineReader != null) {
+                try {
+                    line = lineReader.readLine(prompt);
+                } catch (org.jline.reader.UserInterruptException | org.jline.reader.EndOfFileException e) {
+                    System.out.println("\nSaliendo de JettraStore Shell...");
+                    break;
+                }
+            } else if (console != null) {
+                System.out.print(prompt);
                 line = console.readLine();
             } else if (scanner.hasNextLine()) {
+                System.out.print(prompt);
                 line = scanner.nextLine();
             } else {
                 break;

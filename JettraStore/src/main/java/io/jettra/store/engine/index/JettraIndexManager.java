@@ -41,6 +41,12 @@ public final class JettraIndexManager {
     }
 
     public synchronized IndexInfo createIndex(String collection, String indexName, String field, String type, boolean unique, DocumentEngine docEngine) {
+        if (config != null && config.isClusterMultinodeActive() && config.getNodeRole() == io.jettra.store.cluster.ClusterNode.Role.SECONDARY) {
+            throw new UnsupportedOperationException(String.format(
+                "[READ-ONLY REPLICA] El nodo actual '%s' tiene rol SECUNDARIO. No se permite crear índices directamente.",
+                config.getNodeId()
+            ));
+        }
         if (indexMetadata.containsKey(indexName)) {
             throw new IllegalArgumentException("Index '" + indexName + "' already exists in database '" + databaseName + "'.");
         }
@@ -54,7 +60,36 @@ public final class JettraIndexManager {
         return indexMetadata.get(indexName);
     }
 
+    /**
+     * Aplica la creación de índice proveniente de una trama de replicación Raft
+     * emitida por el nodo primario.
+     */
+    public synchronized IndexInfo applyReplicatedIndex(String collection, String indexName, String field, String type, boolean unique, DocumentEngine docEngine) {
+        if (indexMetadata.containsKey(indexName)) {
+            return indexMetadata.get(indexName);
+        }
+        IndexInfo info = new IndexInfo(indexName, collection, field, type.toUpperCase(), unique, 0, System.currentTimeMillis());
+        indexMetadata.put(indexName, info);
+        indexData.put(indexName, UnifiedMap.newMap(128));
+
+        if (docEngine != null) {
+            rebuildIndex(indexName, docEngine);
+        }
+        return indexMetadata.get(indexName);
+    }
+
     public synchronized boolean dropIndex(String indexName) {
+        if (config != null && config.isClusterMultinodeActive() && config.getNodeRole() == io.jettra.store.cluster.ClusterNode.Role.SECONDARY) {
+            throw new UnsupportedOperationException(String.format(
+                "[READ-ONLY REPLICA] El nodo actual '%s' tiene rol SECUNDARIO. No se permite eliminar índices directamente.",
+                config.getNodeId()
+            ));
+        }
+        indexData.remove(indexName);
+        return indexMetadata.remove(indexName) != null;
+    }
+
+    public synchronized boolean applyReplicatedDropIndex(String indexName) {
         indexData.remove(indexName);
         return indexMetadata.remove(indexName) != null;
     }
@@ -188,21 +223,24 @@ public final class JettraIndexManager {
                                 }
                             }
                         } else {
-                            for (var it = inverted.entrySet().iterator(); it.hasNext(); ) {
-                                var entry = it.next();
+                            List<Object> keysToRemove = new ArrayList<>();
+                            for (var entry : inverted.entrySet()) {
                                 Object v = entry.getValue();
                                 if (v instanceof String singleId) {
                                     if (singleId.equals(id)) {
-                                        it.remove();
+                                        keysToRemove.add(entry.getKey());
                                     }
                                 } else if (v instanceof UnifiedSet<?> rawSet) {
                                     @SuppressWarnings("unchecked")
                                     UnifiedSet<String> set = (UnifiedSet<String>) rawSet;
                                     set.remove(id);
                                     if (set.isEmpty()) {
-                                        it.remove();
+                                        keysToRemove.add(entry.getKey());
                                     }
                                 }
+                            }
+                            for (Object k : keysToRemove) {
+                                inverted.remove(k);
                             }
                         }
                     }
