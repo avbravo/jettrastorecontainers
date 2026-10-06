@@ -267,4 +267,71 @@ public class JettraConfigValidatorTest {
             Files.deleteIfExists(tempDir);
         }
     }
+
+    @Test
+    @DisplayName("Debe resolver nodeId y role desde propiedades del sistema -Djettra.node.id y -Djettra.node.role")
+    public void testNodeIdAndRoleViaSystemProperties() {
+        Properties clusterProps = createValidClusterProperties();
+        Properties dbProps = new Properties();
+        dbProps.setProperty("jettra.storage.path", "~/jettra/data");
+        dbProps.setProperty("jettra.network.grpc.port", "9092");
+        dbProps.setProperty("jettra.network.rest.port", "8082");
+
+        String prevId = System.getProperty("jettra.node.id");
+        String prevRole = System.getProperty("jettra.node.role");
+        try {
+            System.setProperty("jettra.node.id", "node-02");
+            System.setProperty("jettra.node.role", "SECONDARY");
+
+            JettraStoreConfig config = new JettraStoreConfig(dbProps, clusterProps);
+            assertEquals("node-02", config.getNodeId());
+            assertEquals(io.jettra.store.cluster.ClusterNode.Role.SECONDARY, config.getNodeRole());
+            assertEquals(9092, config.getGrpcPort());
+            assertEquals(8082, config.getRestPort());
+            assertEquals("~/jettra/data", config.getConfiguredStoragePath());
+        } finally {
+            if (prevId != null) System.setProperty("jettra.node.id", prevId);
+            else System.clearProperty("jettra.node.id");
+            if (prevRole != null) System.setProperty("jettra.node.role", prevRole);
+            else System.clearProperty("jettra.node.role");
+        }
+    }
+
+    @Test
+    @DisplayName("Debe leer nodeId, role, puertos y storage.path directamente de database.properties")
+    public void testNodeConfigurationDirectlyFromDatabaseProperties() {
+        Properties clusterProps = createValidClusterProperties();
+        Properties dbProps = new Properties();
+        dbProps.setProperty("jettra.node.id", "node-03");
+        dbProps.setProperty("jettra.node.role", "SECONDARY");
+        dbProps.setProperty("jettra.storage.path", "~/jettra/data");
+        dbProps.setProperty("jettra.network.grpc.port", "9093");
+        dbProps.setProperty("jettra.network.rest.port", "8083");
+        dbProps.setProperty("jettra.index.storage.path", "~/jettra/data/indexes");
+
+        JettraStoreConfig config = new JettraStoreConfig(dbProps, clusterProps);
+        assertEquals("node-03", config.getNodeId());
+        assertEquals(io.jettra.store.cluster.ClusterNode.Role.SECONDARY, config.getNodeRole());
+        assertEquals(9093, config.getGrpcPort());
+        assertEquals(8083, config.getRestPort());
+        assertEquals("~/jettra/data", config.getConfiguredStoragePath());
+
+        // Validar que pase la validación cruzada
+        JettraConfigValidator.ValidationResult result = JettraConfigValidator.validate(dbProps, clusterProps);
+        assertTrue(result.isValid());
+    }
+
+    @Test
+    @DisplayName("Debe rechazar la configuración si el nodeId configurado no existe en jettra.config")
+    public void testValidationRejectsUnrecognizedNodeId() {
+        Properties clusterProps = createValidClusterProperties();
+        Properties dbProps = createValidDatabaseProperties();
+        dbProps.setProperty("jettra.node.id", "node-99");
+
+        JettraConfigValidator.ValidationResult result = JettraConfigValidator.validate(dbProps, clusterProps);
+        assertFalse(result.isValid());
+        boolean hasNodeError = result.getErrors().stream()
+            .anyMatch(err -> err.contains("node-99"));
+        assertTrue(hasNodeError);
+    }
 }

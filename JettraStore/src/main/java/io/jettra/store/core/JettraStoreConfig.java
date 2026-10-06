@@ -47,12 +47,30 @@ public final class JettraStoreConfig {
     private final int queryMaxLimit;
     private final int queryPageSize;
 
-    private static String getPropOrEnv(Properties props, String sysProp, String envVar, String defaultVal) {
-        String sys = System.getProperty(sysProp);
-        if (sys != null && !sys.isBlank()) return sys;
-        String env = System.getenv(envVar);
-        if (env != null && !env.isBlank()) return env;
-        return props.getProperty(sysProp, defaultVal);
+    public static String getPropOrEnv(Properties props, String sysProp, String envVar, String defaultVal) {
+        return getPropOrEnv(props, new String[]{sysProp}, new String[]{envVar}, defaultVal);
+    }
+
+    public static String getPropOrEnv(Properties props, String[] sysProps, String[] envVars, String defaultVal) {
+        if (sysProps != null) {
+            for (String sp : sysProps) {
+                String sys = System.getProperty(sp);
+                if (sys != null && !sys.isBlank()) return sys.trim();
+            }
+        }
+        if (envVars != null) {
+            for (String ev : envVars) {
+                String env = System.getenv(ev);
+                if (env != null && !env.isBlank()) return env.trim();
+            }
+        }
+        if (props != null && sysProps != null) {
+            for (String sp : sysProps) {
+                String val = props.getProperty(sp);
+                if (val != null && !val.isBlank()) return val.trim();
+            }
+        }
+        return defaultVal;
     }
 
     public JettraStoreConfig(Properties props) {
@@ -63,7 +81,10 @@ public final class JettraStoreConfig {
         Properties effectiveClusterProps = clusterProps != null ? clusterProps : new Properties();
         List<JettraConfigValidator.ClusterNodeInfo> clusterNodes = JettraConfigValidator.parseClusterNodes(effectiveClusterProps);
 
-        this.nodeId = getPropOrEnv(props, "jettra.cluster.node.id", "JETTRA_NODE_ID", "node-01");
+        this.nodeId = getPropOrEnv(props, 
+            new String[]{"jettra.node.id", "jettra.cluster.node.id", "node.id"}, 
+            new String[]{"JETTRA_NODE_ID", "JETTRA_CLUSTER_NODE_ID"}, 
+            "node-01");
 
         // Sincronizar con el nodo correspondiente en jettra.config si existe
         JettraConfigValidator.ClusterNodeInfo currentNode = null;
@@ -75,31 +96,50 @@ public final class JettraStoreConfig {
         }
 
         String defaultRole = (currentNode != null && currentNode.role() != null) ? currentNode.role() : "PRIMARY";
-        String roleStr = getPropOrEnv(props, "jettra.cluster.node.role", "JETTRA_NODE_ROLE", defaultRole);
+        String roleStr = getPropOrEnv(props, 
+            new String[]{"jettra.node.role", "jettra.cluster.node.role", "node.role"}, 
+            new String[]{"JETTRA_NODE_ROLE", "JETTRA_CLUSTER_NODE_ROLE"}, 
+            defaultRole);
         this.nodeRole = "PRIMARY".equalsIgnoreCase(roleStr) ? ClusterNode.Role.PRIMARY : ClusterNode.Role.SECONDARY;
 
         String defaultIp = (currentNode != null && currentNode.ip() != null && !currentNode.ip().isBlank())
             ? currentNode.ip() : "127.0.0.1";
-        this.nodeIp = getPropOrEnv(props, "jettra.network.ip", "JETTRA_NODE_IP",
-            getPropOrEnv(props, "jettra.cluster.node.ip", "JETTRA_IP", defaultIp));
+        this.nodeIp = getPropOrEnv(props, 
+            new String[]{"jettra.node.ip", "jettra.network.ip", "jettra.cluster.node.ip", "node.ip"}, 
+            new String[]{"JETTRA_NODE_IP", "JETTRA_IP", "JETTRA_NETWORK_IP"}, 
+            defaultIp);
 
         int defaultGrpc = (currentNode != null) ? currentNode.grpcPort() : 9091;
-        this.grpcPort = Integer.parseInt(getPropOrEnv(props, "jettra.network.grpc.port", "JETTRA_GRPC_PORT", String.valueOf(defaultGrpc)));
+        this.grpcPort = Integer.parseInt(getPropOrEnv(props, 
+            new String[]{"jettra.network.grpc.port", "jettra.grpc.port", "grpc.port"}, 
+            new String[]{"JETTRA_GRPC_PORT", "JETTRA_NETWORK_GRPC_PORT"}, 
+            String.valueOf(defaultGrpc)));
 
         int defaultRest = (currentNode != null) ? currentNode.restPort() : 8080;
-        this.restPort = Integer.parseInt(getPropOrEnv(props, "jettra.network.rest.port", "JETTRA_REST_PORT", String.valueOf(defaultRest)));
+        this.restPort = Integer.parseInt(getPropOrEnv(props, 
+            new String[]{"jettra.network.rest.port", "jettra.rest.port", "rest.port"}, 
+            new String[]{"JETTRA_REST_PORT", "JETTRA_NETWORK_REST_PORT"}, 
+            String.valueOf(defaultRest)));
 
-        this.clusterPeers = getPropOrEnv(props, "jettra.cluster.peers", "JETTRA_CLUSTER_PEERS", "");
+        this.clusterPeers = getPropOrEnv(props, 
+            new String[]{"jettra.cluster.peers", "cluster.peers"}, 
+            new String[]{"JETTRA_CLUSTER_PEERS"}, 
+            "");
 
         String defaultMultinode = (clusterProps != null && clusterProps.containsKey("cluster.multinode.active"))
             ? clusterProps.getProperty("cluster.multinode.active", "on") : "on";
-        String multinodeStr = getPropOrEnv(props, "cluster.multinode.active", "JETTRA_CLUSTER_MULTINODE_ACTIVE", defaultMultinode).trim();
+        String multinodeStr = getPropOrEnv(props, 
+            new String[]{"cluster.multinode.active", "jettra.cluster.multinode.active"}, 
+            new String[]{"JETTRA_CLUSTER_MULTINODE_ACTIVE"}, 
+            defaultMultinode).trim();
         this.clusterMultinodeActive = "on".equalsIgnoreCase(multinodeStr) || "true".equalsIgnoreCase(multinodeStr);
 
         String defaultStorage = (currentNode != null && currentNode.storagePath() != null && !currentNode.storagePath().isBlank())
             ? currentNode.storagePath() : "/jettra/data";
-        String configuredPath = getPropOrEnv(props, "jettra.storage.path", "JETTRA_STORAGE_PATH", 
-            props.getProperty("jettra.storage.path", defaultStorage));
+        String configuredPath = getPropOrEnv(props, 
+            new String[]{"jettra.storage.path", "storage.path"}, 
+            new String[]{"JETTRA_STORAGE_PATH"}, 
+            defaultStorage);
         this.rawConfiguredPath = configuredPath;
         
         String resolvedPath = configuredPath;

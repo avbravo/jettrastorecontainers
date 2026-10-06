@@ -97,8 +97,9 @@ public final class JettraConfigValidator {
         String[] sysKeys = {
             "database.properties.path",
             "jettra.database.properties.path",
-            "jettra.database.path",
-            "database.properties"
+            "jettra.database.properties",
+            "database.properties",
+            "jettra.database.path"
         };
         for (String k : sysKeys) {
             String sysProp = System.getProperty(k);
@@ -110,7 +111,9 @@ public final class JettraConfigValidator {
 
         String[] envKeys = {
             "DATABASE_PROPERTIES_PATH",
-            "JETTRA_DATABASE_PROPERTIES_PATH"
+            "JETTRA_DATABASE_PROPERTIES_PATH",
+            "DATABASE_PROPERTIES",
+            "JETTRA_DATABASE_PROPERTIES"
         };
         for (String k : envKeys) {
             String env = System.getenv(k);
@@ -243,7 +246,9 @@ public final class JettraConfigValidator {
 # Generado automáticamente por JettraStore Engine
 ################################################################################
 
-# Identificador y rol de este nodo en el cluster
+# Identificador y rol de este nodo en el cluster (configurable aquí o vía -Djettra.node.id / -Djettra.node.role)
+jettra.node.id = node-01
+jettra.node.role = PRIMARY
 jettra.cluster.node.id = node-01
 jettra.cluster.node.role = PRIMARY
 
@@ -399,8 +404,25 @@ cluster.index.max.inmemory.keys = 100000
             nodeRestPorts.add(node.restPort());
         }
 
-        // 1. Verificar jettra.storage.path
-        String dbStoragePath = getPropOrEnv(dbProps, "jettra.storage.path", "JETTRA_STORAGE_PATH", "").trim();
+        // 1. Verificar identificador de nodo (si está configurado)
+        String configuredNodeId = getPropOrEnv(dbProps, 
+            new String[]{"jettra.node.id", "jettra.cluster.node.id", "node.id"}, 
+            new String[]{"JETTRA_NODE_ID", "JETTRA_CLUSTER_NODE_ID"}, "").trim();
+        if (!configuredNodeId.isEmpty() && !nodes.isEmpty()) {
+            boolean matchedNode = nodes.stream().anyMatch(n -> n.id().equalsIgnoreCase(configuredNodeId));
+            if (!matchedNode) {
+                List<String> validIds = nodes.stream().map(ClusterNodeInfo::id).toList();
+                errors.add(String.format(
+                    "El identificador de nodo '%s' (definido en database.properties o vía -Djettra.node.id) no coincide con ningún nodo registrado en jettra.config %s.",
+                    configuredNodeId, validIds
+                ));
+            }
+        }
+
+        // 2. Verificar jettra.storage.path
+        String dbStoragePath = getPropOrEnv(dbProps, 
+            new String[]{"jettra.storage.path", "storage.path"}, 
+            new String[]{"JETTRA_STORAGE_PATH"}, "").trim();
         if (dbStoragePath.isEmpty()) {
             errors.add("La propiedad 'jettra.storage.path' no está definida en database.properties.");
         } else {
@@ -428,8 +450,10 @@ cluster.index.max.inmemory.keys = 100000
             }
         }
 
-        // 2. Verificar jettra.network.grpc.port
-        String grpcPortStr = getPropOrEnv(dbProps, "jettra.network.grpc.port", "JETTRA_GRPC_PORT", "").trim();
+        // 3. Verificar jettra.network.grpc.port
+        String grpcPortStr = getPropOrEnv(dbProps, 
+            new String[]{"jettra.network.grpc.port", "jettra.grpc.port", "grpc.port"}, 
+            new String[]{"JETTRA_GRPC_PORT", "JETTRA_NETWORK_GRPC_PORT"}, "").trim();
         if (grpcPortStr.isEmpty()) {
             errors.add("La propiedad 'jettra.network.grpc.port' no está definida en database.properties.");
         } else {
@@ -446,8 +470,10 @@ cluster.index.max.inmemory.keys = 100000
             }
         }
 
-        // 3. Verificar jettra.network.rest.port
-        String restPortStr = getPropOrEnv(dbProps, "jettra.network.rest.port", "JETTRA_REST_PORT", "").trim();
+        // 4. Verificar jettra.network.rest.port
+        String restPortStr = getPropOrEnv(dbProps, 
+            new String[]{"jettra.network.rest.port", "jettra.rest.port", "rest.port"}, 
+            new String[]{"JETTRA_REST_PORT", "JETTRA_NETWORK_REST_PORT"}, "").trim();
         if (restPortStr.isEmpty()) {
             errors.add("La propiedad 'jettra.network.rest.port' no está definida en database.properties.");
         } else {
@@ -464,8 +490,10 @@ cluster.index.max.inmemory.keys = 100000
             }
         }
 
-        // 4. Verificar jettra.index.storage.path
-        String dbIndexPath = dbProps.getProperty("jettra.index.storage.path", "").trim();
+        // 5. Verificar jettra.index.storage.path
+        String dbIndexPath = getPropOrEnv(dbProps, 
+            new String[]{"jettra.index.storage.path", "index.storage.path"}, 
+            new String[]{"JETTRA_INDEX_STORAGE_PATH"}, "").trim();
         if (dbIndexPath.isEmpty()) {
             errors.add("La propiedad 'jettra.index.storage.path' no está definida en database.properties.");
         } else {
@@ -559,12 +587,30 @@ cluster.index.max.inmemory.keys = 100000
         return p;
     }
 
-    private static String getPropOrEnv(Properties props, String sysProp, String envVar, String defaultVal) {
-        String sys = System.getProperty(sysProp);
-        if (sys != null && !sys.isBlank()) return sys;
-        String env = System.getenv(envVar);
-        if (env != null && !env.isBlank()) return env;
-        return props.getProperty(sysProp, defaultVal);
+    public static String getPropOrEnv(Properties props, String sysProp, String envVar, String defaultVal) {
+        return getPropOrEnv(props, new String[]{sysProp}, new String[]{envVar}, defaultVal);
+    }
+
+    public static String getPropOrEnv(Properties props, String[] sysProps, String[] envVars, String defaultVal) {
+        if (sysProps != null) {
+            for (String sp : sysProps) {
+                String sys = System.getProperty(sp);
+                if (sys != null && !sys.isBlank()) return sys.trim();
+            }
+        }
+        if (envVars != null) {
+            for (String ev : envVars) {
+                String env = System.getenv(ev);
+                if (env != null && !env.isBlank()) return env.trim();
+            }
+        }
+        if (props != null && sysProps != null) {
+            for (String sp : sysProps) {
+                String val = props.getProperty(sp);
+                if (val != null && !val.isBlank()) return val.trim();
+            }
+        }
+        return defaultVal;
     }
 
     private static int parseInt(String val, int def) {

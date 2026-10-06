@@ -683,10 +683,11 @@ El archivo `database.properties` reside en la carpeta `config/` de cada nodo (`c
 
 #### 13.1.1 Prioridad de Resolución
 El orden de resolución de parámetros en tiempo de ejecución es:
-1. **Variables de entorno del sistema** (ej. `JETTRA_STORAGE_PATH`, `JETTRA_GRPC_PORT`, `JETTRA_REST_PORT`).
-2. **Propiedades del sistema JVM** pasadas como argumentos `-D` (ej. `-Djettra.storage.path=...`).
-3. **Archivo externo en disco** (`config/database.properties` o `database.properties`).
-4. **Valores predeterminados embebidos** en el classpath (`src/main/resources/database.properties`).
+1. **Propiedades del sistema JVM** pasadas como argumentos `-D` (ej. `-Djettra.node.id=node-01`, `-Djettra.node.role=PRIMARY`, `-Djettra.storage.path=...`, `-Djettra.network.grpc.port=...`, `-Djettra.network.rest.port=...`). Tienen la **máxima prioridad** y sobreescriben cualquier otra fuente.
+2. **Variables de entorno del sistema** (ej. `JETTRA_NODE_ID`, `JETTRA_NODE_ROLE`, `JETTRA_STORAGE_PATH`, `JETTRA_GRPC_PORT`, `JETTRA_REST_PORT`), ideales para despliegues en contenedores Docker y Kubernetes.
+3. **Archivo de configuración del nodo en disco (`database.properties`)** localizado mediante `-Ddatabase.properties.path=...`, carpeta `config/database.properties`, o en el directorio hermano de `jettra.config`.
+4. **Valores mapeados desde la topología del clúster (`jettra.config`)** según el nodo actual (`cluster.node.X.*`).
+5. **Valores predeterminados embebidos** en el classpath (`src/main/resources/database.properties`).
 
 #### 13.1.2 Sintaxis Recomendada de Rutas de Almacenamiento
 * **Ruta de Almacenamiento Principal (`jettra.storage.path`):**  
@@ -721,7 +722,9 @@ La propiedad `cluster.multinode.active` define si JettraStore opera en modo dist
 # Ajustes de bajo nivel JVM, Panama FFM, JettraPolice y Persistencia
 ################################################################################
 
-# Identificador y rol de este nodo en el cluster distribuido
+# Identificador y rol de este nodo en el cluster (configurable aquí o vía -Djettra.node.id / -Djettra.node.role)
+jettra.node.id = node-01
+jettra.node.role = PRIMARY
 jettra.cluster.node.id = node-01
 jettra.cluster.node.role = PRIMARY
 
@@ -1470,7 +1473,6 @@ cluster.index.max.inmemory.keys = 100000
 
 #### 18.1.3 Configuración de `database.properties` en Cada Servidor
 
-
 ```properties
 # /opt/jettra/config/database.properties
 ################################################################################
@@ -1478,20 +1480,19 @@ cluster.index.max.inmemory.keys = 100000
 # Low-level JVM tuning, Panama FFM settings, JettraPolice, and Storage Paths
 ################################################################################
 
-# UbicaciÃ³n explÃ­cita del path del directorio de la base de datos en disco fÃ­sico
-## ==============================================================================
-# TopologÃ­a Multinodo y Algoritmo de Consenso Distribuido
-# ==============================================================================
-# cluster.multinode.active:
-#   on:  Activa el sistema de distribuciÃ³n de datos mediante algoritmo de consenso integrado en JettraStore.
-#   off: Desactiva el comportamiento de distribuciÃ³n y asume que todas las operaciones se realizarÃ¡n
-#        solamente en el servidor local donde se estÃ¡ ejecutando JettraStore sin distribuir los datos.
-#cluster.multinode.active = on
+# Identificador y rol del nodo local en el clúster
+# (Opcional si se pasa en el arranque vía -Djettra.node.id y -Djettra.node.role)
+jettra.node.id = node-01
+jettra.node.role = PRIMARY
+
+# Topología Multinodo y Algoritmo de Consenso Distribuido
+#   on:  Activa el sistema de distribución de datos mediante algoritmo de consenso integrado en JettraStore.
+#   off: Desactiva distribución y opera exclusivamente en modo local standalone.
 cluster.multinode.active = on
 
-jettra.storage.path = /var/jettra/data
+# Ubicación explícita del path del directorio de la base de datos en disco físico
 jettra.storage.path = ~/jettra/data
-# Almacenamiento fÃ­sico de Ã­ndices persistidos en formato .jettra
+# Almacenamiento físico de índices persistidos en formato .jettra
 jettra.index.storage.path = ~/jettra/data/indexes
 # Red y Puertos de Escucha
 jettra.network.grpc.port = 9091
@@ -1576,38 +1577,72 @@ jettrapolice.max.safe.batch.size = 100
 
 JettraStore implementa la lectura unificada y validación cruzada automática de **ambos** archivos de configuración:
 1. **`jettra.config`**: Provee la topología completa del clúster (IPs, puertos gRPC y REST de todos los nodos, y pares de replicación Raft).
-2. **`database.properties`**: Provee la identidad del nodo local (`nodeId`, `role`), límites de memoria, parámetros de motor y persistencia física.
+2. **`database.properties`**: Provee la identidad del nodo local (`nodeId`, `role`), límites de memoria, parámetros de motor, puertos locales y persistencia física (`jettra.storage.path`, `jettra.network.grpc.port`, `jettra.network.rest.port`).
 
-Al pasar `-Djettra.config.path=jettra.config`, JettraStore localiza de forma inteligente el archivo `database.properties` (vía resolución de carpetas hermanas, `-Ddatabase.properties.path=...`, `config/database.properties` o en el directorio de trabajo). Los IPs y puertos definidos en `jettra.config` y `database.properties` se sincronizan automáticamente para el nodo actual y sus pares distribuidos.
+##### Lectura Directa desde `database.properties` y Parámetros JVM
+Los parámetros de puerto REST (`jettra.network.rest.port`), puerto gRPC (`jettra.network.grpc.port`) y ruta de almacenamiento (`jettra.storage.path`) ya están definidos en `database.properties` (o se resuelven automáticamente desde la topología de `jettra.config`). Por tanto, **no es necesario ejecutar comandos `export` en bash para esas variables**.
 
-Cada máquina arranca con su identificador de nodo y su rol correspondiente:
+Para especificar qué nodo del clúster se está ejecutando en cada servidor físico o VM, se utilizan las propiedades de sistema de la JVM:
+* `-Djettra.node.id=node-01` (o `node-02`, `node-03`)
+* `-Djettra.node.role=PRIMARY` (o `SECONDARY`)
+
+> **Nota:** Si se omite `-Djettra.node.role`, JettraStore deduce automáticamente el rol (`PRIMARY` o `SECONDARY`) asignado a dicho nodo en `jettra.config`. Asimismo, el archivo `database.properties` se ubica automáticamente junto a `jettra.config` o en la carpeta `config/database.properties`, por lo que `-Ddatabase.properties.path=database.properties` es opcional si ambos archivos residen en el mismo directorio.
+
+Cada servidor arranca de forma limpia con sus banderas JVM:
 
 **En Servidor 1 (IP `192.168.1.101` - Nodo Primario):**
 ```bash
-export JETTRA_NODE_ID=node-01
-export JETTRA_NODE_ROLE=PRIMARY
-export JETTRA_REST_PORT=8080
-export JETTRA_GRPC_PORT=9091
-export JETTRA_STORAGE_PATH=~/jettra/data
-
 java --enable-preview \
      --enable-native-access=ALL-UNNAMED \
      -XX:+UnlockExperimentalVMOptions \
      -XX:+UseCompactObjectHeaders \
      -XX:+UseZGC \
      -Xms2g -Xmx6g \
+     -Djettra.node.id=node-01 \
+     -Djettra.node.role=PRIMARY \
      -Djettra.config.path=jettra.config \
+     -Ddatabase.properties.path=database.properties \
      -jar JettraStore-1.0-SNAPSHOT-uber.jar
 ```
 
 **En Servidor 2 (IP `192.168.1.102` - Nodo Secundario 1):**
 ```bash
-export JETTRA_NODE_ID=node-02
-export JETTRA_NODE_ROLE=SECONDARY
-export JETTRA_REST_PORT=8080
-export JETTRA_GRPC_PORT=9091
-export JETTRA_STORAGE_PATH=~/jettra/data
+java --enable-preview \
+     --enable-native-access=ALL-UNNAMED \
+     -XX:+UnlockExperimentalVMOptions \
+     -XX:+UseCompactObjectHeaders \
+     -XX:+UseZGC \
+     -Xms2g -Xmx6g \
+     -Djettra.node.id=node-02 \
+     -Djettra.node.role=SECONDARY \
+     -Djettra.config.path=jettra.config \
+     -Ddatabase.properties.path=database.properties \
+     -jar JettraStore-1.0-SNAPSHOT-uber.jar
+```
 
+**En Servidor 3 (IP `192.168.1.103` - Nodo Secundario 2):**
+```bash
+java --enable-preview \
+     --enable-native-access=ALL-UNNAMED \
+     -XX:+UnlockExperimentalVMOptions \
+     -XX:+UseCompactObjectHeaders \
+     -XX:+UseZGC \
+     -Xms2g -Xmx6g \
+     -Djettra.node.id=node-03 \
+     -Djettra.node.role=SECONDARY \
+     -Djettra.config.path=jettra.config \
+     -Ddatabase.properties.path=database.properties \
+     -jar JettraStore-1.0-SNAPSHOT-uber.jar
+```
+
+##### Alternativa: Configuración Directa en `database.properties` de Cada Servidor
+Si en cada servidor se prefiere no pasar propiedades `-D` de nodo en la línea de comandos, se puede configurar directamente dentro del archivo `database.properties` de cada servidor:
+* En Servidor 1: `jettra.node.id = node-01` y `jettra.node.role = PRIMARY`
+* En Servidor 2: `jettra.node.id = node-02` y `jettra.node.role = SECONDARY`
+* En Servidor 3: `jettra.node.id = node-03` y `jettra.node.role = SECONDARY`
+
+Permitiendo ejecutar simplemente:
+```bash
 java --enable-preview \
      --enable-native-access=ALL-UNNAMED \
      -XX:+UnlockExperimentalVMOptions \
@@ -1618,23 +1653,7 @@ java --enable-preview \
      -jar JettraStore-1.0-SNAPSHOT-uber.jar
 ```
 
-**En Servidor 3 (IP `192.168.1.103` - Nodo Secundario 2):**
-```bash
-export JETTRA_NODE_ID=node-03
-export JETTRA_NODE_ROLE=SECONDARY
-export JETTRA_REST_PORT=8080
-export JETTRA_GRPC_PORT=9091
-export JETTRA_STORAGE_PATH=~/jettra/data
-
-java --enable-preview \
-     --enable-native-access=ALL-UNNAMED \
-     -XX:+UnlockExperimentalVMOptions \
-     -XX:+UseCompactObjectHeaders \
-     -XX:+UseZGC \
-     -Xms2g -Xmx6g \
-      -Djettra.config.path=jettra.config \
-     -jar JettraStore-1.0-SNAPSHOT-uber.jar
-```
+*(Las variables de entorno `export JETTRA_NODE_ID=...`, `export JETTRA_STORAGE_PATH=...`, etc. continúan siendo plenamente compatibles para entornos basados en Docker y Docker Compose).*
 
 **Secuencia y Verificación:**
 1. Iniciar primero el Servidor 1 (Líder).
