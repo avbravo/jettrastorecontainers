@@ -4,7 +4,7 @@ import java.util.concurrent.atomic.AtomicLong;
 
 public final class ClusterNode {
     public enum Role { PRIMARY, SECONDARY }
-    public enum RaftState { LEADER, FOLLOWER, CANDIDATE }
+    public enum RaftState { LEADER, FOLLOWER, CANDIDATE, DISCONNECTED }
     public enum NodeStatus { RUNNING, STOPPED, OFFLINE }
 
     private final String id;
@@ -37,11 +37,18 @@ public final class ClusterNode {
 
     public void start() {
         this.status = NodeStatus.RUNNING;
+        this.raftState = (role == Role.PRIMARY) ? RaftState.LEADER : RaftState.FOLLOWER;
         this.lastHeartbeat = System.currentTimeMillis();
     }
 
     public void stop() {
         this.status = NodeStatus.STOPPED;
+        this.raftState = RaftState.DISCONNECTED;
+    }
+
+    public void markOffline() {
+        this.status = NodeStatus.OFFLINE;
+        this.raftState = RaftState.DISCONNECTED;
     }
 
     public boolean isOnline() {

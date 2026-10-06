@@ -17,14 +17,18 @@ import io.jettra.store.security.JettraSecurityManager;
 
 import java.io.Console;
 import java.io.IOException;
+import java.net.InetSocketAddress;
+import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.*;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.nio.file.StandardOpenOption;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 public final class JettraStoreShellApp implements AutoCloseable {
     private JettraClient client;
@@ -90,6 +94,7 @@ public final class JettraStoreShellApp implements AutoCloseable {
     private static final Path CONFIG_DIR = Path.of(System.getProperty("user.home"), ".jettra");
     private static final Path CONFIG_FILE = CONFIG_DIR.resolve("connections.properties");
     private static final Path HISTORY_FILE = CONFIG_DIR.resolve("history.log");
+    private static final Path JLINE_HISTORY_FILE = CONFIG_DIR.resolve(".jline_history");
     private final List<String> commandHistory = new CopyOnWriteArrayList<>();
 
     private void initDefaultConnections() {
@@ -224,11 +229,12 @@ public final class JettraStoreShellApp implements AutoCloseable {
         Set<String> candidates = new LinkedHashSet<>();
 
         List<String> baseKeywords = List.of(
-            "HELP", "MENU", "MENU CONNECTIONS", "STATUS", "CONNECT ", "LOGIN ", "LOGOUT",
+            "HELP", "HELP CLUSTER-DISTRIBUTED", "MENU", "MENU CONNECTIONS", "STATUS", "CONNECT ", "LOGIN ", "LOGOUT",
             "SAVE CONNECTION ", "REMOVE CONNECTION ", "LIST CONNECTIONS",
             "SHOW DATABASES", "SHOW SAMPLES", "CREATE DATABASE ", "DROP DATABASE ", "USE ", "DB STATS",
             "SHOW BUCKETS", "SHOW RECORDS ", "COUNT ", "CREATE INDEX ", "DROP INDEX ", "LIST INDEXES",
             "SHOW NODES", "ADD NODE ", "REMOVE NODE ", "START NODE ", "STOP NODE ", "MULTINODE", "MULTINODE ON", "MULTINODE OFF", "MULTINODE STATUS", "SHOW MULTINODE",
+            "CLUSTER-DISTRIBUTED ALL", "CLUSTER-DISTRIBUTED <ALL>", "CLUSTER-DISTRIBUTED INFO", "CLUSTER-DISTRIBUTED ",
             "STORAGE_MODE ", "LAZY REFERENCE ON", "LAZY REFERENCE OFF", "LAZY REFERENCE STATUS",
             "INSERT INTO ", "SELECT ", "UPDATE ", "DELETE FROM ",
             "KV PUT ", "KV GET ", "KV DELETE ", "KV SCAN ",
@@ -265,6 +271,20 @@ public final class JettraStoreShellApp implements AutoCloseable {
             for (String d : dbs) {
                 if (d.toLowerCase().startsWith(dbPrefix)) {
                     candidates.add(verb + d);
+                }
+            }
+        } else if (pUpper.startsWith("CLUSTER-DISTRIBUTED ") || pUpper.startsWith("CLUSTER_DISTRIBUTED ")) {
+            String verb = pTrim.substring(0, pTrim.indexOf(' ') + 1);
+            String sub = pTrim.substring(verb.length()).trim().toLowerCase();
+            List<String> options = new ArrayList<>(List.of("all", "<all>", "info"));
+            if (client != null) {
+                try {
+                    options.addAll(client.listDatabases());
+                } catch (Exception ignored) {}
+            }
+            for (String opt : options) {
+                if (opt.toLowerCase().startsWith(sub)) {
+                    candidates.add(verb + opt);
                 }
             }
         } else if (pUpper.startsWith("LOAD SAMPLE ") || pUpper.startsWith("INSTALL SAMPLE ")) {
@@ -430,6 +450,12 @@ Seleccione una conexión para iniciar:
         // 1. Ayuda y Menú
         if (upper.equals("HELP") || upper.equals("?")) {
             return getHelpText();
+        } else if (upper.startsWith("HELP ") || upper.startsWith("? ")) {
+            String topic = upper.substring(upper.indexOf(' ') + 1).trim();
+            if (topic.contains("CLUSTER") || topic.contains("DISTRIBUTED")) {
+                return getClusterDistributedHelpText();
+            }
+            return getHelpText();
         } else if (upper.equals("MENU CONNECTIONS") || upper.equals("CONNECTIONS MENU")) {
             return getConnectionsMenuDisplay();
         } else if (upper.equals("MENU")) {
@@ -478,6 +504,10 @@ Seleccione una conexión para iniciar:
             return handleStartNode(trimmed);
         } else if (upper.startsWith("STOP NODE ")) {
             return handleStopNode(trimmed);
+        } else if (upper.startsWith("CLUSTER-DISTRIBUTED") || upper.startsWith("CLUSTER_DISTRIBUTED")) {
+            return handleClusterDistributed(trimmed);
+        } else if (upper.equals("8")) {
+            return handleClusterDistributedInfo();
         }
 
         // Configuración de Storage Mode (JVM-RAM vs DISK-MEMORY / JettraMemory)
@@ -843,15 +873,25 @@ Seleccione una conexión para iniciar:
     }
 
     // --- 4. Administración de Nodos del Clúster ---
+    private static boolean isNodeReachable(String host, int port, int timeoutMs) {
+        if (host == null || host.isBlank() || port <= 0) return false;
+        try (Socket socket = new Socket()) {
+            socket.connect(new InetSocketAddress(host, port), timeoutMs);
+            return true;
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
     private String handleShowNodes() {
         DynamicRingEngine ring = client.getRingEngine();
         StringBuilder sb = new StringBuilder();
         sb.append("==============================================================================================\n");
         sb.append("                          JETTRASTORE RAFT CLUSTER TOPOLOGY                                   \n");
         sb.append("==============================================================================================\n");
-        sb.append("+----------+----------------------+-------+-----------+------------+----------+--------------+\n");
-        sb.append("| Nodo ID  | Dirección IP         | Puerto| Rol       | Estado Raft| Estado   | Offload Bytes|\n");
-        sb.append("+----------+----------------------+-------+-----------+------------+----------+--------------+\n");
+        sb.append("+----------+----------------------+-------+-----------+--------------+----------+--------------+\n");
+        sb.append("| Nodo ID  | Dirección IP         | Puerto| Rol       | Estado Raft  | Estado   | Offload Bytes|\n");
+        sb.append("+----------+----------------------+-------+-----------+--------------+----------+--------------+\n");
         JettraStoreConfig storeCfg = null;
         try {
             storeCfg = JettraStoreConfig.load();
@@ -869,21 +909,75 @@ Seleccione una conexión para iniciar:
             }
         }
 
-        sb.append(String.format("| %-8s | %-20s | %-5d | %-9s | %-10s | %-8s | %-12d |\n",
-            ring.getNodeId(), leaderIp, leaderPort, "PRIMARY", "LEADER", "RUNNING", 0));
+        // Sondeo concurrente en tiempo real de la salud y conectividad de todos los nodos del clúster
+        final String fLeaderIp = leaderIp;
+        final int fLeaderPort = leaderPort;
+        CompletableFuture<Boolean> leaderCheckFuture = CompletableFuture.supplyAsync(() ->
+            isNodeReachable(fLeaderIp, fLeaderPort, 350) || isNodeReachable(currentHost, currentPort, 350)
+        );
 
-        for (ClusterNode peer : ring.getPeers()) {
-            sb.append(String.format("| %-8s | %-20s | %-5d | %-9s | %-10s | %-8s | %-12d |\n",
+        List<ClusterNode> peers = ring.getPeers();
+        List<CompletableFuture<Boolean>> peerFutures = new ArrayList<>();
+        for (ClusterNode peer : peers) {
+            peerFutures.add(CompletableFuture.supplyAsync(() -> {
+                boolean ok = isNodeReachable(peer.getIp(), peer.getPort(), 350);
+                if (ok) {
+                    peer.start();
+                } else {
+                    peer.stop();
+                }
+                return ok;
+            }));
+        }
+
+        boolean leaderOnline = true;
+        try {
+            leaderOnline = leaderCheckFuture.get(500, TimeUnit.MILLISECONDS);
+        } catch (Exception ignored) {}
+
+        String leaderStatus = leaderOnline ? "RUNNING" : "STOPPED";
+        String leaderRaft = leaderOnline ? "LEADER" : "DISCONNECTED";
+
+        sb.append(String.format("| %-8s | %-20s | %-5d | %-9s | %-12s | %-8s | %-12d |\n",
+            ring.getNodeId(), leaderIp, leaderPort, "PRIMARY", leaderRaft, leaderStatus, 0));
+
+        int onlinePeers = 0;
+        for (int i = 0; i < peers.size(); i++) {
+            ClusterNode peer = peers.get(i);
+            boolean pOnline = false;
+            try {
+                pOnline = peerFutures.get(i).get(500, TimeUnit.MILLISECONDS);
+            } catch (Exception ignored) {
+                pOnline = peer.isOnline();
+            }
+            if (pOnline) {
+                onlinePeers++;
+            }
+            sb.append(String.format("| %-8s | %-20s | %-5d | %-9s | %-12s | %-8s | %-12d |\n",
                 peer.getId(), peer.getIp(), peer.getPort(), peer.getRole(), peer.getRaftState(),
                 peer.getStatus(), peer.getReceivedOffloadedBytes()));
         }
-        sb.append("+----------+----------------------+-------+-----------+------------+----------+--------------+\n");
+        sb.append("+----------+----------------------+-------+-----------+--------------+----------+--------------+\n");
         boolean multiActive = ring.isMultinodeActive();
         sb.append(String.format("Modo Multinodo (cluster.multinode.active): %s\n",
             multiActive ? "ON (Algoritmo de consenso y distribución de datos ACTIVO)"
                         : "OFF (Servidor Único / Standalone - Distribución de datos DESACTIVADA)"));
+
+        int totalNodes = peers.size() + 1;
+        int activeNodes = (leaderOnline ? 1 : 0) + onlinePeers;
+        boolean quorumReached = multiActive && (activeNodes >= (totalNodes / 2 + 1));
+
+        String quorumStr;
+        if (!multiActive) {
+            quorumStr = "Inactivo (Operaciones locales exclusivas)";
+        } else if (quorumReached) {
+            quorumStr = String.format("Activo (Consenso distribuido con quórum mayoritario: %d/%d activos)", activeNodes, totalNodes);
+        } else {
+            quorumStr = String.format("Inactivo (Sin mayoría de nodos para consenso: %d/%d activos)", activeNodes, totalNodes);
+        }
+
         sb.append(String.format("Total: %d nodo(s) registrados en el anillo dinámico. Quórum: %s.\n",
-            ring.getPeers().size() + 1, multiActive ? "Activo (Consenso distribuido)" : "Inactivo (Operaciones locales exclusivas)"));
+            totalNodes, quorumStr));
         return sb.toString();
     }
 
@@ -926,6 +1020,115 @@ Seleccione una conexión para iniciar:
         boolean ok = client.getRingEngine().startPeer(id);
         return ok ? "[SUCCESS] Nodo '" + id + "' iniciado (RUNNING)."
                   : "[ERROR] No se pudo iniciar el nodo '" + id + "' (nodo no encontrado).";
+    }
+
+    // --- 4.b Distribución y Migración de Datos en Clúster Raft ---
+    private String handleClusterDistributed(String command) {
+        String arg = command.replaceAll("(?i)^(CLUSTER-DISTRIBUTED|CLUSTER_DISTRIBUTED)\\s*", "").trim();
+        if (arg.isEmpty()) {
+            return """
+                [ERROR] Parámetro requerido para 'cluster-distributed'.
+                Uso:
+                  cluster-distributed all           Distribuye entre todos los nodos todas las bases de datos y registros.
+                  cluster-distributed <all>         Distribuye entre todos los nodos todas las bases de datos y registros.
+                  cluster-distributed <nombre-bd>   Distribuye la base de datos indicada con sus registros exactos.
+                  cluster-distributed info          Muestra una tabla con los nodos y las bases de datos en cada nodo.
+                """;
+        }
+
+        if (arg.equalsIgnoreCase("info")) {
+            return handleClusterDistributedInfo();
+        }
+
+        boolean isAll = arg.equalsIgnoreCase("all") || arg.equalsIgnoreCase("<all>");
+        if (isAll) {
+            return handleClusterDistributedAll();
+        }
+
+        String dbName = cleanQuotes(arg.replaceAll("^<|>$", "").trim());
+        if (dbName.isBlank()) {
+            return "[ERROR] Debe especificar el nombre de la base de datos a distribuir.";
+        }
+        return handleClusterDistributedDatabase(dbName);
+    }
+
+    private String handleClusterDistributedInfo() {
+        try {
+            List<io.jettra.store.cluster.ClusterNodeDistributionInfo> infoList = client.getClusterDistributedInfo();
+            StringBuilder sb = new StringBuilder();
+            sb.append("========================================================================================================================\n");
+            sb.append("                                   JETTRASTORE CLUSTER DATABASE DISTRIBUTION INFO                                       \n");
+            sb.append("========================================================================================================================\n");
+            sb.append("+----------+----------------------+-------+-----------+----------+---------------+--------------------------------------+\n");
+            sb.append("| Nodo ID  | Dirección IP         | Puerto| Rol       | Estado   | Cantidad BDs  | Bases de Datos                       |\n");
+            sb.append("+----------+----------------------+-------+-----------+----------+---------------+--------------------------------------+\n");
+            for (var node : infoList) {
+                String dbListStr = node.databases().isEmpty() 
+                    ? (node.status().equalsIgnoreCase("OFFLINE") ? "(Sin respuesta / Offline)" : "(0 bases de datos)")
+                    : String.join(", ", node.databases());
+                if (dbListStr.length() > 36) {
+                    dbListStr = dbListStr.substring(0, 33) + "...";
+                }
+                sb.append(String.format("| %-8s | %-20s | %-5d | %-9s | %-8s | %-13d | %-36s |\n",
+                    node.nodeId(), node.ip(), node.port(), node.role(), node.status(), node.databaseCount(), dbListStr));
+            }
+            sb.append("+----------+----------------------+-------+-----------+----------+---------------+--------------------------------------+\n");
+            boolean multi = client.getRingEngine().isMultinodeActive();
+            sb.append(String.format("Total nodos en topología: %d | Modo Multinodo (cluster.multinode.active): %s\n",
+                infoList.size(), multi ? "ON (Consenso y Replicación Activos)" : "OFF (Standalone)"));
+            return sb.toString();
+        } catch (Exception e) {
+            return "[ERROR] No se pudo obtener la información de distribución del clúster: " + e.getMessage();
+        }
+    }
+
+    private String handleClusterDistributedDatabase(String dbName) {
+        if (!client.databaseExists(dbName)) {
+            return String.format("[ERROR] La base de datos '%s' no existe en el catálogo local ni en disco.", dbName);
+        }
+        StringBuilder sb = new StringBuilder();
+        sb.append(String.format("[CLUSTER-DISTRIBUTED] Iniciando distribución integral de la base de datos '%s'...\n", dbName));
+        try {
+            boolean ok = client.clusterDistributed(dbName);
+            if (ok) {
+                sb.append(String.format("  ✓ Base de datos '%s' y todos sus registros internos, colecciones e índices fueron migrados con éxito a los nodos secundarios.\n", dbName));
+                sb.append("[SUCCESS] Distribución completada bajo consenso Raft mayoritario.");
+            } else {
+                sb.append(String.format("[WARNING] La distribución de '%s' finalizó sin confirmación de quórum completo.\n", dbName));
+            }
+            return sb.toString();
+        } catch (UnsupportedOperationException e) {
+            return "[ERROR] " + e.getMessage();
+        } catch (Exception e) {
+            return "[ERROR] Falló la distribución de la base de datos '" + dbName + "': " + e.getMessage();
+        }
+    }
+
+    private String handleClusterDistributedAll() {
+        StringBuilder sb = new StringBuilder();
+        sb.append("[CLUSTER-DISTRIBUTED <ALL>] Iniciando migración y distribución de TODAS las bases de datos del clúster...\n");
+        try {
+            Map<String, Boolean> results = client.clusterDistributedAll();
+            if (results.isEmpty()) {
+                return "[INFO] No se encontraron bases de datos registradas para distribuir.";
+            }
+            int successCount = 0;
+            for (var entry : results.entrySet()) {
+                if (entry.getValue()) {
+                    sb.append(String.format("  ✓ [%s]: DISTRIBUIDA Y MIGRADA (Registros y metadatos OK)\n", entry.getKey()));
+                    successCount++;
+                } else {
+                    sb.append(String.format("  ✗ [%s]: ERROR EN DISTRIBUCIÓN (Sin quórum)\n", entry.getKey()));
+                }
+            }
+            sb.append(String.format("[SUCCESS] %d de %d base(s) de datos y todos sus registros internos migrados exitosamente en el clúster.",
+                successCount, results.size()));
+            return sb.toString();
+        } catch (UnsupportedOperationException e) {
+            return "[ERROR] " + e.getMessage();
+        } catch (Exception e) {
+            return "[ERROR] Falló la distribución global: " + e.getMessage();
+        }
     }
 
     private String handleMultinodeStatus() {
@@ -1678,6 +1881,7 @@ Seleccione una conexión para iniciar:
                 JettraDatabase db = client.getDatabase(currentDatabase);
                 db.getDocumentEngine(col).insert(id, data);
                 db.getIndexManager().onDocumentInsert(col, id, data);
+                db.saveToDisk();
                 client.replicatePutDocument(currentDatabase, col, id, data);
                 return String.format("[SUCCESS] Registro con _id '%s' insertado en la colección '%s'.", id, col);
             }
@@ -1696,6 +1900,7 @@ Seleccione una conexión para iniciar:
                 JettraDatabase db = client.getDatabase(currentDatabase);
                 db.getDocumentEngine(col).insert(id, data);
                 db.getIndexManager().onDocumentInsert(col, id, data);
+                db.saveToDisk();
                 client.replicatePutDocument(currentDatabase, col, id, data);
                 return String.format("[SUCCESS] Registro con _id '%s' insertado en la colección '%s'.", id, col);
             }
@@ -1779,6 +1984,7 @@ Seleccione una conexión para iniciar:
                 if (id != null) {
                     JettraDatabase db = client.getDatabase(currentDatabase);
                     db.getDocumentEngine(col).update(id, updates);
+                    db.saveToDisk();
                     Map<String, Object> full = db.getDocumentEngine(col).findById(id);
                     if (full != null) {
                         client.replicatePutDocument(currentDatabase, col, id, full);
@@ -1805,6 +2011,7 @@ Seleccione una conexión para iniciar:
                     JettraDatabase db = client.getDatabase(currentDatabase);
                     boolean deleted = db.getDocumentEngine(col).delete(id);
                     db.getIndexManager().onDocumentDelete(col, id, null);
+                    db.saveToDisk();
                     if (deleted) {
                         client.replicateDeleteDocument(currentDatabase, col, id);
                     }
@@ -1820,6 +2027,7 @@ Seleccione una conexión para iniciar:
                     JettraDatabase db = client.getDatabase(currentDatabase);
                     boolean deleted = db.getDocumentEngine(col).delete(id);
                     db.getIndexManager().onDocumentDelete(col, id, null);
+                    db.saveToDisk();
                     if (deleted) {
                         client.replicateDeleteDocument(currentDatabase, col, id);
                     }
@@ -2920,6 +3128,9 @@ return String.format("[NOT FOUND] No se encontró el bucket/unit '%s' en la base
             2. TELEMETRÍA Y CLÚSTER:
               status                                Monitorea RAM Panama FFM, CPU Loom y Disco LSM.
               show nodes / list nodes               Muestra la topología del clúster Raft y nodos del anillo.
+              cluster-distributed <all>             distribuye entre todos los nodos todas las bases de datos
+              cluster-distributed <nombre-base-datos>: distribuye la base de datos indicada
+              cluster-distributed info :            Muestra una tabla con los nodos y las bases de datos en cada nodo.
               multinode / show multinode            Muestra el estado de cluster.multinode.active (ON/OFF).
               multinode on / multinode off          Activa o desactiva dinámicamente la distribución de datos.
               add node <id> <host> <port> [ROLE]    Agrega un nuevo nodo secundario al clúster Raft.
@@ -3025,6 +3236,18 @@ return String.format("[NOT FOUND] No se encontró el bucket/unit '%s' en la base
             """;
     }
 
+    public String getClusterDistributedHelpText() {
+        return """
+            ==============================================================================================
+                               AYUDA DE COMANDOS: CLUSTER-DISTRIBUTED
+            ==============================================================================================
+              cluster-distributed <all>             distribuye entre todos los nodos todas las bases de datos
+              cluster-distributed <nombre-base-datos>: distribuye la base de datos indicada
+              cluster-distributed info :            Muestra una tabla con los nodos y las bases de datos en cada nodo.
+            ==============================================================================================
+            """;
+    }
+
     public String getInteractiveMenu() {
         return """
             ================================================================================
@@ -3037,6 +3260,7 @@ return String.format("[NOT FOUND] No se encontró el bucket/unit '%s' en la base
             [5] Administrar Índices de la Base de Datos (SHOW INDEXES)
             [6] Administrar Usuarios y Roles RBAC (SHOW USERS)
             [7] Ayuda Completa (HELP)
+            [8] Distribución de Datos en Clúster (cluster-distributed info)
             ================================================================================
             """;
     }
@@ -3265,7 +3489,7 @@ Ejecute el comando 'connect <host> <puerto>' (o presione Enter para [127.0.0.1 9
             lineReader = org.jline.reader.LineReaderBuilder.builder()
                 .terminal(terminal)
                 .completer(completer)
-                .variable(org.jline.reader.LineReader.HISTORY_FILE, HISTORY_FILE)
+                .variable(org.jline.reader.LineReader.HISTORY_FILE, JLINE_HISTORY_FILE)
                 .build();
         } catch (Throwable t) {
             // Fallback elegante a System.console o Scanner si la terminal interactiva no está disponible (ej. entornos de test o redirección)
@@ -3279,6 +3503,21 @@ Ejecute el comando 'connect <host> <puerto>' (o presione Enter para [127.0.0.1 9
             if (lineReader != null) {
                 try {
                     line = lineReader.readLine(prompt);
+                } catch (IllegalArgumentException e) {
+                    // Si el archivo de historial de JLine tuviese sintaxis corrupta previa, purgar y continuar
+                    try {
+                        Files.deleteIfExists(JLINE_HISTORY_FILE);
+                        lineReader.getHistory().purge();
+                        line = lineReader.readLine(prompt);
+                    } catch (Exception ex) {
+                        if (console != null) {
+                            System.out.print(prompt);
+                            line = console.readLine();
+                        } else if (scanner.hasNextLine()) {
+                            System.out.print(prompt);
+                            line = scanner.nextLine();
+                        }
+                    }
                 } catch (org.jline.reader.UserInterruptException | org.jline.reader.EndOfFileException e) {
                     System.out.println("\nSaliendo de JettraStore Shell...");
                     break;

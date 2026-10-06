@@ -10,6 +10,7 @@ import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
@@ -94,17 +95,57 @@ public final class JettraClusterTransportServer implements AutoCloseable {
 
             case JettraRaftFrame.TYPE_CREATE_DATABASE -> {
                 String dbName = frame.databaseName();
-                System.out.printf("[JettraClusterTransport] ↳ [REPLICATE] Recibida orden Raft de crear base de datos: '%s' desde nodo '%s'%n",
-                    dbName, frame.senderNodeId());
+                byte[] payload = frame.payload();
+                System.out.printf("[JettraClusterTransport] ↳ [REPLICATE] Recibida orden Raft de crear base de datos: '%s' (payload: %d bytes) desde nodo '%s'%n",
+                    dbName, payload != null ? payload.length : 0, frame.senderNodeId());
                 try {
                     if (server != null) {
-                        server.getOrCreateDatabaseInternal(dbName, false);
+                        if (payload != null && payload.length > 0) {
+                            Path targetMeta = Path.of(server.getConfig().getStoragePath(), dbName + "_meta.json");
+                            if (targetMeta.getParent() != null) {
+                                Files.createDirectories(targetMeta.getParent());
+                            }
+                            Files.write(targetMeta, payload, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
+                        }
+                        JettraDatabase db = server.getOrCreateDatabaseInternal(dbName, false);
+                        if (db != null) {
+                            db.loadFromDisk();
+                        }
                     }
                     return JettraRaftFrame.ack(frame.term(), frame.logIndex(), 
                         server != null ? server.getConfig().getNodeId() : "local", 
                         "Base de datos '" + dbName + "' replicada exitosamente");
                 } catch (Exception ex) {
                     System.err.printf("[JettraClusterTransport] Error replicando base de datos '%s': %s%n", dbName, ex.getMessage());
+                    return JettraRaftFrame.nack(frame.term(), frame.logIndex(), 
+                        server != null ? server.getConfig().getNodeId() : "local", ex.getMessage());
+                }
+            }
+
+            case JettraRaftFrame.TYPE_DISTRIBUTE_DATABASE -> {
+                String dbName = frame.databaseName();
+                byte[] payload = frame.payload();
+                System.out.printf("[JettraClusterTransport] ↳ [DISTRIBUTE] Recibida orden Raft de migración integral de base de datos: '%s' (%d bytes) desde nodo '%s'%n",
+                    dbName, payload != null ? payload.length : 0, frame.senderNodeId());
+                try {
+                    if (server != null) {
+                        if (payload != null && payload.length > 0) {
+                            Path targetMeta = Path.of(server.getConfig().getStoragePath(), dbName + "_meta.json");
+                            if (targetMeta.getParent() != null) {
+                                Files.createDirectories(targetMeta.getParent());
+                            }
+                            Files.write(targetMeta, payload, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
+                        }
+                        JettraDatabase db = server.getOrCreateDatabaseInternal(dbName, false);
+                        if (db != null) {
+                            db.loadFromDisk();
+                        }
+                    }
+                    return JettraRaftFrame.ack(frame.term(), frame.logIndex(), 
+                        server != null ? server.getConfig().getNodeId() : "local", 
+                        "Base de datos '" + dbName + "' distribuida y sincronizada exitosamente con todos sus registros");
+                } catch (Exception ex) {
+                    System.err.printf("[JettraClusterTransport] Error distribuyendo base de datos '%s': %s%n", dbName, ex.getMessage());
                     return JettraRaftFrame.nack(frame.term(), frame.logIndex(), 
                         server != null ? server.getConfig().getNodeId() : "local", ex.getMessage());
                 }
@@ -135,6 +176,7 @@ public final class JettraClusterTransportServer implements AutoCloseable {
                         JettraDatabase db = server.getOrCreateDatabase(dbName);
                         if (db != null) {
                             db.putOffHeapBinary(key, frame.payload());
+                            db.saveToDisk();
                         }
                     }
                     return JettraRaftFrame.ack(frame.term(), frame.logIndex(), 
@@ -157,6 +199,7 @@ public final class JettraClusterTransportServer implements AutoCloseable {
                             Map<String, Object> doc = new io.jettra.json.JettraJson().fromJson(jsonStr, Map.class);
                             db.getDocumentEngine(colName).applyReplicatedInsert(id, doc);
                             db.getIndexManager().onDocumentInsert(colName, id, doc);
+                            db.saveToDisk();
                         }
                     }
                     return JettraRaftFrame.ack(frame.term(), frame.logIndex(), 
@@ -177,6 +220,7 @@ public final class JettraClusterTransportServer implements AutoCloseable {
                         if (db != null) {
                             db.getDocumentEngine(colName).applyReplicatedDelete(id);
                             db.getIndexManager().onDocumentDelete(colName, id, null);
+                            db.saveToDisk();
                         }
                     }
                     return JettraRaftFrame.ack(frame.term(), frame.logIndex(), 

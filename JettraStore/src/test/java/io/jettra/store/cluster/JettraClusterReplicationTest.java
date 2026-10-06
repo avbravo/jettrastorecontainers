@@ -107,4 +107,93 @@ public class JettraClusterReplicationTest {
             }
         }
     }
+
+    @Test
+    @DisplayName("Debe migrar todos los registros y elementos con broadcastDistributeDatabase")
+    public void testFullDatabaseDistributionWithRecords() throws IOException, InterruptedException {
+        Path tempDirPrimary = Files.createTempDirectory("jettra_prim_dist");
+        Path tempDirSecondary = Files.createTempDirectory("jettra_sec_dist");
+        int testPort = 19095;
+
+        // Servidor primario
+        Properties primProps = new Properties();
+        primProps.setProperty("jettra.node.id", "node-01");
+        primProps.setProperty("jettra.node.role", "PRIMARY");
+        primProps.setProperty("jettra.storage.path", tempDirPrimary.toString());
+        primProps.setProperty("jettra.network.grpc.port", "19094");
+        primProps.setProperty("jettra.network.rest.port", "18084");
+        primProps.setProperty("cluster.multinode.active", "on");
+
+        // Servidor secundario
+        Properties secProps = new Properties();
+        secProps.setProperty("jettra.node.id", "node-02");
+        secProps.setProperty("jettra.node.role", "SECONDARY");
+        secProps.setProperty("jettra.storage.path", tempDirSecondary.toString());
+        secProps.setProperty("jettra.network.grpc.port", String.valueOf(testPort));
+        secProps.setProperty("jettra.network.rest.port", "18085");
+        secProps.setProperty("cluster.multinode.active", "on");
+
+        Properties clusterProps = new Properties();
+        clusterProps.setProperty("cluster.node.1.id", "node-01");
+        clusterProps.setProperty("cluster.node.1.ip", "127.0.0.1");
+        clusterProps.setProperty("cluster.node.1.grpc.port", "19094");
+        clusterProps.setProperty("cluster.node.2.id", "node-02");
+        clusterProps.setProperty("cluster.node.2.ip", "127.0.0.1");
+        clusterProps.setProperty("cluster.node.2.grpc.port", String.valueOf(testPort));
+
+        JettraStoreConfig primConfig = new JettraStoreConfig(primProps, clusterProps);
+        JettraStoreServer primServer = new JettraStoreServer(primConfig);
+
+        JettraStoreConfig secConfig = new JettraStoreConfig(secProps, clusterProps);
+        JettraStoreServer secServer = new JettraStoreServer(secConfig);
+
+        try (JettraClusterTransportServer transportServer = new JettraClusterTransportServer(testPort, secServer)) {
+            transportServer.start();
+            Thread.sleep(100);
+
+            // Crear y poblar base de datos en PRIMARIO
+            var primDb = primServer.getOrCreateDatabaseInternal("migracion_completa_db", false);
+            for (int i = 1; i <= 25; i++) {
+                primDb.getDocumentEngine("facturas").insert("fac_" + i, java.util.Map.of("total", 100.0 * i, "folio", "F-" + i));
+            }
+            for (int i = 1; i <= 10; i++) {
+                primDb.getDocumentEngine("clientes").insert("cli_" + i, java.util.Map.of("nombre", "Cliente " + i));
+            }
+            primDb.getKeyValueEngine("cache_config").put("version", "2.0".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            primDb.saveToDisk();
+
+            assertEquals(25L, primDb.getDocumentEngine("facturas").count());
+            assertEquals(10L, primDb.getDocumentEngine("clientes").count());
+
+            // Distribuir al secundario
+            ClusterNode peerNode2 = new ClusterNode("node-02", "127.0.0.1", testPort, ClusterNode.Role.SECONDARY);
+            try (JettraClusterReplicationClient client = new JettraClusterReplicationClient("node-01", List.of(peerNode2))) {
+                byte[] snapshot = primServer.getDatabaseSnapshotBytes("migracion_completa_db");
+                System.out.printf("DEBUG snapshot length: %d bytes%n", snapshot.length);
+                assertTrue(snapshot.length > 0);
+
+                boolean distOk = client.broadcastDistributeDatabase("migracion_completa_db", snapshot);
+                System.out.println("DEBUG distOk: " + distOk);
+                assertTrue(distOk);
+
+                // Verificar en secundario
+                var secDb = secServer.getOrCreateDatabaseInternal("migracion_completa_db", false);
+                assertNotNull(secDb);
+
+                long secFacturas = secDb.getDocumentEngine("facturas").count();
+                long secClientes = secDb.getDocumentEngine("clientes").count();
+                System.out.printf("DEBUG secFacturas: %d, secClientes: %d%n", secFacturas, secClientes);
+                assertEquals(25L, secFacturas);
+                assertEquals(10L, secClientes);
+
+                var doc1 = secDb.getDocumentEngine("facturas").findById("fac_1");
+                assertNotNull(doc1);
+                assertEquals("F-1", doc1.get("folio"));
+
+                var kvVal = secDb.getKeyValueEngine("cache_config").get("version");
+                assertNotNull(kvVal);
+                assertEquals("2.0", new String(kvVal, java.nio.charset.StandardCharsets.UTF_8));
+            }
+        }
+    }
 }

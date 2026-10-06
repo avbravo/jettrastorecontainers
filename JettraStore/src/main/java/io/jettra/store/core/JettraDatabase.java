@@ -319,6 +319,18 @@ public final class JettraDatabase implements AutoCloseable {
             }
         }
 
+        // Si la base de datos en memoria no tiene colecciones o registros pero en disco existe un archivo previo con datos,
+        // cargar previamente el archivo para garantizar que todos los registros se preserven y serialicen íntegramente.
+        if (getAllCollectionNames().isEmpty()) {
+            if (Files.exists(metaFile)) {
+                try {
+                    if (Files.size(metaFile) > 100) {
+                        loadFromDisk();
+                    }
+                } catch (Exception ignored) {}
+            }
+        }
+
         JettraJson json = new JettraJson();
         try (BufferedWriter writer = Files.newBufferedWriter(metaFile, StandardCharsets.UTF_8,
                 StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE)) {
@@ -530,6 +542,7 @@ public final class JettraDatabase implements AutoCloseable {
                                 if (scanner.peek() == '[') {
                                     scanner.read();
                                     var docEng = getDocumentEngine(colName);
+                                    docEng.applyReplicatedClear();
                                     Map<String, Map<String, Object>> batch = new HashMap<>(5000);
                                     long docCount = 0;
                                     final long MAX_LOCAL_DOCS = ringModeActive ? 10000 : 1000000;
@@ -554,14 +567,20 @@ public final class JettraDatabase implements AutoCloseable {
                                                 batch.put(id, map);
                                                 docCount++;
                                                 if (batch.size() >= 5000) {
-                                                    docEng.insertBatch(batch);
+                                                    docEng.applyReplicatedBatch(batch);
+                                                    for (var entry : batch.entrySet()) {
+                                                        getIndexManager().onDocumentInsert(colName, entry.getKey(), entry.getValue());
+                                                    }
                                                     batch.clear();
                                                 }
                                             }
                                         }
                                     }
                                     if (!batch.isEmpty()) {
-                                        docEng.insertBatch(batch);
+                                        docEng.applyReplicatedBatch(batch);
+                                        for (var entry : batch.entrySet()) {
+                                            getIndexManager().onDocumentInsert(colName, entry.getKey(), entry.getValue());
+                                        }
                                         batch.clear();
                                     }
                                     scanner.skipWhitespace();
@@ -798,6 +817,8 @@ public final class JettraDatabase implements AutoCloseable {
             }
             return true;
         } catch (Exception e) {
+            System.err.printf("[JettraDatabase:%s] Error cargando metadatos y registros desde '%s': %s%n",
+                databaseName, metaFile, e.getMessage());
             return false;
         }
     }

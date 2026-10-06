@@ -385,3 +385,62 @@ client.setStorageMode("example_factura_db", StorageMode.JVM_RAM);
 2. **Uso de Virtual Threads:** Ejecute las llamadas al driver en hilos virtuales creados con `Thread.ofVirtual().start(...)` para maximizar el throughput concurrente.
 3. **Liberación de Recursos:** Siempre utilice bloques `try-with-resources` sobre `JettraClient` para garantizar la liberación de arenas nativas Off-Heap de Project Panama.
 4. **Almacenamiento Híbrido Document + Off-Heap:** Use `JettraDocument` para esquemas de consulta y metadatos, y almacene adjuntos masivos (PDFs, firmas criptográficas, imágenes) a través de `client.putBinary(...)` delegando en `JettraMemory`.
+
+---
+
+## 11. Distribución y Replicación en Clúster (`Cluster-Distributed API`)
+
+A partir de la versión 1.0, `JettraClient` incluye métodos nativos para orquestar la sincronización y distribución de bases de datos completas y registros a través del clúster Raft/multinodo.
+
+### 11.1 Métodos Disponibles en `JettraClient`
+
+```java
+// 1. Distribuir una base de datos específica con todos sus registros a los nodos secundarios
+boolean success = client.clusterDistributed("example_factura_db");
+
+// 2. Distribuir todas las bases de datos registradas y sus registros a todos los nodos
+boolean allSuccess = client.clusterDistributedAll();
+
+// 3. Consultar la tabla de información de distribución de nodos y bases de datos
+List<Map<String, Object>> nodes = client.getClusterDistributedInfo();
+```
+
+### 11.2 Ejemplo de Integración en Java 25
+
+```java
+package com.example;
+
+import io.jettra.driver.JettraClient;
+import java.util.List;
+import java.util.Map;
+
+public class ClusterDistributionDemo {
+    public static void main(String[] args) {
+        try (JettraClient client = JettraClient.builder()
+                .host("192.168.60.243")
+                .port(9091)
+                .credentials("admin", "admin-jettra")
+                .build()) {
+
+            System.out.println("Distribuir base de datos 'example_factura_db'...");
+            boolean ok = client.clusterDistributed("example_factura_db");
+            System.out.println("Resultado de distribución: " + ok);
+
+            System.out.println("\nConsultando estado de distribución en el clúster:");
+            List<Map<String, Object>> topology = client.getClusterDistributedInfo();
+            for (Map<String, Object> node : topology) {
+                System.out.printf("- Nodo [%s] en %s:%s | Rol: %s | Estado: %s | Bases de datos: %s%n",
+                        node.get("nodeId"),
+                        node.get("ip"),
+                        node.get("port"),
+                        node.get("role"),
+                        node.get("status"),
+                        node.get("databases"));
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+}
+```
+

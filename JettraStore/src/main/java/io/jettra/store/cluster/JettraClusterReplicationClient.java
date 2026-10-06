@@ -34,38 +34,25 @@ public final class JettraClusterReplicationClient implements AutoCloseable {
      * y espera quórum mayoritario (1 local + al menos 1 secundario = 2 de 3).
      */
     public boolean broadcastCreateDatabase(String dbName) {
+        return broadcastCreateDatabase(dbName, new byte[0]);
+    }
+
+    public boolean broadcastCreateDatabase(String dbName, byte[] payload) {
         long term = currentTerm.get();
         long idx = logIndex.incrementAndGet();
-        JettraRaftFrame frame = JettraRaftFrame.createDatabase(term, idx, localNodeId, dbName);
+        JettraRaftFrame frame = JettraRaftFrame.createDatabase(term, idx, localNodeId, dbName, payload);
+        return broadcastFrameWithQuorum(frame);
+    }
 
-        int acks = 1; // El nodo local ya la creó
-        List<CompletableFuture<Boolean>> futures = new ArrayList<>();
-
-        for (ClusterNode peer : peers) {
-            futures.add(CompletableFuture.supplyAsync(() -> {
-                try {
-                    JettraRaftFrame resp = sendFrameToPeer(peer, frame);
-                    if (resp != null && resp.frameType() == JettraRaftFrame.TYPE_ACK) {
-                        peer.start();
-                        return true;
-                    }
-                } catch (Exception e) {
-                    peer.setStatus(ClusterNode.NodeStatus.OFFLINE);
-                }
-                return false;
-            }, executor));
-        }
-
-        for (var f : futures) {
-            try {
-                if (f.get(TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
-                    acks++;
-                }
-            } catch (Exception ignored) {}
-        }
-
-        // Quórum: mayoría (2 de 3 nodos)
-        return acks >= 2 || peers.isEmpty();
+    /**
+     * Envía una trama de distribución masiva/integral de base de datos (con todos sus registros serializados)
+     * a todos los nodos secundarios configurados y espera quórum mayoritario.
+     */
+    public boolean broadcastDistributeDatabase(String dbName, byte[] payload) {
+        long term = currentTerm.get();
+        long idx = logIndex.incrementAndGet();
+        JettraRaftFrame frame = JettraRaftFrame.distributeDatabase(term, idx, localNodeId, dbName, payload);
+        return broadcastFrameWithQuorum(frame);
     }
 
     /**
@@ -212,10 +199,47 @@ public final class JettraClusterReplicationClient implements AutoCloseable {
                     if (!csv.isBlank()) {
                         return List.of(csv.split(","));
                     }
+                    return List.of();
                 }
             }
         } catch (Exception ignored) {}
-        return List.of();
+        return null;
+    }
+
+    /**
+     * Consulta el inventario de bases de datos de todos los nodos del clúster concurrentemente.
+     */
+    public List<ClusterNodeDistributionInfo> getClusterDistributionInfo(String localIp, int localPort, String localRole, List<String> localDatabases) {
+        List<ClusterNodeDistributionInfo> result = new ArrayList<>();
+        result.add(new ClusterNodeDistributionInfo(
+            localNodeId, localIp, localPort, localRole, "RUNNING", localDatabases.size(), localDatabases
+        ));
+
+        List<CompletableFuture<ClusterNodeDistributionInfo>> futures = new ArrayList<>();
+        for (ClusterNode peer : peers) {
+            futures.add(CompletableFuture.supplyAsync(() -> {
+                try {
+                    List<String> dbs = requestCatalogSync(peer.getIp(), peer.getPort());
+                    if (dbs != null) {
+                        peer.start();
+                        return new ClusterNodeDistributionInfo(
+                            peer.getId(), peer.getIp(), peer.getPort(), peer.getRole().name(), "RUNNING", dbs.size(), dbs
+                        );
+                    }
+                } catch (Exception ignored) {}
+                peer.setStatus(ClusterNode.NodeStatus.OFFLINE);
+                return new ClusterNodeDistributionInfo(
+                    peer.getId(), peer.getIp(), peer.getPort(), peer.getRole().name(), "OFFLINE", 0, List.of()
+                );
+            }, executor));
+        }
+
+        for (var f : futures) {
+            try {
+                result.add(f.get(TIMEOUT_MS, TimeUnit.MILLISECONDS));
+            } catch (Exception ignored) {}
+        }
+        return result;
     }
 
     /**
@@ -230,9 +254,11 @@ public final class JettraClusterReplicationClient implements AutoCloseable {
                     JettraRaftFrame resp = sendFrameToPeer(peer, frame);
                     if (resp != null && resp.frameType() == JettraRaftFrame.TYPE_HEARTBEAT_ACK) {
                         peer.start();
+                    } else {
+                        peer.markOffline();
                     }
                 } catch (Exception e) {
-                    peer.setStatus(ClusterNode.NodeStatus.OFFLINE);
+                    peer.markOffline();
                 }
             });
         }

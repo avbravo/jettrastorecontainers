@@ -171,8 +171,6 @@ public final class JettraStressTestRunner {
      * en Virtual Threads ejecutando consultas y operaciones continuas durante un período de tiempo sostenido.
      */
     public FacturaBenchmarkResult runFacturaDurationWorkload(int concurrentUsers, long targetDurationMs) throws InterruptedException {
-        long startTime = System.currentTimeMillis();
-        long endTime = startTime + targetDurationMs;
         AtomicInteger completedOps = new AtomicInteger(0);
         AtomicInteger failedOps = new AtomicInteger(0);
         java.util.concurrent.atomic.LongAdder totalLatencyNanos = new java.util.concurrent.atomic.LongAdder();
@@ -190,6 +188,9 @@ public final class JettraStressTestRunner {
             var kvCache = db.getKeyValueEngine("cache_folios");
             var vecEngine = db.getVectorEngine("factura_embeddings", 3);
             var tsEngine = db.getTimeSeriesEngine("volumen_facturacion");
+
+            long startTime = System.currentTimeMillis();
+            long endTime = startTime + targetDurationMs;
 
             try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
                 CountDownLatch latch = new CountDownLatch(concurrentUsers);
@@ -281,8 +282,6 @@ public final class JettraStressTestRunner {
      * en Virtual Threads durante un período de tiempo sostenido (5, 10, 25, 50, 100, 500 usuarios).
      */
     public HospitalBenchmarkResult runHospitalDurationWorkload(int concurrentUsers, long targetDurationMs) throws InterruptedException {
-        long startTime = System.currentTimeMillis();
-        long endTime = startTime + targetDurationMs;
         AtomicInteger completedOps = new AtomicInteger(0);
         AtomicInteger failedOps = new AtomicInteger(0);
         java.util.concurrent.atomic.LongAdder totalLatencyNanos = new java.util.concurrent.atomic.LongAdder();
@@ -300,6 +299,9 @@ public final class JettraStressTestRunner {
             var kvInventario = db.getKeyValueEngine("inventario_medicamentos");
             var vecSintomas = db.getVectorEngine("sintomas_embeddings", 3);
             var tsVitales = db.getTimeSeriesEngine("telemetria_signos_vitales");
+
+            long startTime = System.currentTimeMillis();
+            long endTime = startTime + targetDurationMs;
 
             try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
                 CountDownLatch latch = new CountDownLatch(concurrentUsers);
@@ -392,8 +394,6 @@ public final class JettraStressTestRunner {
      * en Virtual Threads durante un período sostenido (5, 10, 25, 50, 100, 500 usuarios).
      */
     public AmbientalBenchmarkResult runAmbientalDurationWorkload(int concurrentUsers, long targetDurationMs) throws InterruptedException {
-        long startTime = System.currentTimeMillis();
-        long endTime = startTime + targetDurationMs;
         AtomicInteger completedOps = new AtomicInteger(0);
         AtomicInteger failedOps = new AtomicInteger(0);
         java.util.concurrent.atomic.LongAdder totalLatencyNanos = new java.util.concurrent.atomic.LongAdder();
@@ -411,6 +411,9 @@ public final class JettraStressTestRunner {
             var kvAlertas = db.getKeyValueEngine("cache_alertas_ambientales");
             var vecClima = db.getVectorEngine("patrones_climaticos_embeddings", 3);
             var tsTemperatura = db.getTimeSeriesEngine("temperatura_global_telemetria");
+
+            long startTime = System.currentTimeMillis();
+            long endTime = startTime + targetDurationMs;
 
             try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
                 CountDownLatch latch = new CountDownLatch(concurrentUsers);

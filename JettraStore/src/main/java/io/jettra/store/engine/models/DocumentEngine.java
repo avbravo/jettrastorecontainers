@@ -306,6 +306,10 @@ public final class DocumentEngine implements Iterable<Map<String, Object>> {
         if (database != null) {
             database.assertWritable();
         }
+        applyReplicatedClear();
+    }
+
+    public void applyReplicatedClear() {
         wLock.lock();
         try {
             documents.clear();
@@ -322,6 +326,10 @@ public final class DocumentEngine implements Iterable<Map<String, Object>> {
         if (database != null) {
             database.assertWritable();
         }
+        applyReplicatedBatch(batch);
+    }
+
+    public void applyReplicatedBatch(Map<String, Map<String, Object>> batch) {
         wLock.lock();
         try {
             for (Map.Entry<String, Map<String, Object>> entry : batch.entrySet()) {

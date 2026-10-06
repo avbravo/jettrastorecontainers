@@ -1973,3 +1973,61 @@ services:
    curl -s http://192.168.1.103:8080/api/v1/health | jq .
    ```
    Las respuestas confirmarán el estado `UP`, el rol correspondiente (`PRIMARY` o `SECONDARY`) y la telemetría en tiempo real procesada por el clúster.
+
+---
+
+## 19. Mecanismo de Distribución y Migración Integral de Bases de Datos y Registros (`Cluster-Distributed`)
+
+JettraStore implementa un protocolo integral de distribución y migración de datos que garantiza una réplica exacta y consistente de todas las bases de datos y sus registros internos entre los nodos del clúster (Primario y Secundarios).
+
+### 19.1 Arquitectura del Proceso de Migración
+
+Cuando se crea o distribuye una base de datos en el nodo `PRIMARY`:
+1. **Generación del Snapshot Completo:** El servidor primario (`JettraStoreServer.getDatabaseSnapshotBytes(dbName)`) consolida tanto la configuración del esquema (`_meta.json`) como todas las colecciones y registros almacenados en memoria y disco.
+2. **Difusión por Transporte Binario / Raft (`TYPE_DISTRIBUTE_DATABASE = 0x11`):** A través de `JettraClusterReplicationClient`, la trama binaria que contiene el nombre de la base de datos y el payload serializado es emitida hacia todos los nodos pares (`SECONDARY`).
+3. **Persistencia y Recarga Atómica en Nodos Secundarios:** Al recibir la trama `0x11` o `0x01` (`TYPE_CREATE_DATABASE`), el nodo receptor (`JettraClusterTransportServer`):
+   - Almacena atómicamente el payload binario en el archivo `<storagePath>/<dbName>/_meta.json`.
+   - Inicializa la instancia `JettraDatabase` en modo seguidor.
+   - Invoca `db.loadFromDisk()` / `db.loadUsingPanamaOffHeap()` para volcar todas las colecciones, documentos y registros a la memoria nativa Off-Heap mediante Project Panama FFM.
+   - Reconstruye los índices B-Tree, Hash y geoespaciales en `JettraIndexManager`.
+
+### 19.2 Protección de Solo Lectura y Bypass de Ingesta Replicada
+
+Los nodos secundarios operan con la política de **solo lectura (`assertWritable` bloquea mutaciones externas)**:
+- Consultas externas (`INSERT`, `UPDATE`, `DELETE`) ejecutadas directamente por clientes contra un nodo secundario arrojan `UnsupportedOperationException("El nodo actual es secundario y opera en modo de solo lectura...")`.
+- **Carga de Replicación Interna:** Para permitir que los nodos secundarios carguen los registros del snapshot sin violar la protección de solo lectura, `DocumentEngine` implementa los métodos internos `applyReplicatedClear()` y `applyReplicatedBatch(Map<String, Map<String, Object>> batch)`, permitiendo la inserción transparente de registros transferidos desde el primario.
+
+### 19.3 Protocolo de Transporte y Endpoints REST
+
+| Endpoint / Operación | Método | Parámetros | Descripción |
+| :--- | :--- | :--- | :--- |
+| `/api/v1/cluster/distribute` | `POST` | `all=true` | Distribuye todas las bases de datos y sus registros hacia todos los nodos secundarios del clúster. |
+| `/api/v1/cluster/distribute` | `POST` | `db=<nombre>` | Distribuye una base de datos específica con todos sus registros internos hacia los nodos secundarios. |
+| `/api/v1/cluster/distribution-info` | `GET` | N/A | Retorna el reporte de topología en formato JSON (`ClusterNodeDistributionInfo`) con la lista y recuento de bases de datos por nodo. |
+| Trama Binaria Raft | Frame `0x11` | `dbName` + `payload` | Difusión binaria de baja latencia vía TCP entre puertos de transporte gRPC/Raft del clúster. |
+
+### 19.4 Formato del Modelo `ClusterNodeDistributionInfo`
+
+```json
+[
+  {
+    "nodeId": "node-01",
+    "ip": "192.168.60.243",
+    "port": 9091,
+    "role": "PRIMARY",
+    "status": "ONLINE",
+    "databaseCount": 3,
+    "databases": ["example_factura_db", "samples_hospital_db", "samples_ambiental_db"]
+  },
+  {
+    "nodeId": "node-02",
+    "ip": "192.168.60.246",
+    "port": 9091,
+    "role": "SECONDARY",
+    "status": "ONLINE",
+    "databaseCount": 3,
+    "databases": ["example_factura_db", "samples_hospital_db", "samples_ambiental_db"]
+  }
+]
+```
+

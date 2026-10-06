@@ -644,4 +644,60 @@ public class JettraStoreShellTest {
             assertTrue(nodesOn.contains("ON"));
         }
     }
+
+    @Test
+    @DisplayName("Debe procesar cluster-distributed info, cluster-distributed <db> y cluster-distributed all")
+    public void testClusterDistributedCommands() {
+        JettraStoreShellApp shell = new JettraStoreShellApp(true);
+        shell.executeCommand("CREATE DATABASE dist_test_db");
+
+        // 1. cluster-distributed info
+        String info = shell.executeCommand("cluster-distributed info");
+        assertTrue(info.contains("JETTRASTORE CLUSTER DATABASE DISTRIBUTION INFO"));
+        assertTrue(info.contains("Nodo ID"));
+        assertTrue(info.contains("node-01"));
+
+        // 2. cluster-distributed <nombre-bd>
+        String distDb = shell.executeCommand("cluster-distributed dist_test_db");
+        assertTrue(distDb.contains("[CLUSTER-DISTRIBUTED]"));
+        assertTrue(distDb.contains("dist_test_db"));
+
+        // 3. cluster-distributed con tags '<' y '>'
+        String distDbTags = shell.executeCommand("cluster-distributed <dist_test_db>");
+        assertTrue(distDbTags.contains("[CLUSTER-DISTRIBUTED]"));
+
+        // 4. cluster-distributed all y <all>
+        String distAll = shell.executeCommand("cluster-distributed all");
+        assertTrue(distAll.contains("[CLUSTER-DISTRIBUTED <ALL>]"));
+
+        String distAllTags = shell.executeCommand("cluster-distributed <all>");
+        assertTrue(distAllTags.contains("[CLUSTER-DISTRIBUTED <ALL>]"));
+
+        // 5. Autocompletado de cluster-distributed
+        var compl = shell.autocomplete("cluster-distributed ");
+        assertTrue(compl.contains("cluster-distributed all"));
+        assertTrue(compl.contains("cluster-distributed info"));
+    }
+
+    @Test
+    @DisplayName("Debe mostrar ayuda de cluster-distributed en help general y help cluster-distributed")
+    public void testHelpClusterDistributedCommands() {
+        JettraStoreShellApp shell = new JettraStoreShellApp(false);
+
+        // 1. Ayuda general 'help' y '?'
+        String helpGeneral = shell.executeCommand("help");
+        assertTrue(helpGeneral.contains("cluster-distributed <all>             distribuye entre todos los nodos todas las bases de datos"));
+        assertTrue(helpGeneral.contains("cluster-distributed <nombre-base-datos>: distribuye la base de datos indicada"));
+        assertTrue(helpGeneral.contains("cluster-distributed info :            Muestra una tabla con los nodos y las bases de datos en cada nodo."));
+
+        String helpQuestion = shell.executeCommand("?");
+        assertTrue(helpQuestion.contains("cluster-distributed <all>"));
+
+        // 2. Ayuda temática 'help cluster-distributed'
+        String helpTopic = shell.executeCommand("help cluster-distributed");
+        assertTrue(helpTopic.contains("AYUDA DE COMANDOS: CLUSTER-DISTRIBUTED"));
+        assertTrue(helpTopic.contains("cluster-distributed <all>"));
+        assertTrue(helpTopic.contains("cluster-distributed <nombre-base-datos>:"));
+        assertTrue(helpTopic.contains("cluster-distributed info :"));
+    }
 }

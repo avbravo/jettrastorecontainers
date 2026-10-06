@@ -35,6 +35,7 @@ public record JettraRaftFrame(
     public static final byte TYPE_DROP_INDEX       = 0x0E;
     public static final byte TYPE_SYNC_DATA_REQ    = 0x0F;
     public static final byte TYPE_SYNC_DATA_RESP   = 0x10;
+    public static final byte TYPE_DISTRIBUTE_DATABASE = 0x11;
 
     public static JettraRaftFrame heartbeat(long term, String senderNodeId) {
         return new JettraRaftFrame(TYPE_HEARTBEAT, term, 0, senderNodeId, "", "", "", new byte[0], System.currentTimeMillis());
@@ -45,7 +46,15 @@ public record JettraRaftFrame(
     }
 
     public static JettraRaftFrame createDatabase(long term, long logIndex, String senderNodeId, String databaseName) {
-        return new JettraRaftFrame(TYPE_CREATE_DATABASE, term, logIndex, senderNodeId, databaseName, "", "", new byte[0], System.currentTimeMillis());
+        return createDatabase(term, logIndex, senderNodeId, databaseName, new byte[0]);
+    }
+
+    public static JettraRaftFrame createDatabase(long term, long logIndex, String senderNodeId, String databaseName, byte[] payload) {
+        return new JettraRaftFrame(TYPE_CREATE_DATABASE, term, logIndex, senderNodeId, databaseName, "", "", payload != null ? payload : new byte[0], System.currentTimeMillis());
+    }
+
+    public static JettraRaftFrame distributeDatabase(long term, long logIndex, String senderNodeId, String databaseName, byte[] payload) {
+        return new JettraRaftFrame(TYPE_DISTRIBUTE_DATABASE, term, logIndex, senderNodeId, databaseName, "", "", payload != null ? payload : new byte[0], System.currentTimeMillis());
     }
 
     public static JettraRaftFrame dropDatabase(long term, long logIndex, String senderNodeId, String databaseName) {

@@ -11,6 +11,7 @@ import io.jettra.core.three.d.model.UserZoneGroup;
 import io.jettra.driver.JettraClient;
 import io.jettra.driver.config.JettraClientConfig;
 import io.jettra.store.cluster.ClusterNode;
+import io.jettra.store.cluster.ClusterNodeDistributionInfo;
 import io.jettra.store.core.JettraStoreConfig;
 import io.jettra.store.police.JettraPolice;
 
@@ -23,6 +24,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Map;
 import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
@@ -832,6 +834,58 @@ public class JettraStorePoliceMonitor implements AutoCloseable {
     public long getProcessedObjectsTotal() { return processedObjectsTotal; }
     public long getProcessedObjectsPerSecond() { return processedObjectsPerSecond; }
     public int getActiveTransactions() { return activeTransactions; }
+
+    public boolean clusterDistributed(String databaseName) {
+        if (client == null) {
+            initClient();
+        }
+        if (client == null) return false;
+        try {
+            boolean ok = client.clusterDistributed(databaseName);
+            ServerNode3D leader = serverNodes.stream().filter(n -> n.getRole() == ClusterNode.Role.PRIMARY && n.isOnline()).findFirst().orElse(null);
+            ServerNode3D follower = serverNodes.stream().filter(n -> n.getRole() == ClusterNode.Role.SECONDARY && n.isOnline()).findFirst().orElse(null);
+            if (leader != null && follower != null) {
+                triggerNodeTransfer(leader.getId(), follower.getId(), 
+                    ClusterDataTraffic.TrafficType.RAFT_REPLICATION, 
+                    "Migración BD: " + databaseName, 1024 * 512, 125.0f);
+            }
+            this.lastPoliceEvent = "JettraPolice: Migración y distribución de BD '" + databaseName + "' completada con éxito.";
+            return ok;
+        } catch (Exception e) {
+            this.lastPoliceEvent = "JettraPolice: Error en distribución de BD '" + databaseName + "': " + e.getMessage();
+            throw e;
+        }
+    }
+
+    public Map<String, Boolean> clusterDistributedAll() {
+        if (client == null) {
+            initClient();
+        }
+        if (client == null) return Map.of();
+        try {
+            Map<String, Boolean> res = client.clusterDistributedAll();
+            ServerNode3D leader = serverNodes.stream().filter(n -> n.getRole() == ClusterNode.Role.PRIMARY && n.isOnline()).findFirst().orElse(null);
+            ServerNode3D follower = serverNodes.stream().filter(n -> n.getRole() == ClusterNode.Role.SECONDARY && n.isOnline()).findFirst().orElse(null);
+            if (leader != null && follower != null) {
+                triggerNodeTransfer(leader.getId(), follower.getId(), 
+                    ClusterDataTraffic.TrafficType.RAFT_REPLICATION, 
+                    "Distribución Masiva (" + res.size() + " BDs)", 1024 * 1024 * 2, 250.0f);
+            }
+            this.lastPoliceEvent = "JettraPolice: Distribución masiva de todas las bases de datos (" + res.size() + ") completada.";
+            return res;
+        } catch (Exception e) {
+            this.lastPoliceEvent = "JettraPolice: Error en distribución masiva: " + e.getMessage();
+            throw e;
+        }
+    }
+
+    public List<ClusterNodeDistributionInfo> getClusterDistributedInfo() {
+        if (client == null) {
+            initClient();
+        }
+        if (client == null) return List.of();
+        return client.getClusterDistributedInfo();
+    }
 
     @Override
     public void close() {

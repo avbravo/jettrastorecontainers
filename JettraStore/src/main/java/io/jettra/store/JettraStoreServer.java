@@ -19,9 +19,12 @@ import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.concurrent.ConcurrentHashMap;
@@ -149,9 +152,12 @@ public final class JettraStoreServer {
                                             if (targetMeta.getParent() != null) {
                                                 Files.createDirectories(targetMeta.getParent());
                                             }
-                                            Files.write(targetMeta, metaBytes);
+                                            Files.write(targetMeta, metaBytes, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
                                         }
-                                        getOrCreateDatabaseInternal(db, false);
+                                        JettraDatabase syncedDb = getOrCreateDatabaseInternal(db, false);
+                                        if (syncedDb != null) {
+                                            syncedDb.loadFromDisk();
+                                        }
                                     }
                                 }
                             }
@@ -256,8 +262,8 @@ public final class JettraStoreServer {
             for (int i = 0; i < peers.size(); i++) {
                 ClusterNode p = peers.get(i);
                 peersJson.append(String.format(
-                    "{\"id\":\"%s\",\"host\":\"%s\",\"port\":%d,\"role\":\"%s\",\"status\":\"%s\",\"segments\":%d}",
-                    p.getId(), p.getIp(), p.getPort(), p.getRole(), p.getStatus(), p.getReceivedRingSegments()
+                    "{\"id\":\"%s\",\"host\":\"%s\",\"port\":%d,\"role\":\"%s\",\"raft_state\":\"%s\",\"status\":\"%s\",\"segments\":%d}",
+                    p.getId(), p.getIp(), p.getPort(), p.getRole(), p.getRaftState(), p.getStatus(), p.getReceivedRingSegments()
                 ));
                 if (i < peers.size() - 1) peersJson.append(",");
             }
@@ -418,6 +424,16 @@ public final class JettraStoreServer {
                     dropDatabaseInternal(db.trim(), false);
                     sendResponse(exchange, 200, "{\"status\":\"ACK\",\"op\":\"DROP_DATABASE\"}");
                     return;
+                } else if ("DISTRIBUTE_DATABASE".equalsIgnoreCase(op)) {
+                    if ("all".equalsIgnoreCase(db)) {
+                        Map<String, Boolean> res = distributeAllDatabases();
+                        sendResponse(exchange, 200, "{\"status\":\"ACK\",\"op\":\"DISTRIBUTE_DATABASE\",\"count\":" + res.size() + "}");
+                        return;
+                    } else if (db != null) {
+                        boolean ok = distributeDatabase(db.trim());
+                        sendResponse(exchange, ok ? 200 : 500, "{\"status\":\"" + (ok ? "ACK" : "NACK") + "\",\"database\":\"" + db.trim() + "\"}");
+                        return;
+                    }
                 }
             }
             sendResponse(exchange, 400, "{\"error\":\"Invalid replication operation\"}");
@@ -437,7 +453,8 @@ public final class JettraStoreServer {
         JettraDatabase db = databases.computeIfAbsent(name, k -> new JettraDatabase(k, config, ringEngine));
         if (broadcast && config.isClusterMultinodeActive() && config.getNodeRole() == ClusterNode.Role.PRIMARY) {
             if (replicationClient != null) {
-                replicationClient.broadcastCreateDatabase(name);
+                byte[] payload = getDatabaseSnapshotBytes(name);
+                replicationClient.broadcastCreateDatabase(name, payload);
             }
         }
         return db;
@@ -493,14 +510,55 @@ public final class JettraStoreServer {
         }
     }
 
+    public byte[] getDatabaseSnapshotBytes(String dbName) {
+        if (dbName == null || dbName.isBlank()) return new byte[0];
+        try {
+            JettraDatabase db = databases.get(dbName);
+            if (db == null) {
+                db = getOrCreateDatabaseInternal(dbName, false);
+            }
+            if (db != null) {
+                db.saveToDisk();
+            }
+            Path metaFile = JettraDatabase.resolveMetaFile(dbName, config);
+            if (metaFile != null && Files.exists(metaFile)) {
+                return Files.readAllBytes(metaFile);
+            }
+        } catch (Exception ignored) {}
+        return new byte[0];
+    }
+
+    public boolean distributeDatabase(String name) {
+        if (name == null || name.isBlank()) return false;
+        byte[] payload = getDatabaseSnapshotBytes(name);
+        if (config.isClusterMultinodeActive() && config.getNodeRole() == ClusterNode.Role.PRIMARY) {
+            if (replicationClient != null) {
+                return replicationClient.broadcastDistributeDatabase(name, payload);
+            }
+        }
+        return true;
+    }
+
+    public Map<String, Boolean> distributeAllDatabases() {
+        Map<String, Boolean> results = new LinkedHashMap<>();
+        for (String db : listDatabaseNames()) {
+            results.put(db, distributeDatabase(db));
+        }
+        return results;
+    }
+
     public List<String> listDatabaseNames() {
         Set<String> set = new TreeSet<>(databases.keySet());
         Path p = Path.of(config.getStoragePath());
         if (Files.exists(p) && Files.isDirectory(p)) {
             try (var stream = Files.list(p)) {
-                stream.filter(Files::isDirectory).forEach(dir -> {
-                    String fn = dir.getFileName().toString();
-                    if (!fn.startsWith(".")) set.add(fn);
+                stream.forEach(entry -> {
+                    String fn = entry.getFileName().toString();
+                    if (Files.isDirectory(entry)) {
+                        if (!fn.startsWith(".")) set.add(fn);
+                    } else if (fn.endsWith("_meta.json")) {
+                        set.add(fn.substring(0, fn.length() - "_meta.json".length()));
+                    }
                 });
             } catch (Exception ignored) {}
         }

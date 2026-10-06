@@ -3,6 +3,7 @@ package io.jettra.driver;
 import io.jettra.driver.admin.JettraAdminClient;
 import io.jettra.driver.config.JettraClientConfig;
 import io.jettra.store.cluster.ClusterNode;
+import io.jettra.store.cluster.ClusterNodeDistributionInfo;
 import io.jettra.store.cluster.DynamicRingEngine;
 import io.jettra.store.core.JettraDatabase;
 import io.jettra.store.core.StorageMode;
@@ -141,15 +142,6 @@ public final class JettraClient implements AutoCloseable {
         boolean onDisk = deletePhysicalDatabase(name.trim());
         if (io.jettra.store.JettraStoreServer.getActiveInstance() != null) {
             io.jettra.store.JettraStoreServer.getActiveInstance().dropDatabase(name);
-        } else if (config.isClusterMultinodeActive()) {
-            try {
-                var peers = ringEngine.getPeers();
-                if (!peers.isEmpty()) {
-                    try (var replClient = new io.jettra.store.cluster.JettraClusterReplicationClient(ringEngine.getNodeId(), peers)) {
-                        replClient.broadcastDropDatabase(name);
-                    }
-                }
-            } catch (Exception ignored) {}
         }
         return inMemory || onDisk;
     }
@@ -225,18 +217,156 @@ public final class JettraClient implements AutoCloseable {
         if (isNew && config.isClusterMultinodeActive()) {
             if (io.jettra.store.JettraStoreServer.getActiveInstance() != null) {
                 io.jettra.store.JettraStoreServer.getActiveInstance().getOrCreateDatabase(name);
-            } else {
-                try {
-                    var peers = ringEngine.getPeers();
-                    if (!peers.isEmpty()) {
-                        try (var replClient = new io.jettra.store.cluster.JettraClusterReplicationClient(ringEngine.getNodeId(), peers)) {
-                            replClient.broadcastCreateDatabase(name);
-                        }
-                    }
-                } catch (Exception ignored) {}
             }
         }
         return db;
+    }
+
+    private boolean triggerServerDatabaseDistribution(String databaseName) {
+        try {
+            String host = "127.0.0.1";
+            int restPort = 8080;
+            JettraStoreConfig scfg = JettraStoreConfig.load();
+            if (scfg != null) {
+                if (scfg.getNodeIp() != null && !scfg.getNodeIp().isBlank()) {
+                    host = scfg.getNodeIp();
+                }
+                if (scfg.getRestPort() > 0) {
+                    restPort = scfg.getRestPort();
+                }
+            }
+            if (!config.getClusterEndpoints().isEmpty()) {
+                String ep = config.getClusterEndpoints().get(0);
+                if (ep.contains(":")) {
+                    host = ep.substring(0, ep.indexOf(':'));
+                } else {
+                    host = ep;
+                }
+            }
+
+            java.net.http.HttpClient httpClient = java.net.http.HttpClient.newBuilder()
+                .connectTimeout(java.time.Duration.ofMillis(800))
+                .build();
+            String jsonPayload = String.format("{\"op\":\"DISTRIBUTE_DATABASE\",\"database\":\"%s\"}", databaseName);
+            java.net.http.HttpRequest.Builder reqBuilder = java.net.http.HttpRequest.newBuilder()
+                .uri(java.net.URI.create(String.format("http://%s:%d/api/v1/cluster/replicate", host, restPort)))
+                .timeout(java.time.Duration.ofSeconds(3))
+                .header("Content-Type", "application/json")
+                .POST(java.net.http.HttpRequest.BodyPublishers.ofString(jsonPayload));
+            if (sessionToken != null && !sessionToken.isBlank()) {
+                reqBuilder.header("Authorization", "Bearer " + sessionToken);
+            }
+            java.net.http.HttpResponse<String> resp = httpClient.send(reqBuilder.build(), java.net.http.HttpResponse.BodyHandlers.ofString());
+            return resp.statusCode() == 200;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /**
+     * Distribuye la base de datos especificada y todos sus registros internos,
+     * colecciones e índices a todos los nodos del clúster Raft.
+     */
+    public boolean clusterDistributed(String databaseName) {
+        if (databaseName == null || databaseName.isBlank()) return false;
+        JettraStoreConfig scfg = JettraStoreConfig.load();
+        if (scfg.isClusterMultinodeActive() && scfg.getNodeRole() == ClusterNode.Role.SECONDARY) {
+            throw new UnsupportedOperationException(String.format(
+                "[READ-ONLY NODE] El nodo actual '%s' tiene rol SECUNDARIO. Las distribuciones deben iniciarse desde el nodo PRIMARIO.",
+                scfg.getNodeId()
+            ));
+        }
+
+        if (io.jettra.store.JettraStoreServer.getActiveInstance() != null) {
+            return io.jettra.store.JettraStoreServer.getActiveInstance().distributeDatabase(databaseName);
+        }
+
+        // Si el cliente corre en un proceso independiente, delegar vía REST al servidor primario activo
+        if (triggerServerDatabaseDistribution(databaseName)) {
+            return true;
+        }
+
+        JettraDatabase db = getDatabase(databaseName);
+        if (db != null) {
+            db.saveToDisk();
+        }
+        byte[] payload = new byte[0];
+        Path meta = JettraDatabase.resolveMetaFile(databaseName, scfg);
+        if (meta != null && Files.exists(meta)) {
+            try {
+                payload = Files.readAllBytes(meta);
+            } catch (Exception ignored) {}
+        }
+
+        var peers = ringEngine.getPeers();
+        if (!peers.isEmpty()) {
+            try (var replClient = new io.jettra.store.cluster.JettraClusterReplicationClient(ringEngine.getNodeId(), peers)) {
+                return replClient.broadcastDistributeDatabase(databaseName, payload);
+            } catch (Exception ignored) {}
+        }
+        return true;
+    }
+
+    /**
+     * Distribuye todas las bases de datos registradas y sus registros a todos los nodos del clúster.
+     */
+    public Map<String, Boolean> clusterDistributedAll() {
+        JettraStoreConfig scfg = JettraStoreConfig.load();
+        if (scfg.isClusterMultinodeActive() && scfg.getNodeRole() == ClusterNode.Role.SECONDARY) {
+            throw new UnsupportedOperationException(String.format(
+                "[READ-ONLY NODE] El nodo actual '%s' tiene rol SECUNDARIO. Las distribuciones deben iniciarse desde el nodo PRIMARIO.",
+                scfg.getNodeId()
+            ));
+        }
+
+        if (io.jettra.store.JettraStoreServer.getActiveInstance() != null) {
+            return io.jettra.store.JettraStoreServer.getActiveInstance().distributeAllDatabases();
+        }
+
+        if (triggerServerDatabaseDistribution("all")) {
+            Map<String, Boolean> res = new LinkedHashMap<>();
+            for (String db : listDatabases()) {
+                res.put(db, true);
+            }
+            return res;
+        }
+
+        Map<String, Boolean> results = new LinkedHashMap<>();
+        List<String> dbs = listDatabases();
+        for (String db : dbs) {
+            results.put(db, clusterDistributed(db));
+        }
+        return results;
+    }
+
+    /**
+     * Obtiene una lista detallada con los nodos del clúster y las bases de datos presentes en cada uno.
+     */
+    public List<ClusterNodeDistributionInfo> getClusterDistributedInfo() {
+        JettraStoreConfig scfg = JettraStoreConfig.load();
+        String localId = (scfg != null) ? scfg.getNodeId() : ringEngine.getNodeId();
+        String localIp = "127.0.0.1";
+        if (scfg != null && scfg.getNodeIp() != null && !scfg.getNodeIp().isBlank()) {
+            localIp = scfg.getNodeIp();
+        } else if (!config.getClusterEndpoints().isEmpty()) {
+            String ep = config.getClusterEndpoints().get(0);
+            localIp = ep.contains(":") ? ep.substring(0, ep.indexOf(':')) : ep;
+        }
+        int localPort = (scfg != null && scfg.getGrpcPort() > 0) ? scfg.getGrpcPort() : 9091;
+        String localRole = (scfg != null && scfg.getNodeRole() != null) ? scfg.getNodeRole().name() : "PRIMARY";
+        List<String> localDbs = listDatabases();
+
+        var peers = ringEngine.getPeers();
+        try (var replClient = new io.jettra.store.cluster.JettraClusterReplicationClient(localId, peers)) {
+            return replClient.getClusterDistributionInfo(localIp, localPort, localRole, localDbs);
+        } catch (Exception e) {
+            List<ClusterNodeDistributionInfo> fallback = new ArrayList<>();
+            fallback.add(new ClusterNodeDistributionInfo(localId, localIp, localPort, localRole, "RUNNING", localDbs.size(), localDbs));
+            for (var p : peers) {
+                fallback.add(new ClusterNodeDistributionInfo(p.getId(), p.getIp(), p.getPort(), p.getRole().name(), "UNKNOWN", 0, List.of()));
+            }
+            return fallback;
+        }
     }
 
     public void replicatePutDocument(String dbName, String colName, String id, Map<String, Object> doc) {
@@ -244,15 +374,6 @@ public final class JettraClient implements AutoCloseable {
         byte[] jsonBytes = new io.jettra.json.JettraJson().toJson(doc).getBytes(java.nio.charset.StandardCharsets.UTF_8);
         if (io.jettra.store.JettraStoreServer.getActiveInstance() != null) {
             io.jettra.store.JettraStoreServer.getActiveInstance().replicatePutDocument(dbName, colName, id, jsonBytes);
-        } else {
-            try {
-                var peers = ringEngine.getPeers();
-                if (!peers.isEmpty()) {
-                    try (var repl = new io.jettra.store.cluster.JettraClusterReplicationClient(ringEngine.getNodeId(), peers)) {
-                        repl.broadcastPutDocument(dbName, colName, id, jsonBytes);
-                    }
-                }
-            } catch (Exception ignored) {}
         }
     }
 
@@ -260,15 +381,6 @@ public final class JettraClient implements AutoCloseable {
         if (!config.isClusterMultinodeActive()) return;
         if (io.jettra.store.JettraStoreServer.getActiveInstance() != null) {
             io.jettra.store.JettraStoreServer.getActiveInstance().replicateDeleteDocument(dbName, colName, id);
-        } else {
-            try {
-                var peers = ringEngine.getPeers();
-                if (!peers.isEmpty()) {
-                    try (var repl = new io.jettra.store.cluster.JettraClusterReplicationClient(ringEngine.getNodeId(), peers)) {
-                        repl.broadcastDeleteDocument(dbName, colName, id);
-                    }
-                }
-            } catch (Exception ignored) {}
         }
     }
 
@@ -276,15 +388,6 @@ public final class JettraClient implements AutoCloseable {
         if (!config.isClusterMultinodeActive()) return;
         if (io.jettra.store.JettraStoreServer.getActiveInstance() != null) {
             io.jettra.store.JettraStoreServer.getActiveInstance().replicateCreateIndex(dbName, colName, indexName, field, type, unique);
-        } else {
-            try {
-                var peers = ringEngine.getPeers();
-                if (!peers.isEmpty()) {
-                    try (var repl = new io.jettra.store.cluster.JettraClusterReplicationClient(ringEngine.getNodeId(), peers)) {
-                        repl.broadcastCreateIndex(dbName, colName, indexName, field, type, unique);
-                    }
-                }
-            } catch (Exception ignored) {}
         }
     }
 
@@ -292,15 +395,6 @@ public final class JettraClient implements AutoCloseable {
         if (!config.isClusterMultinodeActive()) return;
         if (io.jettra.store.JettraStoreServer.getActiveInstance() != null) {
             io.jettra.store.JettraStoreServer.getActiveInstance().replicateDropIndex(dbName, indexName);
-        } else {
-            try {
-                var peers = ringEngine.getPeers();
-                if (!peers.isEmpty()) {
-                    try (var repl = new io.jettra.store.cluster.JettraClusterReplicationClient(ringEngine.getNodeId(), peers)) {
-                        repl.broadcastDropIndex(dbName, indexName);
-                    }
-                }
-            } catch (Exception ignored) {}
         }
     }
 

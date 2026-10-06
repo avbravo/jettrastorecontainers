@@ -1061,3 +1061,84 @@ jettra-shell [admin@127.0.0.1:9091/example_factura_db]> db stats
 6. **Geoespacial GIS (`GeospatialEngine`):** Puntos geoespaciales (latitud/longitud) indexados con R-Tree y consultas por radio geodésico y Bounding Box.
 7. **Columnar OLAP (`ColumnarEngine`):** Almacenamiento por columnas vectorizado para analítica fiscal y agregaciones masivas.
 8. **Java Records (`RecordsEngine`):** Objetos tipados de Java 25 (`record`) nativos, inmutables, con persistencia zero-copy en memoria y disco (ejemplo: `FacturaAuditRecord`).
+
+---
+
+## 19. Comandos de Distribución en Clúster (`cluster-distributed`) y Gestión de Consola
+
+JettraStoreShell proporciona comandos nativos para la orquestación y migración de datos entre nodos del clúster sin necesidad de llamadas HTTP manuales.
+
+### 19.1 Sintaxis de Comandos `cluster-distributed`
+
+```bash
+# 1. Distribuir todas las bases de datos y sus registros hacia todos los nodos del clúster
+cluster-distributed <all>
+# O alternativamente:
+cluster-distributed all
+
+# 2. Distribuir una base de datos específica con todos sus registros hacia todos los nodos
+cluster-distributed <nombre-base-datos>
+# Ejemplo:
+cluster-distributed example_factura_db
+
+# 3. Consultar la tabla de distribución del clúster (nodos y bases de datos alojadas)
+cluster-distributed info
+```
+
+### 19.2 Visualización de `cluster-distributed info`
+La salida formatea una tabla ASCII con la topología, estado de conexión, roles y bases de datos replicadas:
+
+```text
+jettra-shell [admin@127.0.0.1:9091]> cluster-distributed info
++---------+----------------+------+-----------+--------+-------+------------------------------------------+
+| NODE ID | IP             | PORT | ROLE      | STATUS | DBS   | DATABASES                                |
++---------+----------------+------+-----------+--------+-------+------------------------------------------+
+| node-01 | 192.168.60.243 | 9091 | PRIMARY   | ONLINE | 3     | example_factura_db, samples_hospital_db, samples_ambiental_db |
+| node-02 | 192.168.60.246 | 9091 | SECONDARY | ONLINE | 3     | example_factura_db, samples_hospital_db, samples_ambiental_db |
++---------+----------------+------+-----------+--------+-------+------------------------------------------+
+```
+
+### 19.3 Menú Interactivo `menu` (Opción 8)
+Al escribir `menu`, se incorpora la opción:
+```text
+[8] Distribuir Datos en el Clúster (cluster-distributed)
+```
+Permitiendo distribuir interactivamente todas las bases de datos, una base de datos particular o imprimir la tabla de distribución.
+
+### 19.4 Autocompletado e Historial de Comandos
+
+- **Autocompletado con TAB:** Al escribir `cluster-` y presionar `[TAB]`, el shell autocompleta:
+  - `cluster-distributed all`
+  - `cluster-distributed info`
+  - `cluster-distributed <nombre_bd>` (sugiere dinámicamente las bases de datos registradas).
+- **Gestión del Archivo de Historial:**
+  - JettraStoreShell separa el archivo binario/estructurado de JLine (`~/.jettra/.jline_history`) del registro cronológico en texto plano (`~/.jettra/history.log`). Esto evita errores de formato (`Bad history file syntax!`) causados por escrituras mixtas.
+  - En caso de corrupción histórica previa en `~/.jettra/history.log`, el shell detecta la excepción, inicializa una sesión limpia de forma transparente y continúa sin interrupciones.
+
+### 19.5 Parámetros de Ejecución JVM Recomendados
+Para ejecutar el shell en Java 25 evitando las advertencias de acceso nativo de JLine (`System::load`), utilice el flag:
+```bash
+java --enable-native-access=ALL-UNNAMED -jar JettraStoreShell-1.0-SNAPSHOT-uber.jar
+```
+o utilice el script envoltorio `/home/avbravo/jettra-node/start-shell.sh`.
+
+### 19.6 Ayuda Integrada (`help` y `help cluster-distributed`)
+La ayuda interactiva de la consola incluye los comandos de distribución:
+```bash
+# Ayuda general con la lista completa de comandos
+help
+# O ayuda contextual específica:
+help cluster-distributed
+```
+Salida en consola:
+```text
+==============================================================================================
+                   AYUDA DE COMANDOS: CLUSTER-DISTRIBUTED
+==============================================================================================
+  cluster-distributed <all>             distribuye entre todos los nodos todas las bases de datos
+  cluster-distributed <nombre-base-datos>: distribuye la base de datos indicada
+  cluster-distributed info :            Muestra una tabla con los nodos y las bases de datos en cada nodo.
+==============================================================================================
+```
+
+
