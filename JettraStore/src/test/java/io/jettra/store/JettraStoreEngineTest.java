@@ -8,17 +8,28 @@ import io.jettra.store.core.JettraStoreConfig;
 import io.jettra.store.engine.models.JettraRef;
 import io.jettra.store.engine.panama.NativeMemTable;
 import io.jettra.store.security.JettraSecurityManager;
+import io.jettra.test.annotation.AfterAll;
+import io.jettra.test.annotation.BeforeAll;
 import io.jettra.test.annotation.DisplayName;
 import io.jettra.test.annotation.Test;
 
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Comparator;
+import java.util.List;
 import java.util.Map;
 
 import static io.jettra.test.core.JettraAssert.*;
 
-public class JettraStoreEngineTest {
+public class JettraStoreEngineTest extends JettraStoreBaseTest {
+
+    @BeforeAll
+    @AfterAll
+    public static void cleanUpNode1AndTestDatabases() {
+        JettraTestCleanup.cleanUpNode1AndTestDatabases();
+    }
+
 
     @Test
     @DisplayName("Debe autenticar superusuario por defecto y validar inmutabilidad de roles")
@@ -115,6 +126,8 @@ public class JettraStoreEngineTest {
             boolean restored = BackupManager.restoreDatabase(backupPath, db);
             assertTrue(restored);
             Files.deleteIfExists(backupPath);
+        } finally {
+            cleanUpNode1AndTestDatabases();
         }
     }
 
@@ -135,6 +148,8 @@ public class JettraStoreEngineTest {
             assertTrue(Files.exists(expectedFile));
             assertTrue(Files.size(expectedFile) > 0);
             Files.deleteIfExists(expectedFile);
+        } finally {
+            cleanUpNode1AndTestDatabases();
         }
     }
 
@@ -159,4 +174,28 @@ public class JettraStoreEngineTest {
             assertEquals(0, node2.getReceivedOffloadedBytes());
         }
     }
+
+    @Test
+    @DisplayName("Debe eliminar las bases de datos creadas en /jettra/node-1 y eliminar la subcarpeta node-1 al terminar")
+    public void testNode1DatabaseCreationAndCleanupOnFinish() throws IOException {
+        Path node1Dir = Path.of("/jettra/node-1");
+        java.util.Properties props = new java.util.Properties();
+        props.setProperty("jettra.node.id", "node-1");
+        props.setProperty("jettra.storage.path", "/jettra/node-1");
+        JettraStoreConfig node1Config = new JettraStoreConfig(props, new java.util.Properties());
+
+        try (JettraDatabase db = new JettraDatabase("test_node1_db", node1Config)) {
+            db.getDocumentEngine("metrics").insert("m1", Map.of("cpu", 45.2, "ram", 78.1));
+            db.flushMemTable();
+            db.saveToDisk();
+
+            assertTrue(Files.exists(node1Dir));
+            Path dbMeta = node1Dir.resolve("test_node1_db_meta.json");
+            assertTrue(Files.exists(dbMeta) || Files.exists(Path.of(node1Config.getStoragePath(), "test_node1_db_meta.json")));
+        } finally {
+            cleanUpNode1AndTestDatabases();
+            assertFalse(Files.exists(node1Dir));
+        }
+    }
 }
+

@@ -1,17 +1,30 @@
 package io.jettra.store.calc;
 
+import io.jettra.store.JettraStoreBaseTest;
+import io.jettra.store.JettraTestCleanup;
 import io.jettra.store.core.JettraDatabase;
 import io.jettra.store.core.JettraStoreConfig;
 import io.jettra.store.engine.models.DocumentEngine;
 import io.jettra.store.engine.query.JettraSQLProcessor;
+import io.jettra.test.annotation.AfterAll;
+import io.jettra.test.annotation.BeforeAll;
 import io.jettra.test.annotation.DisplayName;
 import io.jettra.test.annotation.Test;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.*;
 
 import static io.jettra.test.core.JettraAssert.*;
 
-public class JettraCalcEnginesTest {
+public class JettraCalcEnginesTest extends JettraStoreBaseTest {
+
+    @BeforeAll
+    @AfterAll
+    public static void cleanUpNode1AndTestDatabases() {
+        JettraTestCleanup.cleanUpNode1AndTestDatabases();
+    }
+
 
     @Test
     @DisplayName("Test Math Operations & Parser")
@@ -96,6 +109,8 @@ public class JettraCalcEnginesTest {
             var qVec = processor.execute("VECTOR DOT [1, 2, 3] [4, 5, 6]");
             assertEquals(1, qVec.totalRows());
             assertEquals(32.0f, (Float) qVec.rows().get(0).get(0), 0.001f);
+        } finally {
+            cleanUpNode1AndTestDatabases();
         }
     }
 }

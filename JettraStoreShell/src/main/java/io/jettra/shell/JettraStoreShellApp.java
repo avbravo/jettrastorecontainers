@@ -913,26 +913,23 @@ Seleccione una conexión para iniciar:
         final String fLeaderIp = leaderIp;
         final int fLeaderPort = leaderPort;
         CompletableFuture<Boolean> leaderCheckFuture = CompletableFuture.supplyAsync(() ->
-            isNodeReachable(fLeaderIp, fLeaderPort, 350) || isNodeReachable(currentHost, currentPort, 350)
+            isNodeReachable(fLeaderIp, fLeaderPort, 250) || isNodeReachable(currentHost, currentPort, 250)
         );
 
         List<ClusterNode> peers = ring.getPeers();
         List<CompletableFuture<Boolean>> peerFutures = new ArrayList<>();
         for (ClusterNode peer : peers) {
-            peerFutures.add(CompletableFuture.supplyAsync(() -> {
-                boolean ok = isNodeReachable(peer.getIp(), peer.getPort(), 350);
-                if (ok) {
-                    peer.start();
-                } else {
-                    peer.stop();
-                }
-                return ok;
-            }));
+            peerFutures.add(CompletableFuture.supplyAsync(() ->
+                isNodeReachable(peer.getIp(), peer.getPort(), 250)
+            ));
         }
 
-        boolean leaderOnline = true;
+        boolean leaderOnline = (client != null && authenticated);
         try {
-            leaderOnline = leaderCheckFuture.get(500, TimeUnit.MILLISECONDS);
+            Boolean lRes = leaderCheckFuture.get(350, TimeUnit.MILLISECONDS);
+            if (lRes != null && lRes) {
+                leaderOnline = true;
+            }
         } catch (Exception ignored) {}
 
         String leaderStatus = leaderOnline ? "RUNNING" : "STOPPED";
@@ -946,12 +943,16 @@ Seleccione una conexión para iniciar:
             ClusterNode peer = peers.get(i);
             boolean pOnline = false;
             try {
-                pOnline = peerFutures.get(i).get(500, TimeUnit.MILLISECONDS);
+                Boolean res = peerFutures.get(i).get(350, TimeUnit.MILLISECONDS);
+                pOnline = (res != null && res);
             } catch (Exception ignored) {
-                pOnline = peer.isOnline();
+                pOnline = false;
             }
             if (pOnline) {
+                peer.start();
                 onlinePeers++;
+            } else {
+                peer.stop();
             }
             sb.append(String.format("| %-8s | %-20s | %-5d | %-9s | %-12s | %-8s | %-12d |\n",
                 peer.getId(), peer.getIp(), peer.getPort(), peer.getRole(), peer.getRaftState(),

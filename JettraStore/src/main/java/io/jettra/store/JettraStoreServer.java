@@ -518,6 +518,9 @@ public final class JettraStoreServer {
                 db = getOrCreateDatabaseInternal(dbName, false);
             }
             if (db != null) {
+                try {
+                    db.flushMemTable();
+                } catch (Exception ignored) {}
                 db.saveToDisk();
             }
             Path metaFile = JettraDatabase.resolveMetaFile(dbName, config);

@@ -1,5 +1,6 @@
 package io.jettra.store.core;
 
+import io.jettra.store.JettraStoreBaseTest;
 import io.jettra.test.annotation.DisplayName;
 import io.jettra.test.annotation.Test;
 
@@ -10,7 +11,7 @@ import java.util.Properties;
 
 import static io.jettra.test.core.JettraAssert.*;
 
-public class JettraConfigValidatorTest {
+public class JettraConfigValidatorTest extends JettraStoreBaseTest {
 
     private Properties createValidClusterProperties() {
         Properties props = new Properties();

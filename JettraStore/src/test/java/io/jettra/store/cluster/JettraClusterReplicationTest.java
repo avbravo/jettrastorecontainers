@@ -1,5 +1,6 @@
 package io.jettra.store.cluster;
 
+import io.jettra.store.JettraStoreBaseTest;
 import io.jettra.store.JettraStoreServer;
 import io.jettra.store.core.JettraStoreConfig;
 import io.jettra.test.annotation.Test;
@@ -12,7 +13,7 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.Properties;
 
-public class JettraClusterReplicationTest {
+public class JettraClusterReplicationTest extends JettraStoreBaseTest {
 
     @Test
     @DisplayName("Debe replicar creación y borrado de base de datos a través de JettraClusterTransport")

@@ -110,6 +110,7 @@ public final class JettraClusterTransportServer implements AutoCloseable {
                         JettraDatabase db = server.getOrCreateDatabaseInternal(dbName, false);
                         if (db != null) {
                             db.loadFromDisk();
+                            db.saveToDisk();
                         }
                     }
                     return JettraRaftFrame.ack(frame.term(), frame.logIndex(), 
@@ -139,6 +140,7 @@ public final class JettraClusterTransportServer implements AutoCloseable {
                         JettraDatabase db = server.getOrCreateDatabaseInternal(dbName, false);
                         if (db != null) {
                             db.loadFromDisk();
+                            db.saveToDisk();
                         }
                     }
                     return JettraRaftFrame.ack(frame.term(), frame.logIndex(), 

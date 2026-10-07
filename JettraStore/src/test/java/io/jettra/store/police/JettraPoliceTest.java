@@ -1,5 +1,6 @@
 package io.jettra.store.police;
 
+import io.jettra.store.JettraStoreBaseTest;
 import io.jettra.test.annotation.DisplayName;
 import io.jettra.test.annotation.Test;
 
@@ -8,7 +9,7 @@ import java.util.List;
 
 import static io.jettra.test.core.JettraAssert.*;
 
-public class JettraPoliceTest {
+public class JettraPoliceTest extends JettraStoreBaseTest {
 
     @Test
     @DisplayName("Debe permitir consultas seguras y acotadas sin requerir intervención forzada")

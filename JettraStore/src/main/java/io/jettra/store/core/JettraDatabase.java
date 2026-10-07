@@ -283,7 +283,7 @@ public final class JettraDatabase implements AutoCloseable {
                 } else if ("documentEngines".equals(key) || "keyValueEngines".equals(key) ||
                            "timeSeriesEngines".equals(key) || "geospatialEngines".equals(key) ||
                            "vectorEngines".equals(key) || "graphEngines".equals(key) ||
-                           "columnarEngines".equals(key)) {
+                           "columnarEngines".equals(key) || "recordsEngines".equals(key)) {
                     s.skipWhitespace();
                     if (s.peek() == '{') {
                         s.read();
@@ -479,7 +479,79 @@ public final class JettraDatabase implements AutoCloseable {
                 }
                 writer.write("\n      }\n    }");
             }
-            writer.write("\n  }\n");
+            writer.write("\n  },\n");
+
+            // 7. Columnar
+            writer.write("  \"columnarEngines\": {\n");
+            boolean firstColm = true;
+            for (var entry : columnarEngines.entrySet()) {
+                if (!firstColm) writer.write(",\n");
+                firstColm = false;
+                writer.write("    \"" + JettraJson.escapeString(entry.getKey()) + "\": {\n");
+                writer.write("      \"rowCount\": " + entry.getValue().getRowCount() + ",\n");
+                writer.write("      \"numericColumns\": {\n");
+                boolean firstNum = true;
+                for (var nc : entry.getValue().getNumericColumns().entrySet()) {
+                    if (!firstNum) writer.write(",\n");
+                    firstNum = false;
+                    writer.write("        \"" + JettraJson.escapeString(nc.getKey()) + "\": [");
+                    var list = nc.getValue();
+                    for (int i = 0; i < list.size(); i++) {
+                        writer.write(list.get(i).toString() + (i < list.size() - 1 ? ", " : ""));
+                    }
+                    writer.write("]");
+                }
+                writer.write("\n      },\n");
+                writer.write("      \"textColumns\": {\n");
+                boolean firstTxt = true;
+                for (var tc : entry.getValue().getTextColumns().entrySet()) {
+                    if (!firstTxt) writer.write(",\n");
+                    firstTxt = false;
+                    writer.write("        \"" + JettraJson.escapeString(tc.getKey()) + "\": [");
+                    var list = tc.getValue();
+                    for (int i = 0; i < list.size(); i++) {
+                        writer.write("\"" + JettraJson.escapeString(list.get(i)) + "\"" + (i < list.size() - 1 ? ", " : ""));
+                    }
+                    writer.write("]");
+                }
+                writer.write("\n      }\n    }");
+            }
+            writer.write("\n  },\n");
+
+            // 8. Java Records
+            writer.write("  \"recordsEngines\": {\n");
+            boolean firstRecEng = true;
+            for (var entry : recordsEngines.entrySet()) {
+                if (!firstRecEng) writer.write(",\n");
+                firstRecEng = false;
+                var recEng = entry.getValue();
+                writer.write("    \"" + JettraJson.escapeString(entry.getKey()) + "\": {\n");
+                String clsName = recEng.getRecordClass() != null ? recEng.getRecordClass().getName() : "";
+                writer.write("      \"recordClass\": \"" + JettraJson.escapeString(clsName) + "\",\n");
+                writer.write("      \"records\": {\n");
+                boolean firstRec = true;
+                for (var recEntry : recEng.getAll().entrySet()) {
+                    if (!firstRec) writer.write(",\n");
+                    firstRec = false;
+                    writer.write("        \"" + JettraJson.escapeString(recEntry.getKey()) + "\": " + json.toJson(recEntry.getValue()));
+                }
+                writer.write("\n      }\n    }");
+            }
+            writer.write("\n  },\n");
+
+            // 9. Secondary Indexes
+            writer.write("  \"indexes\": [\n");
+            boolean firstIdx = true;
+            for (var idx : indexManager.listIndexes(null)) {
+                if (!firstIdx) writer.write(",\n");
+                firstIdx = false;
+                writer.write("    {\"name\": \"" + JettraJson.escapeString(idx.name()) + "\", " +
+                        "\"collection\": \"" + JettraJson.escapeString(idx.collection()) + "\", " +
+                        "\"field\": \"" + JettraJson.escapeString(idx.field()) + "\", " +
+                        "\"type\": \"" + JettraJson.escapeString(idx.type()) + "\", " +
+                        "\"unique\": " + idx.unique() + "}");
+            }
+            writer.write("\n  ]\n");
 
             writer.write("}\n");
             return true;
@@ -544,17 +616,9 @@ public final class JettraDatabase implements AutoCloseable {
                                     var docEng = getDocumentEngine(colName);
                                     docEng.applyReplicatedClear();
                                     Map<String, Map<String, Object>> batch = new HashMap<>(5000);
-                                    long docCount = 0;
-                                    final long MAX_LOCAL_DOCS = ringModeActive ? 10000 : 1000000;
 
                                     while (scanner.hasMore() && scanner.peek() != ']') {
                                         scanner.skipWhitespaceAndSeparators();
-                                        if (ringModeActive && docCount >= MAX_LOCAL_DOCS) {
-                                            // En modo anillo, omitir el resto del array de forma ultra-rápida off-heap
-                                            scanner.skipArrayBody();
-                                            break;
-                                        }
-
                                         String docStr = scanner.readBalancedObject();
                                         if (docStr != null) {
                                             JsonObject d = json.fromJson(docStr, JsonObject.class);
@@ -562,10 +626,12 @@ public final class JettraDatabase implements AutoCloseable {
                                                 String id = d.has("_id") ? d.getAsString("_id") : UUID.randomUUID().toString();
                                                 Map<String, Object> map = new HashMap<>();
                                                 for (String k : d.keySet()) {
-                                                    map.put(k, d.getAsString(k));
+                                                    map.put(k, d.get(k));
+                                                }
+                                                if (!map.containsKey("_id")) {
+                                                    map.put("_id", id);
                                                 }
                                                 batch.put(id, map);
-                                                docCount++;
                                                 if (batch.size() >= 5000) {
                                                     docEng.applyReplicatedBatch(batch);
                                                     for (var entry : batch.entrySet()) {
@@ -607,21 +673,14 @@ public final class JettraDatabase implements AutoCloseable {
                                 if (scanner.peek() == '{') {
                                     scanner.read();
                                     var kvEng = getKeyValueEngine(ns);
-                                    long count = 0;
-                                    long maxKVs = ringModeActive ? 10000 : 500000;
                                     while (scanner.hasMore() && scanner.peek() != '}') {
                                         scanner.skipWhitespaceAndSeparators();
-                                        if (ringModeActive && count >= maxKVs) {
-                                            scanner.skipObjectBody();
-                                            break;
-                                        }
                                         String k = scanner.readQuotedString();
                                         if (k == null) break;
                                         scanner.skipWhitespaceAndSeparators();
                                         String v = scanner.readQuotedString();
                                         if (v != null) {
                                             kvEng.put(k, v.getBytes(StandardCharsets.UTF_8));
-                                            count++;
                                         } else {
                                             scanner.skipValue();
                                         }
@@ -650,14 +709,8 @@ public final class JettraDatabase implements AutoCloseable {
                                 if (scanner.peek() == '{') {
                                     scanner.read();
                                     var tsEng = getTimeSeriesEngine(metric);
-                                    long count = 0;
-                                    long maxPts = ringModeActive ? 5000 : 100000;
                                     while (scanner.hasMore() && scanner.peek() != '}') {
                                         scanner.skipWhitespaceAndSeparators();
-                                        if (ringModeActive && count >= maxPts) {
-                                            scanner.skipObjectBody();
-                                            break;
-                                        }
                                         String tsStr = scanner.readQuotedString();
                                         if (tsStr == null) break;
                                         scanner.skipWhitespaceAndSeparators();
@@ -667,7 +720,6 @@ public final class JettraDatabase implements AutoCloseable {
                                                 long ts = Long.parseLong(tsStr);
                                                 double val = Double.parseDouble(valStr);
                                                 tsEng.record(ts, val);
-                                                count++;
                                             } catch (Exception ignored) {}
                                         }
                                     }
@@ -695,14 +747,8 @@ public final class JettraDatabase implements AutoCloseable {
                                 if (scanner.peek() == '[') {
                                     scanner.read();
                                     var geoEng = getGeospatialEngine(layer);
-                                    long count = 0;
-                                    long maxPts = ringModeActive ? 5000 : 50000;
                                     while (scanner.hasMore() && scanner.peek() != ']') {
                                         scanner.skipWhitespaceAndSeparators();
-                                        if (ringModeActive && count >= maxPts) {
-                                            scanner.skipArrayBody();
-                                            break;
-                                        }
                                         String ptStr = scanner.readBalancedObject();
                                         if (ptStr != null) {
                                             JsonObject gp = json.fromJson(ptStr, JsonObject.class);
@@ -711,7 +757,6 @@ public final class JettraDatabase implements AutoCloseable {
                                                 double lat = Double.parseDouble(gp.getAsString("lat"));
                                                 double lon = Double.parseDouble(gp.getAsString("lon"));
                                                 geoEng.insertPoint(id, lat, lon);
-                                                count++;
                                             }
                                         }
                                     }
@@ -744,17 +789,13 @@ public final class JettraDatabase implements AutoCloseable {
                                         var vecEng = getVectorEngine(vName, dims);
                                         if (vo.has("vectors")) {
                                             JsonObject vData = vo.getAsJsonObject("vectors");
-                                            long count = 0;
-                                            long maxVecs = ringModeActive ? 5000 : 200000;
                                             for (String vid : vData.keySet()) {
-                                                if (ringModeActive && count >= maxVecs) break;
                                                 JsonArray va = vData.getAsJsonArray(vid);
                                                 float[] fa = new float[va.size()];
                                                 for (int idx = 0; idx < va.size(); idx++) {
                                                     fa[idx] = Float.parseFloat(va.get(idx).toString());
                                                 }
                                                 vecEng.index(vid, fa);
-                                                count++;
                                             }
                                         }
                                     }
@@ -782,24 +823,19 @@ public final class JettraDatabase implements AutoCloseable {
                                         var gEng = getGraphEngine(gName);
                                         if (go.has("vertices")) {
                                             JsonArray va = go.getAsJsonArray("vertices");
-                                            long maxV = ringModeActive ? 5000 : 200000;
-                                            for (int i = 0; i < Math.min(va.size(), maxV); i++) {
+                                            for (int i = 0; i < va.size(); i++) {
                                                 gEng.addVertex(va.get(i).toString());
                                             }
                                         }
                                         if (go.has("edges")) {
                                             JsonObject edges = go.getAsJsonObject("edges");
-                                            long count = 0;
-                                            long maxE = ringModeActive ? 5000 : 200000;
                                             for (String src : edges.keySet()) {
-                                                if (ringModeActive && count >= maxE) break;
                                                 JsonArray ea = edges.getAsJsonArray(src);
                                                 for (int i = 0; i < ea.size(); i++) {
                                                     JsonObject eo = ea.getAsJsonObject(i);
                                                     String tgt = eo.getAsString("target");
                                                     String lbl = eo.getAsString("label");
                                                     gEng.addEdge(src, tgt, lbl, Map.of());
-                                                    count++;
                                                 }
                                             }
                                         }
@@ -808,6 +844,140 @@ public final class JettraDatabase implements AutoCloseable {
                             }
                             scanner.skipWhitespace();
                             if (scanner.peek() == '}') scanner.read();
+                        } else {
+                            scanner.skipValue();
+                        }
+                    }
+                    case "columnarEngines" -> {
+                        scanner.skipWhitespace();
+                        if (scanner.peek() == '{') {
+                            scanner.read();
+                            while (scanner.hasMore() && scanner.peek() != '}') {
+                                scanner.skipWhitespaceAndSeparators();
+                                String tableName = scanner.readQuotedString();
+                                if (tableName == null) break;
+                                scanner.skipWhitespaceAndSeparators();
+                                String tableObjStr = scanner.readBalancedObject();
+                                if (tableObjStr != null) {
+                                    JsonObject to = json.fromJson(tableObjStr, JsonObject.class);
+                                    if (to != null) {
+                                        var colEng = getColumnarEngine(tableName);
+                                        int rowCount = to.has("rowCount") ? to.getAsInt("rowCount") : 0;
+                                        Map<String, List<Double>> numCols = new HashMap<>();
+                                        if (to.has("numericColumns")) {
+                                            JsonObject no = to.getAsJsonObject("numericColumns");
+                                            if (no != null) {
+                                                for (String k : no.keySet()) {
+                                                    JsonArray arr = no.getAsJsonArray(k);
+                                                    if (arr != null) {
+                                                        List<Double> list = new ArrayList<>(arr.size());
+                                                        for (int i = 0; i < arr.size(); i++) {
+                                                            try {
+                                                                list.add(Double.parseDouble(arr.get(i).toString()));
+                                                            } catch (Exception ignored) {}
+                                                        }
+                                                        numCols.put(k, list);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        Map<String, List<String>> txtCols = new HashMap<>();
+                                        if (to.has("textColumns")) {
+                                            JsonObject txo = to.getAsJsonObject("textColumns");
+                                            if (txo != null) {
+                                                for (String k : txo.keySet()) {
+                                                    JsonArray arr = txo.getAsJsonArray(k);
+                                                    if (arr != null) {
+                                                        List<String> list = new ArrayList<>(arr.size());
+                                                        for (int i = 0; i < arr.size(); i++) {
+                                                            list.add(arr.get(i) != null ? arr.get(i).toString() : "");
+                                                        }
+                                                        txtCols.put(k, list);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        colEng.appendBatch(numCols, txtCols, rowCount);
+                                    }
+                                }
+                            }
+                            scanner.skipWhitespace();
+                            if (scanner.peek() == '}') scanner.read();
+                        } else {
+                            scanner.skipValue();
+                        }
+                    }
+                    case "recordsEngines" -> {
+                        scanner.skipWhitespace();
+                        if (scanner.peek() == '{') {
+                            scanner.read();
+                            while (scanner.hasMore() && scanner.peek() != '}') {
+                                scanner.skipWhitespaceAndSeparators();
+                                String entityName = scanner.readQuotedString();
+                                if (entityName == null) break;
+                                scanner.skipWhitespaceAndSeparators();
+                                String recEngStr = scanner.readBalancedObject();
+                                if (recEngStr != null) {
+                                    JsonObject ro = json.fromJson(recEngStr, JsonObject.class);
+                                    if (ro != null) {
+                                        String clsName = ro.has("recordClass") ? ro.getAsString("recordClass") : null;
+                                        Class<?> recClass = null;
+                                        if (clsName != null && !clsName.isBlank()) {
+                                            try {
+                                                recClass = Class.forName(clsName);
+                                            } catch (Exception ignored) {}
+                                        }
+                                        if (ro.has("records")) {
+                                            JsonObject recordsObj = ro.getAsJsonObject("records");
+                                            if (recordsObj != null && recClass != null && Record.class.isAssignableFrom(recClass)) {
+                                                @SuppressWarnings("unchecked")
+                                                Class<? extends Record> checkedClass = (Class<? extends Record>) recClass;
+                                                var engine = getRecordsEngine(entityName, checkedClass);
+                                                @SuppressWarnings({"rawtypes", "unchecked"})
+                                                io.jettra.store.engine.models.RecordsEngine rawEng = (io.jettra.store.engine.models.RecordsEngine) engine;
+                                                for (String rid : recordsObj.keySet()) {
+                                                    try {
+                                                        Object rawVal = recordsObj.get(rid);
+                                                        String recJsonStr = (rawVal instanceof JsonObject) ? rawVal.toString() : json.toJson(rawVal);
+                                                        Record inst = (Record) json.fromJson(recJsonStr, recClass);
+                                                        if (inst != null) {
+                                                            rawEng.persist(rid, inst);
+                                                        }
+                                                    } catch (Exception ignored) {}
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            scanner.skipWhitespace();
+                            if (scanner.peek() == '}') scanner.read();
+                        } else {
+                            scanner.skipValue();
+                        }
+                    }
+                    case "indexes" -> {
+                        scanner.skipWhitespace();
+                        if (scanner.peek() == '[') {
+                            scanner.read();
+                            while (scanner.hasMore() && scanner.peek() != ']') {
+                                scanner.skipWhitespaceAndSeparators();
+                                String idxStr = scanner.readBalancedObject();
+                                if (idxStr != null) {
+                                    JsonObject io = json.fromJson(idxStr, JsonObject.class);
+                                    if (io != null && io.has("name") && io.has("collection") && io.has("field")) {
+                                        String name = io.getAsString("name");
+                                        String collection = io.getAsString("collection");
+                                        String field = io.getAsString("field");
+                                        String type = io.has("type") ? io.getAsString("type") : "HASH";
+                                        boolean unique = io.has("unique") && io.getAsBoolean("unique");
+                                        var docEng = getDocumentEngine(collection);
+                                        indexManager.applyReplicatedIndex(collection, name, field, type, unique, docEng);
+                                    }
+                                }
+                            }
+                            scanner.skipWhitespace();
+                            if (scanner.peek() == ']') scanner.read();
                         } else {
                             scanner.skipValue();
                         }
