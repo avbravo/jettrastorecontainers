@@ -690,15 +690,47 @@ public class JettraStoreShellTest {
         assertTrue(helpGeneral.contains("cluster-distributed <all>             distribuye entre todos los nodos todas las bases de datos"));
         assertTrue(helpGeneral.contains("cluster-distributed <nombre-base-datos>: distribuye la base de datos indicada"));
         assertTrue(helpGeneral.contains("cluster-distributed info :            Muestra una tabla con los nodos y las bases de datos en cada nodo."));
+        assertTrue(helpGeneral.contains("cluster live [límite]"));
 
         String helpQuestion = shell.executeCommand("?");
         assertTrue(helpQuestion.contains("cluster-distributed <all>"));
+        assertTrue(helpQuestion.contains("cluster live [límite]"));
 
-        // 2. Ayuda temática 'help cluster-distributed'
+        // 2. Ayuda temática 'help cluster-distributed' y 'help cluster live'
         String helpTopic = shell.executeCommand("help cluster-distributed");
         assertTrue(helpTopic.contains("AYUDA DE COMANDOS: CLUSTER-DISTRIBUTED"));
         assertTrue(helpTopic.contains("cluster-distributed <all>"));
         assertTrue(helpTopic.contains("cluster-distributed <nombre-base-datos>:"));
         assertTrue(helpTopic.contains("cluster-distributed info :"));
+        assertTrue(helpTopic.contains("cluster live [límite]"));
+
+        String helpLive = shell.executeCommand("help cluster live");
+        assertTrue(helpLive.contains("AYUDA DE COMANDOS: CLUSTER-DISTRIBUTED"));
+        assertTrue(helpLive.contains("cluster live [límite]"));
+    }
+
+    @Test
+    @DisplayName("Debe ejecutar comando 'cluster live' y mostrar flujo de eventos en tiempo real")
+    public void testClusterLiveCommand() {
+        JettraStoreShellApp shell = new JettraStoreShellApp(false);
+        shell.executeCommand("connect 127.0.0.1 9091");
+        shell.executeCommand("login admin admin-jettra");
+
+        // Publicar un evento de prueba en el bus
+        io.jettra.store.cluster.JettraClusterEventBus.getInstance().publish(
+            io.jettra.store.cluster.ClusterLiveEvent.TYPE_DOCUMENT_REPLICATED,
+            "node-01", "node-02", "Replicando factura fac_100 a nodo 2", "db=ventas"
+        );
+
+        String out = shell.executeCommand("cluster live");
+        assertTrue(out.contains("JETTRASTORE CLUSTER LIVE EVENT STREAM"));
+        assertTrue(out.contains("DOCUMENT_REPLICATED"));
+        assertTrue(out.contains("Replicando factura fac_100 a nodo 2"));
+
+        String outLimit = shell.executeCommand("cluster live 5");
+        assertTrue(outLimit.contains("JETTRASTORE CLUSTER LIVE EVENT STREAM"));
+
+        String menu = shell.executeCommand("menu");
+        assertTrue(menu.contains("[9] Flujo de Eventos en Tiempo Real (cluster live)"));
     }
 }

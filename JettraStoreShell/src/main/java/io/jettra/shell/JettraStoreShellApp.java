@@ -229,12 +229,13 @@ public final class JettraStoreShellApp implements AutoCloseable {
         Set<String> candidates = new LinkedHashSet<>();
 
         List<String> baseKeywords = List.of(
-            "HELP", "HELP CLUSTER-DISTRIBUTED", "MENU", "MENU CONNECTIONS", "STATUS", "CONNECT ", "LOGIN ", "LOGOUT",
+            "HELP", "HELP CLUSTER-DISTRIBUTED", "HELP CLUSTER LIVE", "MENU", "MENU CONNECTIONS", "STATUS", "CONNECT ", "LOGIN ", "LOGOUT",
             "SAVE CONNECTION ", "REMOVE CONNECTION ", "LIST CONNECTIONS",
             "SHOW DATABASES", "SHOW SAMPLES", "CREATE DATABASE ", "DROP DATABASE ", "USE ", "DB STATS",
             "SHOW BUCKETS", "SHOW RECORDS ", "COUNT ", "CREATE INDEX ", "DROP INDEX ", "LIST INDEXES",
             "SHOW NODES", "ADD NODE ", "REMOVE NODE ", "START NODE ", "STOP NODE ", "MULTINODE", "MULTINODE ON", "MULTINODE OFF", "MULTINODE STATUS", "SHOW MULTINODE",
             "CLUSTER-DISTRIBUTED ALL", "CLUSTER-DISTRIBUTED <ALL>", "CLUSTER-DISTRIBUTED INFO", "CLUSTER-DISTRIBUTED ",
+            "CLUSTER LIVE", "CLUSTER LIVE ", "CLUSTER-LIVE", "CLUSTER_LIVE",
             "STORAGE_MODE ", "LAZY REFERENCE ON", "LAZY REFERENCE OFF", "LAZY REFERENCE STATUS",
             "INSERT INTO ", "SELECT ", "UPDATE ", "DELETE FROM ",
             "KV PUT ", "KV GET ", "KV DELETE ", "KV SCAN ",
@@ -452,7 +453,7 @@ Seleccione una conexión para iniciar:
             return getHelpText();
         } else if (upper.startsWith("HELP ") || upper.startsWith("? ")) {
             String topic = upper.substring(upper.indexOf(' ') + 1).trim();
-            if (topic.contains("CLUSTER") || topic.contains("DISTRIBUTED")) {
+            if (topic.contains("CLUSTER") || topic.contains("DISTRIBUTED") || topic.contains("LIVE")) {
                 return getClusterDistributedHelpText();
             }
             return getHelpText();
@@ -506,8 +507,12 @@ Seleccione una conexión para iniciar:
             return handleStopNode(trimmed);
         } else if (upper.startsWith("CLUSTER-DISTRIBUTED") || upper.startsWith("CLUSTER_DISTRIBUTED")) {
             return handleClusterDistributed(trimmed);
+        } else if (upper.equals("CLUSTER LIVE") || upper.startsWith("CLUSTER LIVE ") || upper.equals("CLUSTER-LIVE") || upper.startsWith("CLUSTER-LIVE ") || upper.equals("CLUSTER_LIVE") || upper.startsWith("CLUSTER_LIVE ")) {
+            return handleClusterLive(trimmed);
         } else if (upper.equals("8")) {
             return handleClusterDistributedInfo();
+        } else if (upper.equals("9")) {
+            return handleClusterLive("cluster live 30");
         }
 
         // Configuración de Storage Mode (JVM-RAM vs DISK-MEMORY / JettraMemory)
@@ -1129,6 +1134,51 @@ Seleccione una conexión para iniciar:
             return "[ERROR] " + e.getMessage();
         } catch (Exception e) {
             return "[ERROR] Falló la distribución global: " + e.getMessage();
+        }
+    }
+
+    private String handleClusterLive(String command) {
+        try {
+            int limit = 30;
+            String arg = command.replaceAll("(?i)^(CLUSTER[-_\\s]LIVE)\\s*", "").trim();
+            if (!arg.isEmpty()) {
+                try {
+                    limit = Integer.parseInt(arg);
+                } catch (NumberFormatException ignored) {}
+            }
+
+            List<io.jettra.store.cluster.ClusterLiveEvent> events = (client != null) 
+                ? client.getRecentClusterLiveEvents(limit) 
+                : io.jettra.store.cluster.JettraClusterEventBus.getInstance().getRecentEvents(limit);
+
+            StringBuilder sb = new StringBuilder();
+            sb.append("========================================================================================================================\n");
+            sb.append("                                        JETTRASTORE CLUSTER LIVE EVENT STREAM                                           \n");
+            sb.append("========================================================================================================================\n");
+            sb.append("+-------------------------+----------------------+---------+---------+-------------------------------------------------+\n");
+            sb.append("| Marca Temporal          | Tipo de Evento       | Origen  | Destino | Mensaje / Trazabilidad Operativa                |\n");
+            sb.append("+-------------------------+----------------------+---------+---------+-------------------------------------------------+\n");
+            if (events == null || events.isEmpty()) {
+                sb.append("| (Sin eventos recientes de clúster registrados en el búfer)                                                           |\n");
+            } else {
+                for (var ev : events) {
+                    String msg = ev.message();
+                    if (msg.length() > 47) {
+                        msg = msg.substring(0, 44) + "...";
+                    }
+                    String typeStr = ev.type();
+                    if (typeStr.length() > 20) {
+                        typeStr = typeStr.substring(0, 17) + "...";
+                    }
+                    sb.append(String.format("| %-23s | %-20s | %-7s | %-7s | %-47s |\n",
+                        ev.formattedTimestamp(), typeStr, ev.sourceNodeId(), ev.targetNodeId(), msg));
+                }
+            }
+            sb.append("+-------------------------+----------------------+---------+---------+-------------------------------------------------+\n");
+            sb.append(String.format("Eventos en búfer mostrados: %d | Canal de Eventos en Tiempo Real: ACTIVO\n", events != null ? events.size() : 0));
+            return sb.toString();
+        } catch (Exception e) {
+            return "[ERROR] No se pudo obtener el flujo en vivo del clúster: " + e.getMessage();
         }
     }
 
@@ -3132,6 +3182,7 @@ return String.format("[NOT FOUND] No se encontró el bucket/unit '%s' en la base
               cluster-distributed <all>             distribuye entre todos los nodos todas las bases de datos
               cluster-distributed <nombre-base-datos>: distribuye la base de datos indicada
               cluster-distributed info :            Muestra una tabla con los nodos y las bases de datos en cada nodo.
+              cluster live [límite]                 Muestra trazas y eventos en tiempo real de lo que ocurre en el clúster.
               multinode / show multinode            Muestra el estado de cluster.multinode.active (ON/OFF).
               multinode on / multinode off          Activa o desactiva dinámicamente la distribución de datos.
               add node <id> <host> <port> [ROLE]    Agrega un nuevo nodo secundario al clúster Raft.
@@ -3245,6 +3296,7 @@ return String.format("[NOT FOUND] No se encontró el bucket/unit '%s' en la base
               cluster-distributed <all>             distribuye entre todos los nodos todas las bases de datos
               cluster-distributed <nombre-base-datos>: distribuye la base de datos indicada
               cluster-distributed info :            Muestra una tabla con los nodos y las bases de datos en cada nodo.
+              cluster live [límite]                 Muestra trazas en tiempo real de lo que ocurre en el clúster.
             ==============================================================================================
             """;
     }
@@ -3262,6 +3314,7 @@ return String.format("[NOT FOUND] No se encontró el bucket/unit '%s' en la base
             [6] Administrar Usuarios y Roles RBAC (SHOW USERS)
             [7] Ayuda Completa (HELP)
             [8] Distribución de Datos en Clúster (cluster-distributed info)
+            [9] Flujo de Eventos en Tiempo Real (cluster live)
             ================================================================================
             """;
     }

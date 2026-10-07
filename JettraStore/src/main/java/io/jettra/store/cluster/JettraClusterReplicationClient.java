@@ -62,30 +62,7 @@ public final class JettraClusterReplicationClient implements AutoCloseable {
         long term = currentTerm.get();
         long idx = logIndex.incrementAndGet();
         JettraRaftFrame frame = JettraRaftFrame.dropDatabase(term, idx, localNodeId, dbName);
-
-        int acks = 1;
-        List<CompletableFuture<Boolean>> futures = new ArrayList<>();
-
-        for (ClusterNode peer : peers) {
-            futures.add(CompletableFuture.supplyAsync(() -> {
-                try {
-                    JettraRaftFrame resp = sendFrameToPeer(peer, frame);
-                    return resp != null && resp.frameType() == JettraRaftFrame.TYPE_ACK;
-                } catch (Exception e) {
-                    return false;
-                }
-            }, executor));
-        }
-
-        for (var f : futures) {
-            try {
-                if (f.get(TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
-                    acks++;
-                }
-            } catch (Exception ignored) {}
-        }
-
-        return acks >= 2 || peers.isEmpty();
+        return broadcastFrameWithQuorum(frame);
     }
 
     /**
@@ -128,34 +105,116 @@ public final class JettraClusterReplicationClient implements AutoCloseable {
         return broadcastFrameWithQuorum(frame);
     }
 
+    /**
+     * Envía una trama de inserción/actualización de registro clave-valor a todos los nodos secundarios.
+     */
+    public boolean broadcastPutRecord(String dbName, String colName, String key, byte[] payload) {
+        long term = currentTerm.get();
+        long idx = logIndex.incrementAndGet();
+        JettraRaftFrame frame = JettraRaftFrame.putRecord(term, idx, localNodeId, dbName, colName, key, payload);
+        return broadcastFrameWithQuorum(frame);
+    }
+
+    /**
+     * Envía una trama de eliminación de registro clave-valor a todos los nodos secundarios.
+     */
+    public boolean broadcastDeleteRecord(String dbName, String colName, String key) {
+        long term = currentTerm.get();
+        long idx = logIndex.incrementAndGet();
+        JettraRaftFrame frame = JettraRaftFrame.deleteRecord(term, idx, localNodeId, dbName, colName, key);
+        return broadcastFrameWithQuorum(frame);
+    }
+
+    /**
+     * Notifica a todos los nodos del clúster que este nodo se está deteniendo de forma controlada.
+     */
+    public void broadcastNodeStopping(String role, String reason) {
+        long term = currentTerm.get();
+        JettraRaftFrame frame = JettraRaftFrame.nodeStopping(term, localNodeId, role, reason);
+        for (ClusterNode peer : peers) {
+            executor.submit(() -> {
+                try {
+                    sendFrameToPeer(peer, frame);
+                } catch (Exception ignored) {}
+            });
+        }
+    }
+
+    /**
+     * Notifica a todos los nodos que este nodo ha asumido el rol de nuevo PRIMARY tras un failover.
+     */
+    public boolean broadcastNewLeaderPromoted(long newTerm) {
+        currentTerm.set(newTerm);
+        long idx = logIndex.incrementAndGet();
+        JettraRaftFrame frame = JettraRaftFrame.newLeaderPromoted(newTerm, idx, localNodeId);
+        return broadcastFrameWithQuorum(frame);
+    }
+
+    /**
+     * Transmite un evento en tiempo real a todos los nodos del clúster.
+     */
+    public void broadcastLiveEvent(ClusterLiveEvent event) {
+        if (event == null) return;
+        long term = currentTerm.get();
+        JettraRaftFrame frame = JettraRaftFrame.clusterLiveEvent(term, localNodeId, event.toJson());
+        for (ClusterNode peer : peers) {
+            executor.submit(() -> {
+                try {
+                    sendFrameToPeer(peer, frame);
+                } catch (Exception ignored) {}
+            });
+        }
+    }
+
+    private record PeerVote(ClusterNode peer, boolean reachable, boolean ack) {}
+
     private boolean broadcastFrameWithQuorum(JettraRaftFrame frame) {
         int acks = 1;
-        List<CompletableFuture<Boolean>> futures = new ArrayList<>();
+        List<CompletableFuture<PeerVote>> futures = new ArrayList<>();
         for (ClusterNode peer : peers) {
             futures.add(CompletableFuture.supplyAsync(() -> {
                 try {
                     JettraRaftFrame resp = sendFrameToPeer(peer, frame);
-                    if (resp != null && resp.frameType() == JettraRaftFrame.TYPE_ACK) {
-                        return true;
-                    } else if (resp != null) {
-                        System.err.printf("[broadcastFrameWithQuorum] Peer %s returned type 0x%02X: %s%n",
-                            peer.getId(), resp.frameType(), resp.getPayloadAsString());
+                    if (resp != null) {
+                        peer.start();
+                        boolean ack = (resp.frameType() == JettraRaftFrame.TYPE_ACK);
+                        if (!ack) {
+                            System.err.printf("[broadcastFrameWithQuorum] Peer %s returned type 0x%02X: %s%n",
+                                peer.getId(), resp.frameType(), resp.getPayloadAsString());
+                        }
+                        return new PeerVote(peer, true, ack);
                     }
                 } catch (Exception e) {
-                    System.err.printf("[broadcastFrameWithQuorum] Error sending to %s: %s%n", peer.getId(), e.getMessage());
-                    return false;
+                    peer.markOffline();
+                    System.err.printf("[broadcastFrameWithQuorum] Peer %s unreachable / offline: %s%n", peer.getId(), e.getMessage());
                 }
-                return false;
+                return new PeerVote(peer, false, false);
             }, executor));
         }
+
+        int activePeers = 0;
         for (var f : futures) {
             try {
-                if (f.get(TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
-                    acks++;
+                PeerVote vote = f.get(TIMEOUT_MS, TimeUnit.MILLISECONDS);
+                if (vote != null && vote.reachable()) {
+                    activePeers++;
+                    if (vote.ack()) {
+                        acks++;
+                    }
                 }
             } catch (Exception ignored) {}
         }
-        return acks >= 2 || peers.isEmpty();
+
+        // Consenso dinámico: quórum calculado exclusivamente entre los nodos activos y disponibles
+        int totalAvailableNodes = 1 + activePeers;
+        int requiredQuorum = (totalAvailableNodes / 2) + 1;
+        boolean consensusReached = acks >= requiredQuorum;
+
+        if (activePeers < peers.size()) {
+            System.out.printf("[broadcastFrameWithQuorum] ⚡ Consenso Dinámico ajustado: %d de %d nodos configurados disponibles. Acks: %d/%d (quórum requerido: %d, resultado: %s)%n",
+                totalAvailableNodes, peers.size() + 1, acks, totalAvailableNodes, requiredQuorum, consensusReached);
+        }
+        return consensusReached;
     }
 
     /**

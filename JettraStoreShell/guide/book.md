@@ -11,7 +11,11 @@
 3. [Ciclo de Inicio, Conexión y Autenticación](#3-ciclo-de-inicio-conexión-y-autenticación)
 4. [Gestor de Perfiles de Conexión](#4-gestor-de-perfiles-de-conexión)
 5. [Telemetría de Recursos y Monitoreo del Clúster](#5-telemetría-de-recursos-y-monitoreo-del-clúster)
-6. [Administración de Nodos del Clúster Raft](#6-administración-de-nodos-del-clúster-raft)
+6. [Administración de Nodos del Clúster Raft y Supervisión en Vivo](#6-administración-de-nodos-del-clúster-raft)
+   - [6.1 Parámetro `cluster.multinode.active`](#61-parámetro-clustermultinodeactive-distribución-de-datos-vs-servidor-único)
+   - [6.2 Comandos de Distribución de Clúster (`cluster distributed`)](#62-comandos-de-distribución-de-clúster-cluster-distributed)
+   - [6.3 Supervisión en Tiempo Real con `cluster live`](#63-supervisión-en-tiempo-real-con-cluster-live)
+   - [6.4 Mecanismo de Failover y Reconexión Automática](#64-mecanismo-de-failover-y-reconexión-automática)
 7. [Administración de Bases de Datos y Muestras (`SHOW DBS` y `SHOW SAMPLES`)](#7-administración-de-bases-de-datos-y-muestras-show-dbs-y-show-samples)
 8. [Lenguajes de Consulta: JettraQL y JettraSQL](#8-lenguajes-de-consulta-jettraql-y-jettrasql)
    - [8.1 JettraQL](#81-jettraql-motor-declarativo-multimodelo)
@@ -175,6 +179,10 @@ JettraStore opera sobre una topología distribuida basada en consenso Raft y un 
 | `stop node <id>` | Pausa el nodo réplica (detiene la descarga de memoria).| `stop node node-02` |
 | `start node <id>` | Reactiva el nodo para recibir transferencias del anillo.| `start node node-02` |
 | `remove node <id>` | Remueve un nodo secundario del clúster. | `remove node node-04` |
+| `cluster distributed <db>` | Distribuye y replica la base de datos y sus registros hacia los secundarios. | `cluster distributed facturas_db` |
+| `cluster distributed all` | Distribuye y replica todas las bases de datos registradas hacia los secundarios. | `cluster distributed all` |
+| `cluster distributed info` | Muestra la matriz de topología y distribución de datos del clúster. | `cluster distributed info` |
+| `cluster live [limit]` | Streaming interactivo y visualización en tiempo real de eventos del clúster. | `cluster live 50` |
 
 ### Visualización de la Topología:
 ```text
@@ -198,6 +206,70 @@ Total: 3 nodo(s) registrados en el anillo dinámico. Quórum: Activo (Consenso d
 En el archivo `database.properties` de JettraStore, la propiedad `cluster.multinode.active` controla si la instancia distribuye datos entre nodos o trabaja de forma autónoma:
 - **`on`**: Activa el sistema de distribución de datos mediante algoritmo de consenso integrado (Raft y Dynamic Ring). Las transiciones de memoria y saturación derivan datos a los nodos secundarios.
 - **`off`**: Desactiva el comportamiento de distribución. Se asume que todas las operaciones se realizarán solamente en el servidor donde se está ejecutando JettraStore sin distribuir los datos.
+
+### 6.2 Comandos de Distribución de Clúster (`cluster distributed`)
+Para forzar la sincronización íntegra de una base de datos o de todo el clúster:
+* **`cluster distributed <database>`**: Crea y serializa el snapshot en el nodo primario e instruye a todos los nodos secundarios configurados para que carguen la estructura y los registros de la base de datos indicada.
+* **`cluster distributed all`**: Itera sobre todas las bases de datos activas en el nodo primario y sincroniza su estado y registros con los nodos secundarios réplica.
+* **`cluster distributed info`**: Despliega una tabla con el estado de replicación, número de bases de datos compartidas y disponibilidad por nodo.
+
+### 6.3 Supervisión en Tiempo Real con `cluster live`
+
+#### 6.3.1 Propósito y Sintaxis
+El comando interactivo `cluster live [limit]` (o la opción `[9]` en el menú interactivo `menu`, y documentado en `help cluster live`) proporciona una ventana de observabilidad en vivo sobre la telemetría, el protocolo de consenso Raft y los eventos operativos entre todos los nodos del clúster sin requerir inspección manual de archivos de logs en disco.
+
+* **Sintaxis:**
+  ```bash
+  cluster live [límite]
+  ```
+  Donde `límite` es un parámetro numérico opcional (por defecto `30`) que define cuántos eventos recientes del búfer circular deben desplegarse en pantalla.
+
+* **Propósito:**
+  - Auditar en tiempo real la replicación de documentos (`DOCUMENT_REPLICATED`, `DOCUMENT_DELETED`), registros (`RECORD_REPLICATED`, `RECORD_DELETED`) e índices (`INDEX_CREATED`, `INDEX_DROPPED`).
+  - Monitorear altas y bajas de nodos (`NODE_ONLINE`, `NODE_OFFLINE`, `NODE_STOPPED`).
+  - Visualizar la distribución masiva de bases de datos (`DATABASE_DISTRIBUTED`).
+  - Observar en vivo el proceso de elección y promoción de nuevo primario (`LEADER_ELECTION`, `LEADER_PROMOTED`).
+
+#### 6.3.2 Ejemplo de Uso y Salida en Consola
+```text
+jettra-shell [admin@127.0.0.1:9091/facturas_db]> cluster live 10
+
+========================================================================================================================
+                                        JETTRASTORE CLUSTER LIVE EVENT STREAM                                           
+========================================================================================================================
++-------------------------+----------------------+---------+---------+-------------------------------------------------+
+| Marca Temporal          | Tipo de Evento       | Origen  | Destino | Mensaje / Trazabilidad Operativa                |
++-------------------------+----------------------+---------+---------+-------------------------------------------------+
+| 2026-10-07 16:50:10.102 | NODE_ONLINE          | node-01 | ALL     | Nodo en línea y listo (REST: 18080, gRPC: 19090)|
+| 2026-10-07 16:50:11.215 | DATABASE_DISTRIBUTED | node-01 | node-02 | Sincronización inicial completa de tienda_db    |
+| 2026-10-07 16:50:12.040 | DOCUMENT_REPLICATED  | node-01 | node-02 | Replicando documento prod_100 en productos      |
+| 2026-10-07 16:50:13.310 | RECORD_REPLICATED    | node-01 | node-02 | Replicando par clave-valor config:moneda        |
+| 2026-10-07 16:50:14.500 | NODE_STOPPED         | node-01 | ALL     | Parada controlada de node-01                    |
+| 2026-10-07 16:50:14.545 | LEADER_ELECTION      | node-02 | cluster | Iniciado protocolo de elección de nuevo PRIMARY |
+| 2026-10-07 16:50:14.610 | LEADER_PROMOTED      | node-02 | cluster | ¡Failover Exitoso! Nodo promovido a PRIMARY     |
++-------------------------+----------------------+---------+---------+-------------------------------------------------+
+Eventos en búfer mostrados: 7 | Canal de Eventos en Tiempo Real: ACTIVO
+```
+
+#### 6.3.3 Consenso Dinámico ante Nodos Desconectados
+En arquitecturas distribuidas con alta disponibilidad, uno o más nodos pueden sufrir fallos de red o desconexiones temporales. `JettraStore` implementa un algoritmo de **Consenso Dinámico**:
+- Cuando se envía una trama Raft (creación/borrado de base de datos, mutación de documentos, claves o índices), el cliente de consenso evalúa la disponibilidad de los nodos en tiempo real.
+- Si un nodo secundario no responde (`Conexión rehusada`, `SocketTimeout`), se marca automáticamente como `OFFLINE` y queda excluido del cálculo del quórum.
+- El consenso opera **exclusivamente sobre el subconjunto de nodos activos y disponibles en ese momento**:
+  $$\text{Quórum Requerido} = \left\lfloor \frac{\text{Nodos Activos}}{2} \right\rfloor + 1$$
+- De esta manera, si en un clúster de 3 nodos (1 primario y 2 secundarios) uno o ambos secundarios caen, el nodo primario ajusta el quórum de forma inmediata y continúa procesando operaciones transaccionales sin degradación ni bloqueos inducidos por los nodos sin conexión. Al recuperarse los nodos secundarios, se reconectan automáticamente e integran al quórum general.
+
+#### 6.3.4 Flujo de Arranque y Sincronización de Nodos Secundarios (`SECONDARY`)
+Para asegurar la consistencia eventual fuerte de los datos tras reinicios o adiciones dinámicas de nodos:
+1. **Solicitud de Catálogo:** Al arrancar, el nodo con rol `SECONDARY` envía una trama `TYPE_SYNC_CATALOG_REQ` al nodo primario activo (`PRIMARY`).
+2. **Transferencia de Instantánea Integral:** Por cada base de datos reportada por el primario, el secundario solicita `TYPE_SYNC_DATA_REQ`. El primario consolida la instantánea completa en memoria y disco (`getDatabaseSnapshotBytes`) y la envía comprimida/serializada.
+3. **Carga y Activación Local:** El nodo secundario almacena la instantánea en su directorio físico (`_meta.json`), ejecuta la carga Off-Heap en sus motores multimodelo (`loadFromDisk`) y persiste el estado local.
+4. **Incorporación Formal al Clúster:** Solo una vez completada y verificada la sincronización de todas las bases de datos y registros existentes, el nodo secundario activa su centinela supervisor de failover y se une formalmente al flujo de operaciones distribuidas del clúster.
+
+### 6.4 Mecanismo de Failover y Reconexión Automática
+El Shell interactivo incorpora un receptor de eventos en segundo plano que detecta eventos `LEADER_PROMOTED`:
+- Si el nodo primario se detiene o pierde conexión (`NODE_STOPPED` / timeout de latidos), los nodos secundarios eligen un nuevo primario de forma determinista.
+- `JettraStoreShell` intercepta el cambio de topología, actualiza su enrutador interno hacia el nuevo primario y notifica al usuario mediante una alerta informativa en pantalla, permitiendo continuar operando de forma continua.
 
 ---
 
@@ -792,6 +864,12 @@ logout
 2. TELEMETRÍA Y CLÚSTER:
   status                                Monitorea RAM Panama FFM, CPU Loom y Disco LSM.
   show nodes / list nodes               Muestra la topología del clúster Raft y nodos del anillo.
+  cluster-distributed <all>             distribuye entre todos los nodos todas las bases de datos
+  cluster-distributed <nombre-base-datos>: distribuye la base de datos indicada
+  cluster-distributed info :            Muestra una tabla con los nodos y las bases de datos en cada nodo.
+  cluster live [límite]                 Muestra trazas y eventos en tiempo real de lo que ocurre en el clúster.
+  multinode / show multinode            Muestra el estado de cluster.multinode.active (ON/OFF).
+  multinode on / multinode off          Activa o desactiva dinámicamente la distribución de datos.
   add node <id> <host> <port> [ROLE]    Agrega un nuevo nodo secundario al clúster Raft.
   remove node <id>                      Remueve un nodo réplica del anillo dinámico.
   start node <id>                       Inicia y activa el procesamiento para un nodo específico.
@@ -1122,13 +1200,14 @@ java --enable-native-access=ALL-UNNAMED -jar JettraStoreShell-1.0-SNAPSHOT-uber.
 ```
 o utilice el script envoltorio `/home/avbravo/jettra-node/start-shell.sh`.
 
-### 19.6 Ayuda Integrada (`help` y `help cluster-distributed`)
-La ayuda interactiva de la consola incluye los comandos de distribución:
+### 19.6 Ayuda Integrada (`help`, `help cluster-distributed` y `help cluster live`)
+La ayuda interactiva de la consola incluye los comandos de distribución y supervisión en tiempo real:
 ```bash
 # Ayuda general con la lista completa de comandos
 help
 # O ayuda contextual específica:
 help cluster-distributed
+help cluster live
 ```
 Salida en consola:
 ```text
@@ -1138,6 +1217,7 @@ Salida en consola:
   cluster-distributed <all>             distribuye entre todos los nodos todas las bases de datos
   cluster-distributed <nombre-base-datos>: distribuye la base de datos indicada
   cluster-distributed info :            Muestra una tabla con los nodos y las bases de datos en cada nodo.
+  cluster live [límite]                 Muestra trazas en tiempo real de lo que ocurre en el clúster.
 ==============================================================================================
 ```
 

@@ -28,6 +28,9 @@
 6. [Topología de Clúster de 3 Nodos y Consenso Raft](#6-topología-de-clúster-de-3-nodos-y-consenso-raft)
    - [6.1 Configuración de Nodos (Líder y Secundarios)](#61-configuración-de-nodos-líder-y-secundarios)
    - [6.2 Canales Raft Sin Bloqueo con Virtual Threads y `jettraGRPC`](#62-canales-raft-sin-bloqueo-con-virtual-threads-y-jettragrpc)
+   - [6.3 Replicación y Distribución Continua de Registros](#63-replicación-y-distribución-continua-de-registros)
+   - [6.4 Protocolo de Failover y Elección Automática de Primario](#64-protocolo-de-failover-y-elección-automática-de-primario)
+   - [6.5 Canal de Eventos en Tiempo Real y Streaming `cluster live`](#65-canal-de-eventos-en-tiempo-real-y-streaming-cluster-live)
 7. [Seguridad Estricta: Autenticación, Superusuario y `JettraJWT`](#7-seguridad-estricta-autenticación-superusuario-y-jettrajwt)
    - [6.1 Superusuario Administrativo por Defecto (`admin` / `admin-jettra`)](#61-superusuario-administrativo-por-defecto-admin--admin-jettra)
    - [6.2 Inviolabilidad y Jerarquía Máxima del Superusuario](#62-inviolabilidad-y-jerarquía-máxima-del-superusuario)
@@ -308,6 +311,61 @@ Al superar el umbral crítico, el nodo principal no bloquea la admisión de dato
 
 * **Virtual Threads por Conexión:** Cada flujo de replicación y latido Raft (*Heartbeat*) se procesa en un Virtual Thread independiente de la JVM, permitiendo millones de transacciones por segundo sin saturar el pool de hilos de la plataforma del sistema operativo.
 * **Protocolo `jettraGRPC`:** Implementación gRPC de alto rendimiento optimizada para serialización binaria directa sobre archivos `.jettra`. Todas las tramas están firmadas criptográficamente con tokens de sesión **`JettraJWT`**.
+
+### 6.3 Replicación y Distribución Continua de Registros
+
+En una arquitectura de datos distribuida, replicar únicamente la creación o metadatos de la base de datos es insuficiente: los nodos secundarios (`SECONDARY`) deben mantener una copia exacta en tiempo real tanto del estado histórico como del flujo continuo de operaciones de escritura.
+
+`JettraStore` implementa un canal de sincronización dual:
+
+1. **Distribución Inicial y Snapshots (`clusterDistributed`):**
+   * Cuando se invoca `clusterDistributed(dbName)` o `clusterDistributedAll()`, el nodo primario serializa en disco y emite una trama binaria `TYPE_DATABASE_SNAPSHOT` (0x03) hacia cada nodo secundario configurado.
+   * El nodo secundario recibe la carga de la base de datos, inicializa los subdirectorios locales de almacenamiento (e.g. `/jettra/node-2/dbName/`) e invoca `loadFromDisk()` mediante los métodos de aplicación de réplica (`applyReplicatedPut`, `applyReplicatedClear`), garantizando que los datos existentes se carguen en memoria sin violar el estado de solo lectura del seguidor.
+
+2. **Replicación Continua de Mutaciones en Tiempo Real:**
+   * Cualquier inserción, actualización o eliminación en `JettraDatabase` (tanto en `DocumentEngine` mediante `onDocumentInsert`/`onDocumentDelete`, como en `KeyValueEngine` mediante `onKeyValuePut`/`onKeyValueDelete`) genera inmediatamente una trama binaria Raft:
+     * `TYPE_PUT_RECORD` (`0x10`): Contiene `dbName`, `engineType`, `key`, `value` y `metadata`.
+     * `TYPE_DELETE_RECORD` (`0x11`): Contiene `dbName`, `engineType` y `key`.
+   * El cliente de transporte `JettraClusterReplicationClient` emite de forma asíncrona no bloqueante (mediante Virtual Threads) estas tramas a todos los nodos secundarios activos.
+   * Al ser procesadas en el nodo secundario por `JettraClusterTransportServer`, este actualiza la memoria del motor correspondiente y sus índices de búsqueda sin requerir recargar desde el disco.
+
+### 6.4 Protocolo de Failover y Elección Automática de Primario
+
+La alta disponibilidad de `JettraStore` se basa en la autodetección de fallos y un protocolo de sucesión determinista:
+
+1. **Detección Inmediata de Parada Limpia (`Graceful Shutdown`):**
+   * Al invocarse `server.stop()`, el nodo emite una trama de control `TYPE_NODE_STOPPING` (`0x12`) a través del transporte del clúster y publica un evento `NODE_STOPPED` en el bus de eventos en vivo.
+   * Si el nodo que se detiene era el `PRIMARY`, este mensaje desencadena de inmediato el procedimiento de failover en los nodos secundarios restantes sin esperar la expiración de temporizadores.
+
+2. **Detección por Temporizador de Latidos (`Heartbeat Watchdog`):**
+   * El nodo primario transmite latidos periódicos (`TYPE_HEARTBEAT` / `0x01`) cada **500 ms** hacia los secundarios.
+   * Cada nodo secundario ejecuta un hilo centinela (*Failover Watchdog*) con un umbral de inactividad configurable de **1,500 ms** (`raft.heartbeat.timeout.ms`).
+   * Si transcurre dicho lapso sin recibir latidos del nodo primario, el nodo secundario asume que el líder se encuentra caído o inaccesible e inicia la elección de liderazgo.
+
+3. **Elección y Promoción Determinista:**
+   * Los nodos secundarios activos evalúan la lista ordenada de identificadores de nodo (`nodeId`).
+   * El nodo activo con el identificador menor elegible (por ejemplo, `node-02` en ausencia de `node-01`) se autoproclama de inmediato como el nuevo `PRIMARY`.
+   * El nodo promovido cambia su rol a `ClusterNode.Role.PRIMARY`, asume el estado Raft `LEADER`, habilita el modo de escritura en sus bases de datos y notifica a la topología completa emitiendo una trama `TYPE_NEW_LEADER_PROMOTED` (`0x14`).
+   * Todos los nodos secundarios supervivientes actualizan sus tablas de enrutamiento asignando al nuevo primario como destino de las operaciones de escritura.
+
+4. **Notificación a Clientes y Servicios Periféricos:**
+   * El nuevo primario propaga el evento `LEADER_PROMOTED` a todos los clientes conectados (`JettraStoreDriver`, `JettraStoreShell`, `JettraStorePolice3D`) a través del canal de eventos en tiempo real.
+   * `JettraClient` adapta automáticamente su anillo de enrutamiento (*Dynamic Ring Engine*), redirigiendo las llamadas subsiguientes al nuevo líder sin interrupción del servicio para las aplicaciones consumidoras.
+
+### 6.5 Canal de Eventos en Tiempo Real y Streaming `cluster live`
+
+Para proporcionar observabilidad integral del clúster en tiempo de ejecución, `JettraStore` integra el bus de eventos desacoplado **`JettraClusterEventBus`**:
+
+* **Estructura del Evento (`ClusterLiveEvent`):**
+  * `timestamp`: Milisegundos de época de alta resolución.
+  * `type`: Tipo de evento (`NODE_ONLINE`, `NODE_OFFLINE`, `NODE_STOPPED`, `LEADER_ELECTION`, `LEADER_PROMOTED`, `DATABASE_DISTRIBUTED`, `RECORD_REPLICATED`, `DOCUMENT_REPLICATED`, `DOCUMENT_DELETED`).
+  * `sourceNodeId` / `targetNodeId`: Nodos emisor y receptor involucrados en la acción.
+  * `message`: Descripción legible de la operación en curso (e.g. *"Replicando documento doc_881 de facturas a node-02"*).
+  * `details`: Metadatos auxiliares o serialización de claves afectadas.
+
+* **Canal Server-Sent Events (SSE) y REST en HTTP:**
+  * `GET /api/v1/cluster/events?limit=50`: Devuelve los últimos eventos registrados en el búfer circular en formato JSON estructurado.
+  * `GET /api/v1/cluster/live`: Abre un flujo continuo en tiempo real (Content-Type: `text/event-stream`) permitiendo que cualquier cliente consuma instantáneamente los eventos a medida que ocurren.
 
 ---
 

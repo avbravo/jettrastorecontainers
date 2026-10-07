@@ -62,6 +62,7 @@ public final class JettraClient implements AutoCloseable {
 
         this.policeNotificationListener = this::dispatchPoliceEvent;
         JettraPolice.getInstance().addNotificationListener(this.policeNotificationListener);
+        registerAutoFailoverHandler();
     }
 
     public static JettraClient connect(String host, int port, String user, String pass) {
@@ -400,6 +401,40 @@ public final class JettraClient implements AutoCloseable {
         if (io.jettra.store.JettraStoreServer.getActiveInstance() != null) {
             io.jettra.store.JettraStoreServer.getActiveInstance().replicateDropIndex(dbName, indexName);
         }
+    }
+
+    public List<io.jettra.store.cluster.ClusterLiveEvent> getClusterLiveEvents() {
+        return getRecentClusterLiveEvents(100);
+    }
+
+    public List<io.jettra.store.cluster.ClusterLiveEvent> getRecentClusterLiveEvents(int limit) {
+        return io.jettra.store.cluster.JettraClusterEventBus.getInstance().getRecentEvents(limit);
+    }
+
+    public void subscribeClusterLive(Consumer<io.jettra.store.cluster.ClusterLiveEvent> listener) {
+        io.jettra.store.cluster.JettraClusterEventBus.getInstance().subscribe(listener);
+    }
+
+    public void unsubscribeClusterLive(Consumer<io.jettra.store.cluster.ClusterLiveEvent> listener) {
+        io.jettra.store.cluster.JettraClusterEventBus.getInstance().unsubscribe(listener);
+    }
+
+    public void registerAutoFailoverHandler() {
+        subscribeClusterLive(event -> {
+            if (io.jettra.store.cluster.ClusterLiveEvent.TYPE_LEADER_PROMOTED.equals(event.type())) {
+                String newLeader = event.sourceNodeId();
+                if (newLeader != null && ringEngine != null) {
+                    for (ClusterNode p : ringEngine.getPeers()) {
+                        if (p.getId().equalsIgnoreCase(newLeader)) {
+                            p.setRole(ClusterNode.Role.PRIMARY);
+                            p.start();
+                        } else if (p.getRole() == ClusterNode.Role.PRIMARY) {
+                            p.setRole(ClusterNode.Role.SECONDARY);
+                        }
+                    }
+                }
+            }
+        });
     }
 
     public io.jettra.store.engine.query.JettraQLProcessor.JQLResult jql(String databaseName, String query) {

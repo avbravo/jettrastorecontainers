@@ -38,9 +38,10 @@ public final class DocumentEngine implements Iterable<Map<String, Object>> {
         if (database != null) {
             database.assertWritable();
         }
+        Map<String, Object> copy = null;
         wLock.lock();
         try {
-            Map<String, Object> copy = UnifiedMap.newMap(Math.max(4, document.size() + 1));
+            copy = UnifiedMap.newMap(Math.max(4, document.size() + 1));
             copy.putAll(document);
             copy.put("_id", id);
             documents.put(id, copy);
@@ -49,6 +50,9 @@ public final class DocumentEngine implements Iterable<Map<String, Object>> {
             }
         } finally {
             wLock.unlock();
+        }
+        if (database != null && copy != null) {
+            database.onDocumentInsert(collectionName, id, copy);
         }
     }
 
@@ -254,6 +258,7 @@ public final class DocumentEngine implements Iterable<Map<String, Object>> {
         if (database != null) {
             database.assertWritable();
         }
+        Map<String, Object> updatedCopy = null;
         wLock.lock();
         try {
             Map<String, Object> existing = documents.get(id);
@@ -262,9 +267,13 @@ public final class DocumentEngine implements Iterable<Map<String, Object>> {
                 if (database != null && database.getStorageMode().isDiskMemory()) {
                     persistToDiskMemory(id, existing);
                 }
+                updatedCopy = existing;
             }
         } finally {
             wLock.unlock();
+        }
+        if (database != null && updatedCopy != null) {
+            database.onDocumentInsert(collectionName, id, updatedCopy);
         }
     }
 
@@ -272,16 +281,20 @@ public final class DocumentEngine implements Iterable<Map<String, Object>> {
         if (database != null) {
             database.assertWritable();
         }
+        boolean removed = false;
         wLock.lock();
         try {
-            boolean removed = documents.remove(id) != null;
+            removed = documents.remove(id) != null;
             if (database != null && database.getStorageMode().isDiskMemory()) {
                 removeFromDiskMemory(id);
             }
-            return removed;
         } finally {
             wLock.unlock();
         }
+        if (removed && database != null) {
+            database.onDocumentDelete(collectionName, id);
+        }
+        return removed;
     }
 
     public long count() {

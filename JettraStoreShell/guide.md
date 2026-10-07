@@ -778,6 +778,12 @@ logout
 2. TELEMETRÍA Y CLÚSTER:
   status                                Monitorea RAM Panama FFM, CPU Loom y Disco LSM.
   show nodes / list nodes               Muestra la topología del clúster Raft y nodos del anillo.
+  cluster-distributed <all>             distribuye entre todos los nodos todas las bases de datos
+  cluster-distributed <nombre-base-datos>: distribuye la base de datos indicada
+  cluster-distributed info :            Muestra una tabla con los nodos y las bases de datos en cada nodo.
+  cluster live [límite]                 Muestra trazas y eventos en tiempo real de lo que ocurre en el clúster.
+  multinode / show multinode            Muestra el estado de cluster.multinode.active (ON/OFF).
+  multinode on / multinode off          Activa o desactiva dinámicamente la distribución de datos.
   add node <id> <host> <port> [ROLE]    Agrega un nuevo nodo secundario al clúster Raft.
   remove node <id>                      Remueve un nodo réplica del anillo dinámico.
   start node <id>                       Inicia y activa el procesamiento para un nodo específico.

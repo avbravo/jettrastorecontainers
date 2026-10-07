@@ -1,6 +1,7 @@
 package io.jettra.core.three.d.police;
 
 import io.jettra.core.three.d.model.ServerNode3D;
+import io.jettra.store.cluster.ClusterLiveEvent;
 import io.jettra.store.cluster.ClusterNode;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -142,6 +143,63 @@ public class JettraStorePoliceMonitorTest {
             assertTrue(loader.isMultinodeActive());
             assertEquals("on", loader.getClusterMultinodeActive());
             assertTrue(monitor.isMultinodeActive());
+        }
+    }
+
+    @Test
+    @DisplayName("Debe procesar eventos en vivo de cluster, failover y comando cluster live")
+    public void testClusterLiveAndFailoverEvents() {
+        try (JettraStorePoliceMonitor monitor = new JettraStorePoliceMonitor()) {
+            ServerNode3D n1 = monitor.getNodeById("node-01");
+            ServerNode3D n2 = monitor.getNodeById("node-02");
+            assertNotNull(n1);
+            assertNotNull(n2);
+            assertEquals(ClusterNode.Role.PRIMARY, n1.getRole());
+            assertEquals(ClusterNode.Role.SECONDARY, n2.getRole());
+
+            // 1. Simular evento de replicación de registros
+            ClusterLiveEvent repEvent = new ClusterLiveEvent(
+                System.currentTimeMillis(),
+                ClusterLiveEvent.TYPE_RECORD_REPLICATED,
+                "node-01",
+                "node-02",
+                "Registro replicado a node-02",
+                "doc_101"
+            );
+            monitor.onClusterLiveEvent(repEvent);
+            assertTrue(monitor.getLastPoliceEvent().contains("Registro replicado"));
+
+            // 2. Simular parada de node-01
+            ClusterLiveEvent stopEvent = new ClusterLiveEvent(
+                System.currentTimeMillis(),
+                ClusterLiveEvent.TYPE_NODE_STOPPED,
+                "node-01",
+                null,
+                "Nodo detenido limpiamente",
+                null
+            );
+            monitor.onClusterLiveEvent(stopEvent);
+            assertFalse(n1.isOnline());
+            assertEquals(ClusterNode.NodeStatus.OFFLINE, n1.getStatus());
+
+            // 3. Simular promoción de node-02 a nuevo PRIMARY
+            ClusterLiveEvent promoEvent = new ClusterLiveEvent(
+                System.currentTimeMillis(),
+                ClusterLiveEvent.TYPE_LEADER_PROMOTED,
+                "node-02",
+                null,
+                "Nodo promovido a nuevo PRIMARY",
+                null
+            );
+            monitor.onClusterLiveEvent(promoEvent);
+            assertEquals(ClusterNode.Role.PRIMARY, n2.getRole());
+            assertEquals(ClusterNode.RaftState.LEADER, n2.getRaftState());
+            assertTrue(n2.isOnline());
+
+            // 4. Verificar comando clusterLive()
+            String output = monitor.clusterLive(10);
+            assertNotNull(output);
+            assertFalse(output.isBlank());
         }
     }
 }

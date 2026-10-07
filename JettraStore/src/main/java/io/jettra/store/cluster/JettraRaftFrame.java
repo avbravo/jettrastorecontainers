@@ -36,6 +36,10 @@ public record JettraRaftFrame(
     public static final byte TYPE_SYNC_DATA_REQ    = 0x0F;
     public static final byte TYPE_SYNC_DATA_RESP   = 0x10;
     public static final byte TYPE_DISTRIBUTE_DATABASE = 0x11;
+    public static final byte TYPE_NODE_STOPPING     = 0x12;
+    public static final byte TYPE_LEADER_ELECTION   = 0x13;
+    public static final byte TYPE_NEW_LEADER_PROMOTED = 0x14;
+    public static final byte TYPE_CLUSTER_LIVE_EVENT = 0x15;
 
     public static JettraRaftFrame heartbeat(long term, String senderNodeId) {
         return new JettraRaftFrame(TYPE_HEARTBEAT, term, 0, senderNodeId, "", "", "", new byte[0], System.currentTimeMillis());
@@ -112,6 +116,25 @@ public record JettraRaftFrame(
     public static JettraRaftFrame nack(long term, long logIndex, String senderNodeId, String reason) {
         byte[] bytes = reason != null ? reason.getBytes(java.nio.charset.StandardCharsets.UTF_8) : new byte[0];
         return new JettraRaftFrame(TYPE_NACK, term, logIndex, senderNodeId, "", "", "", bytes, System.currentTimeMillis());
+    }
+
+    public static JettraRaftFrame nodeStopping(long term, String senderNodeId, String role, String reason) {
+        String msg = role + ":" + (reason != null ? reason : "Graceful shutdown");
+        byte[] bytes = msg.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        return new JettraRaftFrame(TYPE_NODE_STOPPING, term, 0, senderNodeId, "", "", "", bytes, System.currentTimeMillis());
+    }
+
+    public static JettraRaftFrame leaderElection(long term, long logIndex, String candidateNodeId) {
+        return new JettraRaftFrame(TYPE_LEADER_ELECTION, term, logIndex, candidateNodeId, "", "", "", new byte[0], System.currentTimeMillis());
+    }
+
+    public static JettraRaftFrame newLeaderPromoted(long term, long logIndex, String newLeaderNodeId) {
+        return new JettraRaftFrame(TYPE_NEW_LEADER_PROMOTED, term, logIndex, newLeaderNodeId, "", "", "", new byte[0], System.currentTimeMillis());
+    }
+
+    public static JettraRaftFrame clusterLiveEvent(long term, String senderNodeId, String eventJson) {
+        byte[] bytes = eventJson != null ? eventJson.getBytes(java.nio.charset.StandardCharsets.UTF_8) : new byte[0];
+        return new JettraRaftFrame(TYPE_CLUSTER_LIVE_EVENT, term, 0, senderNodeId, "", "", "", bytes, System.currentTimeMillis());
     }
 
     public String getPayloadAsString() {

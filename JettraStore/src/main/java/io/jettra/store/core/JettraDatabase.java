@@ -192,7 +192,68 @@ public final class JettraDatabase implements AutoCloseable {
     }
 
     public KeyValueEngine getKeyValueEngine(String name) {
-        return keyValueEngines.computeIfAbsent(name, KeyValueEngine::new);
+        return keyValueEngines.computeIfAbsent(name, k -> new KeyValueEngine(k, this));
+    }
+
+    public void onDocumentInsert(String collectionName, String id, Map<String, Object> doc) {
+        if (indexManager != null) {
+            indexManager.onDocumentInsert(collectionName, id, doc);
+        }
+        if (config != null && config.isClusterMultinodeActive() && config.getNodeRole() == ClusterNode.Role.PRIMARY) {
+            io.jettra.store.JettraStoreServer server = io.jettra.store.JettraStoreServer.getActiveInstance();
+            if (server != null) {
+                byte[] jsonBytes = new io.jettra.json.JettraJson().toJson(doc).getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                server.replicatePutDocument(databaseName, collectionName, id, jsonBytes);
+            }
+            io.jettra.store.cluster.JettraClusterEventBus.getInstance().publish(
+                io.jettra.store.cluster.ClusterLiveEvent.TYPE_DOCUMENT_REPLICATED,
+                config.getNodeId(), "cluster",
+                String.format("Documento '%s' en colección '%s' de base '%s' replicado a nodos secundarios", id, collectionName, databaseName),
+                "db=" + databaseName + ",col=" + collectionName + ",id=" + id
+            );
+        }
+    }
+
+    public void onDocumentDelete(String collectionName, String id) {
+        if (indexManager != null) {
+            indexManager.onDocumentDelete(collectionName, id, null);
+        }
+        if (config != null && config.isClusterMultinodeActive() && config.getNodeRole() == ClusterNode.Role.PRIMARY) {
+            io.jettra.store.JettraStoreServer server = io.jettra.store.JettraStoreServer.getActiveInstance();
+            if (server != null) {
+                server.replicateDeleteDocument(databaseName, collectionName, id);
+            }
+            io.jettra.store.cluster.JettraClusterEventBus.getInstance().publish(
+                io.jettra.store.cluster.ClusterLiveEvent.TYPE_DOCUMENT_DELETED,
+                config.getNodeId(), "cluster",
+                String.format("Documento '%s' en colección '%s' de base '%s' eliminado y propagado al clúster", id, collectionName, databaseName),
+                "db=" + databaseName + ",col=" + collectionName + ",id=" + id
+            );
+        }
+    }
+
+    public void onKeyValuePut(String namespace, String key, byte[] value) {
+        if (config != null && config.isClusterMultinodeActive() && config.getNodeRole() == ClusterNode.Role.PRIMARY) {
+            io.jettra.store.JettraStoreServer server = io.jettra.store.JettraStoreServer.getActiveInstance();
+            if (server != null) {
+                server.replicatePutRecord(databaseName, namespace, key, value);
+            }
+            io.jettra.store.cluster.JettraClusterEventBus.getInstance().publish(
+                io.jettra.store.cluster.ClusterLiveEvent.TYPE_RECORD_REPLICATED,
+                config.getNodeId(), "cluster",
+                String.format("Registro KV '%s' en '%s' de base '%s' replicado a nodos secundarios", key, namespace, databaseName),
+                "db=" + databaseName + ",ns=" + namespace + ",key=" + key
+            );
+        }
+    }
+
+    public void onKeyValueDelete(String namespace, String key) {
+        if (config != null && config.isClusterMultinodeActive() && config.getNodeRole() == ClusterNode.Role.PRIMARY) {
+            io.jettra.store.JettraStoreServer server = io.jettra.store.JettraStoreServer.getActiveInstance();
+            if (server != null) {
+                server.replicateDeleteRecord(databaseName, namespace, key);
+            }
+        }
     }
 
     public GeospatialEngine getGeospatialEngine(String name) {
@@ -655,7 +716,7 @@ public final class JettraDatabase implements AutoCloseable {
                                 if (scanner.peek() == '{') {
                                     scanner.read();
                                     var kvEng = getKeyValueEngine(ns);
-                                    kvEng.clear();
+                                    kvEng.applyReplicatedClear();
                                     while (scanner.hasMore() && scanner.peek() != '}') {
                                         scanner.skipWhitespaceAndSeparators();
                                         String k = scanner.readQuotedString();
@@ -663,7 +724,7 @@ public final class JettraDatabase implements AutoCloseable {
                                         scanner.skipWhitespaceAndSeparators();
                                         String v = scanner.readQuotedString();
                                         if (v != null) {
-                                            kvEng.put(k, v.getBytes(StandardCharsets.UTF_8));
+                                            kvEng.applyReplicatedPut(k, v.getBytes(StandardCharsets.UTF_8));
                                         } else {
                                             scanner.skipValue();
                                         }

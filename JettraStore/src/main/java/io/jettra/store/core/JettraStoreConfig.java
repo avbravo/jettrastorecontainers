@@ -14,7 +14,7 @@ import java.util.Properties;
 public final class JettraStoreConfig {
     private final String nodeId;
     private final String nodeIp;
-    private final ClusterNode.Role nodeRole;
+    private volatile ClusterNode.Role nodeRole;
     private final String clusterPeers;
     private final List<ClusterNode> parsedPeers;
     private final List<JettraConfigValidator.ClusterNodeInfo> allClusterNodes;
@@ -309,6 +309,7 @@ public final class JettraStoreConfig {
 
     public String getNodeId() { return nodeId; }
     public ClusterNode.Role getNodeRole() { return nodeRole; }
+    public void setNodeRole(ClusterNode.Role role) { this.nodeRole = role; }
     public String getClusterPeers() { return clusterPeers; }
 
     public List<ClusterNode> getParsedPeers() {

@@ -10,8 +10,10 @@ import io.jettra.core.three.d.model.ServerNode3D;
 import io.jettra.core.three.d.model.UserZoneGroup;
 import io.jettra.driver.JettraClient;
 import io.jettra.driver.config.JettraClientConfig;
+import io.jettra.store.cluster.ClusterLiveEvent;
 import io.jettra.store.cluster.ClusterNode;
 import io.jettra.store.cluster.ClusterNodeDistributionInfo;
+import io.jettra.store.cluster.JettraClusterEventBus;
 import io.jettra.store.core.JettraStoreConfig;
 import io.jettra.store.police.JettraPolice;
 
@@ -28,6 +30,7 @@ import java.util.Map;
 import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
+import java.util.function.Consumer;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -95,6 +98,7 @@ public class JettraStorePoliceMonitor implements AutoCloseable {
         initPoliceAgents();
         initClusterTraffic();
         initClient();
+        JettraClusterEventBus.getInstance().subscribe(this::onClusterLiveEvent);
         pollServerTelemetryNonBlocking();
         startScheduler();
     }
@@ -292,6 +296,8 @@ public class JettraStorePoliceMonitor implements AutoCloseable {
                 .clusterMultinodeActive(multiActive)
                 .build();
             this.client = new JettraClient(cfg);
+            this.client.registerAutoFailoverHandler();
+            this.client.subscribeClusterLive(this::onClusterLiveEvent);
             this.connected = true;
             this.lastPoliceEvent = "En línea con JettraStore [" + currentProfile.getName() + "] en " + host + ":" + port;
         } catch (Exception e) {
@@ -885,6 +891,124 @@ public class JettraStorePoliceMonitor implements AutoCloseable {
         }
         if (client == null) return List.of();
         return client.getClusterDistributedInfo();
+    }
+
+    public void onClusterLiveEvent(ClusterLiveEvent event) {
+        if (event == null) return;
+        this.lastPoliceEvent = "[" + event.type() + "] " + event.message();
+
+        String type = event.type() != null ? event.type() : "";
+        switch (type) {
+            case ClusterLiveEvent.TYPE_LEADER_PROMOTED -> {
+                String leaderId = event.sourceNodeId();
+                for (ServerNode3D n : serverNodes) {
+                    if (n.getId().equalsIgnoreCase(leaderId)) {
+                        n.setRole(ClusterNode.Role.PRIMARY);
+                        n.setRaftState(ClusterNode.RaftState.LEADER);
+                        n.setOnline(true);
+                        n.setStatus(ClusterNode.NodeStatus.RUNNING);
+                        n.setStatusMessage("EN LÍNEA (PRIMARY / LEADER)");
+                    } else if (n.getRole() == ClusterNode.Role.PRIMARY) {
+                        n.setRole(ClusterNode.Role.SECONDARY);
+                        n.setRaftState(ClusterNode.RaftState.FOLLOWER);
+                        n.setStatusMessage("EN LÍNEA (SECONDARY / FOLLOWER)");
+                    }
+                }
+                for (JettraPoliceAgent k9 : activePoliceAgents) {
+                    if (k9.getRole() == JettraPoliceAgent.PoliceRole.RAFT_QUORUM_K9) {
+                        k9.assignMission(leaderId, "👑 Nuevo Líder PRIMARY proclamado en clúster: " + leaderId, false, "INFO");
+                    }
+                }
+            }
+            case ClusterLiveEvent.TYPE_NODE_STOPPED, ClusterLiveEvent.TYPE_NODE_OFFLINE -> {
+                String stopId = event.sourceNodeId();
+                for (ServerNode3D n : serverNodes) {
+                    if (n.getId().equalsIgnoreCase(stopId)) {
+                        n.setOnline(false);
+                        n.setStatus(ClusterNode.NodeStatus.OFFLINE);
+                        n.setStatusMessage("FUERA DE SERVICIO (" + event.message() + ")");
+                        offlineAlertCount++;
+                        break;
+                    }
+                }
+                for (JettraPoliceAgent k9 : activePoliceAgents) {
+                    if (k9.getRole() == JettraPoliceAgent.PoliceRole.RAFT_QUORUM_K9) {
+                        k9.assignMission(stopId, "🚨 Nodo " + stopId + " fuera de servicio. Desviando tráfico.", true, "CRITICAL");
+                    }
+                }
+            }
+            case ClusterLiveEvent.TYPE_NODE_ONLINE -> {
+                String onlineId = event.sourceNodeId();
+                for (ServerNode3D n : serverNodes) {
+                    if (n.getId().equalsIgnoreCase(onlineId)) {
+                        n.setOnline(true);
+                        n.setStatus(ClusterNode.NodeStatus.RUNNING);
+                        n.setStatusMessage("EN LÍNEA (Quórum Raft)");
+                        break;
+                    }
+                }
+            }
+            case ClusterLiveEvent.TYPE_DATABASE_DISTRIBUTED,
+                 ClusterLiveEvent.TYPE_RECORD_REPLICATED,
+                 ClusterLiveEvent.TYPE_DOCUMENT_REPLICATED -> {
+                String src = (event.sourceNodeId() != null && !event.sourceNodeId().isBlank()) ? event.sourceNodeId() : "node-01";
+                String tgt = (event.targetNodeId() != null && !event.targetNodeId().isBlank()) ? event.targetNodeId() : "node-02";
+                triggerNodeTransfer(src, tgt, ClusterDataTraffic.TrafficType.RAFT_REPLICATION, event.message(), 1024 * 64, 85.0f);
+            }
+            default -> {}
+        }
+    }
+
+    public List<ClusterLiveEvent> getClusterLiveEvents() {
+        if (client != null) {
+            try {
+                List<ClusterLiveEvent> evts = client.getClusterLiveEvents();
+                if (evts != null && !evts.isEmpty()) return evts;
+            } catch (Exception ignored) {}
+        }
+        return JettraClusterEventBus.getInstance().getRecentEvents(100);
+    }
+
+    public List<ClusterLiveEvent> getRecentClusterLiveEvents(int limit) {
+        if (client != null) {
+            try {
+                List<ClusterLiveEvent> evts = client.getRecentClusterLiveEvents(limit);
+                if (evts != null && !evts.isEmpty()) return evts;
+            } catch (Exception ignored) {}
+        }
+        return JettraClusterEventBus.getInstance().getRecentEvents(limit);
+    }
+
+    public void subscribeClusterLive(Consumer<ClusterLiveEvent> listener) {
+        JettraClusterEventBus.getInstance().subscribe(listener);
+        if (client != null) {
+            try {
+                client.subscribeClusterLive(listener);
+            } catch (Exception ignored) {}
+        }
+    }
+
+    public String clusterLive() {
+        return clusterLive(25);
+    }
+
+    public String clusterLive(int limit) {
+        List<ClusterLiveEvent> events = getRecentClusterLiveEvents(limit);
+        if (events == null || events.isEmpty()) {
+            return "No hay eventos recientes en el clúster.";
+        }
+        StringBuilder sb = new StringBuilder();
+        sb.append(String.format("%-23s | %-12s | %-20s | %s%n", "TIMESTAMP", "NODE", "TIPO DE EVENTO", "DESCRIPCIÓN"));
+        sb.append("-".repeat(88)).append("\n");
+        for (ClusterLiveEvent e : events) {
+            String ts = e.formattedTimestamp();
+            if (ts.length() > 23) ts = ts.substring(0, 23);
+            String node = e.sourceNodeId() != null ? e.sourceNodeId() : "-";
+            String t = e.type() != null ? e.type() : "-";
+            String msg = e.message() != null ? e.message() : "";
+            sb.append(String.format("%-23s | %-12s | %-20s | %s%n", ts, node, t, msg));
+        }
+        return sb.toString();
     }
 
     @Override

@@ -83,11 +83,13 @@ public final class JettraClusterTransportServer implements AutoCloseable {
     private JettraRaftFrame processFrame(JettraRaftFrame frame) {
         switch (frame.frameType()) {
             case JettraRaftFrame.TYPE_HEARTBEAT -> {
-                // Registrar actividad del peer en el anillo
-                if (server != null && server.getRingEngine() != null) {
-                    ClusterNode peer = server.getRingEngine().getPeer(frame.senderNodeId());
-                    if (peer != null) {
-                        peer.start();
+                if (server != null) {
+                    server.recordLeaderHeartbeat(frame.senderNodeId());
+                    if (server.getRingEngine() != null) {
+                        ClusterNode peer = server.getRingEngine().getPeer(frame.senderNodeId());
+                        if (peer != null) {
+                            peer.start();
+                        }
                     }
                 }
                 return JettraRaftFrame.heartbeatAck(frame.term(), server != null ? server.getConfig().getNodeId() : "node-local");
@@ -180,17 +182,39 @@ public final class JettraClusterTransportServer implements AutoCloseable {
 
             case JettraRaftFrame.TYPE_PUT_RECORD -> {
                 String dbName = frame.databaseName();
+                String colName = frame.collectionName();
                 String key = frame.key();
                 try {
                     if (server != null) {
-                        JettraDatabase db = server.getOrCreateDatabase(dbName);
+                        JettraDatabase db = server.getOrCreateDatabaseInternal(dbName, false);
                         if (db != null) {
+                            db.getKeyValueEngine(colName != null && !colName.isEmpty() ? colName : "default").put(key, frame.payload());
                             db.putOffHeapBinary(key, frame.payload());
                             db.saveToDisk();
                         }
                     }
                     return JettraRaftFrame.ack(frame.term(), frame.logIndex(), 
                         server != null ? server.getConfig().getNodeId() : "local", "Record replicated");
+                } catch (Exception ex) {
+                    return JettraRaftFrame.nack(frame.term(), frame.logIndex(), 
+                        server != null ? server.getConfig().getNodeId() : "local", ex.getMessage());
+                }
+            }
+
+            case JettraRaftFrame.TYPE_DELETE_RECORD -> {
+                String dbName = frame.databaseName();
+                String colName = frame.collectionName();
+                String key = frame.key();
+                try {
+                    if (server != null) {
+                        JettraDatabase db = server.getOrCreateDatabaseInternal(dbName, false);
+                        if (db != null) {
+                            db.getKeyValueEngine(colName != null && !colName.isEmpty() ? colName : "default").remove(key);
+                            db.saveToDisk();
+                        }
+                    }
+                    return JettraRaftFrame.ack(frame.term(), frame.logIndex(), 
+                        server != null ? server.getConfig().getNodeId() : "local", "Record deleted");
                 } catch (Exception ex) {
                     return JettraRaftFrame.nack(frame.term(), frame.logIndex(), 
                         server != null ? server.getConfig().getNodeId() : "local", ex.getMessage());
@@ -302,6 +326,37 @@ public final class JettraClusterTransportServer implements AutoCloseable {
                     return JettraRaftFrame.syncDataResp(frame.term(), 
                         server != null ? server.getConfig().getNodeId() : "local", dbName, new byte[0]);
                 }
+            }
+
+            case JettraRaftFrame.TYPE_NODE_STOPPING -> {
+                String sender = frame.senderNodeId();
+                String msg = frame.getPayloadAsString();
+                System.out.printf("[JettraClusterTransport] ⚠️ Nodo '%s' notifica parada controlada (%s)%n", sender, msg);
+                if (server != null) {
+                    server.handleNodeStopping(sender, msg);
+                }
+                return JettraRaftFrame.ack(frame.term(), frame.logIndex(), 
+                    server != null ? server.getConfig().getNodeId() : "local", "Node stop acknowledged");
+            }
+
+            case JettraRaftFrame.TYPE_NEW_LEADER_PROMOTED -> {
+                String newLeader = frame.senderNodeId();
+                System.out.printf("[JettraClusterTransport] ⚡ Nodo '%s' ha sido promovido a nuevo PRIMARY (Term %d)%n",
+                    newLeader, frame.term());
+                if (server != null) {
+                    server.handleNewLeaderPromoted(newLeader, frame.term());
+                }
+                return JettraRaftFrame.ack(frame.term(), frame.logIndex(), 
+                    server != null ? server.getConfig().getNodeId() : "local", "Leader promotion accepted");
+            }
+
+            case JettraRaftFrame.TYPE_CLUSTER_LIVE_EVENT -> {
+                String json = frame.getPayloadAsString();
+                if (server != null) {
+                    server.handleLiveEvent(json);
+                }
+                return JettraRaftFrame.ack(frame.term(), frame.logIndex(), 
+                    server != null ? server.getConfig().getNodeId() : "local", "Live event received");
             }
 
             case JettraRaftFrame.TYPE_SYNC_CATALOG_REQ -> {

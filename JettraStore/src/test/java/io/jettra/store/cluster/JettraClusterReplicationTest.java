@@ -223,5 +223,191 @@ public class JettraClusterReplicationTest extends JettraStoreBaseTest {
         }
     }
 
+    @Test
+    @DisplayName("Debe ejecutar failover automático y promover nodo secundario a PRIMARY al detenerse el nodo primario")
+    public void testFailoverAndPromotion() throws IOException, InterruptedException {
+        Path tempDir = Files.createTempDirectory("jettra_failover_test");
+        int testPort = 19098;
+
+        Properties dbProps = new Properties();
+        dbProps.setProperty("jettra.node.id", "node-02");
+        dbProps.setProperty("jettra.node.role", "SECONDARY");
+        dbProps.setProperty("jettra.storage.path", tempDir.toString());
+        dbProps.setProperty("jettra.network.grpc.port", String.valueOf(testPort));
+        dbProps.setProperty("jettra.network.rest.port", "18088");
+        dbProps.setProperty("cluster.multinode.active", "on");
+
+        Properties clusterProps = new Properties();
+        clusterProps.setProperty("cluster.node.1.id", "node-01");
+        clusterProps.setProperty("cluster.node.1.ip", "127.0.0.1");
+        clusterProps.setProperty("cluster.node.1.grpc.port", "19090");
+        clusterProps.setProperty("cluster.node.1.role", "PRIMARY");
+        clusterProps.setProperty("cluster.node.2.id", "node-02");
+        clusterProps.setProperty("cluster.node.2.ip", "127.0.0.1");
+        clusterProps.setProperty("cluster.node.2.grpc.port", String.valueOf(testPort));
+        clusterProps.setProperty("cluster.node.2.role", "SECONDARY");
+
+        JettraStoreConfig secConfig = new JettraStoreConfig(dbProps, clusterProps);
+        JettraStoreServer secServer = new JettraStoreServer(secConfig);
+
+        assertEquals(ClusterNode.Role.SECONDARY, secServer.getConfig().getNodeRole());
+
+        // Simular que el PRIMARY 'node-01' se detiene limpiamente
+        secServer.handleNodeStopping("node-01", "Graceful shutdown test");
+
+        // El nodo secundario debe promoverse a PRIMARY
+        assertEquals(ClusterNode.Role.PRIMARY, secServer.getConfig().getNodeRole());
+
+        // Validar que el evento fue emitido en el bus de eventos
+        List<ClusterLiveEvent> events = JettraClusterEventBus.getInstance().getRecentEvents(10);
+        boolean foundPromoted = events.stream().anyMatch(e -> ClusterLiveEvent.TYPE_LEADER_PROMOTED.equals(e.type()));
+        assertTrue(foundPromoted);
+    }
+
+    @Test
+    @DisplayName("Debe publicar y recibir eventos de clúster en tiempo real mediante JettraClusterEventBus")
+    public void testClusterLiveEventChannel() throws InterruptedException {
+        java.util.concurrent.atomic.AtomicReference<ClusterLiveEvent> received = new java.util.concurrent.atomic.AtomicReference<>();
+        java.util.concurrent.CountDownLatch latch = new java.util.concurrent.CountDownLatch(1);
+
+        java.util.function.Consumer<ClusterLiveEvent> listener = ev -> {
+            if ("CUSTOM_LIVE_TEST".equals(ev.type())) {
+                received.set(ev);
+                latch.countDown();
+            }
+        };
+
+        JettraClusterEventBus.getInstance().subscribe(listener);
+        try {
+            JettraClusterEventBus.getInstance().publish(
+                "CUSTOM_LIVE_TEST", "node-01", "node-02", "Transferencia de 100 registros", "db=ventas"
+            );
+
+            boolean ok = latch.await(2, java.util.concurrent.TimeUnit.SECONDS);
+            assertTrue(ok);
+            assertNotNull(received.get());
+            assertEquals("node-01", received.get().sourceNodeId());
+            assertEquals("node-02", received.get().targetNodeId());
+            assertEquals("Transferencia de 100 registros", received.get().message());
+        } finally {
+            JettraClusterEventBus.getInstance().unsubscribe(listener);
+        }
+    }
+
+    @Test
+    @DisplayName("Debe ajustar dinámicamente el consenso cuando uno o más nodos están desconectados")
+    public void testDynamicConsensusWithDisconnectedPeers() throws IOException, InterruptedException {
+        Path tempDir = Files.createTempDirectory("jettra_dyn_consensus");
+        int activePeerPort = 19120;
+        int deadPeerPort = 19129; // Puerto donde no corre ningún servicio
+
+        Properties secProps = new Properties();
+        secProps.setProperty("jettra.node.id", "node-02");
+        secProps.setProperty("jettra.node.role", "SECONDARY");
+        secProps.setProperty("jettra.storage.path", tempDir.toString());
+        secProps.setProperty("jettra.network.grpc.port", String.valueOf(activePeerPort));
+        secProps.setProperty("jettra.network.rest.port", "18090");
+        secProps.setProperty("cluster.multinode.active", "on");
+
+        JettraStoreConfig secConfig = new JettraStoreConfig(secProps, new Properties());
+        JettraStoreServer secServer = new JettraStoreServer(secConfig);
+
+        try (JettraClusterTransportServer transportServer = new JettraClusterTransportServer(activePeerPort, secServer)) {
+            transportServer.start();
+            Thread.sleep(100);
+
+            ClusterNode activePeer = new ClusterNode("node-02", "127.0.0.1", activePeerPort, ClusterNode.Role.SECONDARY);
+            ClusterNode deadPeer = new ClusterNode("node-03", "127.0.0.1", deadPeerPort, ClusterNode.Role.SECONDARY);
+
+            // Escenario A: 1 peer activo y 1 peer desconectado -> Quórum dinámico entre los 2 nodos disponibles
+            try (JettraClusterReplicationClient clientA = new JettraClusterReplicationClient("node-01", List.of(activePeer, deadPeer))) {
+                boolean ok = clientA.broadcastCreateDatabase("dyn_consensus_db");
+                assertTrue(ok);
+                assertTrue(secServer.listDatabaseNames().contains("dyn_consensus_db"));
+            }
+
+            // Escenario B: Todos los peers desconectados -> Quórum dinámico exclusivo en el nodo local activo (1 nodo disponible)
+            try (JettraClusterReplicationClient clientB = new JettraClusterReplicationClient("node-01", List.of(deadPeer))) {
+                boolean okAlone = clientB.broadcastCreateDatabase("solo_node_db");
+                assertTrue(okAlone);
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("Debe sincronizar catálogo y registros en nodo SECUNDARIO desde el PRIMARY al arrancar")
+    public void testSecondaryNodeStartupSynchronizationFlow() throws IOException, InterruptedException {
+        Path primaryDir = Files.createTempDirectory("jettra_prim_sync");
+        Path secondaryDir = Files.createTempDirectory("jettra_sec_sync");
+        int primPort = 19130;
+        int secPort = 19135;
+
+        // Configuración y datos en PRIMARY
+        Properties primDbProps = new Properties();
+        primDbProps.setProperty("jettra.node.id", "node-01");
+        primDbProps.setProperty("jettra.node.role", "PRIMARY");
+        primDbProps.setProperty("jettra.storage.path", primaryDir.toString());
+        primDbProps.setProperty("jettra.network.grpc.port", String.valueOf(primPort));
+        primDbProps.setProperty("jettra.network.rest.port", "18092");
+        primDbProps.setProperty("cluster.multinode.active", "on");
+
+        Properties primClusterProps = new Properties();
+        primClusterProps.setProperty("cluster.node.1.id", "node-01");
+        primClusterProps.setProperty("cluster.node.1.ip", "127.0.0.1");
+        primClusterProps.setProperty("cluster.node.1.grpc.port", String.valueOf(primPort));
+        primClusterProps.setProperty("cluster.node.2.id", "node-02");
+        primClusterProps.setProperty("cluster.node.2.ip", "127.0.0.1");
+        primClusterProps.setProperty("cluster.node.2.grpc.port", String.valueOf(secPort));
+
+        JettraStoreConfig primConfig = new JettraStoreConfig(primDbProps, primClusterProps);
+        JettraStoreServer primServer = new JettraStoreServer(primConfig);
+
+        // Crear base de datos en PRIMARIO con datos y persistirla
+        var primDb = primServer.getOrCreateDatabaseInternal("tienda_online_db", false);
+        primDb.getDocumentEngine("productos").insert("p100", java.util.Map.of("nombre", "Laptop Pro", "precio", 1200.0));
+        primDb.getKeyValueEngine("config").put("moneda", "USD".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        primDb.saveToDisk();
+
+        // Iniciar transporte en PRIMARY
+        try (JettraClusterTransportServer primTransport = new JettraClusterTransportServer(primPort, primServer)) {
+            primTransport.start();
+            Thread.sleep(100);
+
+            // Configuración en SECONDARY apuntando a PRIMARY
+            Properties secDbProps = new Properties();
+            secDbProps.setProperty("jettra.node.id", "node-02");
+            secDbProps.setProperty("jettra.node.role", "SECONDARY");
+            secDbProps.setProperty("jettra.storage.path", secondaryDir.toString());
+            secDbProps.setProperty("jettra.network.grpc.port", String.valueOf(secPort));
+            secDbProps.setProperty("jettra.network.rest.port", "18093");
+            secDbProps.setProperty("cluster.multinode.active", "on");
+
+            JettraStoreConfig secConfig = new JettraStoreConfig(secDbProps, primClusterProps);
+            JettraStoreServer secServer = new JettraStoreServer(secConfig);
+
+            // Ejecutar el flujo de sincronización inicial
+            secServer.start();
+            boolean syncOk = secServer.synchronizeFromPrimary();
+            assertTrue(syncOk);
+
+            // Validar que el nodo SECUNDARIO obtuvo el catálogo y todos los registros del PRIMARY
+            List<String> secDbs = secServer.listDatabaseNames();
+            assertTrue(secDbs.contains("tienda_online_db"));
+
+            var secDb = secServer.getOrCreateDatabaseInternal("tienda_online_db", false);
+            assertNotNull(secDb);
+            assertEquals(1L, secDb.getDocumentEngine("productos").count());
+            var prod = secDb.getDocumentEngine("productos").findById("p100");
+            assertNotNull(prod);
+            assertEquals("Laptop Pro", prod.get("nombre"));
+
+            byte[] monedaBytes = secDb.getKeyValueEngine("config").get("moneda");
+            assertNotNull(monedaBytes);
+            assertEquals("USD", new String(monedaBytes, java.nio.charset.StandardCharsets.UTF_8));
+
+            secServer.stop();
+        }
+    }
+
     public record TestRecord(String id, String name, int score) {}
 }

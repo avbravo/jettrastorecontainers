@@ -68,6 +68,36 @@ Esto genera un flujo animado de camiones de datos cuánticos (`ClusterDataTraffi
 * **Modo Servidor Único / Standalone (`cluster.multinode.active = off`):**  
   Al configurarse en `off`, el monitor reconoce que el sistema de distribución de datos por consenso está desactivado. Todas las operaciones y consultas se resuelven exclusivamente en el servidor local. El HUD notifica `[STANDALONE: OFF]`.
 
+### 3.4 Canal de Eventos en Vivo, Failover Visual y `cluster live`
+
+`JettraStorePolice3D` se conecta directamente al bus de eventos `JettraClusterEventBus` y al canal reactivo de `JettraClient`:
+
+1. **Reacción Visual a Failover y Promoción de Líder (`LEADER_PROMOTED`):**
+   * Cuando un nodo primario cae o es detenido, el clúster elige un nuevo líder primario.
+   * `JettraStorePoliceMonitor` intercepta el evento `LEADER_PROMOTED`, actualiza dinámicamente el nodo `ServerNode3D` correspondiente asignándole el rol `PRIMARY` y estado Raft `LEADER`.
+   * En la escena 3D, el edificio del nuevo nodo primario adquiere el brillo dorado característico del maestro, y el agente canino `k9_beta` (Quórum Raft) reporta la misión con estado informativo de confirmación del nuevo liderazgo.
+
+2. **Detección Visual de Nodos Fuera de Servicio (`NODE_STOPPED` / `NODE_OFFLINE`):**
+   * Al recibir una notificación de detención o caída de nodo, el servidor conmuta a estado `OFFLINE` y se renderiza en la escena como inactivo, alertando al centinela `k9_gamma` para proteger las rutas de tráfico residual.
+
+3. **Animación en Tiempo Real de Replicación de Registros:**
+   * Los eventos `RECORD_REPLICATED`, `DOCUMENT_REPLICATED` y `DATABASE_DISTRIBUTED` activan instantáneamente el transporte de datos cuánticos (`triggerNodeTransfer`), proyectando partículas y camiones holográficos entre los nodos correspondientes.
+
+4. **Comando y Consulta `cluster live`:**
+   * El monitor expone métodos para inspeccionar o transmitir la bitácora de eventos en tiempo real:
+     ```java
+     // Obtener tabla formateada de los últimos 25 eventos del clúster
+     String logLive = monitor.clusterLive(25);
+     
+     // Obtener lista estructurada de eventos recientes
+     List<ClusterLiveEvent> events = monitor.getRecentClusterLiveEvents(50);
+     
+     // Suscribir callback reactivo
+     monitor.subscribeClusterLive(event -> {
+         System.out.println("Evento 3D recibido: " + event.type() + " -> " + event.message());
+     });
+     ```
+
 ---
 
 ## 4. Gestión de Seguridad y Roles Multimodelo (`UserManager` & `JettraUser`)
