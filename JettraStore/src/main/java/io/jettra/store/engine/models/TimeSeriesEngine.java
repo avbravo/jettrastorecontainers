@@ -37,4 +37,8 @@ public final class TimeSeriesEngine {
     public void recordBatch(Map<Long, Double> batch) {
         series.putAll(batch);
     }
+
+    public void clear() {
+        series.clear();
+    }
 }

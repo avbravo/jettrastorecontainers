@@ -212,6 +212,9 @@ public final class JettraClient implements AutoCloseable {
     }
 
     public JettraDatabase getDatabase(String name) {
+        if (io.jettra.store.JettraStoreServer.getActiveInstance() != null) {
+            return io.jettra.store.JettraStoreServer.getActiveInstance().getOrCreateDatabase(name);
+        }
         boolean isNew = !databases.containsKey(name);
         JettraDatabase db = databases.computeIfAbsent(name, k -> new JettraDatabase(k, JettraStoreConfig.load(), ringEngine));
         if (isNew && config.isClusterMultinodeActive()) {
@@ -288,6 +291,7 @@ public final class JettraClient implements AutoCloseable {
 
         JettraDatabase db = getDatabase(databaseName);
         if (db != null) {
+            try { db.flushMemTable(); } catch (Exception ignored) {}
             db.saveToDisk();
         }
         byte[] payload = new byte[0];

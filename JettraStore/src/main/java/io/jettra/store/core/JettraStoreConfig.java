@@ -166,12 +166,25 @@ public final class JettraStoreConfig {
         if (Files.exists(path) && Files.isWritable(path)) {
             effectivePath = resolvedPath;
         } else {
-            System.err.printf("[JettraStoreConfig] Advertencia: Directorio '%s' no accesible para escritura. Conmutando a fallback local './data/jettra'.%n", 
-                resolvedPath);
-            effectivePath = "./data/jettra";
-            try {
-                Files.createDirectories(Path.of(effectivePath));
-            } catch (Exception ignored) {}
+            boolean fallbackApplied = false;
+            if (resolvedPath.startsWith("/jettra")) {
+                Path userHomeFallback = Path.of(System.getProperty("user.home"), resolvedPath.substring(1));
+                try {
+                    Files.createDirectories(userHomeFallback);
+                    if (Files.exists(userHomeFallback) && Files.isWritable(userHomeFallback)) {
+                        effectivePath = userHomeFallback.toAbsolutePath().toString();
+                        fallbackApplied = true;
+                    }
+                } catch (Exception ignored) {}
+            }
+            if (!fallbackApplied) {
+                System.err.printf("[JettraStoreConfig] Advertencia: Directorio '%s' no accesible para escritura. Conmutando a fallback local './data/jettra'.%n", 
+                    resolvedPath);
+                effectivePath = "./data/jettra";
+                try {
+                    Files.createDirectories(Path.of(effectivePath));
+                } catch (Exception ignored) {}
+            }
         }
 
         this.storagePath = effectivePath;

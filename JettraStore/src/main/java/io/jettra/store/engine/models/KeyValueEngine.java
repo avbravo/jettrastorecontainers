@@ -38,4 +38,8 @@ public final class KeyValueEngine {
     public void putBatch(Map<String, byte[]> batch) {
         store.putAll(batch);
     }
+
+    public void clear() {
+        store.clear();
+    }
 }

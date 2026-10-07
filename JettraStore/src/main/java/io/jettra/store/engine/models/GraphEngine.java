@@ -48,4 +48,9 @@ public final class GraphEngine {
             }
         }
     }
+
+    public void clear() {
+        vertices.clear();
+        adjacencyList.clear();
+    }
 }

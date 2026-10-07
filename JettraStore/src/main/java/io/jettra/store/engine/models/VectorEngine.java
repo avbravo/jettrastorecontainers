@@ -100,4 +100,8 @@ public final class VectorEngine {
     public void indexBatch(Map<String, float[]> batch) {
         vectors.putAll(batch);
     }
+
+    public void clear() {
+        vectors.clear();
+    }
 }

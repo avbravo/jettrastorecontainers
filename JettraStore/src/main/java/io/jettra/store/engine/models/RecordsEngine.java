@@ -52,4 +52,8 @@ public final class RecordsEngine<T extends Record> {
     public String getEntityName() { return entityName; }
     public Class<T> getRecordClass() { return recordClass; }
     public int size() { return records.size(); }
+
+    public void clear() {
+        records.clear();
+    }
 }

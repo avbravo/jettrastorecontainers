@@ -100,8 +100,8 @@ public final class JettraClusterTransportServer implements AutoCloseable {
                     dbName, payload != null ? payload.length : 0, frame.senderNodeId());
                 try {
                     if (server != null) {
+                        Path targetMeta = Path.of(server.getConfig().getStoragePath(), dbName + "_meta.json");
                         if (payload != null && payload.length > 0) {
-                            Path targetMeta = Path.of(server.getConfig().getStoragePath(), dbName + "_meta.json");
                             if (targetMeta.getParent() != null) {
                                 Files.createDirectories(targetMeta.getParent());
                             }
@@ -109,7 +109,11 @@ public final class JettraClusterTransportServer implements AutoCloseable {
                         }
                         JettraDatabase db = server.getOrCreateDatabaseInternal(dbName, false);
                         if (db != null) {
-                            db.loadFromDisk();
+                            if (Files.exists(targetMeta)) {
+                                db.loadFromDisk(targetMeta);
+                            } else {
+                                db.loadFromDisk();
+                            }
                             db.saveToDisk();
                         }
                     }
@@ -130,8 +134,8 @@ public final class JettraClusterTransportServer implements AutoCloseable {
                     dbName, payload != null ? payload.length : 0, frame.senderNodeId());
                 try {
                     if (server != null) {
+                        Path targetMeta = Path.of(server.getConfig().getStoragePath(), dbName + "_meta.json");
                         if (payload != null && payload.length > 0) {
-                            Path targetMeta = Path.of(server.getConfig().getStoragePath(), dbName + "_meta.json");
                             if (targetMeta.getParent() != null) {
                                 Files.createDirectories(targetMeta.getParent());
                             }
@@ -139,7 +143,11 @@ public final class JettraClusterTransportServer implements AutoCloseable {
                         }
                         JettraDatabase db = server.getOrCreateDatabaseInternal(dbName, false);
                         if (db != null) {
-                            db.loadFromDisk();
+                            if (Files.exists(targetMeta)) {
+                                db.loadFromDisk(targetMeta);
+                            } else {
+                                db.loadFromDisk();
+                            }
                             db.saveToDisk();
                         }
                     }
@@ -280,14 +288,14 @@ public final class JettraClusterTransportServer implements AutoCloseable {
             case JettraRaftFrame.TYPE_SYNC_DATA_REQ -> {
                 String dbName = frame.databaseName();
                 try {
+                    byte[] bytes = new byte[0];
                     if (server != null) {
-                        JettraDatabase db = server.getOrCreateDatabaseInternal(dbName, false);
-                        if (db != null) {
-                            db.saveToDisk();
-                        }
+                        bytes = server.getDatabaseSnapshotBytes(dbName);
                     }
-                    Path metaFile = JettraDatabase.resolveMetaFile(dbName, server != null ? server.getConfig() : null);
-                    byte[] bytes = (metaFile != null && Files.exists(metaFile)) ? Files.readAllBytes(metaFile) : new byte[0];
+                    if (bytes == null || bytes.length == 0) {
+                        Path metaFile = JettraDatabase.resolveMetaFile(dbName, server != null ? server.getConfig() : null);
+                        bytes = (metaFile != null && Files.exists(metaFile)) ? Files.readAllBytes(metaFile) : new byte[0];
+                    }
                     return JettraRaftFrame.syncDataResp(frame.term(), 
                         server != null ? server.getConfig().getNodeId() : "local", dbName, bytes);
                 } catch (Exception ex) {

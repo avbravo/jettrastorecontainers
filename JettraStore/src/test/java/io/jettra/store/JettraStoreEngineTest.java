@@ -183,17 +183,22 @@ public class JettraStoreEngineTest extends JettraStoreBaseTest {
         props.setProperty("jettra.node.id", "node-1");
         props.setProperty("jettra.storage.path", "/jettra/node-1");
         JettraStoreConfig node1Config = new JettraStoreConfig(props, new java.util.Properties());
+        Path effectiveDir = Path.of(node1Config.getStoragePath());
 
         try (JettraDatabase db = new JettraDatabase("test_node1_db", node1Config)) {
             db.getDocumentEngine("metrics").insert("m1", Map.of("cpu", 45.2, "ram", 78.1));
             db.flushMemTable();
             db.saveToDisk();
 
-            assertTrue(Files.exists(node1Dir));
-            Path dbMeta = node1Dir.resolve("test_node1_db_meta.json");
-            assertTrue(Files.exists(dbMeta) || Files.exists(Path.of(node1Config.getStoragePath(), "test_node1_db_meta.json")));
+            assertTrue(Files.exists(effectiveDir));
+            Path dbMeta = effectiveDir.resolve("test_node1_db_meta.json");
+            assertTrue(Files.exists(dbMeta));
+            if (Files.exists(node1Dir)) {
+                assertTrue(Files.exists(node1Dir.resolve("test_node1_db_meta.json")));
+            }
         } finally {
             cleanUpNode1AndTestDatabases();
+            assertFalse(Files.exists(effectiveDir));
             assertFalse(Files.exists(node1Dir));
         }
     }

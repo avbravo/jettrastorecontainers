@@ -59,4 +59,10 @@ public final class ColumnarEngine {
         }
         this.rowCount += count;
     }
+
+    public synchronized void clear() {
+        numericColumns.clear();
+        textColumns.clear();
+        rowCount = 0;
+    }
 }

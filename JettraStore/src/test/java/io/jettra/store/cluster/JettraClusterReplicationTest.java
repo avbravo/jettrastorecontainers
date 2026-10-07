@@ -152,7 +152,7 @@ public class JettraClusterReplicationTest extends JettraStoreBaseTest {
             transportServer.start();
             Thread.sleep(100);
 
-            // Crear y poblar base de datos en PRIMARIO
+            // Crear y poblar base de datos en PRIMARIO con todos los elementos y modelos
             var primDb = primServer.getOrCreateDatabaseInternal("migracion_completa_db", false);
             for (int i = 1; i <= 25; i++) {
                 primDb.getDocumentEngine("facturas").insert("fac_" + i, java.util.Map.of("total", 100.0 * i, "folio", "F-" + i));
@@ -161,6 +161,15 @@ public class JettraClusterReplicationTest extends JettraStoreBaseTest {
                 primDb.getDocumentEngine("clientes").insert("cli_" + i, java.util.Map.of("nombre", "Cliente " + i));
             }
             primDb.getKeyValueEngine("cache_config").put("version", "2.0".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            primDb.getTimeSeriesEngine("cpu_metric").record(1000L, 85.5);
+            primDb.getGeospatialEngine("poi").insertPoint("pt1", 8.98, -79.52);
+            primDb.getVectorEngine("embeddings", 3).index("vec1", new float[]{1.0f, 2.0f, 3.0f});
+            primDb.getGraphEngine("social").addEdge("u1", "u2", "FRIEND", java.util.Map.of());
+            primDb.getColumnarEngine("analytics").appendRow(java.util.Map.of("views", 100.0, "page", "home"));
+            primDb.getIndexManager().createIndex("facturas", "idx_fac_folio", "folio", "HASH", false, primDb.getDocumentEngine("facturas"));
+            primDb.getRecordsEngine("test_records", TestRecord.class).persist("r1", new TestRecord("r1", "Admin", 99));
+
+            primDb.flushMemTable();
             primDb.saveToDisk();
 
             assertEquals(25L, primDb.getDocumentEngine("facturas").count());
@@ -177,7 +186,7 @@ public class JettraClusterReplicationTest extends JettraStoreBaseTest {
                 System.out.println("DEBUG distOk: " + distOk);
                 assertTrue(distOk);
 
-                // Verificar en secundario
+                // Verificar en secundario copia exacta de todos los elementos
                 var secDb = secServer.getOrCreateDatabaseInternal("migracion_completa_db", false);
                 assertNotNull(secDb);
 
@@ -194,7 +203,25 @@ public class JettraClusterReplicationTest extends JettraStoreBaseTest {
                 var kvVal = secDb.getKeyValueEngine("cache_config").get("version");
                 assertNotNull(kvVal);
                 assertEquals("2.0", new String(kvVal, java.nio.charset.StandardCharsets.UTF_8));
+
+                var tsMap = secDb.getTimeSeriesEngine("cpu_metric").getAll();
+                assertTrue(tsMap.containsKey(1000L));
+                assertEquals(85.5, tsMap.get(1000L));
+
+                assertEquals(1, secDb.getGeospatialEngine("poi").size());
+                assertNotNull(secDb.getGeospatialEngine("poi").getAllPoints().get("pt1"));
+
+                assertNotNull(secDb.getVectorEngine("embeddings", 3).getVector("vec1"));
+                assertTrue(secDb.getGraphEngine("social").getVertices().contains("u1"));
+                assertEquals(1, secDb.getColumnarEngine("analytics").getRowCount());
+                assertNotNull(secDb.getIndexManager().getIndex("idx_fac_folio"));
+
+                var secRecEng = secDb.getRecordsEngine("test_records", TestRecord.class);
+                assertNotNull(secRecEng.find("r1"));
+                assertEquals("Admin", secRecEng.find("r1").name());
             }
         }
     }
+
+    public record TestRecord(String id, String name, int score) {}
 }

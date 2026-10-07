@@ -51,4 +51,8 @@ public final class GeospatialEngine {
     public void insertBatch(Map<String, GeoPoint> batch) {
         points.putAll(batch);
     }
+
+    public void clear() {
+        points.clear();
+    }
 }

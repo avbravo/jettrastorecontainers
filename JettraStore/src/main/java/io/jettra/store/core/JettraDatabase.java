@@ -319,18 +319,6 @@ public final class JettraDatabase implements AutoCloseable {
             }
         }
 
-        // Si la base de datos en memoria no tiene colecciones o registros pero en disco existe un archivo previo con datos,
-        // cargar previamente el archivo para garantizar que todos los registros se preserven y serialicen íntegramente.
-        if (getAllCollectionNames().isEmpty()) {
-            if (Files.exists(metaFile)) {
-                try {
-                    if (Files.size(metaFile) > 100) {
-                        loadFromDisk();
-                    }
-                } catch (Exception ignored) {}
-            }
-        }
-
         JettraJson json = new JettraJson();
         try (BufferedWriter writer = Files.newBufferedWriter(metaFile, StandardCharsets.UTF_8,
                 StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE)) {
@@ -357,17 +345,7 @@ public final class JettraDatabase implements AutoCloseable {
                 for (var doc : entry.getValue().findAll()) {
                     if (!firstDoc) writer.write(",\n");
                     firstDoc = false;
-                    JsonObject d = new JsonObject();
-                    for (var kv : doc.entrySet()) {
-                        if (kv.getValue() instanceof Number n) {
-                            d.addProperty(kv.getKey(), n);
-                        } else if (kv.getValue() instanceof Boolean b) {
-                            d.addProperty(kv.getKey(), b);
-                        } else {
-                            d.addProperty(kv.getKey(), String.valueOf(kv.getValue()));
-                        }
-                    }
-                    writer.write("      " + json.toJson(d));
+                    writer.write("      " + json.toJson(doc));
                 }
                 writer.write("\n    ]");
             }
@@ -562,6 +540,10 @@ public final class JettraDatabase implements AutoCloseable {
 
     public boolean loadFromDisk() {
         Path metaFile = resolveMetaFile(databaseName, config);
+        return loadFromDisk(metaFile);
+    }
+
+    public boolean loadFromDisk(Path metaFile) {
         if (metaFile == null || !Files.exists(metaFile)) {
             return false;
         }
@@ -673,6 +655,7 @@ public final class JettraDatabase implements AutoCloseable {
                                 if (scanner.peek() == '{') {
                                     scanner.read();
                                     var kvEng = getKeyValueEngine(ns);
+                                    kvEng.clear();
                                     while (scanner.hasMore() && scanner.peek() != '}') {
                                         scanner.skipWhitespaceAndSeparators();
                                         String k = scanner.readQuotedString();
@@ -709,6 +692,7 @@ public final class JettraDatabase implements AutoCloseable {
                                 if (scanner.peek() == '{') {
                                     scanner.read();
                                     var tsEng = getTimeSeriesEngine(metric);
+                                    tsEng.clear();
                                     while (scanner.hasMore() && scanner.peek() != '}') {
                                         scanner.skipWhitespaceAndSeparators();
                                         String tsStr = scanner.readQuotedString();
@@ -747,6 +731,7 @@ public final class JettraDatabase implements AutoCloseable {
                                 if (scanner.peek() == '[') {
                                     scanner.read();
                                     var geoEng = getGeospatialEngine(layer);
+                                    geoEng.clear();
                                     while (scanner.hasMore() && scanner.peek() != ']') {
                                         scanner.skipWhitespaceAndSeparators();
                                         String ptStr = scanner.readBalancedObject();
@@ -787,6 +772,7 @@ public final class JettraDatabase implements AutoCloseable {
                                     if (vo != null) {
                                         int dims = vo.has("dimensions") ? vo.getAsInt("dimensions") : 3;
                                         var vecEng = getVectorEngine(vName, dims);
+                                        vecEng.clear();
                                         if (vo.has("vectors")) {
                                             JsonObject vData = vo.getAsJsonObject("vectors");
                                             for (String vid : vData.keySet()) {
@@ -821,6 +807,7 @@ public final class JettraDatabase implements AutoCloseable {
                                     JsonObject go = json.fromJson(grObjStr, JsonObject.class);
                                     if (go != null) {
                                         var gEng = getGraphEngine(gName);
+                                        gEng.clear();
                                         if (go.has("vertices")) {
                                             JsonArray va = go.getAsJsonArray("vertices");
                                             for (int i = 0; i < va.size(); i++) {
@@ -862,6 +849,7 @@ public final class JettraDatabase implements AutoCloseable {
                                     JsonObject to = json.fromJson(tableObjStr, JsonObject.class);
                                     if (to != null) {
                                         var colEng = getColumnarEngine(tableName);
+                                        colEng.clear();
                                         int rowCount = to.has("rowCount") ? to.getAsInt("rowCount") : 0;
                                         Map<String, List<Double>> numCols = new HashMap<>();
                                         if (to.has("numericColumns")) {
@@ -935,6 +923,7 @@ public final class JettraDatabase implements AutoCloseable {
                                                 var engine = getRecordsEngine(entityName, checkedClass);
                                                 @SuppressWarnings({"rawtypes", "unchecked"})
                                                 io.jettra.store.engine.models.RecordsEngine rawEng = (io.jettra.store.engine.models.RecordsEngine) engine;
+                                                rawEng.clear();
                                                 for (String rid : recordsObj.keySet()) {
                                                     try {
                                                         Object rawVal = recordsObj.get(rid);
@@ -1101,7 +1090,7 @@ public final class JettraDatabase implements AutoCloseable {
             }
             if (depth != 0) return null;
             long len = offset - startPos;
-            if (len > 131072) { // Tope seguro de 128 KB por objeto
+            if (len > 67_108_864L) { // 64 MB por objeto/bloque de motor
                 return null;
             }
             return new String(segment.asSlice(startPos, len).toArray(ValueLayout.JAVA_BYTE), StandardCharsets.UTF_8);
@@ -1258,6 +1247,35 @@ public final class JettraDatabase implements AutoCloseable {
         all.addAll(columnarEngines.keySet());
         all.addAll(recordsEngines.keySet());
         return all;
+    }
+
+    public long getAllRecordCount() {
+        long count = 0;
+        for (var eng : documentEngines.values()) {
+            count += eng.count();
+        }
+        for (var eng : keyValueEngines.values()) {
+            count += eng.size();
+        }
+        for (var eng : timeSeriesEngines.values()) {
+            count += eng.size();
+        }
+        for (var eng : geospatialEngines.values()) {
+            count += eng.size();
+        }
+        for (var eng : vectorEngines.values()) {
+            count += eng.getAllVectors().size();
+        }
+        for (var eng : graphEngines.values()) {
+            count += eng.size();
+        }
+        for (var eng : columnarEngines.values()) {
+            count += eng.getRowCount();
+        }
+        for (var eng : recordsEngines.values()) {
+            count += eng.count();
+        }
+        return count;
     }
 
     public boolean dropCollection(String name) {
