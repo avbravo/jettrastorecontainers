@@ -28,35 +28,55 @@ public final class JettraConfigValidator {
     public static final String DEFAULT_DATABASE_PROPERTIES_PATH = "config/database.properties";
     public static final String DEFAULT_JETTRA_CONFIG_PATH = "config/jettra.config";
 
-    // Sintaxis recomendada: <path>/jettra/data
-    private static final Pattern STORAGE_PATH_PATTERN = Pattern.compile("^(?:.*[/\\\\])?jettra[/\\\\]data[/\\\\]?$");
-
-    // Sintaxis recomendada de índices: <path>/jettra/data/indexes
-    private static final Pattern INDEX_STORAGE_PATH_PATTERN = Pattern.compile("^(?:.*[/\\\\])?jettra[/\\\\]data[/\\\\]indexes[/\\\\]?$");
-
     public record ClusterNodeInfo(
         String id,
         String role,
         String ip,
         int grpcPort,
         int restPort,
-        String storagePath
-    ) {}
+        String storagePath,
+        String nodeNumber
+    ) {
+        public ClusterNodeInfo(String id, String role, String ip, int grpcPort, int restPort, String storagePath) {
+            this(id, role, ip, grpcPort, restPort, storagePath, extractNodeNumber(id));
+        }
+    }
 
     public static final class ValidationResult {
         private final boolean valid;
         private final List<String> errors;
+        private final List<String> warnings;
         private final String notification;
 
         public ValidationResult(boolean valid, List<String> errors, String notification) {
+            this(valid, errors, List.of(), notification);
+        }
+
+        public ValidationResult(boolean valid, List<String> errors, List<String> warnings, String notification) {
             this.valid = valid;
             this.errors = errors != null ? Collections.unmodifiableList(errors) : List.of();
+            this.warnings = warnings != null ? Collections.unmodifiableList(warnings) : List.of();
             this.notification = notification != null ? notification : "";
         }
 
         public boolean isValid() { return valid; }
         public List<String> getErrors() { return errors; }
+        public List<String> getWarnings() { return warnings; }
+        public boolean hasWarnings() { return !warnings.isEmpty(); }
         public String getNotification() { return notification; }
+    }
+
+    public static String extractNodeNumber(String nodeId) {
+        if (nodeId == null || nodeId.isBlank()) return "1";
+        var m = Pattern.compile("\\d+").matcher(nodeId);
+        if (m.find()) {
+            try {
+                return String.valueOf(Integer.parseInt(m.group()));
+            } catch (Exception e) {
+                return m.group();
+            }
+        }
+        return "1";
     }
 
     private JettraConfigValidator() {}
@@ -389,17 +409,14 @@ cluster.index.max.inmemory.keys = 100000
         }
 
         List<String> errors = new ArrayList<>();
+        List<String> warnings = new ArrayList<>();
 
         // Extraer los nodos del clúster definidos en jettra.config
         List<ClusterNodeInfo> nodes = parseClusterNodes(clusterProps);
-        List<String> nodeStoragePaths = new ArrayList<>();
         List<Integer> nodeGrpcPorts = new ArrayList<>();
         List<Integer> nodeRestPorts = new ArrayList<>();
 
         for (ClusterNodeInfo node : nodes) {
-            if (node.storagePath() != null && !node.storagePath().isBlank()) {
-                nodeStoragePaths.add(node.storagePath().trim());
-            }
             nodeGrpcPorts.add(node.grpcPort());
             nodeRestPorts.add(node.restPort());
         }
@@ -409,7 +426,11 @@ cluster.index.max.inmemory.keys = 100000
             new String[]{"jettra.node.id", "jettra.cluster.node.id", "node.id"}, 
             new String[]{"JETTRA_NODE_ID", "JETTRA_CLUSTER_NODE_ID"}, "").trim();
         if (!configuredNodeId.isEmpty() && !nodes.isEmpty()) {
-            boolean matchedNode = nodes.stream().anyMatch(n -> n.id().equalsIgnoreCase(configuredNodeId));
+            String nodeNum = extractNodeNumber(configuredNodeId);
+            boolean matchedNode = nodes.stream().anyMatch(n -> 
+                n.id().equalsIgnoreCase(configuredNodeId) || 
+                (nodeNum != null && nodeNum.equals(n.nodeNumber()))
+            );
             if (!matchedNode) {
                 List<String> validIds = nodes.stream().map(ClusterNodeInfo::id).toList();
                 errors.add(String.format(
@@ -419,34 +440,55 @@ cluster.index.max.inmemory.keys = 100000
             }
         }
 
-        // 2. Verificar jettra.storage.path
+        // 2. Verificar jettra.storage.path y jettra.index.storage.path
+        // Los valores de ambas propiedades pueden ser cualquier ruta que el usuario indique
+        // para dar libertad a una mejor configuración.
+        // Lo único que debe verificar es que si en el archivo database.properties se especifica
+        // el valor de jettra.node.id, deben coincidir el valor de jettra.storage.path del archivo
+        // database.properties con el valor de la propiedad cluster.node.<numero-nodo>.storage.path
+        // del archivo jettra.config. Si no coinciden, se envía una advertencia.
         String dbStoragePath = getPropOrEnv(dbProps, 
             new String[]{"jettra.storage.path", "storage.path"}, 
             new String[]{"JETTRA_STORAGE_PATH"}, "").trim();
+
         if (dbStoragePath.isEmpty()) {
             errors.add("La propiedad 'jettra.storage.path' no está definida en database.properties.");
-        } else {
-            // Verificar coincidencia con al menos un cluster.node.X.storage.path
-            boolean matched = false;
-            for (String clusterPath : nodeStoragePaths) {
-                if (pathsMatch(dbStoragePath, clusterPath)) {
-                    matched = true;
+        } else if (!configuredNodeId.isEmpty()) {
+            String nodeNum = extractNodeNumber(configuredNodeId);
+            ClusterNodeInfo targetNode = null;
+            for (ClusterNodeInfo node : nodes) {
+                if (node.id().equalsIgnoreCase(configuredNodeId)) {
+                    targetNode = node;
                     break;
                 }
             }
-            if (!matched) {
-                errors.add(String.format(
-                    "El path 'jettra.storage.path' ('%s') de database.properties no coincide con ninguna de las propiedades cluster.node.X.storage.path de jettra.config %s. Debe coincidir con al menos un nodo configurado.",
-                    dbStoragePath, nodeStoragePaths
-                ));
+            if (targetNode == null && nodeNum != null) {
+                for (ClusterNodeInfo node : nodes) {
+                    if (nodeNum.equals(node.nodeNumber())) {
+                        targetNode = node;
+                        break;
+                    }
+                }
             }
 
-            // Verificar sintaxis recomendada: <path>/jettra/data
-            if (!STORAGE_PATH_PATTERN.matcher(dbStoragePath).matches()) {
-                errors.add(String.format(
-                    "La propiedad 'jettra.storage.path' ('%s') no sigue la sintaxis recomendada: <path>/jettra/data (ejemplo: ~/jettra/data o /opt/jettra/data).",
-                    dbStoragePath
-                ));
+            String nodeIdxStr = (targetNode != null && targetNode.nodeNumber() != null)
+                ? targetNode.nodeNumber()
+                : (nodeNum != null ? nodeNum : "1");
+
+            String clusterNodeStoragePath = clusterProps.getProperty(
+                "cluster.node." + nodeIdxStr + ".storage.path",
+                targetNode != null ? targetNode.storagePath() : null
+            );
+
+            if (clusterNodeStoragePath != null && !clusterNodeStoragePath.isBlank()) {
+                if (!pathsMatch(dbStoragePath, clusterNodeStoragePath.trim())) {
+                    String warnMsg = String.format(
+                        "ADVERTENCIA: La propiedad 'jettra.storage.path' ('%s') de database.properties no coincide con la propiedad 'cluster.node.%s.storage.path' ('%s') de jettra.config para el nodo %s ('%s').",
+                        dbStoragePath, nodeIdxStr, clusterNodeStoragePath.trim(), nodeIdxStr, configuredNodeId
+                    );
+                    warnings.add(warnMsg);
+                    System.err.println("[JettraStore] " + warnMsg);
+                }
             }
         }
 
@@ -490,22 +532,9 @@ cluster.index.max.inmemory.keys = 100000
             }
         }
 
-        // 5. Verificar jettra.index.storage.path
-        String dbIndexPath = getPropOrEnv(dbProps, 
-            new String[]{"jettra.index.storage.path", "index.storage.path"}, 
-            new String[]{"JETTRA_INDEX_STORAGE_PATH"}, "").trim();
-        if (dbIndexPath.isEmpty()) {
-            errors.add("La propiedad 'jettra.index.storage.path' no está definida en database.properties.");
-        } else {
-            if (!INDEX_STORAGE_PATH_PATTERN.matcher(dbIndexPath).matches()) {
-                errors.add(String.format(
-                    "La propiedad 'jettra.index.storage.path' ('%s') no implementa la sintaxis requerida: <path>/jettra/data/indexes (ejemplo: ~/jettra/data/indexes o /opt/jettra/data/indexes).",
-                    dbIndexPath
-                ));
-            }
-        }
+        // 5. jettra.index.storage.path puede ser cualquier ruta que el usuario indique para dar libertad a una mejor configuración.
 
-        // 5. Verificar cluster.multinode.active (on / off)
+        // 6. Verificar cluster.multinode.active (on / off)
         String multinodeVal = getPropOrEnv(dbProps, "cluster.multinode.active", "JETTRA_CLUSTER_MULTINODE_ACTIVE", "on").trim();
         if (!multinodeVal.equalsIgnoreCase("on") && !multinodeVal.equalsIgnoreCase("off")
             && !multinodeVal.equalsIgnoreCase("true") && !multinodeVal.equalsIgnoreCase("false")) {
@@ -516,12 +545,14 @@ cluster.index.max.inmemory.keys = 100000
         }
 
         if (errors.isEmpty()) {
-            return new ValidationResult(true, List.of(), 
-                "[JettraStore] Validación exitosa: database.properties y jettra.config están debidamente sincronizados.");
+            String msg = warnings.isEmpty() 
+                ? "[JettraStore] Validación exitosa: database.properties y jettra.config están debidamente sincronizados."
+                : "[JettraStore] Validación completada con advertencias: " + String.join("; ", warnings);
+            return new ValidationResult(true, List.of(), warnings, msg);
         }
 
         String notification = buildNotificationBanner(errors);
-        return new ValidationResult(false, errors, notification);
+        return new ValidationResult(false, errors, warnings, notification);
     }
 
     /**
@@ -540,13 +571,11 @@ cluster.index.max.inmemory.keys = 100000
         }
         sb.append("────────────────────────────────────────────────────────────────────────────────\n");
         sb.append("DIRECTIVAS DE CORRECCIÓN:\n");
-        sb.append(" 1. Verifique que 'jettra.storage.path' en database.properties coincida con\n");
-        sb.append("    al menos uno de los valores cluster.node.[1|2|3].storage.path de jettra.config.\n");
-        sb.append("    Sintaxis recomendada: <path>/jettra/data\n");
+        sb.append(" 1. Si especifica 'jettra.node.id' en database.properties, verifique que\n");
+        sb.append("    'jettra.storage.path' coincida con 'cluster.node.<numero-nodo>.storage.path' en jettra.config.\n");
         sb.append(" 2. Verifique que 'jettra.network.grpc.port' coincida con cluster.node.[1|2|3].grpc.port\n");
         sb.append(" 3. Verifique que 'jettra.network.rest.port' coincida con cluster.node.[1|2|3].rest.port\n");
-        sb.append(" 4. Verifique que 'jettra.index.storage.path' cumpla: <path>/jettra/data/indexes\n");
-        sb.append(" 5. Verifique que 'cluster.multinode.active' sea 'on' u 'off' (on=consenso distribuido, off=servidor local).\n");
+        sb.append(" 4. Verifique que 'cluster.multinode.active' sea 'on' u 'off' (on=consenso distribuido, off=servidor local).\n");
         sb.append("────────────────────────────────────────────────────────────────────────────────\n");
         sb.append("[JettraStore] La ejecución se detiene de forma preventiva. Corrija los archivos para iniciar.\n");
         return sb.toString();
@@ -640,7 +669,7 @@ cluster.index.max.inmemory.keys = 100000
             int restPort = parseInt(props.getProperty(prefix + "rest.port"), 8080);
             String storagePath = props.getProperty(prefix + "storage.path", "~/jettra/data").trim();
 
-            list.add(new ClusterNodeInfo(id, role, ip, grpcPort, restPort, storagePath));
+            list.add(new ClusterNodeInfo(id, role, ip, grpcPort, restPort, storagePath, String.valueOf(idx)));
             idx++;
         }
 
@@ -663,14 +692,14 @@ cluster.index.max.inmemory.keys = 100000
                 int grpcPort = parseInt(props.getProperty(prefix + "grpc.port"), 9091);
                 int restPort = parseInt(props.getProperty(prefix + "rest.port"), 8080);
                 String storagePath = props.getProperty(prefix + "storage.path", "~/jettra/data").trim();
-                list.add(new ClusterNodeInfo(id, role, ip, grpcPort, restPort, storagePath));
+                list.add(new ClusterNodeInfo(id, role, ip, grpcPort, restPort, storagePath, nodeIdx));
             }
         }
 
         if (list.isEmpty()) {
-            list.add(new ClusterNodeInfo("node-01", "PRIMARY", "127.0.0.1", 9091, 8080, "~/jettra/data"));
-            list.add(new ClusterNodeInfo("node-02", "SECONDARY", "127.0.0.1", 9091, 8080, "~/jettra/data"));
-            list.add(new ClusterNodeInfo("node-03", "SECONDARY", "127.0.0.1", 9091, 8080, "~/jettra/data"));
+            list.add(new ClusterNodeInfo("node-01", "PRIMARY", "127.0.0.1", 9091, 8080, "~/jettra/data", "1"));
+            list.add(new ClusterNodeInfo("node-02", "SECONDARY", "127.0.0.1", 9091, 8080, "~/jettra/data", "2"));
+            list.add(new ClusterNodeInfo("node-03", "SECONDARY", "127.0.0.1", 9091, 8080, "~/jettra/data", "3"));
         }
 
         return list;
@@ -732,6 +761,12 @@ cluster.index.max.inmemory.keys = 100000
 
         // 3. Ejecutar validaciones
         ValidationResult result = validate(dbProps, clusterProps);
+
+        if (result.hasWarnings()) {
+            for (String w : result.getWarnings()) {
+                System.err.println("[JettraStore] " + w);
+            }
+        }
 
         if (!result.isValid()) {
             System.err.println(result.getNotification());

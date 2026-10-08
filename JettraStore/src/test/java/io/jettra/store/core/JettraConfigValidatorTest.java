@@ -64,34 +64,70 @@ public class JettraConfigValidatorTest extends JettraStoreBaseTest {
     }
 
     @Test
-    @DisplayName("Debe fallar si jettra.storage.path no coincide con ningún cluster.node.X.storage.path")
-    public void testStoragePathMismatchFails() {
+    @DisplayName("Debe verificar correctamente la coincidencia de storage.path en el nodo 1")
+    public void testStoragePathMatchesNode1Passes() {
         Properties clusterProps = createValidClusterProperties();
         Properties dbProps = createValidDatabaseProperties();
-        dbProps.setProperty("jettra.storage.path", "/var/other/jettra/data");
-        dbProps.setProperty("jettra.index.storage.path", "/var/other/jettra/data/indexes");
+        dbProps.setProperty("jettra.node.id", "node-01");
+        dbProps.setProperty("jettra.storage.path", "~/jettra/data");
+        clusterProps.setProperty("cluster.node.1.storage.path", "~/jettra/data");
 
         JettraConfigValidator.ValidationResult result = JettraConfigValidator.validate(dbProps, clusterProps);
-        assertFalse(result.isValid());
-        boolean hasStorageError = result.getErrors().stream()
-            .anyMatch(err -> err.contains("jettra.storage.path") && err.contains("no coincide"));
-        assertTrue(hasStorageError);
+        assertTrue(result.isValid());
+        assertFalse(result.hasWarnings());
+        assertTrue(result.getWarnings().isEmpty());
     }
 
     @Test
-    @DisplayName("Debe fallar si jettra.storage.path no cumple la sintaxis recomendada <path>/jettra/data")
-    public void testStoragePathInvalidSyntaxFails() {
+    @DisplayName("Debe verificar correctamente la coincidencia de storage.path en el nodo 2")
+    public void testStoragePathMatchesNode2Passes() {
         Properties clusterProps = createValidClusterProperties();
         Properties dbProps = createValidDatabaseProperties();
-        // Ruta que no cumple la sintaxis recomendada
-        dbProps.setProperty("jettra.storage.path", "~/misdatos/almacen");
-        clusterProps.setProperty("cluster.node.1.storage.path", "~/misdatos/almacen");
+        dbProps.setProperty("jettra.node.id", "node-02");
+        dbProps.setProperty("jettra.storage.path", "~/jettra-2/data");
+        dbProps.setProperty("jettra.network.grpc.port", "9092");
+        dbProps.setProperty("jettra.network.rest.port", "8082");
+        clusterProps.setProperty("cluster.node.2.storage.path", "~/jettra-2/data");
 
         JettraConfigValidator.ValidationResult result = JettraConfigValidator.validate(dbProps, clusterProps);
-        assertFalse(result.isValid());
-        boolean hasSyntaxError = result.getErrors().stream()
-            .anyMatch(err -> err.contains("sintaxis recomendada"));
-        assertTrue(hasSyntaxError);
+        assertTrue(result.isValid());
+        assertFalse(result.hasWarnings());
+    }
+
+    @Test
+    @DisplayName("Debe emitir advertencia si jettra.storage.path del nodo 2 no coincide con cluster.node.2.storage.path")
+    public void testStoragePathMismatchWithNode2EmitsWarning() {
+        Properties clusterProps = createValidClusterProperties();
+        Properties dbProps = createValidDatabaseProperties();
+        dbProps.setProperty("jettra.node.id", "node-02");
+        dbProps.setProperty("jettra.storage.path", "~/jettra-2/data");
+        dbProps.setProperty("jettra.network.grpc.port", "9092");
+        dbProps.setProperty("jettra.network.rest.port", "8082");
+        // En jettra.config el nodo 2 tiene una ruta diferente
+        clusterProps.setProperty("cluster.node.2.storage.path", "~/jettra-3/data");
+
+        JettraConfigValidator.ValidationResult result = JettraConfigValidator.validate(dbProps, clusterProps);
+        assertTrue(result.isValid()); // No detiene bruscamente, es una advertencia
+        assertTrue(result.hasWarnings());
+        boolean hasWarning = result.getWarnings().stream()
+            .anyMatch(w -> w.contains("cluster.node.2.storage.path") && w.contains("~/jettra-2/data") && w.contains("~/jettra-3/data"));
+        assertTrue(hasWarning);
+    }
+
+    @Test
+    @DisplayName("Debe permitir cualquier ruta indicada por el usuario en storage.path e index.storage.path")
+    public void testCustomStorageAndIndexPathsAllowedWithoutRestrictions() {
+        Properties clusterProps = createValidClusterProperties();
+        Properties dbProps = createValidDatabaseProperties();
+        // Rutas arbitrarias elegidas libremente por el usuario
+        dbProps.setProperty("jettra.node.id", "node-01");
+        dbProps.setProperty("jettra.storage.path", "/opt/custom/db/storage");
+        dbProps.setProperty("jettra.index.storage.path", "/opt/custom/db/indexes_fast");
+        clusterProps.setProperty("cluster.node.1.storage.path", "/opt/custom/db/storage");
+
+        JettraConfigValidator.ValidationResult result = JettraConfigValidator.validate(dbProps, clusterProps);
+        assertTrue(result.isValid());
+        assertFalse(result.hasWarnings());
     }
 
     @Test
@@ -120,21 +156,6 @@ public class JettraConfigValidatorTest extends JettraStoreBaseTest {
         boolean hasRestError = result.getErrors().stream()
             .anyMatch(err -> err.contains("jettra.network.rest.port") && err.contains("no coincide"));
         assertTrue(hasRestError);
-    }
-
-    @Test
-    @DisplayName("Debe fallar si jettra.index.storage.path no implementa la sintaxis <path>/jettra/data/indexes")
-    public void testIndexStoragePathInvalidSyntaxFails() {
-        Properties clusterProps = createValidClusterProperties();
-        Properties dbProps = createValidDatabaseProperties();
-        // Ruta que no cumple la sintaxis requerida
-        dbProps.setProperty("jettra.index.storage.path", "~/jettra/indices");
-
-        JettraConfigValidator.ValidationResult result = JettraConfigValidator.validate(dbProps, clusterProps);
-        assertFalse(result.isValid());
-        boolean hasIndexError = result.getErrors().stream()
-            .anyMatch(err -> err.contains("jettra.index.storage.path") && err.contains("sintaxis"));
-        assertTrue(hasIndexError);
     }
 
     @Test

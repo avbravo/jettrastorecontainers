@@ -90,8 +90,9 @@ public final class JettraStoreConfig {
 
         // Sincronizar con el nodo correspondiente en jettra.config si existe
         JettraConfigValidator.ClusterNodeInfo currentNode = null;
+        String nodeNum = JettraConfigValidator.extractNodeNumber(this.nodeId);
         for (JettraConfigValidator.ClusterNodeInfo n : clusterNodes) {
-            if (n.id().equalsIgnoreCase(this.nodeId)) {
+            if (n.id().equalsIgnoreCase(this.nodeId) || (nodeNum != null && nodeNum.equals(n.nodeNumber()))) {
                 currentNode = n;
                 break;
             }
@@ -241,7 +242,7 @@ public final class JettraStoreConfig {
             }
         } else if (!clusterNodes.isEmpty()) {
             for (JettraConfigValidator.ClusterNodeInfo node : clusterNodes) {
-                if (!node.id().equalsIgnoreCase(this.nodeId)) {
+                if (!node.id().equalsIgnoreCase(this.nodeId) && (nodeNum == null || !nodeNum.equals(node.nodeNumber()))) {
                     ClusterNode.Role peerRole = "PRIMARY".equalsIgnoreCase(node.role()) 
                         ? ClusterNode.Role.PRIMARY : ClusterNode.Role.SECONDARY;
                     peersList.add(new ClusterNode(node.id(), node.ip(), node.grpcPort(), peerRole));

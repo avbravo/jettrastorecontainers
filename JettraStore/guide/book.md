@@ -914,20 +914,19 @@ cluster.index.max.inmemory.keys = 100000
 
 Al iniciar JettraStore mediante `java -jar JettraStore.jar`, el motor invoca `JettraConfigValidator.validateAndBootstrapOrHalt()` para auditar exhaustivamente la coherencia entre `database.properties` y `jettra.config`.
 
-Las 4 reglas de validación obligatorias son:
+Las reglas principales de validación son:
 
-| Regla | Parámetro en `database.properties` | Validación frente a `jettra.config` | Sintaxis Requerida |
+| Regla | Parámetro en `database.properties` | Validación frente a `jettra.config` | Sintaxis / Flexibilidad |
 | :--- | :--- | :--- | :--- |
-| **Regla 1** | `jettra.storage.path` | Debe coincidir con al menos un `cluster.node.X.storage.path` configurado en `jettra.config` (admitiendo normalización de tildes `~` y rutas canónicas absolutas). | `<path>/jettra/data` |
-| **Regla 2** | `jettra.network.grpc.port` | Debe coincidir con al menos un valor de `cluster.node.X.grpc.port` de `jettra.config`. | Puerto entero válido (ej. `9091`). |
-| **Regla 3** | `jettra.network.rest.port` | Debe coincidir con al menos un valor de `cluster.node.X.rest.port` de `jettra.config`. | Puerto entero válido (ej. `8080`). |
-| **Regla 4** | `jettra.index.storage.path` | Debe implementar la sintaxis estructurada de índices subordinada al nodo correspondiente. | `<path>/jettra/data/indexes` |
-| **Regla 5** | `cluster.multinode.active` | Determina si se activa la distribución por consenso (`on`) o servidor único local (`off`). Debe ser estrictamente `on` u `off`. | `on` u `off` |
+| **Regla 1** | `jettra.storage.path` | Si se especifica `jettra.node.id`, debe coincidir con `cluster.node.<numero-nodo>.storage.path` de `jettra.config` (emite una advertencia si hay discrepancia). | Cualquier ruta libre indicada por el usuario (ej. `~/jettra/data`, `~/jettra-2/data`, `/opt/data`). |
+| **Regla 2** | `jettra.index.storage.path` | Permite especificar libremente la ruta del almacenamiento de índices. | Cualquier ruta libre indicada por el usuario (ej. `~/jettra/data/indexes`, `/opt/indexes`). |
+| **Regla 3** | `jettra.network.grpc.port` | Debe coincidir con al menos un valor de `cluster.node.X.grpc.port` de `jettra.config`. | Puerto entero válido (ej. `9091`). |
+| **Regla 4** | `jettra.network.rest.port` | Debe coincidir con al menos un valor de `cluster.node.X.rest.port` de `jettra.config`. | Puerto entero válido (ej. `8080`). |
+| **Regla 5** | `cluster.multinode.active` | Determina si se activa la distribución por consenso (`on`) o servidor único local (`off`). | `on` u `off` |
 
-#### Acción Preventiva y Detención de la Ejecución
-Si cualquiera de estas 4 reglas no se cumple:
-1. El motor emite una alerta visual en la consola estándar con el desglose exacto de las discrepancias encontradas y las instrucciones precisas para su resolución.
-2. Detiene inmediatamente la ejecución de la JVM mediante `System.exit(1)` (o lanza `JettraConfigurationException` en suites de pruebas unitarias), protegiendo la base de datos contra inconsistencias de red o escritura en directorios desalineados.
+#### Acción Preventiva y Gestión de Advertencias
+1. Si se detecta una discrepancia entre `jettra.storage.path` y `cluster.node.<numero-nodo>.storage.path` para el nodo indicado por `jettra.node.id`, el validador emite una advertencia informativa (`ADVERTENCIA`) notificando la diferencia sin bloquear indebidamente la flexibilidad del administrador.
+2. Si se detectan inconsistencias críticas (como identificadores de nodo inexistentes, puertos desalineados o valores de multinodo inválidos), el motor detiene inmediatamente la ejecución de la JVM mediante `System.exit(1)` (o lanza `JettraConfigurationException` en modo de prueba).
 
 ---
 
