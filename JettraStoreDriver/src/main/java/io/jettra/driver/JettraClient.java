@@ -407,8 +407,106 @@ public final class JettraClient implements AutoCloseable {
         return getRecentClusterLiveEvents(100);
     }
 
+    private List<io.jettra.store.cluster.ClusterLiveEvent> fetchRemoteClusterLiveEvents(int limit) {
+        try {
+            String host = "127.0.0.1";
+            int restPort = 8080;
+            JettraStoreConfig scfg = JettraStoreConfig.load();
+            if (scfg != null) {
+                if (scfg.getNodeIp() != null && !scfg.getNodeIp().isBlank()) {
+                    host = scfg.getNodeIp();
+                }
+                if (scfg.getRestPort() > 0) {
+                    restPort = scfg.getRestPort();
+                }
+            }
+            if (!config.getClusterEndpoints().isEmpty()) {
+                String ep = config.getClusterEndpoints().get(0);
+                if (ep.contains(":")) {
+                    host = ep.substring(0, ep.indexOf(':'));
+                } else {
+                    host = ep;
+                }
+            }
+
+            java.net.http.HttpClient httpClient = java.net.http.HttpClient.newBuilder()
+                .connectTimeout(java.time.Duration.ofMillis(800))
+                .build();
+            java.net.http.HttpRequest.Builder reqBuilder = java.net.http.HttpRequest.newBuilder()
+                .uri(java.net.URI.create(String.format("http://%s:%d/api/v1/cluster/events?limit=%d", host, restPort, limit)))
+                .timeout(java.time.Duration.ofSeconds(2))
+                .GET();
+            if (sessionToken != null && !sessionToken.isBlank()) {
+                reqBuilder.header("Authorization", "Bearer " + sessionToken);
+            }
+            var resp = httpClient.send(reqBuilder.build(), java.net.http.HttpResponse.BodyHandlers.ofString());
+            if (resp.statusCode() == 200 && resp.body() != null && !resp.body().isBlank()) {
+                List<Map<String, Object>> parsedList = new io.jettra.json.JettraJson().fromJson(resp.body(), List.class);
+                if (parsedList != null) {
+                    List<io.jettra.store.cluster.ClusterLiveEvent> result = new ArrayList<>();
+                    for (Map<String, Object> map : parsedList) {
+                        long ts = (map.get("timestamp") instanceof Number n) ? n.longValue() : System.currentTimeMillis();
+                        String type = (String) map.get("type");
+                        String src = (String) map.get("source");
+                        String tgt = (String) map.get("target");
+                        String msg = (String) map.get("message");
+                        String details = (String) map.get("details");
+                        result.add(new io.jettra.store.cluster.ClusterLiveEvent(ts, type, src, tgt, msg, details));
+                    }
+                    if (!result.isEmpty()) {
+                        return result;
+                    }
+                }
+            }
+        } catch (Exception ignored) {}
+        return Collections.emptyList();
+    }
+
     public List<io.jettra.store.cluster.ClusterLiveEvent> getRecentClusterLiveEvents(int limit) {
+        if (io.jettra.store.JettraStoreServer.getActiveInstance() != null) {
+            return io.jettra.store.cluster.JettraClusterEventBus.getInstance().getRecentEvents(limit);
+        }
+        List<io.jettra.store.cluster.ClusterLiveEvent> remoteEvents = fetchRemoteClusterLiveEvents(limit);
+        if (!remoteEvents.isEmpty()) {
+            return remoteEvents;
+        }
         return io.jettra.store.cluster.JettraClusterEventBus.getInstance().getRecentEvents(limit);
+    }
+
+    public String clusterLive() {
+        return clusterLive(25);
+    }
+
+    public String clusterLive(int limit) {
+        List<io.jettra.store.cluster.ClusterLiveEvent> events = getRecentClusterLiveEvents(limit);
+        StringBuilder sb = new StringBuilder();
+        sb.append("========================================================================================================================\n");
+        sb.append("                                        JETTRASTORE CLUSTER LIVE EVENT STREAM                                           \n");
+        sb.append("========================================================================================================================\n");
+        sb.append("+-------------------------+----------------------+---------+---------+-------------------------------------------------+\n");
+        sb.append("| Marca Temporal          | Tipo de Evento       | Origen  | Destino | Mensaje / Trazabilidad Operativa                |\n");
+        sb.append("+-------------------------+----------------------+---------+---------+-------------------------------------------------+\n");
+        if (events == null || events.isEmpty()) {
+            sb.append("| (Sin eventos recientes de clúster registrados en el búfer)                                                           |\n");
+        } else {
+            for (var ev : events) {
+                String msg = ev.message() != null ? ev.message() : "";
+                if (msg.length() > 47) {
+                    msg = msg.substring(0, 44) + "...";
+                }
+                String typeStr = ev.type() != null ? ev.type() : "";
+                if (typeStr.length() > 20) {
+                    typeStr = typeStr.substring(0, 17) + "...";
+                }
+                String src = ev.sourceNodeId() != null ? ev.sourceNodeId() : "-";
+                String tgt = ev.targetNodeId() != null ? ev.targetNodeId() : "-";
+                sb.append(String.format("| %-23s | %-20s | %-7s | %-7s | %-47s |\n",
+                    ev.formattedTimestamp(), typeStr, src, tgt, msg));
+            }
+        }
+        sb.append("+-------------------------+----------------------+---------+---------+-------------------------------------------------+\n");
+        sb.append(String.format("Eventos en búfer mostrados: %d | Canal de Eventos en Tiempo Real: ACTIVO\n", events != null ? events.size() : 0));
+        return sb.toString();
     }
 
     public void subscribeClusterLive(Consumer<io.jettra.store.cluster.ClusterLiveEvent> listener) {

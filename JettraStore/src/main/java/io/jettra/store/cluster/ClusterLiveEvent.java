@@ -29,6 +29,8 @@ public record ClusterLiveEvent(
     public static final String TYPE_DATABASE_CREATED  = "DATABASE_CREATED";
     public static final String TYPE_DATABASE_DROPPED  = "DATABASE_DROPPED";
     public static final String TYPE_DATABASE_DISTRIBUTED = "DATABASE_DISTRIBUTED";
+    public static final String TYPE_ENGINE_CREATED    = "ENGINE_CREATED";
+    public static final String TYPE_DATA_TRANSFER     = "DATA_TRANSFER";
     public static final String TYPE_RECORD_REPLICATED = "RECORD_REPLICATED";
     public static final String TYPE_DOCUMENT_REPLICATED = "DOCUMENT_REPLICATED";
     public static final String TYPE_DOCUMENT_DELETED  = "DOCUMENT_DELETED";

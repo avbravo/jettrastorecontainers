@@ -167,8 +167,28 @@ public final class JettraDatabase implements AutoCloseable {
                 databaseName, (double) config.getRingReleaseTargetPercent()));
     }
 
+    private void onEngineCreated(String engineType, String engineName, byte[] payload) {
+        if (config != null && config.isClusterMultinodeActive() && config.getNodeRole() == ClusterNode.Role.PRIMARY) {
+            io.jettra.store.JettraStoreServer server = io.jettra.store.JettraStoreServer.getActiveInstance();
+            if (server != null) {
+                server.replicateCreateEngine(databaseName, engineName, engineType, payload);
+            }
+            io.jettra.store.cluster.JettraClusterEventBus.getInstance().publish(
+                io.jettra.store.cluster.ClusterLiveEvent.TYPE_ENGINE_CREATED,
+                config.getNodeId(), "cluster",
+                String.format("Motor especializado '%s' [%s] en base '%s' creado y sincronizado en el clúster", engineName, engineType, databaseName),
+                "db=" + databaseName + ",engine=" + engineName + ",type=" + engineType
+            );
+        }
+    }
+
     public DocumentEngine getDocumentEngine(String name) {
-        return documentEngines.computeIfAbsent(name, n -> new DocumentEngine(n, this));
+        boolean isNew = !documentEngines.containsKey(name);
+        DocumentEngine eng = documentEngines.computeIfAbsent(name, n -> new DocumentEngine(n, this));
+        if (isNew) {
+            onEngineCreated("DOCUMENT", name, null);
+        }
+        return eng;
     }
 
     public StreamResponse<Map<String, Object>> streamCollection(String collectionName) {
@@ -180,19 +200,40 @@ public final class JettraDatabase implements AutoCloseable {
     }
 
     public VectorEngine getVectorEngine(String name, int dimensions) {
-        return vectorEngines.computeIfAbsent(name, k -> new VectorEngine(k, dimensions));
+        boolean isNew = !vectorEngines.containsKey(name);
+        VectorEngine eng = vectorEngines.computeIfAbsent(name, k -> new VectorEngine(k, dimensions));
+        if (isNew) {
+            byte[] payload = String.valueOf(dimensions).getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            onEngineCreated("VECTOR", name, payload);
+        }
+        return eng;
     }
 
     public GraphEngine getGraphEngine(String name) {
-        return graphEngines.computeIfAbsent(name, GraphEngine::new);
+        boolean isNew = !graphEngines.containsKey(name);
+        GraphEngine eng = graphEngines.computeIfAbsent(name, GraphEngine::new);
+        if (isNew) {
+            onEngineCreated("GRAPH", name, null);
+        }
+        return eng;
     }
 
     public TimeSeriesEngine getTimeSeriesEngine(String name) {
-        return timeSeriesEngines.computeIfAbsent(name, TimeSeriesEngine::new);
+        boolean isNew = !timeSeriesEngines.containsKey(name);
+        TimeSeriesEngine eng = timeSeriesEngines.computeIfAbsent(name, TimeSeriesEngine::new);
+        if (isNew) {
+            onEngineCreated("TIMESERIES", name, null);
+        }
+        return eng;
     }
 
     public KeyValueEngine getKeyValueEngine(String name) {
-        return keyValueEngines.computeIfAbsent(name, k -> new KeyValueEngine(k, this));
+        boolean isNew = !keyValueEngines.containsKey(name);
+        KeyValueEngine eng = keyValueEngines.computeIfAbsent(name, k -> new KeyValueEngine(k, this));
+        if (isNew) {
+            onEngineCreated("KEY_VALUE", name, null);
+        }
+        return eng;
     }
 
     public void onDocumentInsert(String collectionName, String id, Map<String, Object> doc) {
@@ -257,16 +298,32 @@ public final class JettraDatabase implements AutoCloseable {
     }
 
     public GeospatialEngine getGeospatialEngine(String name) {
-        return geospatialEngines.computeIfAbsent(name, GeospatialEngine::new);
+        boolean isNew = !geospatialEngines.containsKey(name);
+        GeospatialEngine eng = geospatialEngines.computeIfAbsent(name, GeospatialEngine::new);
+        if (isNew) {
+            onEngineCreated("GEOSPATIAL", name, null);
+        }
+        return eng;
     }
 
     public ColumnarEngine getColumnarEngine(String name) {
-        return columnarEngines.computeIfAbsent(name, ColumnarEngine::new);
+        boolean isNew = !columnarEngines.containsKey(name);
+        ColumnarEngine eng = columnarEngines.computeIfAbsent(name, ColumnarEngine::new);
+        if (isNew) {
+            onEngineCreated("COLUMNAR", name, null);
+        }
+        return eng;
     }
 
     @SuppressWarnings("unchecked")
     public <T extends Record> io.jettra.store.engine.models.RecordsEngine<T> getRecordsEngine(String name, Class<T> recordClass) {
-        return (io.jettra.store.engine.models.RecordsEngine<T>) recordsEngines.computeIfAbsent(name, k -> new io.jettra.store.engine.models.RecordsEngine<>(name, recordClass));
+        boolean isNew = !recordsEngines.containsKey(name);
+        var eng = (io.jettra.store.engine.models.RecordsEngine<T>) recordsEngines.computeIfAbsent(name, k -> new io.jettra.store.engine.models.RecordsEngine<>(name, recordClass));
+        if (isNew) {
+            byte[] payload = recordClass != null ? recordClass.getName().getBytes(java.nio.charset.StandardCharsets.UTF_8) : null;
+            onEngineCreated("RECORDS", name, payload);
+        }
+        return eng;
     }
 
     public io.jettra.store.engine.models.RecordsEngine<?> getRecordsEngine(String name) {
@@ -275,6 +332,40 @@ public final class JettraDatabase implements AutoCloseable {
 
     public java.util.Set<String> getRecordsEngineNames() {
         return java.util.Collections.unmodifiableSet(recordsEngines.keySet());
+    }
+
+    public void ensureEngineInternal(String engineType, String engineName, byte[] payload) {
+        if (engineType == null || engineName == null) return;
+        switch (engineType.toUpperCase()) {
+            case "DOCUMENT" -> documentEngines.computeIfAbsent(engineName, n -> new DocumentEngine(n, this));
+            case "KEY_VALUE" -> keyValueEngines.computeIfAbsent(engineName, k -> new KeyValueEngine(k, this));
+            case "VECTOR" -> {
+                int dims = 128;
+                if (payload != null && payload.length > 0) {
+                    try {
+                        dims = Integer.parseInt(new String(payload, java.nio.charset.StandardCharsets.UTF_8).trim());
+                    } catch (Exception ignored) {}
+                }
+                final int finalDims = dims;
+                vectorEngines.computeIfAbsent(engineName, k -> new VectorEngine(k, finalDims));
+            }
+            case "GRAPH" -> graphEngines.computeIfAbsent(engineName, GraphEngine::new);
+            case "TIMESERIES" -> timeSeriesEngines.computeIfAbsent(engineName, TimeSeriesEngine::new);
+            case "GEOSPATIAL" -> geospatialEngines.computeIfAbsent(engineName, GeospatialEngine::new);
+            case "COLUMNAR" -> columnarEngines.computeIfAbsent(engineName, ColumnarEngine::new);
+            case "RECORDS" -> {
+                Class<?> rClass = Record.class;
+                if (payload != null && payload.length > 0) {
+                    try {
+                        String clsName = new String(payload, java.nio.charset.StandardCharsets.UTF_8).trim();
+                        rClass = Class.forName(clsName);
+                    } catch (Exception ignored) {}
+                }
+                final Class<?> finalClass = rClass;
+                recordsEngines.computeIfAbsent(engineName, k -> (io.jettra.store.engine.models.RecordsEngine) new io.jettra.store.engine.models.RecordsEngine(engineName, finalClass));
+            }
+            default -> documentEngines.computeIfAbsent(engineName, n -> new DocumentEngine(n, this));
+        }
     }
 
     public void flushMemTable() throws IOException {

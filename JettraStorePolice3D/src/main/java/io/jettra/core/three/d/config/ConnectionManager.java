@@ -118,6 +118,37 @@ public class ConnectionManager {
         }
     }
 
+    public synchronized void syncWithClusterConfig() {
+        List<ClusterConfigLoader.ConfiguredNode> configNodes = ClusterConfigLoader.getInstance().getNodes();
+        if (configNodes == null || configNodes.isEmpty()) {
+            return;
+        }
+
+        // Remove old dummy placeholder profiles (such as 8765 ports)
+        profiles.removeIf(p -> p.getUrl() != null && p.getUrl().contains(":8765"));
+
+        for (ClusterConfigLoader.ConfiguredNode cNode : configNodes) {
+            String cId = cNode.id();
+            boolean exists = profiles.stream().anyMatch(p -> cId.equalsIgnoreCase(p.getId()) || 
+                (p.getHost().equalsIgnoreCase(cNode.host()) && p.getPort() == cNode.grpcPort()));
+            if (!exists) {
+                String name = "JettraStore " + cNode.id() + (cNode.isLeader() ? " (Primary)" : " (Secondary)");
+                String url = "tcp://" + cNode.host() + ":" + cNode.grpcPort();
+                ConnectionProfile newProf = new ConnectionProfile(
+                    cNode.id(),
+                    name,
+                    url,
+                    "admin",
+                    "admin",
+                    cNode.isLeader()
+                );
+                profiles.add(newProf);
+            }
+        }
+        ensureDefaultExists();
+        save();
+    }
+
     public synchronized void load() {
         profiles.clear();
         File file = new File(filePath);
@@ -125,28 +156,35 @@ public class ConnectionManager {
             try {
                 List<ConnectionProfile> loaded = mapper.readValue(file, new TypeReference<List<ConnectionProfile>>() {});
                 if (loaded != null) {
-                    profiles.addAll(loaded);
+                    // Filter out legacy dummy entries with :8765
+                    for (ConnectionProfile cp : loaded) {
+                        if (cp.getUrl() == null || !cp.getUrl().contains(":8765")) {
+                            profiles.add(cp);
+                        }
+                    }
                 }
             } catch (IOException e) {
                 System.err.println("[WARN] Error cargando conexiones desde " + filePath + ": " + e.getMessage());
             }
         }
 
+        syncWithClusterConfig();
+
         if (profiles.isEmpty()) {
             ConnectionProfile defaultLocal = new ConnectionProfile(
-                "conn_local",
-                "JettraStore Local Master",
-                "tcp://127.0.0.1:8765",
+                "node-01",
+                "JettraStore node-01 (Primary)",
+                "tcp://127.0.0.1:9091",
                 "admin",
-                "admin123",
+                "admin",
                 true
             );
             ConnectionProfile replicaCluster = new ConnectionProfile(
-                "conn_replica",
-                "JettraStore Cluster Node 2",
-                "tcp://192.168.1.102:8765",
-                "operator",
-                "jettraPass!",
+                "node-02",
+                "JettraStore node-02 (Secondary)",
+                "tcp://127.0.0.1:9092",
+                "admin",
+                "admin",
                 false
             );
             profiles.add(defaultLocal);

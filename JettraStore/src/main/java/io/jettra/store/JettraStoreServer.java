@@ -427,11 +427,11 @@ public final class JettraStoreServer {
                 String op = extractJsonField(body, "op");
                 String db = extractJsonField(body, "database");
                 if ("CREATE_DATABASE".equalsIgnoreCase(op) && db != null) {
-                    getOrCreateDatabaseInternal(db.trim(), false);
+                    getOrCreateDatabaseInternal(db.trim(), true);
                     sendResponse(exchange, 200, "{\"status\":\"ACK\",\"op\":\"CREATE_DATABASE\"}");
                     return;
                 } else if ("DROP_DATABASE".equalsIgnoreCase(op) && db != null) {
-                    dropDatabaseInternal(db.trim(), false);
+                    dropDatabaseInternal(db.trim(), true);
                     sendResponse(exchange, 200, "{\"status\":\"ACK\",\"op\":\"DROP_DATABASE\"}");
                     return;
                 } else if ("DISTRIBUTE_DATABASE".equalsIgnoreCase(op)) {
@@ -600,6 +600,12 @@ public final class JettraStoreServer {
             );
         }
         return true;
+    }
+
+    public void replicateCreateEngine(String dbName, String engineName, String engineType, byte[] payload) {
+        if (config.isClusterMultinodeActive() && config.getNodeRole() == ClusterNode.Role.PRIMARY && replicationClient != null) {
+            replicationClient.broadcastCreateEngine(dbName, engineName, engineType, payload);
+        }
     }
 
     public void replicatePutDocument(String dbName, String colName, String id, byte[] jsonBytes) {

@@ -119,6 +119,20 @@ public final class JettraClusterTransportServer implements AutoCloseable {
                             db.saveToDisk();
                         }
                     }
+                    JettraClusterEventBus.getInstance().publish(
+                        ClusterLiveEvent.TYPE_DATABASE_CREATED,
+                        frame.senderNodeId(),
+                        server != null ? server.getConfig().getNodeId() : "local",
+                        String.format("Base de datos '%s' replicada exitosamente desde nodo '%s'", dbName, frame.senderNodeId()),
+                        "db=" + dbName
+                    );
+                    JettraClusterEventBus.getInstance().publish(
+                        ClusterLiveEvent.TYPE_DATA_TRANSFER,
+                        frame.senderNodeId(),
+                        server != null ? server.getConfig().getNodeId() : "local",
+                        String.format("Transferencia de creación de base '%s' completada", dbName),
+                        "db=" + dbName
+                    );
                     return JettraRaftFrame.ack(frame.term(), frame.logIndex(), 
                         server != null ? server.getConfig().getNodeId() : "local", 
                         "Base de datos '" + dbName + "' replicada exitosamente");
@@ -153,6 +167,20 @@ public final class JettraClusterTransportServer implements AutoCloseable {
                             db.saveToDisk();
                         }
                     }
+                    JettraClusterEventBus.getInstance().publish(
+                        ClusterLiveEvent.TYPE_DATABASE_DISTRIBUTED,
+                        frame.senderNodeId(),
+                        server != null ? server.getConfig().getNodeId() : "local",
+                        String.format("Base de datos '%s' migrada integralmente desde '%s'", dbName, frame.senderNodeId()),
+                        "db=" + dbName + ",bytes=" + (payload != null ? payload.length : 0)
+                    );
+                    JettraClusterEventBus.getInstance().publish(
+                        ClusterLiveEvent.TYPE_DATA_TRANSFER,
+                        frame.senderNodeId(),
+                        server != null ? server.getConfig().getNodeId() : "local",
+                        String.format("Transferencia integral de base '%s' (%d bytes) recibida", dbName, payload != null ? payload.length : 0),
+                        "db=" + dbName
+                    );
                     return JettraRaftFrame.ack(frame.term(), frame.logIndex(), 
                         server != null ? server.getConfig().getNodeId() : "local", 
                         "Base de datos '" + dbName + "' distribuida y sincronizada exitosamente con todos sus registros");
@@ -180,6 +208,44 @@ public final class JettraClusterTransportServer implements AutoCloseable {
                 }
             }
 
+            case JettraRaftFrame.TYPE_CREATE_ENGINE -> {
+                String dbName = frame.databaseName();
+                String engineName = frame.collectionName();
+                String engineType = frame.key();
+                System.out.printf("[JettraClusterTransport] ↳ [ENGINE] Recibida orden Raft de crear motor: '%s' [%s] en base '%s' desde nodo '%s'%n",
+                    engineName, engineType, dbName, frame.senderNodeId());
+                try {
+                    if (server != null) {
+                        JettraDatabase db = server.getOrCreateDatabaseInternal(dbName, false);
+                        if (db != null) {
+                            db.ensureEngineInternal(engineType, engineName, frame.payload());
+                            db.saveToDisk();
+                        }
+                    }
+                    JettraClusterEventBus.getInstance().publish(
+                        ClusterLiveEvent.TYPE_ENGINE_CREATED,
+                        frame.senderNodeId(),
+                        server != null ? server.getConfig().getNodeId() : "local",
+                        String.format("Motor '%s' [%s] replicado y creado en base '%s'", engineName, engineType, dbName),
+                        "db=" + dbName + ",engine=" + engineName + ",type=" + engineType
+                    );
+                    JettraClusterEventBus.getInstance().publish(
+                        ClusterLiveEvent.TYPE_DATA_TRANSFER,
+                        frame.senderNodeId(),
+                        server != null ? server.getConfig().getNodeId() : "local",
+                        String.format("Transferencia de creación de motor '%s' [%s] completada", engineName, engineType),
+                        "db=" + dbName + ",engine=" + engineName
+                    );
+                    return JettraRaftFrame.ack(frame.term(), frame.logIndex(),
+                        server != null ? server.getConfig().getNodeId() : "local",
+                        "Motor '" + engineName + "' [" + engineType + "] en base '" + dbName + "' replicado exitosamente");
+                } catch (Exception ex) {
+                    System.err.printf("[JettraClusterTransport] Error replicando motor '%s' en base '%s': %s%n", engineName, dbName, ex.getMessage());
+                    return JettraRaftFrame.nack(frame.term(), frame.logIndex(),
+                        server != null ? server.getConfig().getNodeId() : "local", ex.getMessage());
+                }
+            }
+
             case JettraRaftFrame.TYPE_PUT_RECORD -> {
                 String dbName = frame.databaseName();
                 String colName = frame.collectionName();
@@ -188,11 +254,25 @@ public final class JettraClusterTransportServer implements AutoCloseable {
                     if (server != null) {
                         JettraDatabase db = server.getOrCreateDatabaseInternal(dbName, false);
                         if (db != null) {
-                            db.getKeyValueEngine(colName != null && !colName.isEmpty() ? colName : "default").put(key, frame.payload());
+                            db.getKeyValueEngine(colName != null && !colName.isEmpty() ? colName : "default").applyReplicatedPut(key, frame.payload());
                             db.putOffHeapBinary(key, frame.payload());
                             db.saveToDisk();
                         }
                     }
+                    JettraClusterEventBus.getInstance().publish(
+                        ClusterLiveEvent.TYPE_RECORD_REPLICATED,
+                        frame.senderNodeId(),
+                        server != null ? server.getConfig().getNodeId() : "local",
+                        String.format("Registro KV '%s' en '%s' de base '%s' replicado exitosamente", key, colName, dbName),
+                        "db=" + dbName + ",ns=" + colName + ",key=" + key
+                    );
+                    JettraClusterEventBus.getInstance().publish(
+                        ClusterLiveEvent.TYPE_DATA_TRANSFER,
+                        frame.senderNodeId(),
+                        server != null ? server.getConfig().getNodeId() : "local",
+                        String.format("Transferencia de registro KV '%s' en '%s' de base '%s' completada", key, colName, dbName),
+                        "db=" + dbName + ",ns=" + colName + ",key=" + key
+                    );
                     return JettraRaftFrame.ack(frame.term(), frame.logIndex(), 
                         server != null ? server.getConfig().getNodeId() : "local", "Record replicated");
                 } catch (Exception ex) {
@@ -209,7 +289,7 @@ public final class JettraClusterTransportServer implements AutoCloseable {
                     if (server != null) {
                         JettraDatabase db = server.getOrCreateDatabaseInternal(dbName, false);
                         if (db != null) {
-                            db.getKeyValueEngine(colName != null && !colName.isEmpty() ? colName : "default").remove(key);
+                            db.getKeyValueEngine(colName != null && !colName.isEmpty() ? colName : "default").applyReplicatedRemove(key);
                             db.saveToDisk();
                         }
                     }
@@ -236,6 +316,20 @@ public final class JettraClusterTransportServer implements AutoCloseable {
                             db.saveToDisk();
                         }
                     }
+                    JettraClusterEventBus.getInstance().publish(
+                        ClusterLiveEvent.TYPE_DOCUMENT_REPLICATED,
+                        frame.senderNodeId(),
+                        server != null ? server.getConfig().getNodeId() : "local",
+                        String.format("Documento '%s' en colección '%s' de base '%s' replicado exitosamente", id, colName, dbName),
+                        "db=" + dbName + ",col=" + colName + ",id=" + id
+                    );
+                    JettraClusterEventBus.getInstance().publish(
+                        ClusterLiveEvent.TYPE_DATA_TRANSFER,
+                        frame.senderNodeId(),
+                        server != null ? server.getConfig().getNodeId() : "local",
+                        String.format("Transferencia de documento '%s' en '%s' de base '%s' completada", id, colName, dbName),
+                        "db=" + dbName + ",col=" + colName + ",id=" + id
+                    );
                     return JettraRaftFrame.ack(frame.term(), frame.logIndex(), 
                         server != null ? server.getConfig().getNodeId() : "local", "Document replicated");
                 } catch (Exception ex) {

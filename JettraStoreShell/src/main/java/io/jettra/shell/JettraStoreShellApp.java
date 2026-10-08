@@ -10,6 +10,7 @@ import io.jettra.store.cluster.ClusterNode;
 import io.jettra.store.cluster.DynamicRingEngine;
 import io.jettra.store.core.JettraDatabase;
 import io.jettra.store.core.JettraStoreConfig;
+import io.jettra.store.core.JettraConfigValidator;
 import io.jettra.store.engine.index.JettraIndexManager;
 import io.jettra.store.engine.query.JettraQLProcessor;
 import io.jettra.store.engine.query.JettraSQLProcessor;
@@ -97,12 +98,43 @@ public final class JettraStoreShellApp implements AutoCloseable {
     private static final Path JLINE_HISTORY_FILE = CONFIG_DIR.resolve(".jline_history");
     private final List<String> commandHistory = new CopyOnWriteArrayList<>();
 
+    private String defaultConnectionName = "node-01";
+
     private void initDefaultConnections() {
-        savedConnections.put("local_master", new SavedConnection("local_master", "127.0.0.1", 9091, "admin"));
-        savedConnections.put("node-02-replica", new SavedConnection("node-02-replica", "127.0.0.1", 9092, "admin"));
-        savedConnections.put("node-03-replica", new SavedConnection("node-03-replica", "127.0.0.1", 9093, "admin"));
+        loadInitialConnectionsFromJettraConfig();
         loadSavedConnections();
         loadHistory();
+    }
+
+    private void loadInitialConnectionsFromJettraConfig() {
+        try {
+            Path clusterPath = JettraConfigValidator.locateJettraConfigFile();
+            if (clusterPath != null && Files.exists(clusterPath)) {
+                Properties clusterProps = JettraConfigValidator.loadProperties(clusterPath, "/jettra.config");
+                List<JettraConfigValidator.ClusterNodeInfo> nodes = JettraConfigValidator.parseClusterNodes(clusterProps);
+                if (nodes != null && !nodes.isEmpty()) {
+                    for (JettraConfigValidator.ClusterNodeInfo node : nodes) {
+                        String name = node.id();
+                        String host = (node.ip() != null && !node.ip().isBlank()) ? node.ip() : "127.0.0.1";
+                        int port = node.grpcPort() > 0 ? node.grpcPort() : 9091;
+                        savedConnections.put(name, new SavedConnection(name, host, port, "admin"));
+                        if ("PRIMARY".equalsIgnoreCase(node.role())) {
+                            defaultConnectionName = name;
+                        }
+                    }
+                    if (defaultConnectionName == null && !nodes.isEmpty()) {
+                        defaultConnectionName = nodes.get(0).id();
+                    }
+                    return;
+                }
+            }
+        } catch (Exception ignored) {}
+
+        // Fallback predeterminado según jettra.config estándar
+        savedConnections.put("node-01", new SavedConnection("node-01", "127.0.0.1", 9091, "admin"));
+        savedConnections.put("node-02", new SavedConnection("node-02", "127.0.0.1", 9092, "admin"));
+        savedConnections.put("node-03", new SavedConnection("node-03", "127.0.0.1", 9093, "admin"));
+        defaultConnectionName = "node-01";
     }
 
     private void loadHistory() {
@@ -356,7 +388,15 @@ public final class JettraStoreShellApp implements AutoCloseable {
                 try (var in = Files.newInputStream(CONFIG_FILE)) {
                     props.load(in);
                 }
+                // Purge legacy obsolete placeholder names in favor of jettra.config
+                Set<String> legacyNames = Set.of(
+                    "local_master", "node-02-replica", "node-03-replica",
+                    "node-1", "node-2", "node-3"
+                );
                 for (String name : props.stringPropertyNames()) {
+                    if (legacyNames.contains(name.toLowerCase())) {
+                        continue;
+                    }
                     String val = props.getProperty(name);
                     String[] parts = val.split(":", 3);
                     if (parts.length >= 2) {
@@ -387,7 +427,13 @@ public final class JettraStoreShellApp implements AutoCloseable {
 
     public List<SavedConnection> getOrderedConnectionsList() {
         List<SavedConnection> list = new ArrayList<>(savedConnections.values());
-        list.sort(Comparator.comparing(SavedConnection::name));
+        list.sort((c1, c2) -> {
+            boolean d1 = c1.name().equalsIgnoreCase(defaultConnectionName);
+            boolean d2 = c2.name().equalsIgnoreCase(defaultConnectionName);
+            if (d1 && !d2) return -1;
+            if (!d1 && d2) return 1;
+            return c1.name().compareToIgnoreCase(c2.name());
+        });
         return list;
     }
 
@@ -403,7 +449,8 @@ Seleccione una conexión para iniciar:
         List<SavedConnection> list = getOrderedConnectionsList();
         for (int i = 0; i < list.size(); i++) {
             SavedConnection sc = list.get(i);
-            String defMarker = sc.name().equals("local_master") ? "  [Predeterminado]" : "";
+            String defMarker = (sc.name().equalsIgnoreCase(defaultConnectionName) || (defaultConnectionName == null && i == 0)) 
+                ? "  [Predeterminado]" : "";
             sb.append(String.format("  [%d] %-20s (%s:%d - Usuario: %s)%s%n", 
                 (i + 1), sc.name(), sc.host(), sc.port(), sc.user(), defMarker));
         }

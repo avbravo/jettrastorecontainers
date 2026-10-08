@@ -1,19 +1,22 @@
 [ {
-  "id" : "conn_local",
-  "name" : "JettraStore Local Master",
-  "url" : "tcp://127.0.0.1:8765",
+  "id" : "node-01",
+  "name" : "JettraStore node-01 (Primary)",
+  "url" : "tcp://127.0.0.1:9091",
   "username" : "admin",
-  "password" : "admin123",
-  "default" : true,
-  "host" : "tcp",
-  "port" : 9091
+  "password" : "admin",
+  "default" : true
 }, {
-  "id" : "conn_replica",
-  "name" : "JettraStore Cluster Node 2",
-  "url" : "tcp://192.168.1.102:8765",
-  "username" : "operator",
-  "password" : "jettraPass!",
-  "default" : false,
-  "host" : "tcp",
-  "port" : 9091
+  "id" : "node-02",
+  "name" : "JettraStore node-02 (Secondary)",
+  "url" : "tcp://127.0.0.1:9092",
+  "username" : "admin",
+  "password" : "admin",
+  "default" : false
+}, {
+  "id" : "node-03",
+  "name" : "JettraStore node-03 (Secondary)",
+  "url" : "tcp://127.0.0.1:9093",
+  "username" : "admin",
+  "password" : "admin",
+  "default" : false
 } ]

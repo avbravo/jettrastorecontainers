@@ -988,11 +988,22 @@ public class JettraStorePoliceMonitor implements AutoCloseable {
                 }
             }
             case ClusterLiveEvent.TYPE_DATABASE_DISTRIBUTED,
+                 ClusterLiveEvent.TYPE_DATABASE_CREATED,
+                 ClusterLiveEvent.TYPE_ENGINE_CREATED,
+                 ClusterLiveEvent.TYPE_DATA_TRANSFER,
                  ClusterLiveEvent.TYPE_RECORD_REPLICATED,
                  ClusterLiveEvent.TYPE_DOCUMENT_REPLICATED -> {
                 String src = (event.sourceNodeId() != null && !event.sourceNodeId().isBlank()) ? event.sourceNodeId() : "node-01";
                 String tgt = (event.targetNodeId() != null && !event.targetNodeId().isBlank()) ? event.targetNodeId() : "node-02";
-                triggerNodeTransfer(src, tgt, ClusterDataTraffic.TrafficType.RAFT_REPLICATION, event.message(), 1024 * 64, 85.0f);
+                if ("cluster".equalsIgnoreCase(tgt)) {
+                    for (ServerNode3D peer : serverNodes) {
+                        if (!peer.getId().equalsIgnoreCase(src)) {
+                            triggerNodeTransfer(src, peer.getId(), ClusterDataTraffic.TrafficType.RAFT_REPLICATION, event.message(), 1024 * 64, 85.0f);
+                        }
+                    }
+                } else {
+                    triggerNodeTransfer(src, tgt, ClusterDataTraffic.TrafficType.RAFT_REPLICATION, event.message(), 1024 * 64, 85.0f);
+                }
             }
             default -> {}
         }

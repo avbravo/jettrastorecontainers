@@ -66,6 +66,16 @@ public final class JettraClusterReplicationClient implements AutoCloseable {
     }
 
     /**
+     * Envía una trama de creación de motor especializado dentro de una base de datos a los nodos secundarios.
+     */
+    public boolean broadcastCreateEngine(String dbName, String engineName, String engineType, byte[] payload) {
+        long term = currentTerm.get();
+        long idx = logIndex.incrementAndGet();
+        JettraRaftFrame frame = JettraRaftFrame.createEngine(term, idx, localNodeId, dbName, engineName, engineType, payload);
+        return broadcastFrameWithQuorum(frame);
+    }
+
+    /**
      * Envía una trama de inserción/actualización de documento a todos los nodos secundarios.
      */
     public boolean broadcastPutDocument(String dbName, String colName, String id, byte[] jsonBytes) {
@@ -200,6 +210,23 @@ public final class JettraClusterReplicationClient implements AutoCloseable {
                     activePeers++;
                     if (vote.ack()) {
                         acks++;
+                        String desc = switch (frame.frameType()) {
+                            case JettraRaftFrame.TYPE_CREATE_DATABASE -> String.format("Base '%s' replicada hacia '%s'", frame.databaseName(), vote.peer().getId());
+                            case JettraRaftFrame.TYPE_DISTRIBUTE_DATABASE -> String.format("Transferencia de base '%s' completada hacia '%s'", frame.databaseName(), vote.peer().getId());
+                            case JettraRaftFrame.TYPE_CREATE_ENGINE -> String.format("Motor '%s' [%s] en base '%s' replicado hacia '%s'", frame.collectionName(), frame.key(), frame.databaseName(), vote.peer().getId());
+                            case JettraRaftFrame.TYPE_PUT_DOCUMENT -> String.format("Documento '%s' en colección '%s' replicado hacia '%s'", frame.key(), frame.collectionName(), vote.peer().getId());
+                            case JettraRaftFrame.TYPE_PUT_RECORD -> String.format("Registro KV '%s' en '%s' replicado hacia '%s'", frame.key(), frame.collectionName(), vote.peer().getId());
+                            default -> String.format("Trama Raft 0x%02X transferida hacia '%s'", frame.frameType(), vote.peer().getId());
+                        };
+                        ClusterLiveEvent transferEvt = new ClusterLiveEvent(
+                            System.currentTimeMillis(),
+                            ClusterLiveEvent.TYPE_DATA_TRANSFER,
+                            localNodeId,
+                            vote.peer().getId(),
+                            desc,
+                            "db=" + frame.databaseName() + ",type=0x" + Integer.toHexString(frame.frameType())
+                        );
+                        JettraClusterEventBus.getInstance().publish(transferEvt);
                     }
                 }
             } catch (Exception ignored) {}

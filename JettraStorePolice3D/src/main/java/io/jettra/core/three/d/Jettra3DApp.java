@@ -2192,6 +2192,22 @@ public class Jettra3DApp {
                     } catch (Exception ex) {}
                 }
 
+                if (lowerMsg.contains("cluster live") || lowerMsg.contains("cluster-live")) {
+                    if (policeMonitor != null) {
+                        String liveOutput = policeMonitor.clusterLive(10);
+                        res = "📡 TELEMETRÍA DE CLÚSTER EN VIVO:";
+                        chatHistory.add("Jettra: " + res);
+                        for (String l : liveOutput.split("\n")) {
+                            if (!l.isBlank()) {
+                                chatHistory.add("  " + l);
+                            }
+                        }
+                        worldEvents.add(new WorldEvent("Comando 'cluster live' procesado", worldTime, 0, 255, 200));
+                    } else {
+                        res = "Monitor de policía del clúster no disponible.";
+                    }
+                }
+
                 // Physical Commands
                 if (lowerMsg.matches(".*\\b(teletransportar|mover|viajar|centro)\\b.*")) {
                     res = "Teletransporte cuántico activado. Vuelvan a casa.";

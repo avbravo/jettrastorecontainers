@@ -409,5 +409,71 @@ public class JettraClusterReplicationTest extends JettraStoreBaseTest {
         }
     }
 
+    @Test
+    @DisplayName("Debe replicar creación de motores especializados y transferencias en vivo")
+    public void testReplicationEngineCreationAndDataTransfer() throws IOException, InterruptedException {
+        Path tempDir = Files.createTempDirectory("jettra_engine_repl_test");
+        int testPort = 19140;
+
+        Properties dbProps = new Properties();
+        dbProps.setProperty("jettra.node.id", "node-02");
+        dbProps.setProperty("jettra.node.role", "SECONDARY");
+        dbProps.setProperty("jettra.storage.path", tempDir.toString());
+        dbProps.setProperty("jettra.network.grpc.port", String.valueOf(testPort));
+        dbProps.setProperty("jettra.network.rest.port", "18084");
+        dbProps.setProperty("cluster.multinode.active", "on");
+
+        Properties clusterProps = new Properties();
+        clusterProps.setProperty("cluster.node.1.id", "node-01");
+        clusterProps.setProperty("cluster.node.1.ip", "127.0.0.1");
+        clusterProps.setProperty("cluster.node.1.grpc.port", "19139");
+        clusterProps.setProperty("cluster.node.2.id", "node-02");
+        clusterProps.setProperty("cluster.node.2.ip", "127.0.0.1");
+        clusterProps.setProperty("cluster.node.2.grpc.port", String.valueOf(testPort));
+
+        JettraStoreConfig secondaryConfig = new JettraStoreConfig(dbProps, clusterProps);
+        JettraStoreServer secondaryServer = new JettraStoreServer(secondaryConfig);
+
+        try (JettraClusterTransportServer transportServer = new JettraClusterTransportServer(testPort, secondaryServer)) {
+            transportServer.start();
+            Thread.sleep(100);
+
+            ClusterNode peerNode2 = new ClusterNode("node-02", "127.0.0.1", testPort, ClusterNode.Role.SECONDARY);
+            try (JettraClusterReplicationClient client = new JettraClusterReplicationClient("node-01", List.of(peerNode2))) {
+                // 1. Replicar creación de base
+                boolean dbCreated = client.broadcastCreateDatabase("engines_test_db");
+                assertTrue(dbCreated);
+
+                // 2. Replicar creación de motores
+                boolean vecEngine = client.broadcastCreateEngine("engines_test_db", "embeddings", "VECTOR", "256".getBytes());
+                assertTrue(vecEngine);
+
+                boolean tsEngine = client.broadcastCreateEngine("engines_test_db", "metrics", "TIMESERIES", null);
+                assertTrue(tsEngine);
+
+                // 3. Replicar registro KV
+                byte[] val = "activo".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                boolean kvPut = client.broadcastPutRecord("engines_test_db", "app_config", "status", val);
+                assertTrue(kvPut);
+
+                // Verificar en nodo secundario
+                var secDb = secondaryServer.getOrCreateDatabaseInternal("engines_test_db", false);
+                assertNotNull(secDb);
+                assertNotNull(secDb.getVectorEngine("embeddings", 256));
+                assertNotNull(secDb.getTimeSeriesEngine("metrics"));
+                byte[] readVal = secDb.getKeyValueEngine("app_config").get("status");
+                assertNotNull(readVal);
+                assertEquals("activo", new String(readVal, java.nio.charset.StandardCharsets.UTF_8));
+
+                // 4. Verificar eventos de transferencia en el bus
+                List<ClusterLiveEvent> events = JettraClusterEventBus.getInstance().getRecentEvents(50);
+                boolean foundEngine = events.stream().anyMatch(e -> ClusterLiveEvent.TYPE_ENGINE_CREATED.equals(e.type()));
+                boolean foundTransfer = events.stream().anyMatch(e -> ClusterLiveEvent.TYPE_DATA_TRANSFER.equals(e.type()));
+                assertTrue(foundEngine);
+                assertTrue(foundTransfer);
+            }
+        }
+    }
+
     public record TestRecord(String id, String name, int score) {}
 }

@@ -40,6 +40,7 @@ public record JettraRaftFrame(
     public static final byte TYPE_LEADER_ELECTION   = 0x13;
     public static final byte TYPE_NEW_LEADER_PROMOTED = 0x14;
     public static final byte TYPE_CLUSTER_LIVE_EVENT = 0x15;
+    public static final byte TYPE_CREATE_ENGINE    = 0x16;
 
     public static JettraRaftFrame heartbeat(long term, String senderNodeId) {
         return new JettraRaftFrame(TYPE_HEARTBEAT, term, 0, senderNodeId, "", "", "", new byte[0], System.currentTimeMillis());
@@ -55,6 +56,10 @@ public record JettraRaftFrame(
 
     public static JettraRaftFrame createDatabase(long term, long logIndex, String senderNodeId, String databaseName, byte[] payload) {
         return new JettraRaftFrame(TYPE_CREATE_DATABASE, term, logIndex, senderNodeId, databaseName, "", "", payload != null ? payload : new byte[0], System.currentTimeMillis());
+    }
+
+    public static JettraRaftFrame createEngine(long term, long logIndex, String senderNodeId, String databaseName, String engineName, String engineType, byte[] payload) {
+        return new JettraRaftFrame(TYPE_CREATE_ENGINE, term, logIndex, senderNodeId, databaseName, engineName, engineType, payload != null ? payload : new byte[0], System.currentTimeMillis());
     }
 
     public static JettraRaftFrame distributeDatabase(long term, long logIndex, String senderNodeId, String databaseName, byte[] payload) {
