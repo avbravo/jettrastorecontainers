@@ -562,9 +562,11 @@ Seleccione una conexión para iniciar:
             return handleCount(trimmed);
         } else if (upper.equals("SHOW COLLECTIONS") || upper.equals("SHOW TABLES")) {
             return handleShowCollections();
-        } else if (upper.startsWith("CREATE COLLECTION ")) {
+        } else if (upper.startsWith("CREATE COLLECTION ") || upper.startsWith("CREATE ENGINE ")
+                || upper.startsWith("CREATE BUCKET ") || upper.startsWith("CREATE UNIT ")) {
             return handleCreateCollection(trimmed);
-        } else if (upper.startsWith("DROP COLLECTION ")) {
+        } else if (upper.startsWith("DROP COLLECTION ") || upper.startsWith("DROP ENGINE ")
+                || upper.startsWith("DROP BUCKET ") || upper.startsWith("DROP UNIT ")) {
             return handleDropCollection(trimmed);
         }
 
@@ -2738,7 +2740,7 @@ Seleccione una conexión para iniciar:
 
     private String handleCreateCollection(String command) {
         String[] parts = command.split("\\s+");
-        if (parts.length < 3) return "[ERROR] Uso: CREATE COLLECTION <nombre> [TYPE <tipo>]";
+        if (parts.length < 3) return "[ERROR] Uso: CREATE <ENGINE|COLLECTION|BUCKET|UNIT> <nombre> [TYPE <tipo>]";
         String colName = cleanQuotes(parts[2]);
         String type = "DOCUMENT";
         for (int i = 3; i < parts.length - 1; i++) {
@@ -2757,7 +2759,7 @@ Seleccione una conexión para iniciar:
             case "GEOSPATIAL", "GEO" -> db.getGeospatialEngine(colName);
             default -> db.getDocumentEngine(colName);
         }
-        return String.format("[SUCCESS] Colección '%s' creada con motor multimodelo '%s' en base de datos '%s'.", colName, type, currentDatabase);
+        return String.format("[SUCCESS] Unidad/Motor '%s' creado con motor multimodelo '%s' en base de datos '%s'.", colName, type, currentDatabase);
     }
 
     // --- Control de Buckets / Units, Conteo y Visualización de Registros ---
@@ -3117,10 +3119,11 @@ return String.format("[NOT FOUND] No se encontró el bucket/unit '%s' en la base
     }
 
     private String handleDropCollection(String command) {
-        String col = cleanQuotes(command.substring("DROP COLLECTION ".length()).trim());
+        String clean = command.replaceAll("(?i)^(DROP COLLECTION|DROP ENGINE|DROP BUCKET|DROP UNIT)\\s+", "").trim();
+        String col = cleanQuotes(clean.split("\\s+")[0]);
         boolean ok = client.getDatabase(currentDatabase).dropCollection(col);
-        return ok ? String.format("[SUCCESS] Colección '%s' eliminada.", col)
-                  : String.format("[WARN] La colección '%s' no existía.", col);
+        return ok ? String.format("[SUCCESS] Unidad/Colección/Motor '%s' eliminado.", col)
+                  : String.format("[WARN] La unidad/colección/motor '%s' no existía.", col);
     }
 
     // --- Auxiliares de Parseo ---

@@ -25,8 +25,14 @@
 10. [Administración Integral de Índices](#10-administración-integral-de-índices)
 11. [Administración de Usuarios y Roles de Base de Datos (RBAC Granular)](#11-administración-de-usuarios-y-roles-de-base-de-datos-rbac-granular)
 12. [Exploración de Buckets/Units, Inspección de Registros y Conteo](#12-exploración-de-bucketsunits-inspección-de-registros-y-conteo-multimodelo)
-13. [Operaciones CRUD sobre Registros](#13-operaciones-crud-sobre-registros)
-14. [Motores Multimodelo Especializados](#14-motores-multimodelo-especializados)
+13. [Operaciones CRUD sobre Unidades y Registros por cada Motor Multimodelo](#13-operaciones-crud-sobre-unidades-y-registros-por-cada-motor-multimodelo)
+   - [13.1 Ciclo de Vida y Creación de Motores/Unidades](#131-ciclo-de-vida-de-base-de-datos-y-creación-de-motores-unidades--buckets)
+   - [13.2 CRUD en Motor Documental (DOCUMENT)](#132-crud-completo-en-motores-documentales-document)
+   - [13.3 CRUD en Motor Clave-Valor (KEYVALUE / KV)](#133-crud-completo-en-motores-clave-valor-keyvalue--kv)
+   - [13.4 CRUD en Motor Vectorial (VECTOR)](#134-crud-completo-en-motores-vectoriales-vector)
+   - [13.5 CRUD en Motor de Grafos (GRAPH)](#135-crud-completo-en-motores-de-grafos-graph)
+   - [13.6 CRUD en Motor de Series Temporales (TIMESERIES)](#136-crud-completo-en-motores-de-series-temporales-timeseries)
+14. [Ejemplo Práctico Completo: Base de Datos de un Hospital Inteligente (`hospital_db`)](#14-ejemplo-práctico-completo-base-de-datos-de-un-hospital-inteligente-hospital_db)
 15. [Respaldos Físicos en Caliente y Restauración (Backup & Restore)](#15-respaldos-físicos-en-caliente-y-restauración-backup--restore)
 16. [Tutorial Práctico Extremo a Extremo (Paso a Paso)](#16-tutorial-práctico-extremo-a-extremo-paso-a-paso)
 17. [Tabla Rápida de Comandos y Ayuda (`help`)](#17-tabla-rápida-de-comandos-y-ayuda-help)
@@ -719,69 +725,799 @@ Gran Total en 'sample_enterprise_db': 9 registro(s) multimodelo.
 
 ---
 
-## 13. Operaciones CRUD sobre Registros
+---
+
+## 13. Operaciones CRUD sobre Unidades y Registros por cada Motor Multimodelo
+
+`JettraStoreShell` permite manipular de forma exhaustiva tanto el ciclo de vida de los motores (unidades/buckets) como las operaciones **CRUD** (Crear, Leer, Actualizar, Eliminar) sobre los registros en cualquiera de los motores soportados.
+
+### 13.1 Ciclo de Vida de Base de Datos y Creación de Motores (Unidades / Buckets)
 
 ```sql
-USE sample_enterprise_db;
+-- 1. Crear una base de datos lógica
+CREATE DATABASE clinica_db;
 
--- Inserción (Sintaxis amigable o SQL estándar)
-INSERT INTO employees ID emp_02 JSON {"name": "Alan Turing", "dept": "Cryptanalysis"};
-INSERT INTO employees VALUES ('emp_03', '{"name": "Donald Knuth", "dept": "Algorithms"}');
+-- 2. Conmutar a la base de datos de trabajo
+USE clinica_db;
 
--- Lectura puntual
-GET employees emp_02;
+-- 3. Crear unidades/motores especializados (sintaxis CREATE ENGINE o CREATE COLLECTION)
+CREATE ENGINE pacientes TYPE DOCUMENT;
+CREATE ENGINE inventario_rapido TYPE KEYVALUE;
+CREATE ENGINE diagnostico_vectores TYPE VECTOR;
+CREATE ENGINE red_afiliados TYPE GRAPH;
+CREATE ENGINE telemetria_pulso TYPE TIMESERIES;
+CREATE ENGINE sedes_clinicas TYPE GEOSPATIAL;
+CREATE ENGINE costos_servicios TYPE COLUMNAR;
 
--- Escaneo masivo con paginación
-FIND ALL employees LIMIT 10;
+-- 4. Inspeccionar las unidades creadas
+SHOW BUCKETS;
 
--- Actualización
-UPDATE employees SET {salary: 210000} WHERE _id = 'emp_02';
+-- 5. Eliminar una unidad/motor específico
+DROP ENGINE costos_servicios;
 
--- Eliminación
-DELETE employees emp_03;
-DELETE FROM employees WHERE _id = 'emp_02';
+-- 6. Eliminar una base de datos completa
+-- (Nota: Para eliminar la base de datos activa, conmute primero a otra con USE)
+USE default_db;
+DROP DATABASE clinica_db;
 ```
 
 ---
 
-## 14. Motores Multimodelo Especializados
+### 13.2 CRUD Completo en Motores Documentales (`DOCUMENT`)
 
-### 13.1 Motor Vectorial (Embeddings IA)
+El motor documental soporta documentos tipo JSON con identificador único `_id`.
+
+#### C - Create (Inserción de Registros)
 ```sql
--- Indexar vector float[] de 3 dimensiones
-VECTOR INDEX product_embeddings emb_02 [0.85, 0.12, -0.33];
+USE clinica_db;
 
--- Búsqueda de vecinos más cercanos (k-NN Cosine Similarity)
-VECTOR SEARCH product_embeddings [0.80, 0.10, -0.30] K 3;
+-- Inserción con sintaxis JSON declarativa:
+INSERT INTO pacientes ID pac_01 JSON {"nombre": "Maria Elena Vega", "edad": 42, "habitacion": 201, "estado": "Estable"};
+
+-- Inserción con sintaxis VALUES de estilo SQL:
+INSERT INTO pacientes VALUES ('pac_02', '{"nombre": "Carlos Alberto Mora", "edad": 61, "habitacion": 104, "estado": "Observacion"}');
 ```
 
-### 13.2 Motor de Grafos
+#### R - Read (Lectura y Consultas)
 ```sql
--- Crear vértices
-GRAPH ADD VERTEX catalog_graph prod_02;
-GRAPH ADD VERTEX catalog_graph cat_software;
+-- Lectura directa por ID primario (con resolución de referencias si están activas):
+GET pacientes pac_01;
 
--- Conectar arista dirigida con peso
-GRAPH ADD EDGE catalog_graph prod_02 cat_software LABEL CATEGORIZED_IN WEIGHT 0.95;
+-- Escaneo masivo con límite de resultados:
+FIND ALL pacientes LIMIT 10;
 
--- Consultar aristas salientes
-GRAPH GET EDGES catalog_graph prod_02;
+-- Consulta relacional ANSI SQL:
+SELECT _id, nombre, edad, habitacion, estado FROM pacientes WHERE edad > 40;
+
+-- Consulta declarativa JettraQL:
+JQL FROM pacientes WHERE estado = Estable;
+
+-- Conteo de registros en la colección:
+COUNT pacientes;
+
+-- Inspección interactiva de registros con diagnóstico:
+SHOW RECORDS pacientes LIMIT 5;
 ```
 
-### 13.3 Motor de Series Temporales (IoT)
+#### U - Update (Actualización de Registros)
 ```sql
--- Registrar punto métrico
-TS RECORD server_cpu 14.8 TIME 1759160500;
+-- Modificación de campos específicos por identificador _id:
+UPDATE pacientes SET {habitacion: 205, estado: "Alta Medica"} WHERE _id = 'pac_01';
 
--- Consultar rango temporal
-TS RANGE server_cpu 1759160000 1759161000;
+-- Comprobación inmediata del registro actualizado:
+GET pacientes pac_01;
 ```
 
-### 13.4 Motor Clave-Valor (Memoria de Ultra Alta Velocidad)
+#### D - Delete (Eliminación de Registros)
 ```sql
-KV PUT cache session_admin_token "JettraJWT.abc123xyz";
-KV GET cache session_admin_token;
+-- Eliminación mediante cláusula WHERE:
+DELETE FROM pacientes WHERE _id = 'pac_02';
+
+-- Eliminación directa indicando colección e ID:
+DELETE pacientes pac_01;
+
+-- Verificación de eliminación:
+COUNT pacientes;
 ```
+
+---
+
+### 13.3 CRUD Completo en Motores Clave-Valor (`KEYVALUE` / `KV`)
+
+Almacenamiento ultra veloz en memoria y disco persistente para sesiones, cachés, identificadores de hardware y folios.
+
+#### C - Create / U - Update (Almacenamiento y Sobrescritura)
+```sql
+-- Inserción o actualización de pares clave-valor (KV PUT <unidad> <clave> <valor>):
+KV PUT inventario_rapido cam_uci_01 "OCUPADA | Monitor Cardiaco Activo";
+KV PUT inventario_rapido cam_uci_02 "DISPONIBLE | Desinfectada y Lista";
+KV PUT inventario_rapido token_admin_guardia "JWT.Bearer.SecretSession2026";
+
+-- Actualización (sobrescribe el valor existente):
+KV PUT inventario_rapido cam_uci_01 "DISPONIBLE | Mantenimiento Concluido";
+```
+
+#### R - Read (Lectura Puntual y Listado)
+```sql
+-- Recuperación puntual por clave:
+KV GET inventario_rapido cam_uci_01;
+KV GET inventario_rapido cam_uci_02;
+
+-- Inspección de todos los registros en el bucket KV:
+SHOW RECORDS inventario_rapido;
+
+-- Conteo de claves registradas:
+COUNT inventario_rapido;
+```
+
+#### D - Delete (Eliminación)
+```sql
+-- Eliminación de la unidad clave-valor completa:
+DROP ENGINE inventario_rapido;
+```
+
+---
+
+### 13.4 CRUD Completo en Motores Vectoriales (`VECTOR`)
+
+Almacenamiento de embeddings multidimensionales para modelos de Inteligencia Artificial, diagnóstico predictivo y similitud semántica.
+
+#### C - Create (Indexación de Vectores)
+```sql
+-- Indexar vectores float[] multidimensionales (VECTOR INDEX <unidad> <id> [v1, v2, ...]):
+VECTOR INDEX diagnostico_vectores vec_cuadro_gripal [0.85, 0.72, 0.14];
+VECTOR INDEX diagnostico_vectores vec_infarto_agudo [0.12, 0.96, 0.89];
+VECTOR INDEX diagnostico_vectores vec_migrana_severa [0.68, 0.25, 0.40];
+```
+
+#### R - Read (Búsqueda Vecinos más Cercanos k-NN Cosine Similarity)
+```sql
+-- Búsqueda de similitud coseno vectorial:
+VECTOR SEARCH diagnostico_vectores [0.80, 0.70, 0.20] K 2;
+
+-- Inspección de registros vectoriales indexados:
+SHOW RECORDS diagnostico_vectores;
+
+-- Conteo de vectores:
+COUNT diagnostico_vectores;
+```
+
+#### U - Update (Recalibración de Vectores)
+```sql
+-- Para actualizar un vector, se re-indexa el mismo ID con las coordenadas actualizadas:
+VECTOR INDEX diagnostico_vectores vec_cuadro_gripal [0.88, 0.75, 0.11];
+```
+
+#### D - Delete (Eliminación de la Unidad Vectorial)
+```sql
+DROP ENGINE diagnostico_vectores;
+```
+
+---
+
+### 13.5 CRUD Completo en Motores de Grafos (`GRAPH`)
+
+Redes topológicas dirigidas de conocimiento compuestas por nodos (vértices) y relaciones con atributos y ponderación (aristas).
+
+#### C - Create (Inserción de Vértices y Aristas Dirigidas)
+```sql
+-- 1. Creación de nodos (vértices):
+GRAPH ADD VERTEX red_afiliados dr_fernandez;
+GRAPH ADD VERTEX red_afiliados pac_maria;
+GRAPH ADD VERTEX red_afiliados pabellon_uci;
+
+-- 2. Creación de conexiones (aristas dirigidas ponderadas):
+GRAPH ADD EDGE red_afiliados dr_fernandez pac_maria LABEL TRATA_A WEIGHT 1.0;
+GRAPH ADD EDGE red_afiliados pac_maria pabellon_uci LABEL ASIGNADO_A WEIGHT 0.95;
+```
+
+#### R - Read (Consultas Topológicas de Conectividad)
+```sql
+-- Obtener las aristas salientes de un nodo:
+GRAPH GET EDGES red_afiliados dr_fernandez;
+GRAPH GET EDGES red_afiliados pac_maria;
+
+-- Inspección de toda la topología del grafo:
+SHOW RECORDS red_afiliados;
+
+-- Conteo de vértices en el grafo:
+COUNT red_afiliados;
+```
+
+#### U - Update (Reconfiguración de Aristas y Ponderación)
+```sql
+-- Re-conectar o actualizar el peso y la etiqueta de la relación entre nodos:
+GRAPH ADD EDGE red_afiliados pac_maria pabellon_uci LABEL TRASLADADO_A WEIGHT 0.60;
+```
+
+#### D - Delete (Eliminación de la Red de Grafos)
+```sql
+DROP ENGINE red_afiliados;
+```
+
+---
+
+### 13.6 CRUD Completo en Motores de Series Temporales (`TIMESERIES`)
+
+Estructura append-only ultra rápida con compresión de marcas de tiempo delta para lecturas telemétricas e IoT médico continuo.
+
+#### C - Create (Registro de Puntos Telemétricos con Timestamp)
+```sql
+-- Registrar métricas con marca de tiempo UNIX epoch (TS RECORD <unidad> <valor> [TIME <timestamp>]):
+TS RECORD telemetria_pulso 72.0 TIME 1759160000;
+TS RECORD telemetria_pulso 75.5 TIME 1759160060;
+TS RECORD telemetria_pulso 88.0 TIME 1759160120;
+TS RECORD telemetria_pulso 115.3 TIME 1759160180;
+TS RECORD telemetria_pulso 74.0 TIME 1759160240;
+```
+
+#### R - Read (Consultas de Rangos Temporales y Monitoreo)
+```sql
+-- Consultar rango temporal cronológico:
+TS RANGE telemetria_pulso 1759160000 1759160240;
+
+-- Inspección de puntos telemétricos:
+SHOW RECORDS telemetria_pulso LIMIT 10;
+
+-- Conteo total de puntos almacenados:
+COUNT telemetria_pulso;
+```
+
+#### U - Update / D - Delete
+Por su naturaleza arquitectónica append-only orientada a auditoría inmutable, los puntos temporales no se mutan individualmente; nuevas lecturas rectificativas se registran cronológicamente, o la unidad completa se reinicia mediante `DROP ENGINE telemetria_pulso`.
+
+---
+
+## 14. Ejemplo Práctico Completo: Base de Datos de un Hospital Inteligente (`hospital_db`)
+
+A continuación se desarrolla un escenario empresarial real de punta a punta: el diseño, aprovisionamiento, ingesta y manipulación de datos de un **Centro Hospitalario de Alta Complejidad**, implementando **los 8 motores multimodelo**, referencias cruzadas `JettraRef`, índices secundarios, paginación, auditoría y respaldo.
+
+```
+       +---------------------------------------------------------------+
+       |             HOSPITAL_DB (Multimodelo Distribuido)             |
+       +---------------------------------------------------------------+
+                 |                   |                   |
+                 v                   v                   v
+        [DOCUMENT ENGINE]     [VECTOR ENGINE]     [GRAPH ENGINE]
+           - pacientes          - sintomas_ia       - red_hospital
+           - medicos          (Triaje predictivo) (Médicos, Pacientes, Camas)
+                 |                   |                   |
+                 +--------+----------+---------+---------+
+                          |                    |
+                          v                    v
+                   [KEYVALUE ENGINE]   [TIMESERIES ENGINE]
+                    - cache_camas        - signos_vitales
+                    - farmacia_stock   (Telemetría de UCI)
+```
+
+---
+
+### Fase 1: Creación de la Base de Datos Hospitalaria y Selección del Contexto
+
+Iniciamos sesión como superusuario en el terminal interactivo de `JettraStoreShell`:
+
+```text
+admin@jettra-cluster:primary> CREATE DATABASE hospital_db
+[SUCCESS] Base de datos 'hospital_db' creada exitosamente y registrada en el clúster.
+
+admin@jettra-cluster:primary> USE hospital_db
+[SUCCESS] Conmutado a base de datos activa: 'hospital_db'.
+
+admin@jettra-cluster:primary> DB STATS
+=== ESTADÍSTICAS DE BASE DE DATOS: 'hospital_db' ===
+- Colecciones Totales: 0
+- Documentos:          []
+- Clave-Valor (KV):    []
+- Vectores:            []
+- Grafos:              []
+- Series Temporales:   []
+- Geoespacial (GIS):   []
+- Columnar (OLAP):     []
+- Java Records:        []
+- Índices Secundarios: 0
+- MemTable Utilizada:  0.00 KB
+```
+
+---
+
+### Fase 2: Creación de Motores (Unidades / Buckets) Especializados
+
+Creamos los motores específicos que gobernarán cada vertical de información dentro del hospital:
+
+```text
+admin@jettra-cluster:primary> CREATE ENGINE pacientes TYPE DOCUMENT
+[SUCCESS] Unidad/Motor 'pacientes' creado con motor multimodelo 'DOCUMENT' en base de datos 'hospital_db'.
+
+admin@jettra-cluster:primary> CREATE ENGINE medicos TYPE DOCUMENT
+[SUCCESS] Unidad/Motor 'medicos' creado con motor multimodelo 'DOCUMENT' en base de datos 'hospital_db'.
+
+admin@jettra-cluster:primary> CREATE ENGINE cache_camas TYPE KEYVALUE
+[SUCCESS] Unidad/Motor 'cache_camas' creado con motor multimodelo 'KEYVALUE' en base de datos 'hospital_db'.
+
+admin@jettra-cluster:primary> CREATE ENGINE farmacia_stock TYPE KEYVALUE
+[SUCCESS] Unidad/Motor 'farmacia_stock' creado con motor multimodelo 'KEYVALUE' en base de datos 'hospital_db'.
+
+admin@jettra-cluster:primary> CREATE ENGINE sintomas_ia TYPE VECTOR
+[SUCCESS] Unidad/Motor 'sintomas_ia' creado con motor multimodelo 'VECTOR' en base de datos 'hospital_db'.
+
+admin@jettra-cluster:primary> CREATE ENGINE red_hospital TYPE GRAPH
+[SUCCESS] Unidad/Motor 'red_hospital' creado con motor multimodelo 'GRAPH' en base de datos 'hospital_db'.
+
+admin@jettra-cluster:primary> CREATE ENGINE signos_vitales TYPE TIMESERIES
+[SUCCESS] Unidad/Motor 'signos_vitales' creado con motor multimodelo 'TIMESERIES' en base de datos 'hospital_db'.
+
+admin@jettra-cluster:primary> CREATE ENGINE ubicacion_centros TYPE GEOSPATIAL
+[SUCCESS] Unidad/Motor 'ubicacion_centros' creado con motor multimodelo 'GEOSPATIAL' en base de datos 'hospital_db'.
+
+admin@jettra-cluster:primary> CREATE ENGINE analitica_costos TYPE COLUMNAR
+[SUCCESS] Unidad/Motor 'analitica_costos' creado con motor multimodelo 'COLUMNAR' en base de datos 'hospital_db'.
+```
+
+#### Verificación del aprovisionamiento:
+```text
+admin@jettra-cluster:primary> SHOW BUCKETS
+==============================================================================================
+                BUCKETS / UNITS EN BASE DE DATOS: 'hospital_db'                                        
+==============================================================================================
++-------------+----------------------+--------------------+-----------+----------------------+
+| Motor       | Tipo de Unidad       | Nombre de Unidad   | Registros | Estado               |
++-------------+----------------------+--------------------+-----------+----------------------+
+| DOCUMENT    | Collection           | pacientes          | 0         | ACTIVE (In-Memory)   |
+| DOCUMENT    | Collection           | medicos            | 0         | ACTIVE (In-Memory)   |
+| VECTOR      | Vector Index [3d]    | sintomas_ia        | 0         | INDEXED (HNSW)       |
+| GRAPH       | Property Graph       | red_hospital       | 0         | TOPOLOGY (In-Memory) |
+| TIMESERIES  | Metric Series        | signos_vitales     | 0         | APPEND-ONLY (Delta)  |
+| KEYVALUE    | KV Store             | cache_camas        | 0         | HASH-MAP (Persistent)|
+| KEYVALUE    | KV Store             | farmacia_stock     | 0         | HASH-MAP (Persistent)|
+| GEOSPATIAL  | Spatial Layer        | ubicacion_centros  | 0         | R-TREE (Spatial)     |
+| COLUMNAR    | Column Family        | analitica_costos   | 0         | ARROW/SLOT (Compress)|
++-------------+----------------------+--------------------+-----------+----------------------+
+Total: 9 bucket(s)/unit(s) registrados en la base de datos 'hospital_db'.
+```
+
+---
+
+### Fase 3: Operaciones CRUD por Motor y Manipulación de Registros
+
+---
+
+#### 🏥 3.1 Motor Documental (`pacientes` y `medicos`)
+
+##### [CREATE] Inserción de Médicos y Pacientes:
+```text
+-- Registro de médicos especialistas:
+INSERT INTO medicos ID doc_101 JSON {"nombre": "Dr. Fernando Ruiz", "especialidad": "Cardiologia", "planta": 4};
+INSERT INTO medicos ID doc_102 JSON {"nombre": "Dra. Carmen Morales", "especialidad": "Neumologia", "planta": 3};
+
+-- Registro de pacientes con antecedentes clínicos y referencias cruzadas:
+INSERT INTO pacientes ID pac_01 JSON {"nombre": "Ernesto Valdes", "edad": 54, "habitacion": 402, "estado": "Observacion", "prioridad": "Alta", "_ref_medico": "document::medicos#doc_101", "_ref_sintoma": "vector::sintomas_ia#emb_respiratorio_grave", "_ref_cama": "kv::cache_camas#cama_402"};
+
+INSERT INTO pacientes ID pac_02 JSON {"nombre": "Lucia Santamaria", "edad": 38, "habitacion": 305, "estado": "Estable", "prioridad": "Media", "_ref_medico": "document::medicos#doc_102"};
+
+-- Inserción alternativa con sintaxis VALUES:
+INSERT INTO pacientes VALUES ('pac_03', '{"nombre": "Manuel Coronado", "edad": 72, "habitacion": 408, "estado": "Critico", "prioridad": "Urgente"}');
+INSERT INTO pacientes VALUES ('pac_04', '{"nombre": "Diana Castrellon", "edad": 29, "habitacion": 102, "estado": "Pre-Alta", "prioridad": "Baja"}');
+```
+
+##### [READ] Consultas y Filtros:
+```text
+-- 1. Consulta individual del paciente pac_01:
+admin@jettra-cluster:primary> GET pacientes pac_01
+--- REGISTRO [pac_01] EN 'pacientes' ---
+  _id             : pac_01
+  nombre          : Ernesto Valdes
+  edad            : 54
+  habitacion      : 402
+  estado          : Observacion
+  prioridad       : Alta
+  _ref_medico     : document::medicos#doc_101
+    ↳ [JettraRef Resolución (Lazy Proxy On-Demand)]: Documento {_id=doc_101, nombre=Dr. Fernando Ruiz, especialidad=Cardiologia, planta=4}
+  _ref_sintoma    : vector::sintomas_ia#emb_respiratorio_grave
+  _ref_cama       : kv::cache_camas#cama_402
+
+-- 2. Consulta ANSI SQL con proyección y filtro condicional:
+admin@jettra-cluster:primary> SELECT _id, nombre, edad, habitacion, estado FROM pacientes WHERE edad >= 40
+=== JETTRASQL RESULTADO (1 ms) ===
++--------------+----------------------+--------------+----------------+-----------------+
+| _id          | nombre               | edad         | habitacion     | estado          |
++--------------+----------------------+--------------+----------------+-----------------+
+| pac_01       | Ernesto Valdes       | 54           | 402            | Observacion     |
+| pac_03       | Manuel Coronado      | 72           | 408            | Critico         |
++--------------+----------------------+--------------+----------------+-----------------+
+Total: 2 fila(s) seleccionadas / afectadas.
+
+-- 3. Consulta JettraQL declarativa:
+admin@jettra-cluster:primary> JQL FROM pacientes WHERE prioridad = Urgente
+=== JETTRASQL RESULTADO (0 ms) ===
++--------------+----------------------+--------------+----------------+-----------------+
+| _id          | nombre               | edad         | habitacion     | estado          |
++--------------+----------------------+--------------+----------------+-----------------+
+| pac_03       | Manuel Coronado      | 72           | 408            | Critico         |
++--------------+----------------------+--------------+----------------+-----------------+
+Total: 1 fila(s) seleccionadas / afectadas.
+```
+
+##### [UPDATE] Modificación del Estado Clínico y Habitación:
+```text
+admin@jettra-cluster:primary> UPDATE pacientes SET {estado: "Estable", habitacion: 301, prioridad: "Media"} WHERE _id = 'pac_01'
+[SUCCESS] Registro con _id 'pac_01' actualizado en 'pacientes'.
+
+admin@jettra-cluster:primary> GET pacientes pac_01
+--- REGISTRO [pac_01] EN 'pacientes' ---
+  _id             : pac_01
+  nombre          : Ernesto Valdes
+  edad            : 54
+  habitacion      : 301
+  estado          : Estable
+  prioridad       : Media
+```
+
+##### [DELETE] Eliminación de Paciente por Alta Definitiva o Traslado:
+```text
+admin@jettra-cluster:primary> DELETE FROM pacientes WHERE _id = 'pac_04'
+[SUCCESS] Registro con _id 'pac_04' eliminado de 'pacientes'.
+
+admin@jettra-cluster:primary> COUNT pacientes
+[COUNT] [DOCUMENT] 'pacientes': 3 registro(s).
+```
+
+---
+
+#### 🔑 3.2 Motor Clave-Valor (`cache_camas` y `farmacia_stock`)
+
+##### [CREATE / UPDATE] Almacenamiento Rápido de Camas y Existencias de Fármacos:
+```text
+admin@jettra-cluster:primary> KV PUT cache_camas cama_402 "OCUPADA | Paciente: pac_01 | Oxigeno: SI"
+[SUCCESS] Clave 'cama_402' guardada en tabla KV 'cache_camas'.
+
+admin@jettra-cluster:primary> KV PUT cache_camas cama_305 "OCUPADA | Paciente: pac_02 | Oxigeno: NO"
+[SUCCESS] Clave 'cama_305' guardada en tabla KV 'cache_camas'.
+
+admin@jettra-cluster:primary> KV PUT cache_camas cama_408 "OCUPADA | Paciente: pac_03 | UCI-Avanzada"
+[SUCCESS] Clave 'cama_408' guardada en tabla KV 'cache_camas'.
+
+admin@jettra-cluster:primary> KV PUT farmacia_stock FARMA_PARACETAMOL "STOCK: 1540 ampollas | Lote: L2026-X"
+[SUCCESS] Clave 'FARMA_PARACETAMOL' guardada en tabla KV 'farmacia_stock'.
+
+admin@jettra-cluster:primary> KV PUT farmacia_stock FARMA_CEFTRIAXONA "STOCK: 320 viales | Lote: L2026-AB"
+[SUCCESS] Clave 'FARMA_CEFTRIAXONA' guardada en tabla KV 'farmacia_stock'.
+```
+
+##### [READ] Consulta y Estado:
+```text
+admin@jettra-cluster:primary> KV GET cache_camas cama_402
+[KV] OCUPADA | Paciente: pac_01 | Oxigeno: SI
+
+admin@jettra-cluster:primary> KV GET farmacia_stock FARMA_CEFTRIAXONA
+[KV] STOCK: 320 viales | Lote: L2026-AB
+
+admin@jettra-cluster:primary> SHOW RECORDS cache_camas
+=== REGISTROS DE KEYVALUE BUCKET 'cache_camas' (Mostrando 3 de 3) ===
+  [01] Clave: cama_402             -> Valor: OCUPADA | Paciente: pac_01 | Oxigeno: SI
+  [02] Clave: cama_305             -> Valor: OCUPADA | Paciente: pac_02 | Oxigeno: NO
+  [03] Clave: cama_408             -> Valor: OCUPADA | Paciente: pac_03 | UCI-Avanzada
+```
+
+##### [UPDATE] Liberación y Desinfección de Cama:
+```text
+admin@jettra-cluster:primary> KV PUT cache_camas cama_402 "DISPONIBLE | Desinfectada con Luz UV"
+[SUCCESS] Clave 'cama_402' guardada en tabla KV 'cache_camas'.
+
+admin@jettra-cluster:primary> KV GET cache_camas cama_402
+[KV] DISPONIBLE | Desinfectada con Luz UV
+```
+
+---
+
+#### 🧬 3.3 Motor Vectorial (`sintomas_ia` - Triaje Médico con IA)
+
+Indexamos representaciones vectoriales 3D generadas por modelos clínicos para diagnosticar la similitud entre la sintomatología de un paciente y cuadros clínicos conocidos:
+
+##### [CREATE] Indexación de Embeddings de Síntomas:
+```text
+-- Vector para afección respiratoria severa (Disnea, Hipoxia, Fiebre):
+admin@jettra-cluster:primary> VECTOR INDEX sintomas_ia emb_respiratorio_grave [0.93, 0.88, 0.15]
+[SUCCESS] Vector 'emb_respiratorio_grave' indexado en 'sintomas_ia' (3 dimensiones).
+
+-- Vector para síndrome coronario agudo (Dolor precordial, Diaforesis):
+admin@jettra-cluster:primary> VECTOR INDEX sintomas_ia emb_coronario_agudo [0.12, 0.95, 0.91]
+[SUCCESS] Vector 'emb_coronario_agudo' indexado en 'sintomas_ia' (3 dimensiones).
+
+-- Vector para cuadro gastrointestinal infeccioso:
+admin@jettra-cluster:primary> VECTOR INDEX sintomas_ia emb_gastro_infeccioso [0.45, 0.20, 0.82]
+[SUCCESS] Vector 'emb_gastro_infeccioso' indexado en 'sintomas_ia' (3 dimensiones).
+```
+
+##### [READ] Búsqueda por Similaridad Coseno (k-NN) ante un Nuevo Ingreso:
+Llega un paciente con sintomatología `[0.90, 0.82, 0.18]`. El motor calcula la similitud con las firmas clínicas indexadas:
+
+```text
+admin@jettra-cluster:primary> VECTOR SEARCH sintomas_ia [0.90, 0.82, 0.18] K 2
+=== VECTOR COSINE EN 'sintomas_ia' (k=2) ===
+  [01] Vector ID: emb_respiratorio_grave | Similaridad: 0.9984
+  [02] Vector ID: emb_gastro_infeccioso  | Similaridad: 0.6210
+```
+*Diagnóstico Predictivo Inmediato:* La similitud del 99.84% clasifica prioritariamente al paciente hacia el protocolo de Neumología / Soporte Respiratorio.
+
+##### [UPDATE] Calibración Fina del Vector:
+```text
+admin@jettra-cluster:primary> VECTOR INDEX sintomas_ia emb_respiratorio_grave [0.95, 0.89, 0.12]
+[SUCCESS] Vector 'emb_respiratorio_grave' indexado en 'sintomas_ia' (3 dimensiones).
+```
+
+---
+
+#### 🕸️ 3.4 Motor de Grafos (`red_hospital` - Relaciones Médicas y Logísticas)
+
+Permite modelar la topología del hospital: asignación de médicos tratantes, interconsultas, camas y traslados.
+
+##### [CREATE] Construcción de Nodos y Conexiones Clínicas:
+```text
+-- Creación de nodos:
+admin@jettra-cluster:primary> GRAPH ADD VERTEX red_hospital doc_101
+[SUCCESS] Vértice 'doc_101' agregado al grafo 'red_hospital'.
+
+admin@jettra-cluster:primary> GRAPH ADD VERTEX red_hospital doc_102
+[SUCCESS] Vértice 'doc_102' agregado al grafo 'red_hospital'.
+
+admin@jettra-cluster:primary> GRAPH ADD VERTEX red_hospital pac_01
+[SUCCESS] Vértice 'pac_01' agregado al grafo 'red_hospital'.
+
+admin@jettra-cluster:primary> GRAPH ADD VERTEX red_hospital pac_02
+[SUCCESS] Vértice 'pac_02' agregado al grafo 'red_hospital'.
+
+admin@jettra-cluster:primary> GRAPH ADD VERTEX red_hospital sala_uci_central
+[SUCCESS] Vértice 'sala_uci_central' agregado al grafo 'red_hospital'.
+
+-- Creación de aristas dirigidas y ponderadas:
+admin@jettra-cluster:primary> GRAPH ADD EDGE red_hospital doc_101 pac_01 LABEL TRATA_A WEIGHT 1.0
+[SUCCESS] Arista (doc_101)-[TRATA_A, w=1.0]->(pac_01) agregada en grafo 'red_hospital'.
+
+admin@jettra-cluster:primary> GRAPH ADD EDGE red_hospital pac_01 sala_uci_central LABEL INTERNADO_EN WEIGHT 0.95
+[SUCCESS] Arista (pac_01)-[INTERNADO_EN, w=1.0]->(sala_uci_central) agregada en grafo 'red_hospital'.
+
+admin@jettra-cluster:primary> GRAPH ADD EDGE red_hospital doc_102 pac_01 LABEL INTERCONSULTA WEIGHT 0.70
+[SUCCESS] Arista (doc_102)-[INTERCONSULTA, w=0.7]->(pac_01) agregada en grafo 'red_hospital'.
+```
+
+##### [READ] Navegación de Aristas Salientes:
+```text
+admin@jettra-cluster:primary> GRAPH GET EDGES red_hospital doc_101
+=== ARISTAS SALIENTES DESDE 'doc_101' EN 'red_hospital' ===
+  [01] -> Destino: pac_01          | Relación: TRATA_A         | Props: {weight=1.0}
+
+admin@jettra-cluster:primary> GRAPH GET EDGES red_hospital pac_01
+=== ARISTAS SALIENTES DESDE 'pac_01' EN 'red_hospital' ===
+  [01] -> Destino: sala_uci_central | Relación: INTERNADO_EN    | Props: {weight=0.95}
+```
+
+##### [UPDATE] Modificación de Asignación por Alta o Traslado:
+```text
+admin@jettra-cluster:primary> GRAPH ADD VERTEX red_hospital pabellon_recuperacion
+[SUCCESS] Vértice 'pabellon_recuperacion' agregado al grafo 'red_hospital'.
+
+admin@jettra-cluster:primary> GRAPH ADD EDGE red_hospital pac_01 pabellon_recuperacion LABEL TRASLADADO_A WEIGHT 0.85
+[SUCCESS] Arista (pac_01)-[TRASLADADO_A, w=0.8]->(pabellon_recuperacion) agregada en grafo 'red_hospital'.
+```
+
+---
+
+#### 📈 3.5 Motor de Series Temporales (`signos_vitales` - Monitoreo de UCI)
+
+Ingesta append-only de lecturas de frecuencia cardíaca (lpm) del paciente `pac_01` en estado crítico:
+
+##### [CREATE] Ingesta de Telemetría Cardíaca:
+```text
+admin@jettra-cluster:primary> TS RECORD signos_vitales 72.0 TIME 1759161000
+[SUCCESS] Métrica (timestamp=1759161000, valor=72.00) registrada en 'signos_vitales'.
+
+admin@jettra-cluster:primary> TS RECORD signos_vitales 78.5 TIME 1759161060
+[SUCCESS] Métrica (timestamp=1759161060, valor=78.50) registrada en 'signos_vitales'.
+
+admin@jettra-cluster:primary> TS RECORD signos_vitales 95.0 TIME 1759161120
+[SUCCESS] Métrica (timestamp=1759161120, valor=95.00) registrada en 'signos_vitales'.
+
+admin@jettra-cluster:primary> TS RECORD signos_vitales 128.4 TIME 1759161180
+[SUCCESS] Métrica (timestamp=1759161180, valor=128.40) registrada en 'signos_vitales'.
+
+admin@jettra-cluster:primary> TS RECORD signos_vitales 82.0 TIME 1759161240
+[SUCCESS] Métrica (timestamp=1759161240, valor=82.00) registrada en 'signos_vitales'.
+```
+
+##### [READ] Detección de Episodios Críticos mediante Consulta de Rango Temporal:
+```text
+admin@jettra-cluster:primary> TS RANGE signos_vitales 1759161000 1759161240
+=== TIME SERIES EN 'signos_vitales' [1759161000 a 1759161240] ===
+  [01] Timestamp: 1759161000 | Valor: 72.0000
+  [02] Timestamp: 1759161060 | Valor: 78.5000
+  [03] Timestamp: 1759161120 | Valor: 95.0000
+  [04] Timestamp: 1759161180 | Valor: 128.4000   <-- Taquicardia paroxística detectada
+  [05] Timestamp: 1759161240 | Valor: 82.0000
+
+admin@jettra-cluster:primary> COUNT signos_vitales
+[COUNT] [TIMESERIES] 'signos_vitales': 5 punto(s).
+```
+
+---
+
+### Fase 4: Referencias Cruzadas Multimodelo (`JettraRef`) y Lazy Loading
+
+Vinculamos de forma explícita punteros inter-motor desde el registro del paciente hacia los otros motores especializados:
+
+```text
+-- 1. Vincular puntero hacia la firma de síntomas de IA (Vector):
+admin@jettra-cluster:primary> INSERT REF pacientes pac_01 KEY _ref_ia TARGET vector::sintomas_ia#emb_respiratorio_grave
+[SUCCESS] Referencia JettraRef '_ref_ia' vinculada en 'pacientes'[pac_01] -> 'vector::sintomas_ia#emb_respiratorio_grave'.
+
+-- 2. Vincular puntero hacia el nodo del médico en el grafo:
+admin@jettra-cluster:primary> INSERT REF pacientes pac_01 KEY _ref_grafo TARGET graph::red_hospital#doc_101
+[SUCCESS] Referencia JettraRef '_ref_grafo' vinculada en 'pacientes'[pac_01] -> 'graph::red_hospital#doc_101'.
+
+-- 3. Inspeccionar y resolver en vivo las referencias cruzadas:
+admin@jettra-cluster:primary> SHOW REFS pacientes pac_01
+=== REFERENCIAS CRUZADAS PARA [pac_01] EN 'pacientes' ===
+  [01] Campo: _ref_medico        -> document::medicos#doc_101
+       ↳ Resolución (Lazy On-Demand): Documento {_id=doc_101, nombre=Dr. Fernando Ruiz, especialidad=Cardiologia}
+  [02] Campo: _ref_sintoma       -> vector::sintomas_ia#emb_respiratorio_grave
+       ↳ Resolución (Lazy On-Demand): Vector [0.95, 0.89, 0.12]
+  [03] Campo: _ref_cama          -> kv::cache_camas#cama_402
+       ↳ Resolución (Lazy On-Demand): KV Valor: DISPONIBLE | Desinfectada con Luz UV
+  [04] Campo: _ref_ia            -> vector::sintomas_ia#emb_respiratorio_grave
+       ↳ Resolución (Lazy On-Demand): Vector [0.95, 0.89, 0.12]
+  [05] Campo: _ref_grafo         -> graph::red_hospital#doc_101
+       ↳ Resolución (Lazy On-Demand): Vértice de Grafo 'doc_101' (1 aristas conectadas)
+
+-- 4. Resolución puntual manual:
+admin@jettra-cluster:primary> RESOLVE REF kv::cache_camas#cama_408
+[JettraRef Resolución]: kv::cache_camas#cama_408 -> KV Valor: OCUPADA | Paciente: pac_03 | UCI-Avanzada
+```
+
+---
+
+### Fase 5: Administración de Índices Secundarios (BTREE y HASH)
+
+Para acelerar búsquedas críticas por edad del paciente o por estado clínico:
+
+```text
+-- 1. Crear índice B-Tree sobre la edad para consultas de rango:
+admin@jettra-cluster:primary> CREATE INDEX idx_pacientes_edad ON pacientes (edad) TYPE BTREE
+[SUCCESS] Índice 'idx_pacientes_edad' creado sobre 'pacientes'(edad) tipo BTREE (Entradas indexadas: 3).
+
+-- 2. Crear índice Hash sobre el estado para búsquedas de igualdad exacta:
+admin@jettra-cluster:primary> CREATE INDEX idx_pacientes_estado ON pacientes (estado) TYPE HASH
+[SUCCESS] Índice 'idx_pacientes_estado' creado sobre 'pacientes'(estado) tipo HASH (Entradas indexadas: 3).
+
+-- 3. Listar los índices activos:
+admin@jettra-cluster:primary> SHOW INDEXES ON pacientes
+=== ÍNDICES DE BASE DE DATOS: 'hospital_db' ===
++----------------------+----------------------+----------------------+--------+--------+----------+
+| Nombre de Índice     | Colección            | Campo Indexado       | Tipo   | Único  | Entradas |
++----------------------+----------------------+----------------------+--------+--------+----------+
+| idx_pacientes_edad   | pacientes            | edad                 | BTREE  | NO     | 3        |
+| idx_pacientes_estado | pacientes            | estado               | HASH   | NO     | 3        |
++----------------------+----------------------+----------------------+--------+--------+----------+
+
+-- 4. Reconstruir índice secundario tras inserciones masivas:
+admin@jettra-cluster:primary> ALTER INDEX idx_pacientes_edad REBUILD
+[SUCCESS] Índice 'idx_pacientes_edad' reconstruido exitosamente. Total entradas indexadas: 3.
+
+-- 5. Eliminar un índice en desuso:
+admin@jettra-cluster:primary> DROP INDEX idx_pacientes_estado
+[SUCCESS] Índice 'idx_pacientes_estado' eliminado correctamente.
+```
+
+---
+
+### Fase 6: Paginación Interactiva de Consultas
+
+Configuramos un tamaño de página de 2 registros para observar la paginación interactiva del shell:
+
+```text
+admin@jettra-cluster:primary> PAGE_SIZE 2
+[PAGINACIÓN] Tamaño de página configurado a 2 registros para futuras consultas.
+
+admin@jettra-cluster:primary> SELECT _id, nombre, edad, habitacion FROM pacientes
+=== JETTRASQL RESULTADO (0 ms) ===
++--------------+----------------------+--------------+----------------+
+| _id          | nombre               | edad         | habitacion     |
++--------------+----------------------+--------------+----------------+
+| pac_01       | Ernesto Valdes       | 54           | 301            |
+| pac_02       | Lucia Santamaria     | 38           | 305            |
+... y 1 fila(s) más. Use LIMIT o aumente PAGE_SIZE para ver más.
++--------------+----------------------+--------------+----------------+
+Total: 3 fila(s) seleccionadas / afectadas.
++------------------------------------------------------------------------------------------------------+
+|  PÁGINA [ 1 / 2 ]  •  Mostrando filas 1 - 2 de 3 total  •  Tamaño de página: 2                       |
+|  Navegación: [P]RIMERO (|<<)  •  [A]NTERIOR (<)  •  [S]IGUIENTE (>)  •  [U]LTIMO (>>|)                 |
+|  Comandos: 'SIGUIENTE' | 'ANTERIOR' | 'PRIMERO' | 'ULTIMO' | 'PAGE <n>' | 'PAGE_SIZE <n>'           |
++------------------------------------------------------------------------------------------------------+
+
+-- Avanzar a la siguiente página:
+admin@jettra-cluster:primary> NEXT
+=== JETTRASQL RESULTADO (0 ms) ===
++--------------+----------------------+--------------+----------------+
+| _id          | nombre               | edad         | habitacion     |
++--------------+----------------------+--------------+----------------+
+| pac_03       | Manuel Coronado      | 72           | 408            |
++--------------+----------------------+--------------+----------------+
+Total: 1 fila(s) seleccionadas / afectadas.
++------------------------------------------------------------------------------------------------------+
+|  PÁGINA [ 2 / 2 ]  •  Mostrando filas 3 - 3 de 3 total  •  Tamaño de página: 2                       |
+|  Navegación: [P]RIMERO (|<<)  •  [A]NTERIOR (<)  •  [S]IGUIENTE (>)  •  [U]LTIMO (>>|)                 |
++------------------------------------------------------------------------------------------------------+
+```
+
+---
+
+### Fase 7: Censo Total y Auditoría Global de la Base de Datos
+
+```text
+admin@jettra-cluster:primary> COUNT ALL
+=== CONTEO TOTAL DE REGISTROS EN BASE DE DATOS: 'hospital_db' ===
+  * [DOCUMENT]   pacientes              : 3 registro(s)
+  * [DOCUMENT]   medicos                : 2 registro(s)
+  * [VECTOR]     sintomas_ia            : 3 vector(es)
+  * [GRAPH]      red_hospital           : 6 vértice(s)
+  * [TIMESERIES] signos_vitales         : 5 punto(s)
+  * [KEYVALUE]   cache_camas            : 3 clave(s)
+  * [KEYVALUE]   farmacia_stock         : 2 clave(s)
+  * [GEOSPATIAL] ubicacion_centros      : 0 coordenadas
+  * [COLUMNAR]   analitica_costos       : 0 filas
+  * [RECORDS]    (Sin registros tipados): 0 objetos
+Gran Total en 'hospital_db': 24 registro(s) multimodelo.
+
+admin@jettra-cluster:primary> DB STATS
+=== ESTADÍSTICAS DE BASE DE DATOS: 'hospital_db' ===
+- Colecciones Totales: 9
+- Documentos:          [pacientes, medicos]
+- Clave-Valor (KV):    [cache_camas, farmacia_stock]
+- Vectores:            [sintomas_ia]
+- Grafos:              [red_hospital]
+- Series Temporales:   [signos_vitales]
+- Geoespacial (GIS):   [ubicacion_centros]
+- Columnar (OLAP):     [analitica_costos]
+- Java Records:        []
+- Índices Secundarios: 1
+- MemTable Utilizada:  1.42 KB
+```
+
+---
+
+### Fase 8: Respaldo en Caliente, Limpieza y Eliminación de Unidades
+
+```text
+-- 1. Generar snapshot físico completo con verificación CRC32:
+admin@jettra-cluster:primary> BACKUP DATABASE hospital_db TO './data/jettra/hospital_db_snapshot.snap'
+[SUCCESS] Snapshot físico de 'hospital_db' generado exitosamente en './data/jettra/hospital_db_snapshot.snap'.
+
+-- 2. Eliminar una unidad/motor que ya no es necesaria:
+admin@jettra-cluster:primary> DROP ENGINE farmacia_stock
+[SUCCESS] Unidad/Colección/Motor 'farmacia_stock' eliminado.
+
+-- 3. Verificar que la unidad fue removida del registro de buckets:
+admin@jettra-cluster:primary> SHOW BUCKETS
+(El bucket 'farmacia_stock' ya no figura en la lista de unidades)
+
+-- 4. Para eliminar la base de datos completa, conmutar a otra sesión y ejecutar DROP:
+admin@jettra-cluster:primary> USE default_db
+[SUCCESS] Conmutado a base de datos activa: 'default_db'.
+
+admin@jettra-cluster:primary> DROP DATABASE hospital_db
+[SUCCESS] Base de datos 'hospital_db' eliminada del clúster y disco.
+
+-- 5. Restauración instantánea desde el snapshot:
+admin@jettra-cluster:primary> RESTORE DATABASE hospital_db FROM './data/jettra/hospital_db_snapshot.snap'
+[SUCCESS] Base de datos 'hospital_db' restaurada exitosamente desde './data/jettra/hospital_db_snapshot.snap'.
+
+admin@jettra-cluster:primary> USE hospital_db
+[SUCCESS] Conmutado a base de datos activa: 'hospital_db'.
+
+admin@jettra-cluster:primary> COUNT ALL
+=== CONTEO TOTAL DE REGISTROS EN BASE DE DATOS: 'hospital_db' ===
+(Todos los 24 registros y motores restaurados al 100%)
+```
+
+---
 
 ---
 
