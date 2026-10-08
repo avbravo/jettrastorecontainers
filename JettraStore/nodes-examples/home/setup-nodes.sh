@@ -40,11 +40,15 @@ Node_1_OriginExample="$HOME/NetBeansProjects/jettrastack_local/jettrastorecontai
 Node_2_OriginExample="$HOME/NetBeansProjects/jettrastack_local/jettrastorecontainers/JettraStore/nodes-examples/home/jettra-node-2/."
 Node_3_OriginExample="$HOME/NetBeansProjects/jettrastack_local/jettrastorecontainers/JettraStore/nodes-examples/home/jettra-node-3/."
 
+
+
 # Archivos
 JettraStore_FileName="JettraStore-1.0-SNAPSHOT-uber.jar"
 JettraStoreShell_FileName="JettraStoreShell-1.0-SNAPSHOT-uber.jar"
-JettraStoreShell_FileName="JettraStoreShell-1.0-SNAPSHOT-uber.jar"
+JettraStorePolice3D_FileName="JettraStorePolice3D-1.0-SNAPSHOT-uber.jar"
 
+
+#----------------------------------------------------------------
 # Rutas completas de los archivos
 JettraStore_1_FilePath="$Node_1_Path/$JettraStore_FileName"
 JettraStore_2_FilePath="$Node_2_Path/$JettraStore_FileName"
@@ -54,9 +58,16 @@ JettraStoreShell_1_FilePath="$Node_1_Path/$JettraStoreShell_FileName"
 JettraStoreShell_2_FilePath="$Node_2_Path/$JettraStoreShell_FileName"
 JettraStoreShell_3_FilePath="$Node_3_Path/$JettraStoreShell_FileName"
 
+
+JettraStorePolice3D_1_FilePath="$Node_1_Path/$JettraStorePolice3D_FileName"
+JettraStorePolice3D_2_FilePath="$Node_2_Path/$JettraStorePolice3D_FileName"
+JettraStorePolice3D_3_FilePath="$Node_3_Path/$JettraStorePolice3D_FileName"
+
+#----------------------------------------------------------------
 # Archivos a copiar
 JettraStore_Origin="$HOME/NetBeansProjects/jettrastack_local/jettrastorecontainers/JettraStore/target/JettraStore-1.0-SNAPSHOT-uber.jar"
 JettraStoreShell_Origin="$HOME/NetBeansProjects/jettrastack_local/jettrastorecontainers/JettraStoreShell/target/JettraStoreShell-1.0-SNAPSHOT-uber.jar"
+JettraStorePolice3D_Origin="$HOME/NetBeansProjects/jettrastack_local/jettrastorecontainers/JettraStorePolice3D/target/JettraStorePolice3D-1.0.0-SNAPSHOT-uber.jar"
 
 
 
@@ -92,6 +103,14 @@ for file in "$JettraStoreShell_1_FilePath" "$JettraStoreShell_2_FilePath" "$Jett
         rm -f "$file"
     fi
     cp "$JettraStoreShell_Origin" "$file"
+done
+
+# 4. Verificar si JettraStorePolice3D existe, eliminarlo si es así, y copiar el nuevo archivo
+for file in "$JettraStorePolice3D_1_FilePath" "$JettraStorePolice3D_2_FilePath" "$JettraStorePolice3D_3_FilePath"; do
+    if [ -f "$file" ]; then
+        rm -f "$file"
+    fi
+    cp "$JettraStorePolice3D_Origin" "$file"
 done
 
 

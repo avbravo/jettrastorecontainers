@@ -195,6 +195,9 @@ public final class JettraStoreServer {
         }
         databases.clear();
         JettraPolice.getInstance().stop();
+        if (activeInstance == this) {
+            activeInstance = null;
+        }
         System.out.println("JettraStore Server stopped cleanly.");
     }
 
@@ -541,6 +544,10 @@ public final class JettraStoreServer {
         return activeInstance;
     }
 
+    public boolean isRunning() {
+        return httpServer != null && activeInstance == this;
+    }
+
     public JettraDatabase getOrCreateDatabase(String name) {
         return getOrCreateDatabaseInternal(name, true);
     }
@@ -717,7 +724,18 @@ public final class JettraStoreServer {
                 if (peer.getId().equalsIgnoreCase(newLeaderId)) {
                     peer.setRole(ClusterNode.Role.PRIMARY);
                     peer.start();
-                } else if (peer.getRole() == ClusterNode.Role.PRIMARY) {
+                } else if (peer.getRole() == ClusterNode.Role.PRIMARY || peer.getId().equalsIgnoreCase("node-01")) {
+                    peer.setRole(ClusterNode.Role.SECONDARY);
+                    peer.markOffline();
+                }
+            }
+        }
+        if (replicationClient != null) {
+            for (ClusterNode peer : replicationClient.getPeers()) {
+                if (peer.getId().equalsIgnoreCase(newLeaderId)) {
+                    peer.setRole(ClusterNode.Role.PRIMARY);
+                    peer.start();
+                } else if (peer.getRole() == ClusterNode.Role.PRIMARY || peer.getId().equalsIgnoreCase("node-01")) {
                     peer.setRole(ClusterNode.Role.SECONDARY);
                     peer.markOffline();
                 }
@@ -799,6 +817,15 @@ public final class JettraStoreServer {
                     for (ClusterNode peer : ringEngine.getPeers()) {
                         if (peer.getId().equalsIgnoreCase(deadLeaderId)) {
                             peer.markOffline();
+                            peer.setRole(ClusterNode.Role.SECONDARY);
+                        }
+                    }
+                }
+                if (replicationClient != null) {
+                    for (ClusterNode peer : replicationClient.getPeers()) {
+                        if (peer.getId().equalsIgnoreCase(deadLeaderId)) {
+                            peer.markOffline();
+                            peer.setRole(ClusterNode.Role.SECONDARY);
                         }
                     }
                 }

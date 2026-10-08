@@ -362,8 +362,9 @@ public final class JettraClusterTransportServer implements AutoCloseable {
             case JettraRaftFrame.TYPE_SYNC_CATALOG_REQ -> {
                 List<String> dbs = server != null ? server.listDatabaseNames() : List.of();
                 String csv = String.join(",", dbs);
-                return JettraRaftFrame.syncCatalogResp(frame.term(), 
-                    server != null ? server.getConfig().getNodeId() : "local", csv);
+                String role = server != null ? server.getConfig().getNodeRole().name() : "SECONDARY";
+                String nodeId = server != null ? server.getConfig().getNodeId() : "local";
+                return JettraRaftFrame.syncCatalogResp(frame.term(), nodeId, role, csv);
             }
 
             default -> {

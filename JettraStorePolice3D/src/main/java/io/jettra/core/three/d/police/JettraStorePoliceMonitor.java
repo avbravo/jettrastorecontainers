@@ -119,7 +119,9 @@ public class JettraStorePoliceMonitor implements AutoCloseable {
             ClusterConfigLoader.ConfiguredNode cn = cfgNodes.get(i);
             float[] c = (i < coords.length) ? coords[i] : new float[]{(i * 12.0f) - 12.0f, 0.0f, -15.0f};
             ClusterNode.Role role = "PRIMARY".equalsIgnoreCase(cn.role()) ? ClusterNode.Role.PRIMARY : ClusterNode.Role.SECONDARY;
-            String host = (i == 0 && currentProfile != null) ? currentProfile.getHost() : cn.host();
+            String host = (cn.host() != null && !cn.host().isBlank() && !cn.host().equalsIgnoreCase("127.0.0.1"))
+                ? cn.host()
+                : ((i == 0 && currentProfile != null) ? currentProfile.getHost() : cn.host());
             int port = (i == 0 && currentProfile != null) ? currentProfile.getPort() : cn.restPort();
 
             String suffix = "PRIMARY".equalsIgnoreCase(cn.role()) ? "master" : cn.role().toLowerCase();
@@ -458,6 +460,43 @@ public class JettraStorePoliceMonitor implements AutoCloseable {
                 }
             }
         }
+
+        // Sincronizar dinámicamente IP real, puerto, rol y estado desde el clúster distribuido
+        try {
+            if (client != null) {
+                var distInfo = client.getClusterDistributedInfo();
+                if (distInfo != null && !distInfo.isEmpty()) {
+                    for (var di : distInfo) {
+                        for (ServerNode3D sn : serverNodes) {
+                            if (sn.getId().equalsIgnoreCase(di.nodeId())) {
+                                if (di.ip() != null && !di.ip().isBlank()) {
+                                    sn.setHost(di.ip());
+                                }
+                                if (di.port() > 0) {
+                                    sn.setPort(di.port());
+                                }
+                                if (di.role() != null && !di.role().isBlank()) {
+                                    try {
+                                        ClusterNode.Role r = ClusterNode.Role.valueOf(di.role().toUpperCase());
+                                        sn.setRole(r);
+                                        sn.setRaftState(r == ClusterNode.Role.PRIMARY ? ClusterNode.RaftState.LEADER : ClusterNode.RaftState.FOLLOWER);
+                                    } catch (Exception ignored) {}
+                                }
+                                boolean isRun = "RUNNING".equalsIgnoreCase(di.status());
+                                if (!sn.isSimulatedOffline()) {
+                                    sn.setOnline(isRun);
+                                    sn.setStatus(isRun ? ClusterNode.NodeStatus.RUNNING : ClusterNode.NodeStatus.OFFLINE);
+                                    if (!isRun) {
+                                        sn.setStatusMessage("FUERA DE SERVICIO (Sin respuesta)");
+                                    }
+                                }
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (Exception ignored) {}
 
         for (ServerNode3D node : serverNodes) {
             node.setHeapMaxMb(node.getRole() == ClusterNode.Role.PRIMARY ? maxRam : Math.max(1, maxRam / 2));

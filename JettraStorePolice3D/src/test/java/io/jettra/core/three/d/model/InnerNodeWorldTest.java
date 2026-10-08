@@ -129,4 +129,17 @@ public class InnerNodeWorldTest {
         narrator.toggle();
         assertEquals(initial, narrator.isEnabled());
     }
+
+    @Test
+    public void testServerNodeHostAndPortUpdate() {
+        ServerNode3D node = new ServerNode3D("node-02", "Nodo Réplica 2", "127.0.0.1", 9091,
+                ClusterNode.Role.SECONDARY, 0, 0, 0);
+        assertEquals("127.0.0.1", node.getHost());
+        assertEquals(9091, node.getPort());
+
+        node.setHost("127.0.0.3");
+        node.setPort(9092);
+        assertEquals("127.0.0.3", node.getHost());
+        assertEquals(9092, node.getPort());
+    }
 }

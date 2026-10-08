@@ -2813,8 +2813,8 @@ public class Jettra3DApp {
         drawRectangleLines(0, 0, screenW, 56, online ? SKYBLUE : RED);
 
         drawText("🌐 MUNDO INTERIOR: SERVIDOR " + expandedNode.getId().toUpperCase(), 25, 12, 17, GOLD);
-        drawLegibleText("Host: " + expandedNode.getHost() + ":" + expandedNode.getPort() + " | Rol: " + expandedNode.getRole() + " (" + expandedNode.getRaftState() + ")",
-            25, 34, 11, SKYBLUE);
+        drawLegibleText("HOST: " + expandedNode.getHost() + " | PUERTO: " + expandedNode.getPort() + " | ROL: " + expandedNode.getRole() + " (" + expandedNode.getRaftState() + ")",
+            25, 34, 12, SKYBLUE);
 
         // Botón destacado: Atravesar Puerta y Salir
         Rectangle exitBtnRec = new Rectangle().x(screenW - 410).y(10).width(390).height(36);
@@ -2830,7 +2830,7 @@ public class Jettra3DApp {
         drawRectangleRoundedLines(panelRec, 0.05f, 8, online ? SKYBLUE : RED);
 
         drawText("RECURSOS CONSUMIDOS EN EL NODO", px + 16, py + 14, 14, GOLD);
-        drawLegibleText("Telemetría en Vivo de JettraStore Cluster", px + 16, py + 34, 11, DARKGRAY);
+        drawLegibleText("HOST: " + expandedNode.getHost() + " | Puerto: " + expandedNode.getPort() + " | Telemetría en Vivo", px + 16, py + 34, 11, SKYBLUE);
 
         int cy = py + 55;
         // Badge Estado
@@ -2838,7 +2838,7 @@ public class Jettra3DApp {
         Rectangle bRec = new Rectangle().x(px + 16).y(cy).width(pw - 32).height(26);
         drawRectangleRounded(bRec, 0.2f, 4, badgeBg);
         drawRectangleRoundedLines(bRec, 0.2f, 4, online ? LIME : RED);
-        drawLegibleText(online ? "● EN LÍNEA - LATENCIA: " + expandedNode.getLatencyMs() + " ms" : "▲ FUERA DE SERVICIO (OFFLINE)",
+        drawLegibleText(online ? "● EN LÍNEA [" + expandedNode.getHost() + "] - LATENCIA: " + expandedNode.getLatencyMs() + " ms" : "▲ FUERA DE SERVICIO (OFFLINE - " + expandedNode.getHost() + ")",
             px + 26, cy + 6, 11, online ? LIME : RED);
 
         cy += 35;

@@ -103,9 +103,13 @@ public record JettraRaftFrame(
         return new JettraRaftFrame(TYPE_SYNC_DATA_RESP, term, 0, senderNodeId, databaseName, "", "", metaJsonBytes != null ? metaJsonBytes : new byte[0], System.currentTimeMillis());
     }
 
-    public static JettraRaftFrame syncCatalogResp(long term, String senderNodeId, String dbsCsv) {
+    public static JettraRaftFrame syncCatalogResp(long term, String senderNodeId, String role, String dbsCsv) {
         byte[] bytes = dbsCsv != null ? dbsCsv.getBytes(java.nio.charset.StandardCharsets.UTF_8) : new byte[0];
-        return new JettraRaftFrame(TYPE_SYNC_CATALOG_RESP, term, 0, senderNodeId, "", "", "", bytes, System.currentTimeMillis());
+        return new JettraRaftFrame(TYPE_SYNC_CATALOG_RESP, term, 0, senderNodeId, role != null ? role : "", "", "", bytes, System.currentTimeMillis());
+    }
+
+    public static JettraRaftFrame syncCatalogResp(long term, String senderNodeId, String dbsCsv) {
+        return syncCatalogResp(term, senderNodeId, "SECONDARY", dbsCsv);
     }
 
     public static JettraRaftFrame ack(long term, long logIndex, String senderNodeId, String message) {

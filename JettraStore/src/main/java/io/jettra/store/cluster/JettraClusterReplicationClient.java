@@ -239,10 +239,12 @@ public final class JettraClusterReplicationClient implements AutoCloseable {
         return null;
     }
 
+    public record NodeCatalogInfo(String nodeId, String role, List<String> databases) {}
+
     /**
-     * Solicita al nodo primario la lista de bases de datos para sincronización en caliente.
+     * Consulta el catálogo e información de rol dinámico de un nodo remoto.
      */
-    public List<String> requestCatalogSync(String host, int port) {
+    public NodeCatalogInfo queryNodeCatalogInfo(String host, int port) {
         long term = currentTerm.get();
         JettraRaftFrame req = JettraRaftFrame.syncCatalogReq(term, localNodeId);
         try (Socket s = new Socket()) {
@@ -254,11 +256,11 @@ public final class JettraClusterReplicationClient implements AutoCloseable {
                 JettraClusterProtocol.writeFrame(bos, req);
                 JettraRaftFrame resp = JettraClusterProtocol.readFrame(bis);
                 if (resp != null && resp.frameType() == JettraRaftFrame.TYPE_SYNC_CATALOG_RESP) {
+                    String sender = (resp.senderNodeId() != null && !resp.senderNodeId().isBlank()) ? resp.senderNodeId() : "";
+                    String role = (resp.databaseName() != null && !resp.databaseName().isBlank()) ? resp.databaseName() : "SECONDARY";
                     String csv = resp.getPayloadAsString();
-                    if (!csv.isBlank()) {
-                        return List.of(csv.split(","));
-                    }
-                    return List.of();
+                    List<String> dbs = (csv != null && !csv.isBlank()) ? List.of(csv.split(",")) : List.of();
+                    return new NodeCatalogInfo(sender, role, dbs);
                 }
             }
         } catch (Exception ignored) {}
@@ -266,23 +268,38 @@ public final class JettraClusterReplicationClient implements AutoCloseable {
     }
 
     /**
+     * Solicita al nodo primario la lista de bases de datos para sincronización en caliente.
+     */
+    public List<String> requestCatalogSync(String host, int port) {
+        NodeCatalogInfo info = queryNodeCatalogInfo(host, port);
+        return info != null ? info.databases() : null;
+    }
+
+    public List<ClusterNode> getPeers() {
+        return peers;
+    }
+
+    /**
      * Consulta el inventario de bases de datos de todos los nodos del clúster concurrentemente.
      */
     public List<ClusterNodeDistributionInfo> getClusterDistributionInfo(String localIp, int localPort, String localRole, List<String> localDatabases) {
         List<ClusterNodeDistributionInfo> result = new ArrayList<>();
-        result.add(new ClusterNodeDistributionInfo(
-            localNodeId, localIp, localPort, localRole, "RUNNING", localDatabases.size(), localDatabases
-        ));
 
+        // 1. Consultar peers concurrentemente
         List<CompletableFuture<ClusterNodeDistributionInfo>> futures = new ArrayList<>();
         for (ClusterNode peer : peers) {
             futures.add(CompletableFuture.supplyAsync(() -> {
                 try {
-                    List<String> dbs = requestCatalogSync(peer.getIp(), peer.getPort());
-                    if (dbs != null) {
+                    NodeCatalogInfo catInfo = queryNodeCatalogInfo(peer.getIp(), peer.getPort());
+                    if (catInfo != null) {
                         peer.start();
+                        if (catInfo.role() != null && !catInfo.role().isBlank()) {
+                            try {
+                                peer.setRole(ClusterNode.Role.valueOf(catInfo.role().toUpperCase()));
+                            } catch (Exception ignored) {}
+                        }
                         return new ClusterNodeDistributionInfo(
-                            peer.getId(), peer.getIp(), peer.getPort(), peer.getRole().name(), "RUNNING", dbs.size(), dbs
+                            peer.getId(), peer.getIp(), peer.getPort(), peer.getRole().name(), "RUNNING", catInfo.databases().size(), catInfo.databases()
                         );
                     }
                 } catch (Exception ignored) {}
@@ -293,11 +310,78 @@ public final class JettraClusterReplicationClient implements AutoCloseable {
             }, executor));
         }
 
+        List<ClusterNodeDistributionInfo> peerResults = new ArrayList<>();
         for (var f : futures) {
             try {
-                result.add(f.get(TIMEOUT_MS, TimeUnit.MILLISECONDS));
+                peerResults.add(f.get(TIMEOUT_MS + 200, TimeUnit.MILLISECONDS));
             } catch (Exception ignored) {}
         }
+
+        // 2. Determinar estado y rol real del nodo local
+        boolean isLocalRunning = false;
+        String resolvedLocalRole = localRole != null ? localRole : "SECONDARY";
+        List<String> resolvedLocalDbs = localDatabases != null ? localDatabases : List.of();
+
+        if (io.jettra.store.JettraStoreServer.getActiveInstance() != null) {
+            isLocalRunning = io.jettra.store.JettraStoreServer.getActiveInstance().isRunning();
+            if (isLocalRunning) {
+                if (io.jettra.store.JettraStoreServer.getActiveInstance().getConfig() != null &&
+                    io.jettra.store.JettraStoreServer.getActiveInstance().getConfig().getNodeRole() != null) {
+                    resolvedLocalRole = io.jettra.store.JettraStoreServer.getActiveInstance().getConfig().getNodeRole().name();
+                }
+                resolvedLocalDbs = io.jettra.store.JettraStoreServer.getActiveInstance().listDatabaseNames();
+            }
+        } else {
+            // Shell o cliente independiente: comprobar si el nodo responde por socket
+            NodeCatalogInfo localCatInfo = queryNodeCatalogInfo(localIp, localPort);
+            if (localCatInfo != null) {
+                isLocalRunning = true;
+                resolvedLocalRole = localCatInfo.role();
+                resolvedLocalDbs = localCatInfo.databases();
+            } else {
+                try (Socket s = new Socket()) {
+                    s.connect(new InetSocketAddress(localIp, localPort), 300);
+                    isLocalRunning = true;
+                } catch (Exception e) {
+                    isLocalRunning = false;
+                }
+            }
+        }
+
+        // 3. Si algún nodo está RUNNING y tiene rol PRIMARY, asegurar consistencia:
+        // ningún nodo OFFLINE puede figurar como PRIMARY
+        boolean hasRunningPrimary = "PRIMARY".equalsIgnoreCase(resolvedLocalRole) && isLocalRunning;
+        for (ClusterNodeDistributionInfo pi : peerResults) {
+            if ("RUNNING".equalsIgnoreCase(pi.status()) && "PRIMARY".equalsIgnoreCase(pi.role())) {
+                hasRunningPrimary = true;
+                break;
+            }
+        }
+
+        if (hasRunningPrimary && !isLocalRunning && "PRIMARY".equalsIgnoreCase(resolvedLocalRole)) {
+            resolvedLocalRole = "SECONDARY";
+        }
+
+        String localStatus = isLocalRunning ? "RUNNING" : "OFFLINE";
+        int localDbCount = isLocalRunning ? resolvedLocalDbs.size() : 0;
+        List<String> finalLocalDbs = isLocalRunning ? resolvedLocalDbs : List.of();
+
+        result.add(new ClusterNodeDistributionInfo(
+            localNodeId, localIp, localPort, resolvedLocalRole, localStatus, localDbCount, finalLocalDbs
+        ));
+
+        for (ClusterNodeDistributionInfo pi : peerResults) {
+            String role = pi.role();
+            if (hasRunningPrimary && "OFFLINE".equalsIgnoreCase(pi.status()) && "PRIMARY".equalsIgnoreCase(role)) {
+                role = "SECONDARY";
+            }
+            result.add(new ClusterNodeDistributionInfo(
+                pi.nodeId(), pi.ip(), pi.port(), role, pi.status(), pi.databaseCount(), pi.databases()
+            ));
+        }
+
+        // Ordenar por ID de nodo (node-01, node-02, node-03)
+        result.sort((a, b) -> a.nodeId().compareTo(b.nodeId()));
         return result;
     }
 

@@ -11,8 +11,8 @@ import java.util.List;
 public class ServerNode3D {
     private final String id;
     private final String name;
-    private final String host;
-    private final int port;
+    private String host;
+    private int port;
     private ClusterNode.Role role;
     private ClusterNode.RaftState raftState;
     private ClusterNode.NodeStatus status;
@@ -170,7 +170,9 @@ public class ServerNode3D {
     public String getId() { return id; }
     public String getName() { return name; }
     public String getHost() { return host; }
+    public void setHost(String host) { this.host = host; }
     public int getPort() { return port; }
+    public void setPort(int port) { this.port = port; }
     public ClusterNode.Role getRole() { return role; }
     public void setRole(ClusterNode.Role role) { this.role = role; }
     public ClusterNode.RaftState getRaftState() { return raftState; }

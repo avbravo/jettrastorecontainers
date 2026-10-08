@@ -196,23 +196,8 @@ public class ClusterConfigLoader {
     }
 
     private boolean checkDockerComposeRunning() {
-        // 1. Variable de entorno explícita
         String envDc = System.getenv("JETTRA_DOCKER_COMPOSE");
-        if ("true".equalsIgnoreCase(envDc) || "1".equals(envDc)) {
-            return true;
-        }
-
-        // 2. Comprobar si los puertos locales mapeados por docker-compose (8081, 8082, 8083) están escuchando
-        int[] dcPorts = {8081, 8082, 8083};
-        for (int p : dcPorts) {
-            try (Socket s = new Socket()) {
-                s.connect(new InetSocketAddress("127.0.0.1", p), 120);
-                return true;
-            } catch (Exception ignored) {}
-        }
-
-        // Docker Compose solo se considera activo si los puertos de los contenedores están respondiendo
-        return false;
+        return "true".equalsIgnoreCase(envDc) || "1".equals(envDc);
     }
 
     private void adjustForDockerCompose() {
@@ -221,10 +206,13 @@ public class ClusterConfigLoader {
             ConfiguredNode orig = nodes.get(i);
             int dcRestPort = 8081 + i;
             int dcGrpcPort = 9091 + i;
+            String host = (orig.host() != null && !orig.host().isBlank() && !orig.host().startsWith("jettra-node"))
+                ? orig.host()
+                : "127.0.0.1";
             adjusted.add(new ConfiguredNode(
                 orig.id(),
                 orig.role(),
-                "127.0.0.1",
+                host,
                 dcGrpcPort,
                 dcRestPort,
                 orig.storagePath(),
