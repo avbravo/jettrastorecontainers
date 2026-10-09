@@ -102,11 +102,15 @@ public final class JettraClusterTransportServer implements AutoCloseable {
                     dbName, payload != null ? payload.length : 0, frame.senderNodeId());
                 try {
                     if (server != null) {
-                        Path targetMeta = Path.of(server.getConfig().getStoragePath(), dbName + "_meta.json");
+                        Path storageDir = Path.of(server.getConfig().getStoragePath());
+                        Files.createDirectories(storageDir);
+                        Path dbDir = storageDir.resolve(dbName);
+                        Files.createDirectories(dbDir);
+                        Path memDir = dbDir.resolve("jettra_memory");
+                        Files.createDirectories(memDir);
+
+                        Path targetMeta = storageDir.resolve(dbName + "_meta.json");
                         if (payload != null && payload.length > 0) {
-                            if (targetMeta.getParent() != null) {
-                                Files.createDirectories(targetMeta.getParent());
-                            }
                             Files.write(targetMeta, payload, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
                         }
                         JettraDatabase db = server.getOrCreateDatabaseInternal(dbName, false);
@@ -150,11 +154,15 @@ public final class JettraClusterTransportServer implements AutoCloseable {
                     dbName, payload != null ? payload.length : 0, frame.senderNodeId());
                 try {
                     if (server != null) {
-                        Path targetMeta = Path.of(server.getConfig().getStoragePath(), dbName + "_meta.json");
+                        Path storageDir = Path.of(server.getConfig().getStoragePath());
+                        Files.createDirectories(storageDir);
+                        Path dbDir = storageDir.resolve(dbName);
+                        Files.createDirectories(dbDir);
+                        Path memDir = dbDir.resolve("jettra_memory");
+                        Files.createDirectories(memDir);
+
+                        Path targetMeta = storageDir.resolve(dbName + "_meta.json");
                         if (payload != null && payload.length > 0) {
-                            if (targetMeta.getParent() != null) {
-                                Files.createDirectories(targetMeta.getParent());
-                            }
                             Files.write(targetMeta, payload, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
                         }
                         JettraDatabase db = server.getOrCreateDatabaseInternal(dbName, false);
@@ -375,8 +383,16 @@ public final class JettraClusterTransportServer implements AutoCloseable {
                             if (db.getIndexManager().getIndex(indexName) == null) {
                                 db.getIndexManager().applyReplicatedIndex(colName, indexName, field, type, unique, db.getDocumentEngine(colName));
                             }
+                            db.saveToDisk();
                         }
                     }
+                    JettraClusterEventBus.getInstance().publish(
+                        ClusterLiveEvent.TYPE_INDEX_CREATED,
+                        frame.senderNodeId(),
+                        server != null ? server.getConfig().getNodeId() : "local",
+                        String.format("Índice '%s' en colección '%s' de base '%s' replicado exitosamente", indexName, colName, dbName),
+                        "db=" + dbName + ",col=" + colName + ",index=" + indexName
+                    );
                     return JettraRaftFrame.ack(frame.term(), frame.logIndex(), 
                         server != null ? server.getConfig().getNodeId() : "local", "Index created");
                 } catch (Exception ex) {
@@ -393,8 +409,16 @@ public final class JettraClusterTransportServer implements AutoCloseable {
                         JettraDatabase db = server.getOrCreateDatabaseInternal(dbName, false);
                         if (db != null) {
                             db.getIndexManager().applyReplicatedDropIndex(indexName);
+                            db.saveToDisk();
                         }
                     }
+                    JettraClusterEventBus.getInstance().publish(
+                        ClusterLiveEvent.TYPE_INDEX_DROPPED,
+                        frame.senderNodeId(),
+                        server != null ? server.getConfig().getNodeId() : "local",
+                        String.format("Índice '%s' en base '%s' eliminado por replicación", indexName, dbName),
+                        "db=" + dbName + ",index=" + indexName
+                    );
                     return JettraRaftFrame.ack(frame.term(), frame.logIndex(), 
                         server != null ? server.getConfig().getNodeId() : "local", "Index dropped");
                 } catch (Exception ex) {

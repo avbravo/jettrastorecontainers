@@ -34,6 +34,8 @@ public record ClusterLiveEvent(
     public static final String TYPE_RECORD_REPLICATED = "RECORD_REPLICATED";
     public static final String TYPE_DOCUMENT_REPLICATED = "DOCUMENT_REPLICATED";
     public static final String TYPE_DOCUMENT_DELETED  = "DOCUMENT_DELETED";
+    public static final String TYPE_INDEX_CREATED     = "INDEX_CREATED";
+    public static final String TYPE_INDEX_DROPPED     = "INDEX_DROPPED";
 
     public String formattedTimestamp() {
         return FORMATTER.format(Instant.ofEpochMilli(timestamp));

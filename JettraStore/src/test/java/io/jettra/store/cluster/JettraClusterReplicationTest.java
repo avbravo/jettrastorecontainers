@@ -475,5 +475,153 @@ public class JettraClusterReplicationTest extends JettraStoreBaseTest {
         }
     }
 
+    @Test
+    @DisplayName("Debe replicar creación de base de datos, documentos e índices desde PRIMARIO hacia ambos nodos SECUNDARIOS (3 nodos)")
+    public void testThreeNodeClusterDatabaseAndIndexReplication() throws IOException, InterruptedException {
+        Path tempDirSec1 = Files.createTempDirectory("jettra_cluster_sec1");
+        Path tempDirSec2 = Files.createTempDirectory("jettra_cluster_sec2");
+        Path tempDirPrim = Files.createTempDirectory("jettra_cluster_prim");
+        int sec1Port = 19162;
+        int sec2Port = 19163;
+        int primPort = 19161;
+
+        // Configuración Nodo Secundario 1
+        Properties sec1DbProps = new Properties();
+        sec1DbProps.setProperty("jettra.node.id", "node-02");
+        sec1DbProps.setProperty("jettra.node.role", "SECONDARY");
+        sec1DbProps.setProperty("jettra.storage.path", tempDirSec1.toString());
+        sec1DbProps.setProperty("jettra.network.grpc.port", String.valueOf(sec1Port));
+        sec1DbProps.setProperty("jettra.network.rest.port", "18092");
+        sec1DbProps.setProperty("cluster.multinode.active", "on");
+
+        Properties sec1ClusterProps = new Properties();
+        sec1ClusterProps.setProperty("cluster.node.1.id", "node-01");
+        sec1ClusterProps.setProperty("cluster.node.1.ip", "127.0.0.1");
+        sec1ClusterProps.setProperty("cluster.node.1.grpc.port", String.valueOf(primPort));
+        sec1ClusterProps.setProperty("cluster.node.2.id", "node-02");
+        sec1ClusterProps.setProperty("cluster.node.2.ip", "127.0.0.1");
+        sec1ClusterProps.setProperty("cluster.node.2.grpc.port", String.valueOf(sec1Port));
+
+        JettraStoreConfig sec1Config = new JettraStoreConfig(sec1DbProps, sec1ClusterProps);
+        JettraStoreServer secServer1 = new JettraStoreServer(sec1Config);
+
+        // Configuración Nodo Secundario 2
+        Properties sec2DbProps = new Properties();
+        sec2DbProps.setProperty("jettra.node.id", "node-03");
+        sec2DbProps.setProperty("jettra.node.role", "SECONDARY");
+        sec2DbProps.setProperty("jettra.storage.path", tempDirSec2.toString());
+        sec2DbProps.setProperty("jettra.network.grpc.port", String.valueOf(sec2Port));
+        sec2DbProps.setProperty("jettra.network.rest.port", "18093");
+        sec2DbProps.setProperty("cluster.multinode.active", "on");
+
+        Properties sec2ClusterProps = new Properties();
+        sec2ClusterProps.setProperty("cluster.node.1.id", "node-01");
+        sec2ClusterProps.setProperty("cluster.node.1.ip", "127.0.0.1");
+        sec2ClusterProps.setProperty("cluster.node.1.grpc.port", String.valueOf(primPort));
+        sec2ClusterProps.setProperty("cluster.node.3.id", "node-03");
+        sec2ClusterProps.setProperty("cluster.node.3.ip", "127.0.0.1");
+        sec2ClusterProps.setProperty("cluster.node.3.grpc.port", String.valueOf(sec2Port));
+
+        JettraStoreConfig sec2Config = new JettraStoreConfig(sec2DbProps, sec2ClusterProps);
+        JettraStoreServer secServer2 = new JettraStoreServer(sec2Config);
+
+        try (JettraClusterTransportServer transportServer1 = new JettraClusterTransportServer(sec1Port, secServer1);
+             JettraClusterTransportServer transportServer2 = new JettraClusterTransportServer(sec2Port, secServer2)) {
+            transportServer1.start();
+            transportServer2.start();
+            Thread.sleep(100);
+
+            // Configuración Nodo Primario con los 2 pares secundarios
+            Properties primDbProps = new Properties();
+            primDbProps.setProperty("jettra.node.id", "node-01");
+            primDbProps.setProperty("jettra.node.role", "PRIMARY");
+            primDbProps.setProperty("jettra.storage.path", tempDirPrim.toString());
+            primDbProps.setProperty("jettra.network.grpc.port", String.valueOf(primPort));
+            primDbProps.setProperty("jettra.network.rest.port", "18091");
+            primDbProps.setProperty("cluster.multinode.active", "on");
+
+            Properties primClusterProps = new Properties();
+            primClusterProps.setProperty("cluster.node.1.id", "node-01");
+            primClusterProps.setProperty("cluster.node.1.ip", "127.0.0.1");
+            primClusterProps.setProperty("cluster.node.1.grpc.port", String.valueOf(primPort));
+            primClusterProps.setProperty("cluster.node.2.id", "node-02");
+            primClusterProps.setProperty("cluster.node.2.ip", "127.0.0.1");
+            primClusterProps.setProperty("cluster.node.2.grpc.port", String.valueOf(sec1Port));
+            primClusterProps.setProperty("cluster.node.3.id", "node-03");
+            primClusterProps.setProperty("cluster.node.3.ip", "127.0.0.1");
+            primClusterProps.setProperty("cluster.node.3.grpc.port", String.valueOf(sec2Port));
+
+            JettraStoreConfig primConfig = new JettraStoreConfig(primDbProps, primClusterProps);
+            JettraStoreServer primServer = new JettraStoreServer(primConfig);
+
+            try {
+                // 1. Crear base de datos en PRIMARIO
+                String dbName = "tri_node_db";
+                var primDb = primServer.getOrCreateDatabase(dbName);
+                assertNotNull(primDb);
+
+                // 2. Crear colección, índice y documento en PRIMARIO
+                primDb.getDocumentEngine("articulos").insert("art_1", java.util.Map.of("sku", "A-100", "nombre", "Teclado Mecanico"));
+                primDb.getIndexManager().createIndex("articulos", "idx_art_sku", "sku", "HASH", false, primDb.getDocumentEngine("articulos"));
+                primDb.getKeyValueEngine("config").put("status", "ACTIVE".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                primDb.flushMemTable();
+                primDb.saveToDisk();
+
+                // Replicar base a ambos nodos secundarios
+                byte[] snapshot = primServer.getDatabaseSnapshotBytes(dbName);
+                boolean replDb = primServer.replicateCreateDatabase(dbName, snapshot);
+                assertTrue(replDb);
+
+                // Esperar propagación en hilos virtuales
+                Thread.sleep(250);
+
+                // 3. Validar en SECUNDARIO 1
+                assertTrue(secServer1.listDatabaseNames().contains(dbName));
+                var secDb1 = secServer1.getOrCreateDatabaseInternal(dbName, false);
+                assertNotNull(secDb1);
+                assertTrue(secDb1.isReadOnlyNode());
+                assertEquals(1L, secDb1.getDocumentEngine("articulos").count());
+                var docSec1 = secDb1.getDocumentEngine("articulos").findById("art_1");
+                assertNotNull(docSec1);
+                assertEquals("Teclado Mecanico", docSec1.get("nombre"));
+                assertNotNull(secDb1.getIndexManager().getIndex("idx_art_sku"));
+                java.util.Set<String> foundIds1 = secDb1.getIndexManager().findDocIds("articulos", "sku", "A-100");
+                assertNotNull(foundIds1);
+                assertTrue(foundIds1.contains("art_1"));
+                assertNotNull(secDb1.getKeyValueEngine("config").get("status"));
+                assertEquals("ACTIVE", new String(secDb1.getKeyValueEngine("config").get("status"), java.nio.charset.StandardCharsets.UTF_8));
+
+                // 4. Validar en SECUNDARIO 2
+                assertTrue(secServer2.listDatabaseNames().contains(dbName));
+                var secDb2 = secServer2.getOrCreateDatabaseInternal(dbName, false);
+                assertNotNull(secDb2);
+                assertTrue(secDb2.isReadOnlyNode());
+                assertEquals(1L, secDb2.getDocumentEngine("articulos").count());
+                var docSec2 = secDb2.getDocumentEngine("articulos").findById("art_1");
+                assertNotNull(docSec2);
+                assertEquals("Teclado Mecanico", docSec2.get("nombre"));
+                assertNotNull(secDb2.getIndexManager().getIndex("idx_art_sku"));
+                java.util.Set<String> foundIds2 = secDb2.getIndexManager().findDocIds("articulos", "sku", "A-100");
+                assertNotNull(foundIds2);
+                assertTrue(foundIds2.contains("art_1"));
+                assertNotNull(secDb2.getKeyValueEngine("config").get("status"));
+                assertEquals("ACTIVE", new String(secDb2.getKeyValueEngine("config").get("status"), java.nio.charset.StandardCharsets.UTF_8));
+
+                // 5. Validar que la estructura de archivos en disco se materializó físicamente en ambos secundarios
+                Path sec1DbDir = tempDirSec1.resolve(dbName);
+                Path sec2DbDir = tempDirSec2.resolve(dbName);
+                assertTrue(Files.exists(sec1DbDir));
+                assertTrue(Files.exists(sec2DbDir));
+                assertTrue(Files.exists(sec1DbDir.resolve("jettra_memory")));
+                assertTrue(Files.exists(sec2DbDir.resolve("jettra_memory")));
+            } finally {
+                primServer.stop();
+            }
+        } finally {
+            secServer1.stop();
+            secServer2.stop();
+        }
+    }
+
     public record TestRecord(String id, String name, int score) {}
 }

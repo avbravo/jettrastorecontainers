@@ -383,6 +383,10 @@ public final class JettraStoreServer {
                 sb.append("]");
                 sendResponse(exchange, 200, sb.toString());
             } else if ("POST".equalsIgnoreCase(method)) {
+                if (config.isClusterMultinodeActive() && config.getNodeRole() == ClusterNode.Role.SECONDARY) {
+                    sendResponse(exchange, 403, String.format("{\"error\":\"[READ-ONLY REPLICA] El nodo actual '%s' tiene rol SECUNDARIO. No se permite crear bases de datos directamente.\"}", config.getNodeId()));
+                    return;
+                }
                 String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
                 String name = extractJsonField(body, "name");
                 if (name == null || name.isBlank()) {
@@ -395,6 +399,10 @@ public final class JettraStoreServer {
                 getOrCreateDatabase(name.trim());
                 sendResponse(exchange, 200, String.format("{\"status\":\"CREATED\",\"database\":\"%s\"}", name.trim()));
             } else if ("DELETE".equalsIgnoreCase(method)) {
+                if (config.isClusterMultinodeActive() && config.getNodeRole() == ClusterNode.Role.SECONDARY) {
+                    sendResponse(exchange, 403, String.format("{\"error\":\"[READ-ONLY REPLICA] El nodo actual '%s' tiene rol SECUNDARIO. No se permite eliminar bases de datos directamente.\"}", config.getNodeId()));
+                    return;
+                }
                 String query = exchange.getRequestURI().getQuery();
                 String name = null;
                 if (query != null && query.startsWith("name=")) {
@@ -427,10 +435,18 @@ public final class JettraStoreServer {
                 String op = extractJsonField(body, "op");
                 String db = extractJsonField(body, "database");
                 if ("CREATE_DATABASE".equalsIgnoreCase(op) && db != null) {
+                    if (config.isClusterMultinodeActive() && config.getNodeRole() == ClusterNode.Role.SECONDARY) {
+                        sendResponse(exchange, 403, "{\"error\":\"[READ-ONLY REPLICA] Operación de creación denegada en secundario.\"}");
+                        return;
+                    }
                     getOrCreateDatabaseInternal(db.trim(), true);
                     sendResponse(exchange, 200, "{\"status\":\"ACK\",\"op\":\"CREATE_DATABASE\"}");
                     return;
                 } else if ("DROP_DATABASE".equalsIgnoreCase(op) && db != null) {
+                    if (config.isClusterMultinodeActive() && config.getNodeRole() == ClusterNode.Role.SECONDARY) {
+                        sendResponse(exchange, 403, "{\"error\":\"[READ-ONLY REPLICA] Operación de eliminación denegada en secundario.\"}");
+                        return;
+                    }
                     dropDatabaseInternal(db.trim(), true);
                     sendResponse(exchange, 200, "{\"status\":\"ACK\",\"op\":\"DROP_DATABASE\"}");
                     return;
@@ -552,22 +568,47 @@ public final class JettraStoreServer {
         return getOrCreateDatabaseInternal(name, true);
     }
 
+    public synchronized JettraClusterReplicationClient getOrCreateReplicationClient() {
+        if (replicationClient == null && config.isClusterMultinodeActive()) {
+            replicationClient = new JettraClusterReplicationClient(config.getNodeId(), ringEngine.getPeers());
+        }
+        return replicationClient;
+    }
+
     public JettraDatabase getOrCreateDatabaseInternal(String name, boolean broadcast) {
         if (name == null || name.isBlank()) return null;
         JettraDatabase db = databases.computeIfAbsent(name, k -> new JettraDatabase(k, config, ringEngine));
         if (broadcast && config.isClusterMultinodeActive() && config.getNodeRole() == ClusterNode.Role.PRIMARY) {
-            if (replicationClient != null) {
-                byte[] payload = getDatabaseSnapshotBytes(name);
-                replicationClient.broadcastCreateDatabase(name, payload);
+            if (db != null) {
+                try {
+                    db.flushMemTable();
+                } catch (Exception ignored) {}
+                db.saveToDisk();
+            }
+            byte[] payload = getDatabaseSnapshotBytes(name);
+            JettraClusterReplicationClient client = getOrCreateReplicationClient();
+            boolean replicated = false;
+            if (client != null) {
+                replicated = client.broadcastCreateDatabase(name, payload);
             }
             JettraClusterEventBus.getInstance().publish(
                 ClusterLiveEvent.TYPE_DATABASE_CREATED,
                 config.getNodeId(), "cluster",
                 String.format("Base de datos '%s' creada y sincronizada en el clúster.", name),
-                ""
+                "replicated=" + replicated
             );
         }
         return db;
+    }
+
+    public boolean replicateCreateDatabase(String dbName, byte[] payload) {
+        if (config.isClusterMultinodeActive() && config.getNodeRole() == ClusterNode.Role.PRIMARY) {
+            JettraClusterReplicationClient client = getOrCreateReplicationClient();
+            if (client != null) {
+                return client.broadcastCreateDatabase(dbName, payload);
+            }
+        }
+        return false;
     }
 
     public boolean dropDatabase(String name) {
@@ -589,8 +630,9 @@ public final class JettraStoreServer {
             } catch (Exception ignored) {}
         }
         if (broadcast && config.isClusterMultinodeActive() && config.getNodeRole() == ClusterNode.Role.PRIMARY) {
-            if (replicationClient != null) {
-                replicationClient.broadcastDropDatabase(name);
+            JettraClusterReplicationClient client = getOrCreateReplicationClient();
+            if (client != null) {
+                client.broadcastDropDatabase(name);
             }
             JettraClusterEventBus.getInstance().publish(
                 ClusterLiveEvent.TYPE_DATABASE_DROPPED,
@@ -603,44 +645,65 @@ public final class JettraStoreServer {
     }
 
     public void replicateCreateEngine(String dbName, String engineName, String engineType, byte[] payload) {
-        if (config.isClusterMultinodeActive() && config.getNodeRole() == ClusterNode.Role.PRIMARY && replicationClient != null) {
-            replicationClient.broadcastCreateEngine(dbName, engineName, engineType, payload);
+        if (config.isClusterMultinodeActive() && config.getNodeRole() == ClusterNode.Role.PRIMARY) {
+            JettraClusterReplicationClient client = getOrCreateReplicationClient();
+            if (client != null) {
+                client.broadcastCreateEngine(dbName, engineName, engineType, payload);
+            }
         }
     }
 
     public void replicatePutDocument(String dbName, String colName, String id, byte[] jsonBytes) {
-        if (config.isClusterMultinodeActive() && config.getNodeRole() == ClusterNode.Role.PRIMARY && replicationClient != null) {
-            replicationClient.broadcastPutDocument(dbName, colName, id, jsonBytes);
+        if (config.isClusterMultinodeActive() && config.getNodeRole() == ClusterNode.Role.PRIMARY) {
+            JettraClusterReplicationClient client = getOrCreateReplicationClient();
+            if (client != null) {
+                client.broadcastPutDocument(dbName, colName, id, jsonBytes);
+            }
         }
     }
 
     public void replicateDeleteDocument(String dbName, String colName, String id) {
-        if (config.isClusterMultinodeActive() && config.getNodeRole() == ClusterNode.Role.PRIMARY && replicationClient != null) {
-            replicationClient.broadcastDeleteDocument(dbName, colName, id);
+        if (config.isClusterMultinodeActive() && config.getNodeRole() == ClusterNode.Role.PRIMARY) {
+            JettraClusterReplicationClient client = getOrCreateReplicationClient();
+            if (client != null) {
+                client.broadcastDeleteDocument(dbName, colName, id);
+            }
         }
     }
 
     public void replicatePutRecord(String dbName, String colName, String key, byte[] payload) {
-        if (config.isClusterMultinodeActive() && config.getNodeRole() == ClusterNode.Role.PRIMARY && replicationClient != null) {
-            replicationClient.broadcastPutRecord(dbName, colName, key, payload);
+        if (config.isClusterMultinodeActive() && config.getNodeRole() == ClusterNode.Role.PRIMARY) {
+            JettraClusterReplicationClient client = getOrCreateReplicationClient();
+            if (client != null) {
+                client.broadcastPutRecord(dbName, colName, key, payload);
+            }
         }
     }
 
     public void replicateDeleteRecord(String dbName, String colName, String key) {
-        if (config.isClusterMultinodeActive() && config.getNodeRole() == ClusterNode.Role.PRIMARY && replicationClient != null) {
-            replicationClient.broadcastDeleteRecord(dbName, colName, key);
+        if (config.isClusterMultinodeActive() && config.getNodeRole() == ClusterNode.Role.PRIMARY) {
+            JettraClusterReplicationClient client = getOrCreateReplicationClient();
+            if (client != null) {
+                client.broadcastDeleteRecord(dbName, colName, key);
+            }
         }
     }
 
     public void replicateCreateIndex(String dbName, String colName, String indexName, String field, String type, boolean unique) {
-        if (config.isClusterMultinodeActive() && config.getNodeRole() == ClusterNode.Role.PRIMARY && replicationClient != null) {
-            replicationClient.broadcastCreateIndex(dbName, colName, indexName, field, type, unique);
+        if (config.isClusterMultinodeActive() && config.getNodeRole() == ClusterNode.Role.PRIMARY) {
+            JettraClusterReplicationClient client = getOrCreateReplicationClient();
+            if (client != null) {
+                client.broadcastCreateIndex(dbName, colName, indexName, field, type, unique);
+            }
         }
     }
 
     public void replicateDropIndex(String dbName, String indexName) {
-        if (config.isClusterMultinodeActive() && config.getNodeRole() == ClusterNode.Role.PRIMARY && replicationClient != null) {
-            replicationClient.broadcastDropIndex(dbName, indexName);
+        if (config.isClusterMultinodeActive() && config.getNodeRole() == ClusterNode.Role.PRIMARY) {
+            JettraClusterReplicationClient client = getOrCreateReplicationClient();
+            if (client != null) {
+                client.broadcastDropIndex(dbName, indexName);
+            }
         }
     }
 

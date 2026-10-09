@@ -34,7 +34,19 @@ public final class JettraClusterReplicationClient implements AutoCloseable {
      * y espera quórum mayoritario (1 local + al menos 1 secundario = 2 de 3).
      */
     public boolean broadcastCreateDatabase(String dbName) {
-        return broadcastCreateDatabase(dbName, new byte[0]);
+        byte[] payload = new byte[0];
+        try {
+            if (io.jettra.store.JettraStoreServer.getActiveInstance() != null) {
+                payload = io.jettra.store.JettraStoreServer.getActiveInstance().getDatabaseSnapshotBytes(dbName);
+            }
+            if (payload == null || payload.length == 0) {
+                java.nio.file.Path meta = io.jettra.store.core.JettraDatabase.resolveMetaFile(dbName, io.jettra.store.core.JettraStoreConfig.load());
+                if (meta != null && java.nio.file.Files.exists(meta)) {
+                    payload = java.nio.file.Files.readAllBytes(meta);
+                }
+            }
+        } catch (Exception ignored) {}
+        return broadcastCreateDatabase(dbName, payload);
     }
 
     public boolean broadcastCreateDatabase(String dbName, byte[] payload) {
@@ -214,6 +226,8 @@ public final class JettraClusterReplicationClient implements AutoCloseable {
                             case JettraRaftFrame.TYPE_CREATE_DATABASE -> String.format("Base '%s' replicada hacia '%s'", frame.databaseName(), vote.peer().getId());
                             case JettraRaftFrame.TYPE_DISTRIBUTE_DATABASE -> String.format("Transferencia de base '%s' completada hacia '%s'", frame.databaseName(), vote.peer().getId());
                             case JettraRaftFrame.TYPE_CREATE_ENGINE -> String.format("Motor '%s' [%s] en base '%s' replicado hacia '%s'", frame.collectionName(), frame.key(), frame.databaseName(), vote.peer().getId());
+                            case JettraRaftFrame.TYPE_CREATE_INDEX -> String.format("Índice '%s' en colección '%s' de base '%s' replicado hacia '%s'", frame.key(), frame.collectionName(), frame.databaseName(), vote.peer().getId());
+                            case JettraRaftFrame.TYPE_DROP_INDEX -> String.format("Índice '%s' de base '%s' eliminado hacia '%s'", frame.key(), frame.databaseName(), vote.peer().getId());
                             case JettraRaftFrame.TYPE_PUT_DOCUMENT -> String.format("Documento '%s' en colección '%s' replicado hacia '%s'", frame.key(), frame.collectionName(), vote.peer().getId());
                             case JettraRaftFrame.TYPE_PUT_RECORD -> String.format("Registro KV '%s' en '%s' replicado hacia '%s'", frame.key(), frame.collectionName(), vote.peer().getId());
                             default -> String.format("Trama Raft 0x%02X transferida hacia '%s'", frame.frameType(), vote.peer().getId());

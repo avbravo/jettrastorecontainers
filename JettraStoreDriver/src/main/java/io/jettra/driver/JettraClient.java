@@ -143,6 +143,8 @@ public final class JettraClient implements AutoCloseable {
         boolean onDisk = deletePhysicalDatabase(name.trim());
         if (io.jettra.store.JettraStoreServer.getActiveInstance() != null) {
             io.jettra.store.JettraStoreServer.getActiveInstance().dropDatabase(name);
+        } else if (config.isClusterMultinodeActive()) {
+            triggerServerDatabaseOp("DROP_DATABASE", name);
         }
         return inMemory || onDisk;
     }
@@ -219,14 +221,12 @@ public final class JettraClient implements AutoCloseable {
         boolean isNew = !databases.containsKey(name);
         JettraDatabase db = databases.computeIfAbsent(name, k -> new JettraDatabase(k, JettraStoreConfig.load(), ringEngine));
         if (isNew && config.isClusterMultinodeActive()) {
-            if (io.jettra.store.JettraStoreServer.getActiveInstance() != null) {
-                io.jettra.store.JettraStoreServer.getActiveInstance().getOrCreateDatabase(name);
-            }
+            triggerServerDatabaseOp("CREATE_DATABASE", name);
         }
         return db;
     }
 
-    private boolean triggerServerDatabaseDistribution(String databaseName) {
+    private boolean triggerServerDatabaseOp(String op, String databaseName) {
         try {
             String host = "127.0.0.1";
             int restPort = 8080;
@@ -251,7 +251,7 @@ public final class JettraClient implements AutoCloseable {
             java.net.http.HttpClient httpClient = java.net.http.HttpClient.newBuilder()
                 .connectTimeout(java.time.Duration.ofMillis(800))
                 .build();
-            String jsonPayload = String.format("{\"op\":\"DISTRIBUTE_DATABASE\",\"database\":\"%s\"}", databaseName);
+            String jsonPayload = String.format("{\"op\":\"%s\",\"database\":\"%s\"}", op, databaseName);
             java.net.http.HttpRequest.Builder reqBuilder = java.net.http.HttpRequest.newBuilder()
                 .uri(java.net.URI.create(String.format("http://%s:%d/api/v1/cluster/replicate", host, restPort)))
                 .timeout(java.time.Duration.ofSeconds(3))
@@ -265,6 +265,10 @@ public final class JettraClient implements AutoCloseable {
         } catch (Exception e) {
             return false;
         }
+    }
+
+    private boolean triggerServerDatabaseDistribution(String databaseName) {
+        return triggerServerDatabaseOp("DISTRIBUTE_DATABASE", databaseName);
     }
 
     /**

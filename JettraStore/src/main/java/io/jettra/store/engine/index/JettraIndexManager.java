@@ -57,6 +57,21 @@ public final class JettraIndexManager {
         if (docEngine != null) {
             rebuildIndex(indexName, docEngine);
         }
+
+        // Propagar orden Raft de creación de índice si este nodo es PRIMARY
+        if (config != null && config.isClusterMultinodeActive() && config.getNodeRole() == io.jettra.store.cluster.ClusterNode.Role.PRIMARY) {
+            io.jettra.store.JettraStoreServer server = io.jettra.store.JettraStoreServer.getActiveInstance();
+            if (server != null) {
+                server.replicateCreateIndex(databaseName, collection, indexName, field, type, unique);
+            }
+            io.jettra.store.cluster.JettraClusterEventBus.getInstance().publish(
+                io.jettra.store.cluster.ClusterLiveEvent.TYPE_INDEX_CREATED,
+                config.getNodeId(), "cluster",
+                String.format("Índice '%s' en colección '%s' de base '%s' creado y replicado al clúster", indexName, collection, databaseName),
+                "db=" + databaseName + ",col=" + collection + ",idx=" + indexName
+            );
+        }
+
         return indexMetadata.get(indexName);
     }
 
@@ -65,12 +80,9 @@ public final class JettraIndexManager {
      * emitida por el nodo primario.
      */
     public synchronized IndexInfo applyReplicatedIndex(String collection, String indexName, String field, String type, boolean unique, DocumentEngine docEngine) {
-        if (indexMetadata.containsKey(indexName)) {
-            return indexMetadata.get(indexName);
-        }
         IndexInfo info = new IndexInfo(indexName, collection, field, type.toUpperCase(), unique, 0, System.currentTimeMillis());
         indexMetadata.put(indexName, info);
-        indexData.put(indexName, UnifiedMap.newMap(128));
+        indexData.computeIfAbsent(indexName, k -> UnifiedMap.newMap(128));
 
         if (docEngine != null) {
             rebuildIndex(indexName, docEngine);
@@ -86,7 +98,20 @@ public final class JettraIndexManager {
             ));
         }
         indexData.remove(indexName);
-        return indexMetadata.remove(indexName) != null;
+        boolean removed = indexMetadata.remove(indexName) != null;
+        if (removed && config != null && config.isClusterMultinodeActive() && config.getNodeRole() == io.jettra.store.cluster.ClusterNode.Role.PRIMARY) {
+            io.jettra.store.JettraStoreServer server = io.jettra.store.JettraStoreServer.getActiveInstance();
+            if (server != null) {
+                server.replicateDropIndex(databaseName, indexName);
+            }
+            io.jettra.store.cluster.JettraClusterEventBus.getInstance().publish(
+                io.jettra.store.cluster.ClusterLiveEvent.TYPE_INDEX_DROPPED,
+                config.getNodeId(), "cluster",
+                String.format("Índice '%s' de base '%s' eliminado y propagado al clúster", indexName, databaseName),
+                "db=" + databaseName + ",idx=" + indexName
+            );
+        }
+        return removed;
     }
 
     public synchronized boolean applyReplicatedDropIndex(String indexName) {
