@@ -9,7 +9,6 @@
         <module>JettraMemory</module>
         <module>JettraStore</module>
         <module>JettraStoreDriver</module>
-        <module>JettraStoreFX</module>
         <module>JettraStoreMeter</module>
         <module>JettraStoreShell</module>
         <module>JettraStorePolice3D</module>
