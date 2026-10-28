@@ -24,7 +24,7 @@
 9. [Registros Referenciados Multimodelo (`JettraRef`) y Lazy Loading](#9-registros-referenciados-multimodelo-jettraref-y-lazy-loading)
 10. [Administración Integral de Índices](#10-administración-integral-de-índices)
 11. [Administración de Usuarios y Roles de Base de Datos (RBAC Granular)](#11-administración-de-usuarios-y-roles-de-base-de-datos-rbac-granular)
-12. [Exploración de Buckets/Units, Inspección de Registros y Conteo](#12-exploración-de-bucketsunits-inspección-de-registros-y-conteo-multimodelo)
+12. [Exploración de Buckets/Units, Inspección de Registros y Conteo Multimodelo](#12-exploración-de-bucketsunits-inspección-de-registros-y-conteo-multimodelo)
 13. [Operaciones CRUD sobre Unidades y Registros por cada Motor Multimodelo](#13-operaciones-crud-sobre-unidades-y-registros-por-cada-motor-multimodelo)
    - [13.1 Ciclo de Vida y Creación de Motores/Unidades](#131-ciclo-de-vida-de-base-de-datos-y-creación-de-motores-unidades--buckets)
    - [13.2 CRUD en Motor Documental (DOCUMENT)](#132-crud-completo-en-motores-documentales-document)
@@ -32,10 +32,30 @@
    - [13.4 CRUD en Motor Vectorial (VECTOR)](#134-crud-completo-en-motores-vectoriales-vector)
    - [13.5 CRUD en Motor de Grafos (GRAPH)](#135-crud-completo-en-motores-de-grafos-graph)
    - [13.6 CRUD en Motor de Series Temporales (TIMESERIES)](#136-crud-completo-en-motores-de-series-temporales-timeseries)
-14. [Ejemplo Práctico Completo: Base de Datos de un Hospital Inteligente (`hospital_db`)](#14-ejemplo-práctico-completo-base-de-datos-de-un-hospital-inteligente-hospital_db)
-15. [Respaldos Físicos en Caliente y Restauración (Backup & Restore)](#15-respaldos-físicos-en-caliente-y-restauración-backup--restore)
-16. [Tutorial Práctico Extremo a Extremo (Paso a Paso)](#16-tutorial-práctico-extremo-a-extremo-paso-a-paso)
-17. [Tabla Rápida de Comandos y Ayuda (`help`)](#17-tabla-rápida-de-comandos-y-ayuda-help)
+14. [Ejemplo Práctico Completo 1: Base de Datos de un Hospital Inteligente (`hospital_db`)](#14-ejemplo-práctico-completo-base-de-datos-de-un-hospital-inteligente-hospital_db)
+15. [Ejemplo Práctico Multimodelo Completo 2: Órdenes de Compra, Facturación y Servicios Técnicos (`orders_billing_db`)](#15-ejemplo-práctico-multimodelo-completo-2-órdenes-de-compra-facturación-y-servicios-técnicos-orders_billing_db)
+   - [15.1 Visión del Dominio y Modelo de Datos Multimodal](#151-visión-del-dominio-y-modelo-de-datos-multimodal)
+   - [15.2 Fase 1: Creación de Base de Datos y Aprovisionamiento de Unidades](#152-fase-1-creación-de-base-de-datos-y-aprovisionamiento-de-unidades)
+   - [15.3 Fase 2: Inserción de Documentos Maestros (Empresas, Clientes, Productos, Técnicos, Órdenes y Facturas)](#153-fase-2-inserción-de-documentos-maestros-empresas-clientes-productos-técnicos-órdenes-y-facturas)
+   - [15.4 Fase 3: Motor Clave-Valor (KV) para Disponibilidad de Técnicos y Folios Fiscales](#154-fase-3-motor-clave-valor-kv-para-disponibilidad-de-técnicos-y-folios-fiscales)
+   - [15.5 Fase 4: Motor Vectorial (VECTOR) para Diagnóstico Predictivo y Búsqueda de Piezas](#155-fase-4-motor-vectorial-vector-para-diagnóstico-predictivo-y-búsqueda-de-piezas)
+   - [15.6 Fase 5: Motor de Grafos (GRAPH) para Trazabilidad Integral de Órdenes y Servicios](#156-fase-5-motor-de-grafos-graph-para-trazabilidad-integral-de-órdenes-y-servicios)
+   - [15.7 Fase 6: Motor de Series Temporales (TIMESERIES) para Telemetría de Campo](#157-fase-6-motor-de-series-temporales-timeseries-para-telemetría-de-campo)
+   - [15.8 Fase 7: Motor Geoespacial (GIS) y Despacho Inteligente de Técnicos en Ruta](#158-fase-7-motor-geoespacial-gis-y-despacho-inteligente-de-técnicos-en-ruta)
+   - [15.9 Fase 8: Motor Columnar (OLAP) para Analítica Fiscal y Márgenes](#159-fase-8-motor-columnar-olap-para-analítica-fiscal-y-márgenes)
+   - [15.10 Fase 9: Java 25 Records para Auditoría Criptográfica Inmutable](#1510-fase-9-java-25-records-para-auditoría-criptográfica-inmutable)
+   - [15.11 Fase 10: Punteros Cruzados Multimodelo JettraRef y Resolución Lazy](#1511-fase-10-punteros-cruzados-multimodelo-jettraref-y-resolución-lazy)
+   - [15.12 Fase 11: Consultas Políglotas (JettraSQL, JettraQL) y Paginación Interactiva](#1512-fase-11-consultas-políglotas-jettrasql-jettraql-y-paginación-interactiva)
+   - [15.13 Fase 12: Analítica CLI y Cálculos Financieros (AGGREGATE, MATH, FINANCE)](#1513-fase-12-analítica-cli-y-cálculos-financieros-aggregate-math-finance)
+   - [15.14 Fase 13: Verificación con DB STATS, Conteo Global y Snapshot de Respaldo](#1514-fase-13-verificación-con-db-stats-conteo-global-y-snapshot-de-respaldo)
+16. [Respaldos Físicos en Caliente y Restauración (Backup & Restore)](#16-respaldos-físicos-en-caliente-y-restauración-backup--restore)
+17. [Gestión del Modo de Almacenamiento: `JVM-RAM` vs `DISK-MEMORY (JettraMemory)`](#17-gestión-del-modo-de-almacenamiento-jvm-ram-vs-disk-memory-jettramemory)
+18. [Módulo de Analítica, Cálculos Cuantitativos y Álgebra Vectorial CLI](#18-módulo-de-analítica-cálculos-cuantitativos-y-álgebra-vectorial-cli)
+19. [Historial Persistente, Expansión Bang y Autocompletado de Comandos CLI (TAB y Flechas ↑/↓)](#19-historial-persistente-expansión-bang-y-autocompletado-de-comandos-cli)
+20. [Estadísticas Multimodelo Completas (DB STATS con 8 Motores Especializados y Java Records)](#20-estadísticas-multimodelo-completas-db-stats-con-8-motores-especializados-y-java-records)
+21. [Comandos de Distribución en Clúster (`cluster-distributed`) y Supervisión en Vivo (`cluster live`)](#21-comandos-de-distribución-en-clúster-cluster-distributed-y-supervisión-en-vivo-cluster-live)
+22. [Tutorial Práctico Extremo a Extremo (Paso a Paso)](#22-tutorial-práctico-extremo-a-extremo-paso-a-paso)
+23. [Tabla Rápida de Comandos y Referencia General (`help`)](#23-tabla-rápida-de-comandos-y-referencia-general-help)
 
 ---
 
@@ -1521,7 +1541,509 @@ admin@jettra-cluster:primary> COUNT ALL
 
 ---
 
-## 15. Respaldos Físicos en Caliente y Restauración (Backup & Restore)
+## 15. Ejemplo Práctico Multimodelo Completo 2: Órdenes de Compra, Facturación y Servicios Técnicos (`orders_billing_db`)
+
+### 15.1 Visión del Dominio y Modelo de Datos Multimodal
+
+Para ilustrar las capacidades completas del motor políglota de **`JettraStore`**, este caso de uso modela un ecosistema integral de aprovisionamiento corporativo, logística, asignación de tareas técnicas en campo y facturación electrónica fiscal:
+
+1. **Empresas (`empresas`)**: Entidades matrices, filiales proveedoras y distribuidores de repuestos de tecnología y energía.
+2. **Clientes (`clientes`)**: Organizaciones y clientes corporativos con Registro Único de Contribuyente (RUC/NIT) que emiten solicitudes de compra y contratos de servicio.
+3. **Productos (`productos`)**: Catálogo maestro que incluye repuestos de hardware, piezas mecánicas especializadas y paquetes de servicios de ingeniería.
+4. **Técnicos que realizan las tareas (`tecnicos`)**: Ficha de ingenieros y especialistas de campo certificados, cuadrillas de guardia, niveles de competencia y herramientas móviles.
+5. **Órdenes de Compra (`ordenes_compra`)**: Documentos contractuales que consolidan los ítems solicitados por el cliente, la empresa emisora, los montos aprobados y el técnico designado para la ejecución de la tarea en campo.
+6. **Facturación Fiscal (`facturas`)**: Facturas electrónicas oficiales timbradas y ligadas a las órdenes de compra.
+
+#### Matriz de Motores Multimodelo en `orders_billing_db`:
+| Motor | Unidad / Bucket | Propósito en el Dominio |
+| :--- | :--- | :--- |
+| **`DOCUMENT`** | `empresas`, `clientes`, `productos`, `tecnicos`, `ordenes_compra`, `facturas` | Almacenamiento JSON con validación de esquemas e índices secundarios Hash y B-Tree. |
+| **`KEYVALUE (KV)`** | `cache_tecnicos_disponibles`, `cache_folios_fiscales` | Estado volátil ultra veloz: disponibilidad del técnico y control atómico de folios consecutivos de facturación. |
+| **`VECTOR`** | `vector_catalogo_repuestos`, `vector_diagnosticos_tareas` | Embeddings multidimensionales para recomendación semántica de piezas y emparejamiento predictivo de técnicos según la avería. |
+| **`GRAPH`** | `red_servicios_facturacion` | Grafo dirigido con relaciones `EMITE`, `SOLICITA`, `ASIGNADO_A`, `CONTIENE` y `FACTURADA_EN`. |
+| **`TIMESERIES`** | `telemetria_tareas_campo`, `flujo_facturacion_horario` | Trazas append-only del progreso del técnico minuto a minuto y métricas de facturación acumulada. |
+| **`GEOSPATIAL (GIS)`** | `sedes_empresas_clientes`, `gps_tecnicos_campo` | Coordenadas geoespaciales indexadas con R-Tree y despacho del técnico más cercano mediante `GEO RADIUS`. |
+| **`COLUMNAR (OLAP)`** | `analitica_facturacion_olap` | Almacenamiento por columnas para agregaciones contables instantáneas (totales, IVA/ITBMS, márgenes). |
+| **`JAVA RECORDS`** | `auditoria_facturacion_records` | Clases `record` inmutables de Java 25 con sellado criptográfico SHA-256 para auditoría fiscal. |
+
+---
+
+### 15.2 Fase 1: Creación de Base de Datos y Aprovisionamiento de Unidades
+
+```text
+admin@jettra-cluster:primary> CREATE DATABASE orders_billing_db
+[SUCCESS] Base de datos 'orders_billing_db' creada exitosamente.
+
+admin@jettra-cluster:primary> USE orders_billing_db
+[SUCCESS] Conmutado a base de datos activa: 'orders_billing_db'.
+```
+
+A continuación aprovisionamos los buckets especializados para cada uno de los motores del sistema:
+
+```text
+-- 1. Unidades del Motor Documental
+admin@jettra-cluster:primary> CREATE COLLECTION empresas
+admin@jettra-cluster:primary> CREATE COLLECTION clientes
+admin@jettra-cluster:primary> CREATE COLLECTION productos
+admin@jettra-cluster:primary> CREATE COLLECTION tecnicos
+admin@jettra-cluster:primary> CREATE COLLECTION ordenes_compra
+admin@jettra-cluster:primary> CREATE COLLECTION facturas
+
+-- 2. Unidades de Motores Especializados
+admin@jettra-cluster:primary> CREATE BUCKET cache_tecnicos_disponibles TYPE KEYVALUE
+admin@jettra-cluster:primary> CREATE BUCKET cache_folios_fiscales TYPE KEYVALUE
+admin@jettra-cluster:primary> CREATE BUCKET vector_catalogo_repuestos TYPE VECTOR
+admin@jettra-cluster:primary> CREATE BUCKET vector_diagnosticos_tareas TYPE VECTOR
+admin@jettra-cluster:primary> CREATE BUCKET red_servicios_facturacion TYPE GRAPH
+admin@jettra-cluster:primary> CREATE BUCKET telemetria_tareas_campo TYPE TIMESERIES
+admin@jettra-cluster:primary> CREATE BUCKET flujo_facturacion_horario TYPE TIMESERIES
+admin@jettra-cluster:primary> CREATE BUCKET sedes_empresas_clientes TYPE GEOSPATIAL
+admin@jettra-cluster:primary> CREATE BUCKET gps_tecnicos_campo TYPE GEOSPATIAL
+admin@jettra-cluster:primary> CREATE BUCKET analitica_facturacion_olap TYPE COLUMNAR
+admin@jettra-cluster:primary> CREATE BUCKET auditoria_facturacion_records TYPE RECORDS
+```
+
+---
+
+### 15.3 Fase 2: Inserción de Documentos Maestros (Empresas, Clientes, Productos, Técnicos, Órdenes y Facturas)
+
+#### 1. Empresas Proveedoras y Matrices (`empresas`):
+```text
+admin@jettra-cluster:primary> INSERT INTO empresas ID emp_01 JSON {"nombre": "Jettra Industrial Corp", "ruc": "1559821-1-654920", "ciudad": "Panama", "telefono": "+507 200-8000", "categoria": "Proveedor Matriz"}
+[SUCCESS] Documento [emp_01] insertado exitosamente en 'empresas'.
+
+admin@jettra-cluster:primary> INSERT INTO empresas ID emp_02 JSON {"nombre": "Soluciones Globales de Hardware S.A.", "ruc": "2498112-2-819230", "ciudad": "Colon", "telefono": "+507 441-9200", "categoria": "Distribuidor Mayorista"}
+[SUCCESS] Documento [emp_02] insertado exitosamente en 'empresas'.
+```
+
+#### 2. Clientes Corporativos (`clientes`):
+```text
+admin@jettra-cluster:primary> INSERT INTO clientes ID cli_101 JSON {"razon_social": "Corporacion Hotelera del Mar", "ruc": "981203-1-49210", "tipo": "CORPORATIVO", "contacto": "Lic. Mariana Rios", "email": "compras@hotelmar.com", "limite_credito": 50000.0}
+[SUCCESS] Documento [cli_101] insertado exitosamente en 'clientes'.
+
+admin@jettra-cluster:primary> INSERT INTO clientes ID cli_102 JSON {"razon_social": "Financiera del Istmo S.A.", "ruc": "1049218-1-58201", "tipo": "FINANCIERO", "contacto": "Ing. Roberto Solis", "email": "infraestructura@istmofin.com", "limite_credito": 120000.0}
+[SUCCESS] Documento [cli_102] insertado exitosamente en 'clientes'.
+```
+
+#### 3. Catálogo de Productos, Repuestos y Servicios (`productos`):
+```text
+admin@jettra-cluster:primary> INSERT INTO productos ID prod_01 JSON {"sku": "SRV-RACK-2U", "nombre": "Servidor Rack 2U Enterprise Xeon 64C", "categoria": "Hardware", "precio_unitario": 4850.0, "stock": 14}
+[SUCCESS] Documento [prod_01] insertado exitosamente en 'productos'.
+
+admin@jettra-cluster:primary> INSERT INTO productos ID prod_02 JSON {"sku": "PWR-HS-800W", "nombre": "Fuente de Poder Redundante 800W Hot-Swap", "categoria": "Repuestos", "precio_unitario": 320.0, "stock": 45}
+[SUCCESS] Documento [prod_02] insertado exitosamente en 'productos'.
+
+admin@jettra-cluster:primary> INSERT INTO productos ID prod_03 JSON {"sku": "MEM-ECC-64GB", "nombre": "Modulo Memoria 64GB ECC DDR5 Registered", "categoria": "Repuestos", "precio_unitario": 280.0, "stock": 80}
+[SUCCESS] Documento [prod_03] insertado exitosamente en 'productos'.
+
+admin@jettra-cluster:primary> INSERT INTO productos ID prod_04 JSON {"sku": "SRV-INST-CRIT", "nombre": "Servicio de Instalacion y Reemplazo Critico 24/7", "categoria": "Servicios", "precio_unitario": 450.0, "duracion_horas": 4}
+[SUCCESS] Documento [prod_04] insertado exitosamente en 'productos'.
+```
+
+#### 4. Técnicos Especialistas para Tareas en Campo (`tecnicos`):
+```text
+admin@jettra-cluster:primary> INSERT INTO tecnicos ID tec_701 JSON {"nombre": "Ing. Marcos Rivera", "cedula": "8-745-1204", "especialidad": "Servidores Blade y Alta Disponibilidad", "cuadrilla": "Alfa-1", "nivel": "SENIOR_L3", "telefono": "+507 6201-9988"}
+[SUCCESS] Documento [tec_701] insertado exitosamente en 'tecnicos'.
+
+admin@jettra-cluster:primary> INSERT INTO tecnicos ID tec_702 JSON {"nombre": "Ing. Sofia Morales", "cedula": "4-812-901", "especialidad": "Redes, Fibra Optica y Energia Redundante", "cuadrilla": "Beta-2", "nivel": "SPECIALIST_L2", "telefono": "+507 6590-4411"}
+[SUCCESS] Documento [tec_702] insertado exitosamente en 'tecnicos'.
+```
+
+#### 5. Órdenes de Compra y Ejecución de Tareas (`ordenes_compra`):
+```text
+admin@jettra-cluster:primary> INSERT INTO ordenes_compra ID ord_5001 JSON {"numero_orden": "OC-2026-005001", "id_empresa": "emp_01", "id_cliente": "cli_101", "id_tecnico": "tec_701", "fecha_emision": "2026-10-28", "estado": "APROBADA", "tipo_tarea": "MANTENIMIENTO_CRITICO_DATACENTER", "subtotal": 5620.0, "itbms": 393.4, "total": 6013.4, "items": [{"prod_id": "prod_01", "cant": 1, "precio": 4850.0}, {"prod_id": "prod_02", "cant": 1, "precio": 320.0}, {"prod_id": "prod_04", "cant": 1, "precio": 450.0}]}
+[SUCCESS] Documento [ord_5001] insertado exitosamente en 'ordenes_compra'.
+```
+
+#### 6. Factura Fiscal Electrónica (`facturas`):
+```text
+admin@jettra-cluster:primary> INSERT INTO facturas ID fac_8001 JSON {"numero_factura": "FAC-2026-000101", "id_orden": "ord_5001", "id_empresa": "emp_01", "id_cliente": "cli_101", "id_tecnico": "tec_701", "fecha_timbrado": "2026-10-28T10:15:00", "cufe": "CUFE-SHA256-992182049AAB881", "monto_bruto": 5620.0, "descuento": 100.0, "subtotal_neto": 5520.0, "impuesto_itbms": 386.4, "monto_total": 5906.4, "estado": "TIMBRADA_PAGADA"}
+[SUCCESS] Documento [fac_8001] insertado exitosamente en 'facturas'.
+```
+
+---
+
+### 15.4 Fase 3: Motor Clave-Valor (KV) para Disponibilidad de Técnicos y Folios Fiscales
+
+El motor de acceso en memoria ultrarrápida gestiona estados altamente volátiles que requieren latencias sub-milisegundo:
+
+```text
+-- 1. Disponibilidad del personal técnico en tiempo real:
+admin@jettra-cluster:primary> KV PUT cache_tecnicos_disponibles tec_701 "EN_TAREA_CAMPO | Orden: ord_5001 | Cliente: Hotel del Mar"
+[OK] Clave-Valor almacenado en 'cache_tecnicos_disponibles'[tec_701].
+
+admin@jettra-cluster:primary> KV PUT cache_tecnicos_disponibles tec_702 "DISPONIBLE_STANDBY | Base Operativa Panama Pacifico"
+[OK] Clave-Valor almacenado en 'cache_tecnicos_disponibles'[tec_702].
+
+-- 2. Folios fiscales consecutivos para garantizar unicidad y cero colisiones concurrentes:
+admin@jettra-cluster:primary> KV PUT cache_folios_fiscales folio_ultimo_emp_01 "FAC-2026-000101"
+[OK] Clave-Valor almacenado en 'cache_folios_fiscales'[folio_ultimo_emp_01].
+
+-- 3. Consulta de estado instantáneo:
+admin@jettra-cluster:primary> KV GET cache_tecnicos_disponibles tec_701
+[KV GET] cache_tecnicos_disponibles[tec_701] = "EN_TAREA_CAMPO | Orden: ord_5001 | Cliente: Hotel del Mar"
+```
+
+---
+
+### 15.5 Fase 4: Motor Vectorial (VECTOR) para Diagnóstico Predictivo y Búsqueda de Piezas
+
+Indexamos vectores numéricos normalizados para resolver dos problemas de IA en operaciones:
+1. **Búsqueda por similitud semántica de repuestos compatibles.**
+2. **Diagnóstico predictivo de averías para emparejar la falla técnica con el especialista adecuado.**
+
+```text
+-- 1. Indexar vector de especificaciones de hardware (Dimensiones: Potencia, Confiabilidad, Nivel de Carga):
+admin@jettra-cluster:primary> VECTOR INDEX vector_catalogo_repuestos prod_02 [0.92, 0.88, 0.45]
+[SUCCESS] Vector [prod_02] indexado en 'vector_catalogo_repuestos'.
+
+admin@jettra-cluster:primary> VECTOR INDEX vector_catalogo_repuestos prod_03 [0.85, 0.95, 0.60]
+[SUCCESS] Vector [prod_03] indexado en 'vector_catalogo_repuestos'.
+
+-- 2. Indexar vector del diagnóstico técnico de la orden ord_5001:
+-- [0.95 (Servidor Caído), 0.89 (Falla Fuente Hot-Swap), 0.12 (Red)]
+admin@jettra-cluster:primary> VECTOR INDEX vector_diagnosticos_tareas ord_5001 [0.95, 0.89, 0.12]
+[SUCCESS] Vector [ord_5001] indexado en 'vector_diagnosticos_tareas'.
+
+-- 3. Calcular la similitud de coseno entre el diagnóstico de la orden y el perfil de habilidad del técnico Marcos Rivera:
+-- Vector de perfil de Marcos Rivera: [0.94, 0.91, 0.15]
+admin@jettra-cluster:primary> VECTOR COSINE [0.95, 0.89, 0.12] [0.94, 0.91, 0.15]
+=== OPERACIÓN VECTORIAL (VECTOR) ===
++-------------------------------------------------------------+
+| OPERACIÓN: COSINE                                           |
+| Vector A:  [0.95, 0.89, 0.12]                              |
+| Vector B:  [0.94, 0.91, 0.15]                              |
++-------------------------------------------------------------+
+| RESULTADO SIMILITUD COSENO: 0.9984                          |
+| INTERPRETACIÓN: Coincidencia óptima (99.8%) para asignación |
++-------------------------------------------------------------+
+```
+
+---
+
+### 15.6 Fase 5: Motor de Grafos (GRAPH) para Trazabilidad Integral de Órdenes y Servicios
+
+La red de grafos vincula todos los vértices del ecosistema corporativo mediante aristas dirigidas y ponderadas:
+
+```text
+-- 1. Registrar vértices principales en la red:
+admin@jettra-cluster:primary> GRAPH ADD VERTEX red_servicios_facturacion emp_01
+admin@jettra-cluster:primary> GRAPH ADD VERTEX red_servicios_facturacion cli_101
+admin@jettra-cluster:primary> GRAPH ADD VERTEX red_servicios_facturacion tec_701
+admin@jettra-cluster:primary> GRAPH ADD VERTEX red_servicios_facturacion prod_01
+admin@jettra-cluster:primary> GRAPH ADD VERTEX red_servicios_facturacion ord_5001
+admin@jettra-cluster:primary> GRAPH ADD VERTEX red_servicios_facturacion fac_8001
+
+-- 2. Trazar relaciones dirigidas (Edges):
+-- La empresa emite la orden de compra:
+admin@jettra-cluster:primary> GRAPH ADD EDGE red_servicios_facturacion emp_01 ord_5001 LABEL EMITE_A
+-- La orden es solicitada por el cliente:
+admin@jettra-cluster:primary> GRAPH ADD EDGE red_servicios_facturacion ord_5001 cli_101 LABEL PARA_CLIENTE
+-- La orden asigna la tarea técnica a un técnico específico:
+admin@jettra-cluster:primary> GRAPH ADD EDGE red_servicios_facturacion ord_5001 tec_701 LABEL ASIGNADA_A
+-- La orden incluye el producto instalado:
+admin@jettra-cluster:primary> GRAPH ADD EDGE red_servicios_facturacion ord_5001 prod_01 LABEL CONTIENE_PRODUCTO
+-- La orden se liquida mediante la factura fiscal:
+admin@jettra-cluster:primary> GRAPH ADD EDGE red_servicios_facturacion ord_5001 fac_8001 LABEL LIQUIDADA_EN
+
+-- 3. Consulta de adyacencias y recorrido del grafo:
+admin@jettra-cluster:primary> GRAPH GET EDGES red_servicios_facturacion ord_5001
+=== GRAFO: ARISTAS CONECTADAS A [ord_5001] ===
+  -> [cli_101] (Etiqueta: PARA_CLIENTE, Peso: 1.0)
+  -> [tec_701] (Etiqueta: ASIGNADA_A, Peso: 1.0)
+  -> [prod_01] (Etiqueta: CONTIENE_PRODUCTO, Peso: 1.0)
+  -> [fac_8001] (Etiqueta: LIQUIDADA_EN, Peso: 1.0)
+
+-- 4. Búsqueda de camino con JettraQL Pattern Matching:
+admin@jettra-cluster:primary> JQL MATCH (ord_5001)-[ASIGNADA_A]->(tec_701) IN red_servicios_facturacion
+=== JETTRAQL [MATCH] ===
+Coincidencia de patrón encontrada en grafo 'red_servicios_facturacion':
+  (ord_5001:Orden) ──[ASIGNADA_A]──> (tec_701:Tecnico)
+```
+
+---
+
+### 15.7 Fase 6: Motor de Series Temporales (TIMESERIES) para Telemetría de Campo
+
+Permite registrar cronológicamente la evolución de la tarea del técnico en campo y el acumulado de ingresos por hora:
+
+```text
+-- 1. Telemetría de la tarea técnica (hitos minuto a minuto):
+-- Minuto 0: Arribo al datacenter del cliente (valor 1.0 = EN_SITIO)
+admin@jettra-cluster:primary> TS RECORD telemetria_tareas_campo 1.0 TIME 1730110800000
+-- Minuto 45: Diagnóstico completado y fuente desmontada (valor 2.0 = DIAGNOSTICO_OK)
+admin@jettra-cluster:primary> TS RECORD telemetria_tareas_campo 2.0 TIME 1730113500000
+-- Minuto 90: Nueva fuente instalada y servidor encendido (valor 3.0 = RECAMBIO_OK)
+admin@jettra-cluster:primary> TS RECORD telemetria_tareas_campo 3.0 TIME 1730116200000
+-- Minuto 120: Pruebas de estrés superadas y entrega a satisfacción (valor 4.0 = FINALIZADA)
+admin@jettra-cluster:primary> TS RECORD telemetria_tareas_campo 4.0 TIME 1730118000000
+
+-- 2. Flujo de facturación horaria (Monto facturado en USD):
+admin@jettra-cluster:primary> TS RECORD flujo_facturacion_horario 6013.4 TIME 1730118000000
+admin@jettra-cluster:primary> TS RECORD flujo_facturacion_horario 12850.0 TIME 1730121600000
+
+-- 3. Consulta de rango temporal de telemetría de tareas:
+admin@jettra-cluster:primary> TS RANGE telemetria_tareas_campo 1730110000000 1730120000000
+=== SERIE TEMPORAL: 'telemetria_tareas_campo' ===
+  [1730110800000] 1.0000 (Check-in en sitio cliente)
+  [1730113500000] 2.0000 (Desmontaje y aislamiento de falla)
+  [1730116200000] 3.0000 (Instalación de repuestos y puesta en marcha)
+  [1730118000000] 4.0000 (Cierre de orden y conformidad de cliente)
+Total: 4 punto(s) temporales registrados.
+```
+
+---
+
+### 15.8 Fase 7: Motor Geoespacial (GIS) y Despacho Inteligente de Técnicos en Ruta
+
+Registra coordenadas geográficas (latitud, longitud) y despacha cuadrillas técnicas evaluando proximidad geodésica:
+
+```text
+-- 1. Registrar sede del cliente (Hotel del Mar - Bahía de Panamá: Lat 8.9714, Lon -79.5180):
+admin@jettra-cluster:primary> GEO INSERT sedes_empresas_clientes cli_101 8.9714 -79.5180
+[SUCCESS] Punto GIS [cli_101] insertado en 'sedes_empresas_clientes' (8.971400, -79.518000).
+
+-- 2. Registrar ubicación GPS en tiempo real de los técnicos en campo:
+-- Marcos Rivera (tec_701) patrullando en Calle 50: Lat 8.9810, Lon -79.5220
+admin@jettra-cluster:primary> GEO INSERT gps_tecnicos_campo tec_701 8.9810 -79.5220
+-- Sofía Morales (tec_702) atendiendo en Costa del Este: Lat 9.0150, Lon -79.4680
+admin@jettra-cluster:primary> GEO INSERT gps_tecnicos_campo tec_702 9.0150 -79.4680
+
+-- 3. Buscar técnicos disponibles en un radio de 5.0 km alrededor de la sede del cliente cli_101:
+admin@jettra-cluster:primary> GEO RADIUS gps_tecnicos_campo 8.9714 -79.5180 5.0
+=== BÚSQUEDA GEOESPACIAL: 'gps_tecnicos_campo' (Radio: 5.0 km) ===
+  * ID: tec_701 | Distancia Geodésica: 1.15 km | Lat: 8.9810, Lon: -79.5220 [ASIGNACIÓN ÓPTIMA]
+Total: 1 técnico(s) dentro del perímetro de respuesta inmediata.
+```
+
+---
+
+### 15.9 Fase 8: Motor Columnar (OLAP) para Analítica Fiscal y Márgenes
+
+Permite ejecutar agregaciones financieras masivas sobre arrays de memoria vectorizada sin deserializar documentos:
+
+```text
+-- Cargar filas contables en el bucket columnar:
+admin@jettra-cluster:primary> COL INSERT analitica_facturacion_olap fac_8001 {"subtotal": 5520.0, "impuesto": 386.4, "total": 5906.4, "costo_piezas": 2800.0, "margen_bruto": 2720.0}
+[SUCCESS] Fila columnar [fac_8001] agregada a 'analitica_facturacion_olap'.
+
+-- Inspección vectorizada:
+admin@jettra-cluster:primary> COL SCAN analitica_facturacion_olap LIMIT 5
+=== ESCANEO COLUMNAR OLAP: 'analitica_facturacion_olap' ===
++------------+------------+------------+------------+---------------+----------------+
+| ID         | SUBTOTAL   | IMPUESTO   | TOTAL      | COSTO_PIEZAS  | MARGEN_BRUTO   |
++------------+------------+------------+------------+---------------+----------------+
+| fac_8001   | 5520.00    | 386.40     | 5906.40    | 2800.00       | 2720.00        |
++------------+------------+------------+------------+---------------+----------------+
+```
+
+---
+
+### 15.10 Fase 9: Java 25 Records para Auditoría Criptográfica Inmutable
+
+El motor de `RECORDS` almacena tipos Java inmutables compilados en Java 25 con memoria zero-copy:
+
+```text
+-- Registro de auditoría fiscal con token criptográfico y timestamp UTC:
+admin@jettra-cluster:primary> INSERT INTO auditoria_facturacion_records ID audit_fac_8001 JSON {"factura_id": "fac_8001", "orden_id": "ord_5001", "operador": "admin", "cufe_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", "monto_sellado": 5906.4, "verificado": true}
+[SUCCESS] Java Record [audit_fac_8001] persistido inmutablemente en 'auditoria_facturacion_records'.
+```
+
+---
+
+### 15.11 Fase 10: Punteros Cruzados Multimodelo JettraRef y Resolución Lazy
+
+El sistema de punteros cruzados **`JettraRef`** conecta los motores desacoplados sin duplicar datos en disco:
+
+```text
+-- 1. Vincular la orden ord_5001 con el documento del técnico:
+admin@jettra-cluster:primary> INSERT REF ordenes_compra ord_5001 KEY _ref_tecnico TARGET document::tecnicos#tec_701
+[SUCCESS] Referencia JettraRef '_ref_tecnico' vinculada en 'ordenes_compra'[ord_5001] -> 'document::tecnicos#tec_701'.
+
+-- 2. Vincular la orden con la factura fiscal emitida:
+admin@jettra-cluster:primary> INSERT REF ordenes_compra ord_5001 KEY _ref_factura TARGET document::facturas#fac_8001
+[SUCCESS] Referencia JettraRef '_ref_factura' vinculada en 'ordenes_compra'[ord_5001] -> 'document::facturas#fac_8001'.
+
+-- 3. Vincular la orden con el vector de diagnóstico de averías:
+admin@jettra-cluster:primary> INSERT REF ordenes_compra ord_5001 KEY _ref_ia_vector TARGET vector::vector_diagnosticos_tareas#ord_5001
+[SUCCESS] Referencia JettraRef '_ref_ia_vector' vinculada en 'ordenes_compra'[ord_5001] -> 'vector::vector_diagnosticos_tareas#ord_5001'.
+
+-- 4. Vincular la orden con el estado en memoria clave-valor del técnico:
+admin@jettra-cluster:primary> INSERT REF ordenes_compra ord_5001 KEY _ref_kv_estado TARGET kv::cache_tecnicos_disponibles#tec_701
+[SUCCESS] Referencia JettraRef '_ref_kv_estado' vinculada en 'ordenes_compra'[ord_5001] -> 'kv::cache_tecnicos_disponibles#tec_701'.
+
+-- 5. Inspeccionar y resolver en vivo las referencias cruzadas de la orden de compra:
+admin@jettra-cluster:primary> SHOW REFS ordenes_compra ord_5001
+=== REFERENCIAS CRUZADAS PARA [ord_5001] EN 'ordenes_compra' ===
+  [01] Campo: _ref_tecnico       -> document::tecnicos#tec_701
+       ↳ Resolución (Lazy On-Demand): Documento {_id=tec_701, nombre=Ing. Marcos Rivera, especialidad=Servidores Blade y Alta Disponibilidad}
+  [02] Campo: _ref_factura       -> document::facturas#fac_8001
+       ↳ Resolución (Lazy On-Demand): Documento {_id=fac_8001, numero_factura=FAC-2026-000101, monto_total=5906.4}
+  [03] Campo: _ref_ia_vector     -> vector::vector_diagnosticos_tareas#ord_5001
+       ↳ Resolución (Lazy On-Demand): Vector [0.95, 0.89, 0.12]
+  [04] Campo: _ref_kv_estado     -> kv::cache_tecnicos_disponibles#tec_701
+       ↳ Resolución (Lazy On-Demand): KV Valor: "EN_TAREA_CAMPO | Orden: ord_5001 | Cliente: Hotel del Mar"
+
+-- 6. Obtención integral con GET y Lazy Load:
+admin@jettra-cluster:primary> GET ordenes_compra ord_5001
+{
+  "_id": "ord_5001",
+  "numero_orden": "OC-2026-005001",
+  "total": 6013.4,
+  "estado": "APROBADA",
+  "_ref_tecnico": "document::tecnicos#tec_701",
+  "_ref_factura": "document::facturas#fac_8001",
+  "_ref_ia_vector": "vector::vector_diagnosticos_tareas#ord_5001",
+  "_ref_kv_estado": "kv::cache_tecnicos_disponibles#tec_701"
+}
+[JettraRef Resolución]: _ref_tecnico -> Ing. Marcos Rivera (SENIOR_L3)
+[JettraRef Resolución]: _ref_factura -> FAC-2026-000101 ($5,906.40)
+```
+
+---
+
+### 15.12 Fase 11: Consultas Políglotas (JettraSQL, JettraQL) y Paginación Interactiva
+
+#### Consultas Relacionales JettraSQL:
+```text
+admin@jettra-cluster:primary> SQL SELECT numero_orden, id_cliente, id_tecnico, total, estado FROM ordenes_compra WHERE estado = 'APROBADA'
+=== JETTRASQL RESULTADO (0 ms) ===
++-----------------+---------------+---------------+------------+------------+
+| NUMERO_ORDEN    | ID_CLIENTE    | ID_TECNICO    | TOTAL      | ESTADO     |
++-----------------+---------------+---------------+------------+------------+
+| OC-2026-005001  | cli_101       | tec_701       | 6013.40    | APROBADA   |
++-----------------+---------------+---------------+------------+------------+
+Total: 1 fila(s) seleccionadas / afectadas.
+```
+
+#### Paginación Interactiva de Facturas:
+```text
+admin@jettra-cluster:primary> PAGE_SIZE 1
+[PAGINACIÓN] Tamaño de página configurado a 1 registros para futuras consultas.
+
+admin@jettra-cluster:primary> SELECT numero_factura, cufe, monto_total, estado FROM facturas
+=== JETTRASQL RESULTADO (0 ms) ===
++--------------------+------------------------------+---------------+-------------------+
+| NUMERO_FACTURA     | CUFE                         | MONTO_TOTAL   | ESTADO            |
++--------------------+------------------------------+---------------+-------------------+
+| FAC-2026-000101    | CUFE-SHA256-992182049AAB881  | 5906.40       | TIMBRADA_PAGADA   |
++--------------------+------------------------------+---------------+-------------------+
+Total: 1 fila(s) seleccionadas / afectadas.
++------------------------------------------------------------------------------------------------------+
+|  PÁGINA [ 1 / 1 ]  •  Mostrando filas 1 - 1 de 1 total  •  Tamaño de página: 1                       |
+|  Navegación: [P]RIMERO (|<<)  •  [A]NTERIOR (<)  •  [S]IGUIENTE (>)  •  [U]LTIMO (>>|)                 |
++------------------------------------------------------------------------------------------------------+
+```
+
+#### Consultas Declarativas JettraQL:
+```text
+admin@jettra-cluster:primary> JQL FROM productos WHERE categoria = Hardware
+=== JETTRAQL [FROM] ===
+Colección: 'productos'
+  [01] ID: prod_01 | Datos: {sku=SRV-RACK-2U, nombre=Servidor Rack 2U Enterprise Xeon 64C, precio_unitario=4850.0}
+
+admin@jettra-cluster:primary> JQL FETCH ordenes_compra ord_5001 RESOLVE REFS
+=== JETTRAQL [FETCH] ===
+Documento recuperado con referencias resueltas:
+  Orden: OC-2026-005001 (Total: $6,013.40)
+  -> Técnico Responsable: Ing. Marcos Rivera (+507 6201-9988)
+  -> Factura Fiscal: FAC-2026-000101
+```
+
+---
+
+### 15.13 Fase 12: Analítica CLI y Cálculos Financieros (AGGREGATE, MATH, FINANCE)
+
+#### 1. Agregaciones de Compras y Facturación:
+```text
+admin@jettra-cluster:primary> AGGREGATE facturas GROUP BY estado SUM monto_total AVG monto_total COUNT
+=== JETTRASQL RESULTADO (0 ms) ===
++--------------------+---------------------+---------------------+---------+
+| ESTADO             | SUM(MONTO_TOTAL)    | AVG(MONTO_TOTAL)    | COUNT   |
++--------------------+---------------------+---------------------+---------+
+| TIMBRADA_PAGADA    | 5906.40             | 5906.40             | 1       |
++--------------------+---------------------+---------------------+---------+
+```
+
+#### 2. Cálculo Financiero de Financiamiento para Órdenes Corporativas (`FINANCE PMT`):
+Si el cliente `cli_101` opta por financiar su orden de compra de **$6,013.40** en **12 cuotas mensuales** con una tasa de interés del **1.2% mensual**:
+```text
+admin@jettra-cluster:primary> FINANCE PMT 0.012 12 6013.40
+=== OPERACIÓN FINANCIERA (FINANCE) ===
++-------------------------------------------------------------+
+| OPERACIÓN: PMT (Cuota Nivelada / Amortización Francesa)    |
+| Tasa Periódica:    1.2000% mensual                          |
+| Total de Pagos:    12 cuotas                                |
+| Monto Financiado:  $6,013.40                                |
++-------------------------------------------------------------+
+| CUOTA MENSUAL FIJA: $541.28                                 |
+| TOTAL A PAGAR:      $6,495.36                               |
+| TOTAL INTERESES:    $481.96                                 |
++-------------------------------------------------------------+
+```
+
+#### 3. Proyección Analítica con Evaluador Matemático (`MATH`):
+```text
+admin@jettra-cluster:primary> MATH 5906.40 * 1.07 - (100.0 * 2)
+=== EVALUADOR MATEMÁTICO (MATH) ===
++-------------------------------------------------------------+
+| EXPRESIÓN: 5906.40 * 1.07 - (100.0 * 2)                     |
+| RESULTADO: 6119.8480                                        |
++-------------------------------------------------------------+
+```
+
+---
+
+### 15.14 Fase 13: Verificación con DB STATS, Conteo Global y Snapshot de Respaldo
+
+Verificamos la radiografía integral de los 8 motores en `orders_billing_db`:
+
+```text
+admin@jettra-cluster:primary> DB STATS
+=== ESTADÍSTICAS DE BASE DE DATOS: 'orders_billing_db' ===
+- Colecciones Totales: 11
+- Documentos:          [empresas, clientes, productos, tecnicos, ordenes_compra, facturas]
+- Clave-Valor (KV):    [cache_tecnicos_disponibles, cache_folios_fiscales]
+- Vectores:            [vector_catalogo_repuestos, vector_diagnosticos_tareas]
+- Grafos:              [red_servicios_facturacion]
+- Series Temporales:   [telemetria_tareas_campo, flujo_facturacion_horario]
+- Geoespacial (GIS):   [sedes_empresas_clientes, gps_tecnicos_campo]
+- Columnar (OLAP):     [analitica_facturacion_olap]
+- Java Records:        [auditoria_facturacion_records]
+- MemTable Utilizada:  0.00 KB (Zero-Leakage Panama FFM)
+
+admin@jettra-cluster:primary> COUNT ALL
+=== CONTEO TOTAL DE REGISTROS EN BASE DE DATOS: 'orders_billing_db' ===
+  * [DOCUMENT]   'empresas'                      : 2 registro(s)
+  * [DOCUMENT]   'clientes'                      : 2 registro(s)
+  * [DOCUMENT]   'productos'                     : 4 registro(s)
+  * [DOCUMENT]   'tecnicos'                      : 2 registro(s)
+  * [DOCUMENT]   'ordenes_compra'                : 1 registro(s)
+  * [DOCUMENT]   'facturas'                      : 1 registro(s)
+  * [KEYVALUE]   'cache_tecnicos_disponibles'    : 2 clave-valor(es)
+  * [KEYVALUE]   'cache_folios_fiscales'         : 1 clave-valor(es)
+  * [VECTOR]     'vector_catalogo_repuestos'     : 2 vector(es)
+  * [VECTOR]     'vector_diagnosticos_tareas'    : 1 vector(es)
+  * [GRAPH]      'red_servicios_facturacion'     : 6 vértices / 5 aristas
+  * [TIMESERIES] 'telemetria_tareas_campo'       : 4 punto(s)
+  * [TIMESERIES] 'flujo_facturacion_horario'     : 2 punto(s)
+  * [GEOSPATIAL] 'sedes_empresas_clientes'       : 1 punto(s) GIS
+  * [GEOSPATIAL] 'gps_tecnicos_campo'            : 2 punto(s) GIS
+  * [COLUMNAR]   'analitica_facturacion_olap'    : 1 fila(s)
+  * [RECORDS]    'auditoria_facturacion_records' : 1 record(s) inmutables
+----------------------------------------------------------------------
+Gran Total: 35 entidades multimodelo integradas y sincronizadas al 100%.
+```
+
+#### Snapshot de Respaldo Inmediato (Hot Backup):
+```text
+admin@jettra-cluster:primary> BACKUP DATABASE orders_billing_db TO './data/jettra/orders_billing_2026.snap'
+[SUCCESS] Respaldo de 'orders_billing_db' generado exitosamente en './data/jettra/orders_billing_2026.snap' (Checksum CRC32 Validado).
+```
+
+---
+
+## 16. Respaldos Físicos en Caliente y Restauración (Backup & Restore)
 
 Generación de snapshots binarios con verificación de suma de comprobación CRC32:
 
@@ -1538,152 +2060,11 @@ RESTORE DATABASE sample_enterprise_db FROM '/var/backups/enterprise_2026.snap';
 
 ---
 
-## 16. Tutorial Práctico Extremo a Extremo (Paso a Paso)
-
-```sql
--- PASO 1: Iniciar sesión y validar telemetría
-connect local_master
-login admin admin-jettra
-status
-
--- PASO 2: Instalar y persistir todas las bases de datos de prueba
-INSTALL SAMPLES
-SHOW DBS
-SHOW SAMPLES
-
--- PASO 3: Seleccionar la base de datos empresarial y verificar colecciones
-USE sample_enterprise_db
-SHOW COLLECTIONS
-SHOW INDEXES
-
--- PASO 4: Consultar con JettraQL y JettraSQL
-JQL FROM products WHERE category = Hardware;
-SQL SELECT * FROM employees;
-
--- PASO 5: Probar resolución de referencias JettraRef
-lazy reference on
-GET products prod_01
-GET employees emp_01
-
--- PASO 6: Crear un índice secundario sobre salarios y reconstruirlo
-CREATE INDEX idx_salaries ON employees (salary) TYPE BTREE
-SHOW INDEXES
-ALTER INDEX idx_salaries REBUILD
-
--- PASO 7: Crear usuario desarrollador con privilegios específicos
-CREATE USER dev_analyst PASSWORD analyst-2026 ROLE DEVELOPER
-GRANT READ_ONLY ON sample_enterprise_db TO dev_analyst
-SHOW GRANTS FOR dev_analyst
-
--- PASO 8: Respaldar la base de datos y cerrar sesión
-BACKUP DATABASE sample_enterprise_db TO './data/jettra/manual_backup.snap'
-logout
-```
-
----
-
-## 17. Tabla Rápida de Comandos y Ayuda (`help`)
-
-```text
-==============================================================================================
-                         JETTRASTORE SHELL - GUÍA COMPLETA DE COMANDOS
-==============================================================================================
-1. CONEXIÓN Y SESIÓN:
-  connect <url> <port>                  Establece la dirección del nodo servidor JettraStore.
-  connect <nombre-perfil>               Conecta utilizando un perfil previamente guardado.
-  login <username> <password>           Autentica y obtiene un token de sesión criptográfico JettraJWT.
-  logout                                Cierra la sesión activa y revoca el token JWT.
-  save connection <nombre>              Guarda el perfil de conexión actual con un alias.
-  remove connection <nombre>            Elimina un perfil de conexión guardado.
-  list connections / list conections    Lista todos los perfiles de conexión guardados.
-
-2. TELEMETRÍA Y CLÚSTER:
-  status                                Monitorea RAM Panama FFM, CPU Loom y Disco LSM.
-  show nodes / list nodes               Muestra la topología del clúster Raft y nodos del anillo.
-  cluster-distributed <all>             distribuye entre todos los nodos todas las bases de datos
-  cluster-distributed <nombre-base-datos>: distribuye la base de datos indicada
-  cluster-distributed info :            Muestra una tabla con los nodos y las bases de datos en cada nodo.
-  cluster live [límite]                 Muestra trazas y eventos en tiempo real de lo que ocurre en el clúster.
-  multinode / show multinode            Muestra el estado de cluster.multinode.active (ON/OFF).
-  multinode on / multinode off          Activa o desactiva dinámicamente la distribución de datos.
-  add node <id> <host> <port> [ROLE]    Agrega un nuevo nodo secundario al clúster Raft.
-  remove node <id>                      Remueve un nodo réplica del anillo dinámico.
-  start node <id>                       Inicia y activa el procesamiento para un nodo específico.
-  stop node <id>                        Detiene un nodo réplica (pausa el tráfico de descarga).
-
-3. BASES DE DATOS Y PERSISTENCIA EN DISCO:
-  show databases / show dbs             Lista todas las bases de datos detectadas en disco y memoria.
-  show samples / show sample dbs        Muestra las bases de datos de prueba preconfiguradas (incluyendo 3M).
-  LOAD SAMPLE example_factura_db        Carga la base de datos de facturación con 3,000,000 objetos multimodelo.
-  LOAD SAMPLE samples_hostipal_db       Carga la base de datos de salud hospitalaria con 2,000,000 objetos.
-  LOAD SAMPLE samples_ambiental_db      Carga la base de datos ambiental mundial con 3,000,000 objetos.
-  create database <nombre>              Crea una nueva base de datos lógica.
-  drop database <nombre>                Elimina la base de datos especificada.
-  use <nombre>                          Conmuta la base de datos activa.
-  db stats                              Muestra estadísticas de la base de datos activa.
-  INSTALL SAMPLES                       Instala y persiste las 5 bases de datos de ejemplo.
-  backup database [nombre] [TO 'path']  Genera un snapshot físico .snap de la base de datos.
-  restore database [nombre] FROM 'path' Restaura un snapshot .snap en una base de datos.
-
-4. BUCKETS/UNITS, REGISTROS Y CONTEO:
-  show buckets / show unit              Lista todos los buckets/units de almacenamiento por motor.
-  show buckets <DOCUMENT|VECTOR|..>     Filtra las unidades por motor específico.
-  show records <bucket> [LIMIT n]       Muestra los registros del bucket (documentos, vectores, grafos, etc.).
-  count <bucket>                        Cuenta los registros contenidos en la unidad especificada.
-  count all / count *                   Censo y conteo total de registros en todos los motores de la base de datos.
-
-5. CONSULTAS POLÍGLOTAS (JETTRAQL Y JETTRASQL):
-  JQL FROM <col> [WHERE campo = valor]  Consulta declarativa sobre documentos.
-  JQL MATCH (a)-[r]->(b) IN <grafo>     Pattern matching sobre redes de grafos.
-  JQL VECTOR SIMILARITY <col> TO [...]  Búsqueda de vecinos más cercanos por similaridad coseno.
-  JQL FETCH <col> <id> [RESOLVE REFS]   Recupera un registro resolviendo referencias JettraRef.
-  SQL SELECT * FROM <col> [WHERE k = v] Consulta relacional con tabla formateada de columnas y filas.
-  SQL INSERT INTO <col> VALUES (id, json) Inserta registro en la colección activa.
-  SQL UPDATE <col> SET k = v WHERE _id = id Actualiza campos de un registro.
-  SQL DELETE FROM <col> WHERE _id = id  Elimina un registro mediante sintaxis SQL.
-
-6. REGISTROS REFERENCIADOS (JETTRAREF) Y LAZY LOADING:
-  lazy reference on / off               Alterna la resolución diferida (Lazy) o inmediata (Eager).
-  insert ref <col> <id> KEY <k> TARGET <engine>::<col>#<id>  Vincula un puntero cruzado multimodelo.
-  resolve ref <engine>::<col>#<id>      Resuelve manualmente el destino de una referencia.
-  show refs <col> <id>                  Muestra todas las referencias de un registro y sus resoluciones.
-  get <col> <id>                        Obtiene un documento y resuelve sus punteros _ref_*.
-
-7. ADMINISTRACIÓN DE ÍNDICES:
-  create index <nombre> ON <col> (campo) [TYPE BTREE|HASH|SPARSE] [UNIQUE]  Crea índice secundario.
-  drop index <nombre>                   Elimina el índice especificado.
-  alter index <nombre> rebuild          Reconstruye el índice re-escaneando los documentos.
-  show indexes [ON <col>]               Muestra la tabla de índices creados en la base de datos.
-
-8. ADMINISTRACIÓN DE USUARIOS Y ROLES (RBAC):
-  show users / list users               Muestra todos los usuarios, rol global y roles por base de datos.
-  create user <user> PASSWORD <pass> [ROLE <role>] Crea un nuevo usuario en el sistema.
-  drop user <user>                      Elimina un usuario (superuser 'admin' inmutable).
-  alter user <user> PASSWORD <newPass>  Actualiza la contraseña del usuario.
-  alter user <user> ROLE <newRole>      Actualiza el rol global del usuario.
-  grant <DB_OWNER|READ_WRITE|READ_ONLY> ON <db> TO <user>  Asigna privilegios sobre una base de datos.
-  revoke <db> FROM <user>               Revoca el acceso sobre la base de datos indicada.
-  show grants for <user>                Muestra los privilegios asignados al usuario especificado.
-
-9. MOTORES ESPECIALIZADOS (VECTORES, GRAFOS, TIME SERIES, KV):
-  vector index <col> <id> [f1,f2,..]    Indexa vector float[] en el motor vectorial.
-  vector search <col> [f1,f2] K <num>   Búsqueda k-NN por similaridad coseno.
-  graph add vertex <grafo> <id>         Agrega un vértice a la red de grafos.
-  graph add edge <g> <a> <b> [LABEL l]  Agrega arista dirigida ponderada.
-  ts record <serie> <val> [TIME t]      Registra punto métrico en serie temporal.
-  ts range <serie> <inicio> <fin>       Consulta métricas en rango de tiempo.
-  kv put <tabla> <clave> <valor>        Almacena clave-valor en memoria de acceso ultra rápido.
-  kv get <tabla> <clave>                Recupera el valor asociado a la clave.
-==============================================================================================
-```
-
----
-
-## 7. Gestión del Modo de Almacenamiento: `JVM-RAM` vs `DISK-MEMORY (JettraMemory)`
+## 17. Gestión del Modo de Almacenamiento: `JVM-RAM` vs `DISK-MEMORY (JettraMemory)`
 
 `JettraStoreShell` permite consultar y conmutar en caliente el modo de almacenamiento entre la memoria RAM de la JVM y el motor de disco off-heap `JettraMemory`:
 
-### 7.1 Comandos de Consola
+### 17.1 Comandos de Consola
 * **Consultar Modo Activo:**
   ```text
   jettra-shell> STORAGE_MODE
@@ -1700,17 +2081,17 @@ logout
   jettra-shell> SET STORAGE_MODE = DISK-MEMORY
   ```
 
-### 7.2 Comportamiento de los Modos
+### 17.2 Comportamiento de los Modos
 * **`JVM-RAM`:** Las colecciones se cargan y consultan en las áreas de memoria Stack y Heap de Java con estructuras `UnifiedMap`, aprovechando ZGC y Compact Object Headers.
 * **`DISK-MEMORY`:** Los registros se escriben y leen directamente en disco mediante `JettraMemory` utilizando punteros nativos Panama `MemorySegment`, asegurando 0% de impacto en el montículo.
 
 ---
 
-## 16. Módulo de Analítica, Cálculos Cuantitativos y Álgebra Vectorial CLI
+## 18. Módulo de Analítica, Cálculos Cuantitativos y Álgebra Vectorial CLI
 
 `JettraStoreShell` incorpora comandos directos y sintaxis declarativa para realizar cálculos analíticos instantáneos con salida en tablas ASCII formateadas:
 
-### 16.1 Comandos de Agregación (`AGGREGATE` y `SELECT ... GROUP BY`)
+### 18.1 Comandos de Agregación (`AGGREGATE` y `SELECT ... GROUP BY`)
 * **Comando Directo:**
   ```bash
   AGGREGATE facturas GROUP BY estado SUM total AVG total MEDIAN total COUNT
@@ -1720,14 +2101,14 @@ logout
   SELECT region, SUM(monto) AS total_ventas, AVG(monto) AS promedio, MEDIAN(monto) AS mediana FROM ventas GROUP BY region;
   ```
 
-### 16.2 Evaluador Matemático Cuantitativo (`MATH` / `CALC`)
+### 18.2 Evaluador Matemático Cuantitativo (`MATH` / `CALC`)
 Permite evaluar cualquier expresión aritmética, trigonométrica o combinatoria:
 ```bash
 MATH cbrt(1000) + sqrt(144) * 2 - hypot(3, 4) + fact(5)
 ```
 * Funciones soportadas: `sqrt`, `cbrt`, `pow`, `abs`, `round`, `ceil`, `floor`, `factorial` / `fact`, `gcd`, `lcm`, `hypot`, `sin`, `cos`, `tan`, `atan2`.
 
-### 16.3 Operaciones Financieras (`FINANCE`)
+### 18.3 Operaciones Financieras (`FINANCE`)
 * **Cuota Mensual Fija PMT (Sistema Francés):**
   ```bash
   FINANCE PMT 0.004166 360 200000
@@ -1751,7 +2132,7 @@ MATH cbrt(1000) + sqrt(144) * 2 - hypot(3, 4) + fact(5)
   FINANCE AMORTIZATION 10000 0.05 12
   ```
 
-### 16.4 Estadística Descriptiva e Inferencial (`STATS`)
+### 18.4 Estadística Descriptiva e Inferencial (`STATS`)
 * **Resumen Integral:**
   ```bash
   STATS SUMMARY 12, 15, 18, 22, 25, 30, 35, 42, 50, 65, 80
@@ -1769,7 +2150,7 @@ MATH cbrt(1000) + sqrt(144) * 2 - hypot(3, 4) + fact(5)
   STATS REGRESSION [1, 2, 3, 4, 5] [2.1, 4.0, 5.9, 8.1, 9.9]
   ```
 
-### 16.5 Álgebra Vectorial y Búsqueda Multidimensional (`VECTOR`)
+### 18.5 Álgebra Vectorial y Búsqueda Multidimensional (`VECTOR`)
 * **Similitud Coseno y Distancia Euclidiana:**
   ```bash
   VECTOR COSINE [0.8, 0.2, 0.5] [0.75, 0.25, 0.45]
@@ -1786,69 +2167,103 @@ MATH cbrt(1000) + sqrt(144) * 2 - hypot(3, 4) + fact(5)
   VECTOR ANGLE [1, 0, 0] [0, 1, 0]
   ```
 
+---
+
+## 19. Historial Persistente, Expansión Bang y Autocompletado de Comandos CLI
+
+Para maximizar la ergonomía y productividad del operador de consola, `JettraStoreShell` incorpora un subsistema avanzado de interactividad CLI impulsado por JLine 3 con enlaces ANSI nativos.
+
+### 19.1 Autocompletado de Comandos con Tecla `[TAB]`
+
+Al escribir un prefijo o comando parcial en el prompt y presionar la tecla **`[TAB]`**:
+1. **Coincidencia Única:** Si existe una única opción válida que coincida con el prefijo ingresado, el comando se autocompleta inmediatamente en la pantalla.
+   * *Ejemplo:* Escribir `LOAD SAMPLE ex` y presionar `[TAB]` $\rightarrow$ autocompleta a `LOAD SAMPLE example_factura_db `.
+   * *Ejemplo:* Escribir `STATU` y presionar `[TAB]` $\rightarrow$ autocompleta a `STATUS `.
+2. **Múltiples Coincidencias:** Si existen múltiples comandos o argumentos que coincidan, el shell despliega una lista organizada por grupos temáticos (*Bases de Datos*, *Colecciones y Buckets*, *CRUD*, *Índices*, *Cluster*, etc.) junto a una descripción funcional:
+   ```text
+   jettra-shell [admin@127.0.0.1:9091/default_db]> SH[TAB]
+   === Bases de Datos ===
+   SHOW DATABASES       -- Lista todas las bases de datos registradas
+   SHOW SAMPLES         -- Muestra bases de datos de demostración predefinidas
+   SHOW SAMPLE DATABASES
+
+   === Colecciones y Buckets ===
+   SHOW BUCKETS         -- Lista colecciones/buckets de la base de datos activa
+   SHOW COLLECTIONS     -- Lista colecciones o tablas de la base de datos activa
+   SHOW RECORDS         -- Muestra registros de una colección o bucket
+   SHOW TABLES
+   SHOW UNITS
+
+   === Índices ===
+   SHOW INDEXES         -- Lista índices secundarios y vectoriales creados
+
+   === Cluster y Nodos ===
+   SHOW NODES           -- Lista la topología de nodos del clúster
+   SHOW MULTINODE
+   ```
+3. **Autocompletado Contextual:** Al ingresar un comando con subargumentos (`USE `, `DROP DATABASE `, `SHOW RECORDS `, `COUNT `, `CONNECT `), el motor sugiere dinámicamente los nombres de bases de datos, colecciones activas y perfiles guardados.
+
+* **Comandos equivalentes en línea:**
+  ```bash
+  COMPLETE SH            # Lista sugerencias para prefijo SH
+  TAB LOAD               # Lista sugerencias para comando LOAD
+  COMPLETE USE           # Sugiere bases de datos disponibles
+  ```
 
 ---
 
-## 17. Historial Persistente, Expansión Bang y Autocompletado de Comandos CLI
+### 19.2 Navegación por Historial con Flechas `[↑]` y `[↓]`
 
-Para maximizar la productividad del operador y permitir una experiencia de consola ágil similar a shells modernos (`bash`, `zsh`, `fish`), `JettraStoreShell` incorpora un subsistema de historial persistente y autocompletado en tiempo real.
+El shell registra automáticamente cada comando ejecutado durante la sesión:
 
-### 17.1 Historial Persistente (`~/.jettra/history.log`)
-Cada comando ejecutado en la consola interactiva se persiste automáticamente en el archivo `~/.jettra/history.log` y se mantiene en memoria compartida (hasta los últimos 1,000 comandos).
+* **Flecha Arriba (`↑`):** Desplaza la línea de comandos hacia atrás en el historial, recuperando los comandos previos secuencialmente desde el más reciente hasta el más antiguo.
+* **Flecha Abajo (`↓`):** Desplaza la línea de comandos hacia adelante en el historial hacia los comandos más nuevos.
+* **Actualización Limpia del Búfer:** Gracias al mapeo explícito de secuencias de escape ANSI (`\033[A` para arriba, `\033[B` para abajo, `\033[C` para derecha, `\033[D` para izquierda, `Home`, `End` y `Delete`), el prompt se redibuja limpiamente sin dejar residuos como `[A` o `[B`.
+* **Persistencia Dual Automática:**
+  * Archivo de historial cronológico plano: `~/.jettra/history.log`.
+  * Archivo de historial estructurado de terminal: `~/.jettra/.jline_history`.
+  * Ambos se sincronizan al arrancar el shell, permitiendo reanudar comandos de sesiones previas con solo presionar la flecha `[↑]`.
 
-Comandos de gestión de historial:
-* **Ver historial completo o limitado:**
+---
+
+### 19.3 Gestión Directa del Historial (`HISTORY`) y Expansión Bang (`!`)
+
+* **Ver historial completo o acotado:**
   ```bash
-  HISTORY           # Muestra todos los comandos registrados con su número de orden
-  HISTORY 20        # Muestra los últimos 20 comandos ejecutados
+  HISTORY           # Muestra todos los comandos registrados
+  HISTORY 20        # Muestra los últimos 20 comandos
   ```
   *Salida de ejemplo:*
   ```text
   === HISTORIAL DE COMANDOS (3 registrados) ===
     [   1] CONNECT 127.0.0.1 9091
-    [   2] USE example_factura_db
+    [   2] USE orders_billing_db
     [   3] DB STATS
   --------------------------------------------------------------------------------
   Uso: !<num> ejecuta comando por número | !! ejecuta el último | !<prefijo> ejecuta por coincidencia
   ```
 * **Búsqueda en el historial:**
   ```bash
-  HISTORY SEARCH factura
+  HISTORY SEARCH facturacion
   ```
 * **Limpiar el historial:**
   ```bash
-  HISTORY CLEAR     # Vacía el historial en memoria y trunca ~/.jettra/history.log
+  HISTORY CLEAR     # Purga la memoria, vacía JLine y trunca history.log y .jline_history
   ```
 
-### 17.2 Expansión Bang (`!`)
-Permite re-ejecutar comandos previos rápidamente:
+#### Expansión Bang (`!`):
 * `!!` : Re-ejecuta el último comando ingresado.
-* `!n` : Ejecuta el comando en la posición `n` del historial (ejemplo: `!1` para el primer comando).
+* `!n` : Ejecuta el comando en la posición `n` del historial (ejemplo: `!1`).
 * `!<prefijo>` : Busca y ejecuta el comando más reciente que comience con `<prefijo>` (ejemplo: `!use` o `!stat`).
-
-### 17.3 Autocompletado Contextual (`COMPLETE` y `TAB`)
-El subsistema de autocompletado analiza el prefijo actual y propone completados basados en:
-1. **Palabras clave y comandos del sistema:** `SHOW DATABASES`, `DB STATS`, `CREATE INDEX`, `AGGREGATE`, `MATH`, `FINANCE`, `VECTOR`, etc.
-2. **Bases de datos disponibles:** Al escribir `USE ` o `DROP DATABASE `, sugiere bases de datos instaladas y de muestra.
-3. **Muestras preconfiguradas:** Al escribir `LOAD SAMPLE ` o `INSTALL SAMPLE `, sugiere `example_factura_db`, `samples_hostipal_db`, `samples_ambiental_db`.
-4. **Buckets y colecciones activas:** Al escribir `SHOW RECORDS `, `COUNT ` o `SELECT * FROM `, sugiere los buckets existentes en la base de datos seleccionada.
-5. **Historial de comandos previos:** Prioriza comandos frecuentes.
-
-Sintaxis en consola:
-```bash
-COMPLETE SH             # Sugiere SHOW BUCKETS, SHOW DATABASES, SHOW RECORDS, SHOW SAMPLES, etc.
-TAB LOAD                # Sugiere LOAD SAMPLE example_factura_db, etc.
-COMPLETE USE            # Sugiere las bases de datos lógicas registradas en el clúster
-```
 
 ---
 
-## 18. Estadísticas Multimodelo Completas (DB STATS con 8 Motores Especializados y Java Records)
+## 20. Estadísticas Multimodelo Completas (DB STATS con 8 Motores Especializados y Java Records)
 
 El comando `DB STATS` audita e inspecciona la totalidad de los 8 motores multimodelo soportados en JettraStore, garantizando visibilidad transparente tanto de motores tradicionales como de motores analíticos y de alta velocidad:
 
-### 18.1 Salida Completa de `DB STATS`
-Al invocar `db stats` sobre una base de datos multimodal (por ejemplo `example_factura_db` tras `LOAD SAMPLE example_factura_db`), el reporte muestra detalladamente las unidades de cada motor:
+### 20.1 Salida Completa de `DB STATS`
+Al invocar `db stats` sobre una base de datos multimodal (por ejemplo `example_factura_db` u `orders_billing_db`), el reporte muestra detalladamente las unidades de cada motor:
 
 ```text
 jettra-shell [admin@127.0.0.1:9091/example_factura_db]> db stats
@@ -1863,10 +2278,10 @@ jettra-shell [admin@127.0.0.1:9091/example_factura_db]> db stats
 - Columnar (OLAP):     [analitica_fiscal]
 - Java Records:        [auditoria_records]
 - Índices Secundarios: 2
-- MemTable Utilizada:  0,00 KB
+- MemTable Utilizada:  0.00 KB
 ```
 
-### 18.2 Motores Multimodelo Soportados y Representados
+### 20.2 Motores Multimodelo Soportados y Representados
 1. **Documentos (`DocumentEngine`):** Almacenamiento JSON/BSON con soporte de índices Hash, B-Tree y Sparse.
 2. **Clave-Valor KV (`KeyValueEngine`):** Almacenamiento ultra veloz byte-array para caché de tokens, folios y estados volátiles.
 3. **Vectores (`VectorEngine`):** Embeddings multidimensionales indexados mediante grafos HNSW y búsqueda k-NN por similitud coseno.
@@ -1874,15 +2289,15 @@ jettra-shell [admin@127.0.0.1:9091/example_factura_db]> db stats
 5. **Series Temporales (`TimeSeriesEngine`):** Registro de métricas append-only con compresión Delta y consultas cronológicas por rangos.
 6. **Geoespacial GIS (`GeospatialEngine`):** Puntos geoespaciales (latitud/longitud) indexados con R-Tree y consultas por radio geodésico y Bounding Box.
 7. **Columnar OLAP (`ColumnarEngine`):** Almacenamiento por columnas vectorizado para analítica fiscal y agregaciones masivas.
-8. **Java Records (`RecordsEngine`):** Objetos tipados de Java 25 (`record`) nativos, inmutables, con persistencia zero-copy en memoria y disco (ejemplo: `FacturaAuditRecord`).
+8. **Java Records (`RecordsEngine`):** Objetos tipados de Java 25 (`record`) nativos, inmutables, con persistencia zero-copy en memoria y disco.
 
 ---
 
-## 19. Comandos de Distribución en Clúster (`cluster-distributed`) y Gestión de Consola
+## 21. Comandos de Distribución en Clúster (`cluster-distributed`) y Supervisión en Vivo (`cluster live`)
 
 JettraStoreShell proporciona comandos nativos para la orquestación y migración de datos entre nodos del clúster sin necesidad de llamadas HTTP manuales.
 
-### 19.1 Sintaxis de Comandos `cluster-distributed`
+### 21.1 Sintaxis de Comandos `cluster-distributed`
 
 ```bash
 # 1. Distribuir todas las bases de datos y sus registros hacia todos los nodos del clúster
@@ -1894,67 +2309,162 @@ cluster-distributed all
 cluster-distributed <nombre-base-datos>
 # Ejemplo:
 cluster-distributed example_factura_db
+cluster-distributed orders_billing_db
 
 # 3. Consultar la tabla de distribución del clúster (nodos y bases de datos alojadas)
 cluster-distributed info
 ```
 
-### 19.2 Visualización de `cluster-distributed info`
+### 21.2 Visualización de `cluster-distributed info`
 La salida formatea una tabla ASCII con la topología, estado de conexión, roles y bases de datos replicadas:
 
 ```text
 jettra-shell [admin@127.0.0.1:9091]> cluster-distributed info
-+---------+----------------+------+-----------+--------+-------+------------------------------------------+
-| NODE ID | IP             | PORT | ROLE      | STATUS | DBS   | DATABASES                                |
-+---------+----------------+------+-----------+--------+-------+------------------------------------------+
-| node-01 | 192.168.60.243 | 9091 | PRIMARY   | ONLINE | 3     | example_factura_db, samples_hospital_db, samples_ambiental_db |
-| node-02 | 192.168.60.246 | 9091 | SECONDARY | ONLINE | 3     | example_factura_db, samples_hospital_db, samples_ambiental_db |
-+---------+----------------+------+-----------+--------+-------+------------------------------------------+
++---------+----------------+------+-----------+--------+-------+--------------------------------------------------------------+
+| NODE ID | IP             | PORT | ROLE      | STATUS | DBS   | DATABASES                                                    |
++---------+----------------+------+-----------+--------+-------+--------------------------------------------------------------+
+| node-01 | 192.168.60.243 | 9091 | PRIMARY   | ONLINE | 4     | orders_billing_db, example_factura_db, samples_hospital_db  |
+| node-02 | 192.168.60.246 | 9091 | SECONDARY | ONLINE | 4     | orders_billing_db, example_factura_db, samples_hospital_db  |
++---------+----------------+------+-----------+--------+-------+--------------------------------------------------------------+
 ```
 
-### 19.3 Menú Interactivo `menu` (Opción 8)
-Al escribir `menu`, se incorpora la opción:
-```text
-[8] Distribuir Datos en el Clúster (cluster-distributed)
-```
-Permitiendo distribuir interactivamente todas las bases de datos, una base de datos particular o imprimir la tabla de distribución.
-
-### 19.4 Autocompletado e Historial de Comandos
-
-- **Autocompletado con TAB:** Al escribir `cluster-` y presionar `[TAB]`, el shell autocompleta:
-  - `cluster-distributed all`
-  - `cluster-distributed info`
-  - `cluster-distributed <nombre_bd>` (sugiere dinámicamente las bases de datos registradas).
-- **Gestión del Archivo de Historial:**
-  - JettraStoreShell separa el archivo binario/estructurado de JLine (`~/.jettra/.jline_history`) del registro cronológico en texto plano (`~/.jettra/history.log`). Esto evita errores de formato (`Bad history file syntax!`) causados por escrituras mixtas.
-  - En caso de corrupción histórica previa en `~/.jettra/history.log`, el shell detecta la excepción, inicializa una sesión limpia de forma transparente y continúa sin interrupciones.
-
-### 19.5 Parámetros de Ejecución JVM Recomendados
-Para ejecutar el shell en Java 25 evitando las advertencias de acceso nativo de JLine (`System::load`), utilice el flag:
+### 21.3 Supervisión en Tiempo Real con `cluster live`
+Permite abrir un flujo de eventos continuos en vivo (mediante Server-Sent Events / EventBus) para observar las réplicas del clúster:
 ```bash
-java --enable-native-access=ALL-UNNAMED -jar JettraStoreShell-1.0-SNAPSHOT-uber.jar
+cluster live          # Muestra los eventos recientes de replicación
+cluster live 10       # Limita la salida a los últimos 10 eventos
 ```
-o utilice el script envoltorio `/home/avbravo/jettra-node/start-shell.sh`.
 
-### 19.6 Ayuda Integrada (`help`, `help cluster-distributed` y `help cluster live`)
-La ayuda interactiva de la consola incluye los comandos de distribución y supervisión en tiempo real:
-```bash
-# Ayuda general con la lista completa de comandos
-help
-# O ayuda contextual específica:
-help cluster-distributed
-help cluster live
+---
+
+## 22. Tutorial Práctico Extremo a Extremo (Paso a Paso)
+
+```sql
+-- PASO 1: Iniciar sesión y validar telemetría
+connect local_master
+login admin admin-jettra
+status
+
+-- PASO 2: Instalar y persistir todas las bases de datos de prueba
+INSTALL SAMPLES
+SHOW DBS
+SHOW SAMPLES
+
+-- PASO 3: Seleccionar la base de datos de órdenes y facturación
+USE orders_billing_db
+SHOW BUCKETS
+SHOW INDEXES
+
+-- PASO 4: Consultar con JettraQL y JettraSQL
+JQL FROM productos WHERE categoria = Hardware;
+SQL SELECT numero_orden, id_cliente, total, estado FROM ordenes_compra;
+
+-- PASO 5: Probar resolución de referencias JettraRef
+lazy reference on
+GET ordenes_compra ord_5001
+
+-- PASO 6: Crear un índice secundario sobre montos y reconstruirlo
+CREATE INDEX idx_ordenes_total ON ordenes_compra (total) TYPE BTREE
+SHOW INDEXES
+ALTER INDEX idx_ordenes_total REBUILD
+
+-- PASO 7: Crear usuario de auditoría con privilegios específicos
+CREATE USER auditor_fiscal PASSWORD auditor-pass-2026 ROLE DEVELOPER
+GRANT READ_ONLY ON orders_billing_db TO auditor_fiscal
+SHOW GRANTS FOR auditor_fiscal
+
+-- PASO 8: Respaldar la base de datos y cerrar sesión
+BACKUP DATABASE orders_billing_db TO './data/jettra/orders_billing_backup.snap'
+logout
 ```
-Salida en consola:
+
+---
+
+## 23. Tabla Rápida de Comandos y Referencia General (`help`)
+
 ```text
 ==============================================================================================
-                   AYUDA DE COMANDOS: CLUSTER-DISTRIBUTED
+                         JETTRASTORE SHELL - GUÍA COMPLETA DE COMANDOS
 ==============================================================================================
-  cluster-distributed <all>             distribuye entre todos los nodos todas las bases de datos
-  cluster-distributed <nombre-base-datos>: distribuye la base de datos indicada
-  cluster-distributed info :            Muestra una tabla con los nodos y las bases de datos en cada nodo.
-  cluster live [límite]                 Muestra trazas en tiempo real de lo que ocurre en el clúster.
+1. CONEXIÓN Y SESIÓN:
+  connect <url> <port>                  Establece la dirección del nodo servidor JettraStore.
+  connect <nombre-perfil>               Conecta utilizando un perfil previamente guardado.
+  login <username> <password>           Autentica y obtiene un token de sesión criptográfico JettraJWT.
+  logout                                Cierra la sesión activa y revoca el token JWT.
+  save connection <nombre>              Guarda el perfil de conexión actual con un alias.
+  remove connection <nombre>            Elimina un perfil de conexión guardado.
+  list connections / list conections    Lista todos los perfiles de conexión guardados.
+
+2. TELEMETRÍA Y CLÚSTER:
+  status                                Monitorea RAM Panama FFM, CPU Loom y Disco LSM.
+  show nodes / list nodes               Muestra la topología del clúster Raft y nodos del anillo.
+  cluster-distributed <all>             Distribuye entre todos los nodos todas las bases de datos.
+  cluster-distributed <nombre-bd>       Distribuye la base de datos indicada.
+  cluster-distributed info              Muestra una tabla con los nodos y las bases de datos en cada nodo.
+  cluster live [límite]                 Muestra trazas y eventos en tiempo real de lo que ocurre en el clúster.
+  multinode / show multinode            Muestra el estado de cluster.multinode.active (ON/OFF).
+  multinode on / multinode off          Activa o desactiva dinámicamente la distribución de datos.
+  add node <id> <host> <port> [ROLE]    Agrega un nuevo nodo secundario al clúster Raft.
+  remove node <id>                      Remueve un nodo réplica del anillo dinámico.
+  start node <id>                       Inicia y activa el procesamiento para un nodo específico.
+  stop node <id>                        Detiene un nodo réplica (pausa el tráfico de descarga).
+
+3. BASES DE DATOS Y PERSISTENCIA EN DISCO:
+  show databases / show dbs             Lista todas las bases de datos detectadas en disco y memoria.
+  show samples / show sample dbs        Muestra las bases de datos de prueba preconfiguradas.
+  LOAD SAMPLE example_factura_db        Carga la base de datos de facturación con 3,000,000 objetos.
+  LOAD SAMPLE samples_hostipal_db       Carga la base de datos hospitalaria con 2,000,000 objetos.
+  LOAD SAMPLE samples_ambiental_db      Carga la base de datos ambiental mundial con 3,000,000 objetos.
+  create database <nombre>              Crea una nueva base de datos lógica.
+  drop database <nombre>                Elimina la base de datos especificada.
+  use <nombre>                          Conmuta la base de datos activa.
+  db stats                              Muestra estadísticas de los 8 motores de la base de datos activa.
+  INSTALL SAMPLES                       Instala y persiste las 5 bases de datos de ejemplo.
+  backup database [nombre] [TO 'path']  Genera un snapshot físico .snap de la base de datos.
+  restore database [nombre] FROM 'path' Restaura un snapshot .snap en una base de datos.
+
+4. BUCKETS/UNITS, REGISTROS Y CONTEO:
+  show buckets / show unit              Lista todos los buckets/units de almacenamiento por motor.
+  show buckets <DOCUMENT|VECTOR|..>     Filtra las unidades por motor específico.
+  show records <bucket> [LIMIT n]       Muestra los registros del bucket (documentos, vectores, etc.).
+  count <bucket>                        Cuenta los registros contenidos en la unidad especificada.
+  count all / count *                   Censo y conteo total de registros en todos los motores.
+
+5. CONSULTAS POLÍGLOTAS (JETTRAQL Y JETTRASQL):
+  JQL FROM <col> [WHERE campo = valor]  Consulta declarativa sobre documentos.
+  JQL MATCH (a)-[r]->(b) IN <grafo>     Pattern matching sobre redes de grafos.
+  JQL VECTOR SIMILARITY <col> TO [...]  Búsqueda de vecinos más cercanos por similaridad coseno.
+  JQL FETCH <col> <id> [RESOLVE REFS]   Recupera un registro resolviendo referencias JettraRef.
+  SQL SELECT * FROM <col> [WHERE k = v] Consulta relacional con tabla formateada de columnas y filas.
+  SQL INSERT INTO <col> VALUES (id,..)  Inserta registro en la colección activa.
+  SQL UPDATE <col> SET k = v WHERE ..   Actualiza campos de un registro.
+  SQL DELETE FROM <col> WHERE _id = id  Elimina un registro mediante sintaxis SQL.
+
+6. REGISTROS REFERENCIADOS (JETTRAREF) Y LAZY LOADING:
+  lazy reference on / off               Alterna la resolución diferida (Lazy) o inmediata (Eager).
+  insert ref <col> <id> KEY <k> TARGET <engine>::<col>#<id>  Vincula un puntero cruzado multimodelo.
+  resolve ref <engine>::<col>#<id>      Resuelve manualmente el destino de una referencia.
+  show refs <col> <id>                  Muestra todas las referencias de un registro y sus resoluciones.
+  get <col> <id>                        Obtiene un documento y resuelve sus punteros _ref_*.
+
+7. HISTORIAL Y AUTOCOMPLETADO INTERACTIVO:
+  [TAB]                                 Autocompleta el comando o muestra opciones agrupadas con descripción.
+  [Flecha Arriba ↑]                     Recorre hacia atrás los comandos ejecutados previamente.
+  [Flecha Abajo ↓]                      Avanza hacia los comandos más recientes en el historial.
+  COMPLETE <prefijo> / TAB <prefijo>    Consulta programática de sugerencias de autocompletado.
+  HISTORY [n]                           Muestra los últimos 'n' comandos del historial.
+  HISTORY SEARCH <termino>              Busca comandos que contengan el término ingresado.
+  HISTORY CLEAR                         Limpia la memoria del historial y trunca los archivos.
+  !! / !<n> / !<prefijo>                Expansión Bang para reejecución rápida de comandos.
+
+8. ANALÍTICA, CÁLCULOS CUANTITATIVOS Y VECTORES:
+  AGGREGATE <col> GROUP BY <c> SUM/AVG.. Agregaciones analíticas instantáneas.
+  MATH <expresion>                      Evaluador matemático con funciones avanzadas.
+  FINANCE PMT/FV/PV/CAGR/AMORTIZATION   Cálculos financieros corporativos (cuota, tasa, amortización).
+  STATS SUMMARY/MEAN/MEDIAN/CORRELATION Estadísticas descriptivas y bivariadas.
+  VECTOR COSINE/EUCLIDEAN/DOT/CROSS     Operaciones de álgebra lineal y similitud vectorial.
 ==============================================================================================
 ```
+
 
 

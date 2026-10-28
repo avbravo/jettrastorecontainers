@@ -465,6 +465,7 @@ public class JettraStoreShellTest {
     public void testInteractivePaginationCommands() {
         try (JettraClient client = JettraClient.connect("127.0.0.1", 9091, "admin", "admin-jettra")) {
             JettraStoreShellApp shell = new JettraStoreShellApp(client);
+            shell.executeCommand("INSTALL SAMPLES FACTURA");
             shell.executeCommand("use example_factura_db");
 
             // 1. Configurar tamaño de página
@@ -733,4 +734,131 @@ public class JettraStoreShellTest {
         String menu = shell.executeCommand("menu");
         assertTrue(menu.contains("[9] Flujo de Eventos en Tiempo Real (cluster live)"));
     }
+
+    @Test
+    @DisplayName("Debe verificar autocompletado de comandos con TAB (coincidencia única y sugerencias múltiples)")
+    public void testTabAutocompletionSingleAndMultipleMatches() {
+        JettraStoreShellApp shell = new JettraStoreShellApp(false);
+
+        // 1. Coincidencia única: 'LOAD SAMPLE ex' debe autocompletar a 'example_factura_db'
+        var singleMatches = shell.autocomplete("LOAD SAMPLE ex");
+        assertNotNull(singleMatches);
+        assertEquals(1, singleMatches.size());
+        assertEquals("LOAD SAMPLE example_factura_db", singleMatches.get(0));
+
+        // 2. Coincidencia única: 'STATU' debe retornar 'STATUS'
+        var statusMatches = shell.autocomplete("STATU");
+        assertNotNull(statusMatches);
+        assertTrue(statusMatches.contains("STATUS"));
+
+        // 3. Múltiples coincidencias: 'SH' debe devolver múltiples comandos SHOW
+        var multiMatches = shell.autocomplete("SH");
+        assertNotNull(multiMatches);
+        assertTrue(multiMatches.size() > 1);
+        assertTrue(multiMatches.contains("SHOW DATABASES"));
+        assertTrue(multiMatches.contains("SHOW BUCKETS"));
+        assertTrue(multiMatches.contains("SHOW COLLECTIONS"));
+
+        // 4. Múltiples coincidencias para subcomandos: 'SHOW '
+        var showSubMatches = shell.autocomplete("SHOW ");
+        assertNotNull(showSubMatches);
+        assertTrue(showSubMatches.contains("SHOW DATABASES"));
+        assertTrue(showSubMatches.contains("SHOW COLLECTIONS"));
+
+        // 5. Metadatos de autocompletado: grupo y descripción
+        String dbGroup = shell.resolveCandidateGroup("SHOW DATABASES");
+        assertEquals("Bases de Datos", dbGroup);
+
+        String crudGroup = shell.resolveCandidateGroup("SELECT * FROM facturas");
+        assertEquals("CRUD y Consultas", crudGroup);
+
+        String descr = shell.resolveCandidateDescription("SHOW DATABASES");
+        assertNotNull(descr);
+        assertTrue(descr.contains("bases de datos"));
+    }
+
+    @Test
+    @DisplayName("Debe validar navegación de historial con flechas Arriba/Abajo y mapeo de teclas ANSI")
+    public void testHistoryNavigationUpDownArrowsAndKeyBindings() throws Exception {
+        JettraStoreShellApp shell = new JettraStoreShellApp(false);
+
+        // 1. Limpiar historial
+        shell.executeCommand("HISTORY CLEAR");
+        assertTrue(shell.getCommandHistory().isEmpty());
+
+        // 2. Crear LineReader simulado con terminal virtual
+        org.jline.terminal.Terminal terminal = org.jline.terminal.TerminalBuilder.builder()
+            .dumb(true)
+            .build();
+
+        org.jline.reader.LineReader lineReader = org.jline.reader.LineReaderBuilder.builder()
+            .terminal(terminal)
+            .option(org.jline.reader.LineReader.Option.AUTO_MENU_LIST, false)
+            .option(org.jline.reader.LineReader.Option.AUTO_LIST, true)
+            .build();
+
+        // Aplicar los mismos mapeos ANSI que utiliza el Shell interactivo
+        for (String mapName : java.util.List.of(org.jline.reader.LineReader.EMACS, org.jline.reader.LineReader.MAIN)) {
+            org.jline.keymap.KeyMap<org.jline.reader.Binding> map = lineReader.getKeyMaps().get(mapName);
+            if (map != null) {
+                map.bind(new org.jline.reader.Reference(org.jline.reader.LineReader.UP_LINE_OR_HISTORY), "\033[A", "\033OA");
+                map.bind(new org.jline.reader.Reference(org.jline.reader.LineReader.DOWN_LINE_OR_HISTORY), "\033[B", "\033OB");
+                map.bind(new org.jline.reader.Reference(org.jline.reader.LineReader.FORWARD_CHAR), "\033[C", "\033OC");
+                map.bind(new org.jline.reader.Reference(org.jline.reader.LineReader.BACKWARD_CHAR), "\033[D", "\033OD");
+                map.bind(new org.jline.reader.Reference(org.jline.reader.LineReader.BEGINNING_OF_LINE), "\033[H", "\033[1~", "\033OH");
+                map.bind(new org.jline.reader.Reference(org.jline.reader.LineReader.END_OF_LINE), "\033[F", "\033[4~", "\033OF");
+                map.bind(new org.jline.reader.Reference(org.jline.reader.LineReader.DELETE_CHAR), "\033[3~");
+            }
+        }
+
+        // 3. Verificar que tanto secuencias ANSI (\033[A, \033[B) como Application (\033OA, \033OB) están mapeadas
+        org.jline.keymap.KeyMap<org.jline.reader.Binding> mainMap = lineReader.getKeyMaps().get(org.jline.reader.LineReader.MAIN);
+        assertNotNull(mainMap);
+        assertNotNull(mainMap.getBound("\033[A"));
+        assertNotNull(mainMap.getBound("\033OA"));
+        assertNotNull(mainMap.getBound("\033[B"));
+        assertNotNull(mainMap.getBound("\033OB"));
+
+        // 4. Vincular activeLineReader al shell y ejecutar comandos
+        shell.setActiveLineReader(lineReader);
+
+        shell.executeCommand("CONNECT 127.0.0.1 9091");
+        shell.executeCommand("USE default_db");
+        shell.executeCommand("DB STATS");
+
+        assertEquals(3, shell.getCommandHistory().size());
+        assertEquals("CONNECT 127.0.0.1 9091", shell.getCommandHistory().get(0));
+        assertEquals("USE default_db", shell.getCommandHistory().get(1));
+        assertEquals("DB STATS", shell.getCommandHistory().get(2));
+
+        // 5. Verificar que el historial de JLine contiene los comandos registrados
+        org.jline.reader.History jlineHistory = lineReader.getHistory();
+        assertTrue(jlineHistory.size() >= 3);
+
+        // 6. Navegación secuencial por historial
+        // Al final del historial (índice 3), navegar hacia atrás (Arriba)
+        jlineHistory.last(); // posicionarse al final
+        assertTrue(jlineHistory.previous());
+        assertEquals("DB STATS", jlineHistory.current());
+
+        assertTrue(jlineHistory.previous());
+        assertEquals("USE default_db", jlineHistory.current());
+
+        assertTrue(jlineHistory.previous());
+        assertEquals("CONNECT 127.0.0.1 9091", jlineHistory.current());
+
+        // Navegar hacia adelante (Abajo)
+        assertTrue(jlineHistory.next());
+        assertEquals("USE default_db", jlineHistory.current());
+
+        assertTrue(jlineHistory.next());
+        assertEquals("DB STATS", jlineHistory.current());
+
+        // 7. Limpiar historial con HISTORY CLEAR purga shell y JLine
+        String clearMsg = shell.executeCommand("HISTORY CLEAR");
+        assertTrue(clearMsg.contains("[OK]"));
+        assertTrue(shell.getCommandHistory().isEmpty());
+        assertEquals(0, lineReader.getHistory().size());
+    }
 }
+

@@ -97,6 +97,15 @@ public final class JettraStoreShellApp implements AutoCloseable {
     private static final Path HISTORY_FILE = CONFIG_DIR.resolve("history.log");
     private static final Path JLINE_HISTORY_FILE = CONFIG_DIR.resolve(".jline_history");
     private final List<String> commandHistory = new CopyOnWriteArrayList<>();
+    private volatile org.jline.reader.LineReader activeLineReader;
+
+    public void setActiveLineReader(org.jline.reader.LineReader activeLineReader) {
+        this.activeLineReader = activeLineReader;
+    }
+
+    public org.jline.reader.LineReader getActiveLineReader() {
+        return this.activeLineReader;
+    }
 
     private String defaultConnectionName = "node-01";
 
@@ -167,6 +176,11 @@ public final class JettraStoreShellApp implements AutoCloseable {
             Files.writeString(HISTORY_FILE, trimmed + System.lineSeparator(),
                 StandardCharsets.UTF_8, StandardOpenOption.CREATE, StandardOpenOption.APPEND);
         } catch (Exception ignored) {}
+        if (activeLineReader != null) {
+            try {
+                activeLineReader.getHistory().add(trimmed);
+            } catch (Exception ignored) {}
+        }
     }
 
     public List<String> getCommandHistory() {
@@ -177,9 +191,17 @@ public final class JettraStoreShellApp implements AutoCloseable {
         String upper = command.toUpperCase().trim();
         if (upper.equals("HISTORY CLEAR")) {
             commandHistory.clear();
+            if (activeLineReader != null) {
+                try {
+                    activeLineReader.getHistory().purge();
+                } catch (Exception ignored) {}
+            }
             try {
                 if (Files.exists(HISTORY_FILE)) {
                     Files.writeString(HISTORY_FILE, "", StandardCharsets.UTF_8, StandardOpenOption.TRUNCATE_EXISTING);
+                }
+                if (Files.exists(JLINE_HISTORY_FILE)) {
+                    Files.writeString(JLINE_HISTORY_FILE, "", StandardCharsets.UTF_8, StandardOpenOption.TRUNCATE_EXISTING);
                 }
             } catch (Exception ignored) {}
             return "[OK] Historial de comandos limpiado exitosamente.";
@@ -544,12 +566,21 @@ public final class JettraStoreShellApp implements AutoCloseable {
             }
         }
 
-        // Búsqueda en historial de comandos ejecutados
+        // Búsqueda en historial de comandos ejecutados (sin duplicar ignorando mayúsculas/minúsculas)
         for (int i = commandHistory.size() - 1; i >= 0; i--) {
             String h = commandHistory.get(i);
-            if ((h.toUpperCase().startsWith(pUpper) || h.toUpperCase().startsWith(pTrimUpper)) && !candidates.contains(h)) {
-                candidates.add(h);
-                if (candidates.size() >= 40) break;
+            if (h.toUpperCase().startsWith(pUpper) || h.toUpperCase().startsWith(pTrimUpper)) {
+                boolean exists = false;
+                for (String c : candidates) {
+                    if (c.equalsIgnoreCase(h)) {
+                        exists = true;
+                        break;
+                    }
+                }
+                if (!exists) {
+                    candidates.add(h);
+                    if (candidates.size() >= 40) break;
+                }
             }
         }
 
@@ -3864,36 +3895,71 @@ Ejecute el comando 'connect <host> <puerto>' (o presione Enter para [127.0.0.1 9
         System.out.println("\nEscriba 'help' o '?' para ver los comandos disponibles, 'menu' para el menú interactivo, o 'exit' para salir.\n");
 
         // 3. Ciclo interactivo de comandos con soporte avanzado de JLine (Historial con flechas y Autocompletado con TAB)
+        org.jline.terminal.Terminal terminal = null;
         org.jline.reader.LineReader lineReader = null;
         try {
-            org.jline.terminal.Terminal terminal = org.jline.terminal.TerminalBuilder.builder()
-                .system(true)
-                .dumb(false)
-                .build();
+            String termEnv = System.getenv("TERM");
+            org.jline.terminal.TerminalBuilder termBuilder = org.jline.terminal.TerminalBuilder.builder()
+                .system(true);
+            if (termEnv == null || termEnv.isBlank() || "dumb".equalsIgnoreCase(termEnv)) {
+                termBuilder.type("xterm-256color");
+            }
+            terminal = termBuilder.build();
+
+            org.jline.reader.impl.DefaultParser parser = new org.jline.reader.impl.DefaultParser();
+            parser.setEscapeChars(new char[]{});
 
             org.jline.reader.Completer completer = (reader, parsedLine, candidates) -> {
                 String rawLine = parsedLine.line();
                 int cursor = parsedLine.cursor();
                 String buffer = rawLine.substring(0, Math.min(cursor, rawLine.length()));
                 String currentWord = parsedLine.word();
-                String prefixBeforeWord = buffer.substring(0, buffer.length() - currentWord.length());
+                if (currentWord == null) currentWord = "";
+
+                String prefixBeforeWord = buffer.substring(0, Math.max(0, buffer.length() - currentWord.length()));
 
                 List<String> suggestions = shell.autocomplete(buffer);
+                Set<String> seenTokens = new LinkedHashSet<>();
+
                 for (String s : suggestions) {
                     if (s == null || s.isBlank()) continue;
-                    String valToInsert = s;
+
+                    String candidateAfterPrefix = s;
                     if (!prefixBeforeWord.isEmpty() && s.toUpperCase().startsWith(prefixBeforeWord.toUpperCase())) {
-                        valToInsert = s.substring(prefixBeforeWord.length());
+                        candidateAfterPrefix = s.substring(prefixBeforeWord.length());
+                    } else if (prefixBeforeWord.isEmpty()) {
+                        candidateAfterPrefix = s;
+                    } else {
+                        String trimmedPrefix = prefixBeforeWord.trim();
+                        if (!trimmedPrefix.isEmpty() && s.toUpperCase().startsWith(trimmedPrefix.toUpperCase())) {
+                            int idx = s.toUpperCase().indexOf(trimmedPrefix.toUpperCase()) + trimmedPrefix.length();
+                            candidateAfterPrefix = s.substring(idx).stripLeading();
+                        }
                     }
-                    if (valToInsert.isBlank()) continue;
+                    if (candidateAfterPrefix.isBlank()) continue;
+
+                    int firstSpace = candidateAfterPrefix.indexOf(' ');
+                    String tokenForWord;
+                    boolean hasMoreTokens;
+                    if (firstSpace != -1) {
+                        tokenForWord = candidateAfterPrefix.substring(0, firstSpace);
+                        hasMoreTokens = true;
+                    } else {
+                        tokenForWord = candidateAfterPrefix;
+                        hasMoreTokens = false;
+                    }
+
+                    if (tokenForWord.isBlank()) continue;
+                    if (!seenTokens.add(tokenForWord.toUpperCase())) continue;
 
                     String group = shell.resolveCandidateGroup(s);
                     String descr = shell.resolveCandidateDescription(s);
 
-                    boolean isComplete = !valToInsert.endsWith(" ");
+                    boolean isComplete = true;
+
                     candidates.add(new org.jline.reader.Candidate(
-                        valToInsert,
-                        valToInsert,
+                        tokenForWord,
+                        tokenForWord,
                         group,
                         descr,
                         null,
@@ -3905,15 +3971,47 @@ Ejecute el comando 'connect <host> <puerto>' (o presione Enter para [127.0.0.1 9
 
             lineReader = org.jline.reader.LineReaderBuilder.builder()
                 .terminal(terminal)
+                .parser(parser)
                 .completer(completer)
                 .variable(org.jline.reader.LineReader.HISTORY_FILE, JLINE_HISTORY_FILE)
                 .option(org.jline.reader.LineReader.Option.AUTO_MENU_LIST, true)
+                .option(org.jline.reader.LineReader.Option.AUTO_LIST, true)
                 .option(org.jline.reader.LineReader.Option.AUTO_GROUP, true)
                 .option(org.jline.reader.LineReader.Option.CASE_INSENSITIVE, true)
                 .option(org.jline.reader.LineReader.Option.COMPLETE_IN_WORD, true)
                 .option(org.jline.reader.LineReader.Option.INSERT_TAB, false)
                 .option(org.jline.reader.LineReader.Option.DISABLE_EVENT_EXPANSION, true)
                 .build();
+
+            // Mapeo explícito de secuencias de escape ANSI para navegación fluida por historial y autocompletado
+            for (String mapName : List.of(org.jline.reader.LineReader.EMACS, org.jline.reader.LineReader.MAIN)) {
+                org.jline.keymap.KeyMap<org.jline.reader.Binding> map = lineReader.getKeyMaps().get(mapName);
+                if (map != null) {
+                    map.bind(new org.jline.reader.Reference(org.jline.reader.LineReader.EXPAND_OR_COMPLETE), "\t");
+                    map.bind(new org.jline.reader.Reference(org.jline.reader.LineReader.UP_LINE_OR_HISTORY), "\033[A", "\033OA");
+                    map.bind(new org.jline.reader.Reference(org.jline.reader.LineReader.DOWN_LINE_OR_HISTORY), "\033[B", "\033OB");
+                    map.bind(new org.jline.reader.Reference(org.jline.reader.LineReader.FORWARD_CHAR), "\033[C", "\033OC");
+                    map.bind(new org.jline.reader.Reference(org.jline.reader.LineReader.BACKWARD_CHAR), "\033[D", "\033OD");
+                    map.bind(new org.jline.reader.Reference(org.jline.reader.LineReader.BEGINNING_OF_LINE), "\033[H", "\033[1~", "\033OH");
+                    map.bind(new org.jline.reader.Reference(org.jline.reader.LineReader.END_OF_LINE), "\033[F", "\033[4~", "\033OF");
+                    map.bind(new org.jline.reader.Reference(org.jline.reader.LineReader.DELETE_CHAR), "\033[3~");
+                }
+            }
+
+            // Sincronizar historial persistente registrado en ~/.jettra/history.log
+            for (String hCmd : shell.getCommandHistory()) {
+                lineReader.getHistory().add(hCmd);
+            }
+            shell.setActiveLineReader(lineReader);
+
+            final org.jline.reader.LineReader shutdownReader = lineReader;
+            Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+                try {
+                    if (shutdownReader != null) {
+                        shutdownReader.getHistory().save();
+                    }
+                } catch (Exception ignored) {}
+            }));
         } catch (Throwable t) {
             // Fallback elegante a System.console o Scanner si la terminal interactiva no está disponible (ej. entornos de test o redirección)
             lineReader = null;
@@ -3943,6 +4041,11 @@ Ejecute el comando 'connect <host> <puerto>' (o presione Enter para [127.0.0.1 9
                     }
                 } catch (org.jline.reader.UserInterruptException | org.jline.reader.EndOfFileException e) {
                     System.out.println("\nSaliendo de JettraStore Shell...");
+                    if (lineReader != null) {
+                        try {
+                            lineReader.getHistory().save();
+                        } catch (Exception ignored) {}
+                    }
                     break;
                 }
             } else if (console != null) {
@@ -3959,6 +4062,11 @@ Ejecute el comando 'connect <host> <puerto>' (o presione Enter para [127.0.0.1 9
             String trimmed = line.trim();
             if (trimmed.equalsIgnoreCase("exit") || trimmed.equalsIgnoreCase("quit")) {
                 System.out.println("Saliendo de JettraStore Shell...");
+                if (lineReader != null) {
+                    try {
+                        lineReader.getHistory().save();
+                    } catch (Exception ignored) {}
+                }
                 break;
             }
 
