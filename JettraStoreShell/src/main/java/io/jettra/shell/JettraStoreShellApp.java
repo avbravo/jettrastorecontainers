@@ -256,39 +256,77 @@ public final class JettraStoreShellApp implements AutoCloseable {
     public List<String> autocomplete(String prefix) {
         if (prefix == null) prefix = "";
         String pTrim = prefix.trim();
-        String pUpper = pTrim.toUpperCase();
+        String pUpper = prefix.toUpperCase();
+        String pTrimUpper = pTrim.toUpperCase();
 
         Set<String> candidates = new LinkedHashSet<>();
 
         List<String> baseKeywords = List.of(
-            "HELP", "HELP CLUSTER-DISTRIBUTED", "HELP CLUSTER LIVE", "MENU", "MENU CONNECTIONS", "STATUS", "CONNECT ", "LOGIN ", "LOGOUT",
-            "SAVE CONNECTION ", "REMOVE CONNECTION ", "LIST CONNECTIONS",
-            "SHOW DATABASES", "SHOW SAMPLES", "CREATE DATABASE ", "DROP DATABASE ", "USE ", "DB STATS",
-            "SHOW BUCKETS", "SHOW RECORDS ", "COUNT ", "CREATE INDEX ", "DROP INDEX ", "LIST INDEXES",
-            "SHOW NODES", "ADD NODE ", "REMOVE NODE ", "START NODE ", "STOP NODE ", "MULTINODE", "MULTINODE ON", "MULTINODE OFF", "MULTINODE STATUS", "SHOW MULTINODE",
-            "CLUSTER-DISTRIBUTED ALL", "CLUSTER-DISTRIBUTED <ALL>", "CLUSTER-DISTRIBUTED INFO", "CLUSTER-DISTRIBUTED ",
-            "CLUSTER LIVE", "CLUSTER LIVE ", "CLUSTER-LIVE", "CLUSTER_LIVE",
-            "STORAGE_MODE ", "LAZY REFERENCE ON", "LAZY REFERENCE OFF", "LAZY REFERENCE STATUS",
-            "INSERT INTO ", "SELECT ", "UPDATE ", "DELETE FROM ",
+            // Sistema & Ayuda
+            "HELP", "HELP CLUSTER-DISTRIBUTED", "HELP CLUSTER LIVE", "MENU", "MENU CONNECTIONS", "STATUS",
+            "HISTORY", "HISTORY CLEAR", "HISTORY SEARCH ", "COMPLETE ", "TAB ", "EXIT", "QUIT",
+            // Conexión & Autenticación
+            "CONNECT ", "LOGIN ", "LOGOUT", "SAVE CONNECTION ", "REMOVE CONNECTION ", "LIST CONNECTIONS",
+            // Bases de Datos
+            "SHOW DATABASES", "SHOW SAMPLES", "SHOW SAMPLE DATABASES", "CREATE DATABASE ", "DROP DATABASE ", "USE ", "DB STATS", "DB INFO",
+            // Colecciones, Buckets & Índices
+            "SHOW BUCKETS", "SHOW COLLECTIONS", "SHOW TABLES", "SHOW UNITS", "SHOW RECORDS ", "COUNT ",
+            "CREATE COLLECTION ", "DROP COLLECTION ", "CREATE BUCKET ", "DROP BUCKET ",
+            "CREATE INDEX ", "CREATE INDEX ON ", "DROP INDEX ", "SHOW INDEXES", "SHOW INDEXES ON ", "LIST INDEXES", "REINDEX ",
+            // Usuarios & Seguridad
+            "SHOW USERS", "LIST USERS", "CREATE USER ", "DROP USER ", "ALTER USER ",
+            "GRANT ", "GRANT READ ON ", "GRANT WRITE ON ", "GRANT ADMIN ON ",
+            "REVOKE ", "REVOKE READ ON ", "REVOKE WRITE ON ", "SHOW GRANTS FOR ",
+            // CRUD & Referencias
+            "SELECT ", "SELECT * FROM ", "INSERT INTO ", "UPDATE ", "DELETE FROM ", "GET ",
+            "FIND ONE ", "FIND ALL ", "FIND BY ID ", "SCAN ",
+            "INSERT REF ", "RESOLVE REF ", "SHOW REFS ",
+            // Topología, Nodos & Cluster
+            "SHOW NODES", "LIST NODES", "ADD NODE ", "REMOVE NODE ", "START NODE ", "STOP NODE ",
+            "MULTINODE", "MULTINODE ON", "MULTINODE OFF", "MULTINODE STATUS", "SHOW MULTINODE",
+            "CLUSTER-DISTRIBUTED", "CLUSTER-DISTRIBUTED ALL", "CLUSTER-DISTRIBUTED <ALL>", "CLUSTER-DISTRIBUTED INFO", "CLUSTER-DISTRIBUTED ",
+            "CLUSTER LIVE", "CLUSTER LIVE 10", "CLUSTER LIVE 30", "CLUSTER LIVE 60", "CLUSTER_LIVE",
+            // Modos de Almacenamiento & Lazy Reference
+            "STORAGE_MODE", "SHOW STORAGE_MODE", "STORAGE_MODE JVM-RAM", "STORAGE_MODE DISK-MEMORY",
+            "SET STORAGE_MODE JVM-RAM", "SET STORAGE_MODE DISK-MEMORY",
+            "LAZY REFERENCE ON", "LAZY REFERENCE OFF", "LAZY REFERENCE STATUS",
+            // Motores Multimodelo
             "KV PUT ", "KV GET ", "KV DELETE ", "KV SCAN ",
-            "VEC INDEX ", "VEC SEARCH ",
-            "GRAPH ADD EDGE ", "GRAPH TRAVERSE ", "GRAPH BFS ", "GRAPH SHORTEST ",
-            "SERIES ADD ", "SERIES RANGE ", "SERIES STATS ",
+            "VEC INDEX ", "VEC SEARCH ", "VECTOR INDEX ", "VECTOR SEARCH ",
+            "GRAPH ADD VERTEX ", "GRAPH ADD EDGE ", "GRAPH GET EDGES ", "GRAPH TRAVERSE ", "GRAPH BFS ", "GRAPH SHORTEST ",
+            "TS RECORD ", "TS RANGE ", "TS QUERY ", "SERIES ADD ", "SERIES RANGE ", "SERIES STATS ",
             "GEO INSERT ", "GEO RADIUS ", "GEO BBOX ",
             "COL INSERT ", "COL SCAN ",
+            "JQL ", "JETTRAQL ", "MATCH ", "FETCH ",
+            "SQL ", "JETTRASQL ",
             "AGGREGATE ", "AGG SUM ", "AGG AVG ", "AGG MIN ", "AGG MAX ", "AGG COUNT ", "AGG GROUP ",
             "MATH ", "FINANCE ", "STATS ", "VECTOR ",
+            // Muestras & Respaldo
             "INSTALL SAMPLES", "INSTALL SAMPLES FACTURA", "INSTALL SAMPLES HOSPITAL", "INSTALL SAMPLES AMBIENTAL",
             "LOAD SAMPLE example_factura_db", "LOAD SAMPLE samples_hostipal_db", "LOAD SAMPLE samples_ambiental_db",
-            "BACKUP DATABASE", "RESTORE DATABASE",
-            "HISTORY", "HISTORY CLEAR", "HISTORY SEARCH ",
+            "BACKUP DATABASE", "BACKUP DATABASE ", "RESTORE DATABASE", "RESTORE DATABASE ",
+            // Paginación
             "PAGE NEXT", "PAGE PREV", "PAGE FIRST", "PAGE LAST", "PAGE SIZE ",
-            "COMPLETE ", "TAB "
+            "FIRST", "PREV", "NEXT", "LAST"
         );
 
-        if (pUpper.startsWith("USE ") || pUpper.startsWith("DROP DATABASE ") || pUpper.startsWith("DROP DB ")) {
-            String verb = pTrim.substring(0, pTrim.indexOf(' ') + 1);
-            String dbPrefix = pTrim.substring(verb.length()).trim().toLowerCase();
+        // 1. Sugerencias contextuales para Bases de Datos
+        if (pUpper.startsWith("USE ") || pTrimUpper.equals("USE")
+                || pUpper.startsWith("DROP DATABASE ") || pTrimUpper.equals("DROP DATABASE")
+                || pUpper.startsWith("DROP DB ") || pTrimUpper.equals("DROP DB")
+                || pUpper.startsWith("BACKUP DATABASE ") || pTrimUpper.equals("BACKUP DATABASE")
+                || pUpper.startsWith("RESTORE DATABASE ") || pTrimUpper.equals("RESTORE DATABASE")) {
+            String verb;
+            String dbPrefix = "";
+            int firstSpace = prefix.indexOf(' ');
+            if (firstSpace == -1) {
+                verb = prefix.toUpperCase() + " ";
+            } else {
+                int lastSpace = prefix.lastIndexOf(' ');
+                verb = prefix.substring(0, lastSpace + 1);
+                dbPrefix = prefix.substring(lastSpace + 1).trim().toLowerCase();
+            }
+
             List<String> dbs = new ArrayList<>(List.of(
                 "default_db", "sample_enterprise_db", "sample_ecommerce_db", "sample_ai_graph_db",
                 "sample_iot_telemetry_db", "sample_financial_db", "example_factura_db",
@@ -302,42 +340,66 @@ public final class JettraStoreShellApp implements AutoCloseable {
                 } catch (Exception ignored) {}
             }
             for (String d : dbs) {
-                if (d.toLowerCase().startsWith(dbPrefix)) {
+                if (dbPrefix.isEmpty() || d.toLowerCase().startsWith(dbPrefix)) {
                     candidates.add(verb + d);
                 }
             }
-        } else if (pUpper.startsWith("CLUSTER-DISTRIBUTED ") || pUpper.startsWith("CLUSTER_DISTRIBUTED ")) {
-            String verb = pTrim.substring(0, pTrim.indexOf(' ') + 1);
-            String sub = pTrim.substring(verb.length()).trim().toLowerCase();
+        }
+        // 2. Sugerencias contextuales para CLUSTER-DISTRIBUTED
+        else if (pUpper.startsWith("CLUSTER-DISTRIBUTED ") || pUpper.startsWith("CLUSTER_DISTRIBUTED ")
+                || pTrimUpper.equals("CLUSTER-DISTRIBUTED") || pTrimUpper.equals("CLUSTER_DISTRIBUTED")) {
+            String verb = prefix.contains(" ") ? prefix.substring(0, prefix.indexOf(' ') + 1) : "cluster-distributed ";
+            String sub = prefix.contains(" ") ? prefix.substring(prefix.indexOf(' ') + 1).trim().toLowerCase() : "";
             List<String> options = new ArrayList<>(List.of("all", "<all>", "info"));
             if (client != null) {
                 try {
                     options.addAll(client.listDatabases());
                 } catch (Exception ignored) {}
+            } else {
+                options.addAll(List.of("default_db", "sample_enterprise_db", "sample_ecommerce_db"));
             }
             for (String opt : options) {
-                if (opt.toLowerCase().startsWith(sub)) {
+                if (sub.isEmpty() || opt.toLowerCase().startsWith(sub)) {
                     candidates.add(verb + opt);
                 }
             }
-        } else if (pUpper.startsWith("LOAD SAMPLE ") || pUpper.startsWith("INSTALL SAMPLE ")) {
-            String verb = pTrim.substring(0, pTrim.lastIndexOf(' ') + 1);
-            String sub = pTrim.substring(verb.length()).trim().toLowerCase();
-            List<String> samples = List.of("example_factura_db", "samples_hostipal_db", "samples_ambiental_db");
+        }
+        // 3. Sugerencias contextuales para Muestras (LOAD SAMPLE / INSTALL SAMPLE)
+        else if (pUpper.startsWith("LOAD SAMPLE ") || pTrimUpper.equals("LOAD SAMPLE")
+                || pUpper.startsWith("INSTALL SAMPLE ") || pTrimUpper.equals("INSTALL SAMPLE")
+                || pUpper.startsWith("INSTALL SAMPLES ") || pTrimUpper.equals("INSTALL SAMPLES")) {
+            int lastSpace = prefix.lastIndexOf(' ');
+            String verb = lastSpace != -1 ? prefix.substring(0, lastSpace + 1) : prefix + " ";
+            String sub = lastSpace != -1 ? prefix.substring(lastSpace + 1).trim().toLowerCase() : "";
+            List<String> samples = List.of("example_factura_db", "samples_hostipal_db", "samples_ambiental_db", "FACTURA", "HOSPITAL", "AMBIENTAL");
             for (String s : samples) {
-                if (s.toLowerCase().startsWith(sub)) {
+                if (sub.isEmpty() || s.toLowerCase().startsWith(sub)) {
                     candidates.add(verb + s);
                 }
             }
-        } else if (pUpper.startsWith("SHOW RECORDS ") || pUpper.startsWith("COUNT ") || pUpper.startsWith("SELECT * FROM ")) {
-            String verb = pTrim.substring(0, pTrim.lastIndexOf(' ') + 1);
-            String bucketPrefix = pTrim.substring(verb.length()).trim().toLowerCase();
+        }
+        // 4. Sugerencias contextuales para Colecciones / Buckets en consultas
+        else if (pUpper.startsWith("SHOW RECORDS ") || pTrimUpper.equals("SHOW RECORDS")
+                || pUpper.startsWith("COUNT ") || pTrimUpper.equals("COUNT")
+                || pUpper.startsWith("SELECT * FROM ") || pTrimUpper.equals("SELECT * FROM")
+                || pUpper.startsWith("INSERT INTO ") || pTrimUpper.equals("INSERT INTO")
+                || pUpper.startsWith("DELETE FROM ") || pTrimUpper.equals("DELETE FROM")
+                || pUpper.startsWith("DROP COLLECTION ") || pTrimUpper.equals("DROP COLLECTION")
+                || pUpper.startsWith("DROP BUCKET ") || pTrimUpper.equals("DROP BUCKET")
+                || pUpper.startsWith("CREATE INDEX ON ") || pTrimUpper.equals("CREATE INDEX ON")
+                || pUpper.startsWith("SHOW INDEXES ON ") || pTrimUpper.equals("SHOW INDEXES ON")) {
+            int lastSpace = prefix.lastIndexOf(' ');
+            String verb = lastSpace != -1 ? prefix.substring(0, lastSpace + 1) : prefix + " ";
+            String bucketPrefix = lastSpace != -1 ? prefix.substring(lastSpace + 1).trim().toLowerCase() : "";
+            if (pTrimUpper.equals("COUNT") && (bucketPrefix.isEmpty() || "*".startsWith(bucketPrefix))) {
+                candidates.add(verb + "*");
+            }
             if (client != null) {
                 try {
                     JettraDatabase db = client.getDatabase(currentDatabase);
                     if (db != null) {
                         for (String b : db.getAllCollectionNames()) {
-                            if (b.toLowerCase().startsWith(bucketPrefix)) {
+                            if (bucketPrefix.isEmpty() || b.toLowerCase().startsWith(bucketPrefix)) {
                                 candidates.add(verb + b);
                             }
                         }
@@ -345,22 +407,251 @@ public final class JettraStoreShellApp implements AutoCloseable {
                 } catch (Exception ignored) {}
             }
         }
+        // 5. Sugerencias contextuales para Conexiones Guardadas (CONNECT / REMOVE CONNECTION)
+        else if (pUpper.startsWith("CONNECT ") || pTrimUpper.equals("CONNECT")
+                || pUpper.startsWith("REMOVE CONNECTION ") || pTrimUpper.equals("REMOVE CONNECTION")) {
+            int lastSpace = prefix.lastIndexOf(' ');
+            String verb = lastSpace != -1 ? prefix.substring(0, lastSpace + 1) : prefix + " ";
+            String sub = lastSpace != -1 ? prefix.substring(lastSpace + 1).trim().toLowerCase() : "";
+            if (pUpper.startsWith("CONNECT ") || pTrimUpper.equals("CONNECT")) {
+                if (sub.isEmpty() || "127.0.0.1 9091".startsWith(sub)) {
+                    candidates.add(verb + "127.0.0.1 9091");
+                }
+            }
+            for (String connName : savedConnections.keySet()) {
+                if (sub.isEmpty() || connName.toLowerCase().startsWith(sub)) {
+                    candidates.add(verb + connName);
+                }
+            }
+        }
+        // 6. Sugerencias para STORAGE_MODE
+        else if (pUpper.startsWith("STORAGE_MODE ") || pTrimUpper.equals("STORAGE_MODE")
+                || pUpper.startsWith("SET STORAGE_MODE ") || pTrimUpper.equals("SET STORAGE_MODE")) {
+            int lastSpace = prefix.lastIndexOf(' ');
+            String verb = lastSpace != -1 ? prefix.substring(0, lastSpace + 1) : prefix + " ";
+            String sub = lastSpace != -1 ? prefix.substring(lastSpace + 1).trim().toUpperCase() : "";
+            for (String mode : List.of("JVM-RAM", "DISK-MEMORY")) {
+                if (sub.isEmpty() || mode.startsWith(sub)) {
+                    candidates.add(verb + mode);
+                }
+            }
+        }
+        // 7. Sugerencias para MULTINODE
+        else if (pUpper.startsWith("MULTINODE ") || pTrimUpper.equals("MULTINODE")) {
+            int lastSpace = prefix.lastIndexOf(' ');
+            String verb = lastSpace != -1 ? prefix.substring(0, lastSpace + 1) : prefix + " ";
+            String sub = lastSpace != -1 ? prefix.substring(lastSpace + 1).trim().toUpperCase() : "";
+            for (String opt : List.of("ON", "OFF", "STATUS")) {
+                if (sub.isEmpty() || opt.startsWith(sub)) {
+                    candidates.add(verb + opt);
+                }
+            }
+        }
+        // 8. Sugerencias para LAZY REFERENCE
+        else if (pUpper.startsWith("LAZY REFERENCE ") || pTrimUpper.equals("LAZY REFERENCE")) {
+            int lastSpace = prefix.lastIndexOf(' ');
+            String verb = lastSpace != -1 ? prefix.substring(0, lastSpace + 1) : prefix + " ";
+            String sub = lastSpace != -1 ? prefix.substring(lastSpace + 1).trim().toUpperCase() : "";
+            for (String opt : List.of("ON", "OFF", "STATUS")) {
+                if (sub.isEmpty() || opt.startsWith(sub)) {
+                    candidates.add(verb + opt);
+                }
+            }
+        }
+        // 9. Sugerencias para CLUSTER LIVE
+        else if (pUpper.startsWith("CLUSTER LIVE ") || pTrimUpper.equals("CLUSTER LIVE")) {
+            int lastSpace = prefix.lastIndexOf(' ');
+            String verb = lastSpace != -1 ? prefix.substring(0, lastSpace + 1) : prefix + " ";
+            String sub = lastSpace != -1 ? prefix.substring(lastSpace + 1).trim().toUpperCase() : "";
+            for (String sec : List.of("10", "30", "60")) {
+                if (sub.isEmpty() || sec.startsWith(sub)) {
+                    candidates.add(verb + sec);
+                }
+            }
+        }
+        // 10. Sugerencias para subcomandos SHOW
+        else if (pUpper.startsWith("SHOW ") || pTrimUpper.equals("SHOW")) {
+            int lastSpace = prefix.lastIndexOf(' ');
+            String verb = lastSpace != -1 ? prefix.substring(0, lastSpace + 1) : prefix + " ";
+            String sub = lastSpace != -1 ? prefix.substring(lastSpace + 1).trim().toUpperCase() : "";
+            List<String> showOptions = List.of(
+                "DATABASES", "BUCKETS", "COLLECTIONS", "TABLES", "INDEXES",
+                "USERS", "NODES", "SAMPLES", "STORAGE_MODE", "MULTINODE", "RECORDS "
+            );
+            for (String opt : showOptions) {
+                if (sub.isEmpty() || opt.startsWith(sub)) {
+                    candidates.add(verb + opt);
+                }
+            }
+        }
+        // 11. Sugerencias para subcomandos CREATE
+        else if (pUpper.startsWith("CREATE ") || pTrimUpper.equals("CREATE")) {
+            int lastSpace = prefix.lastIndexOf(' ');
+            String verb = lastSpace != -1 ? prefix.substring(0, lastSpace + 1) : prefix + " ";
+            String sub = lastSpace != -1 ? prefix.substring(lastSpace + 1).trim().toUpperCase() : "";
+            List<String> createOptions = List.of("DATABASE ", "COLLECTION ", "BUCKET ", "INDEX ", "USER ");
+            for (String opt : createOptions) {
+                if (sub.isEmpty() || opt.startsWith(sub)) {
+                    candidates.add(verb + opt);
+                }
+            }
+        }
+        // 12. Sugerencias para subcomandos DROP
+        else if (pUpper.startsWith("DROP ") || pTrimUpper.equals("DROP")) {
+            int lastSpace = prefix.lastIndexOf(' ');
+            String verb = lastSpace != -1 ? prefix.substring(0, lastSpace + 1) : prefix + " ";
+            String sub = lastSpace != -1 ? prefix.substring(lastSpace + 1).trim().toUpperCase() : "";
+            List<String> dropOptions = List.of("DATABASE ", "COLLECTION ", "BUCKET ", "INDEX ", "USER ");
+            for (String opt : dropOptions) {
+                if (sub.isEmpty() || opt.startsWith(sub)) {
+                    candidates.add(verb + opt);
+                }
+            }
+        }
+        // 13. Sugerencias para subcomandos PAGE
+        else if (pUpper.startsWith("PAGE ") || pTrimUpper.equals("PAGE")) {
+            int lastSpace = prefix.lastIndexOf(' ');
+            String verb = lastSpace != -1 ? prefix.substring(0, lastSpace + 1) : prefix + " ";
+            String sub = lastSpace != -1 ? prefix.substring(lastSpace + 1).trim().toUpperCase() : "";
+            for (String opt : List.of("FIRST", "PREV", "NEXT", "LAST", "SIZE ")) {
+                if (sub.isEmpty() || opt.startsWith(sub)) {
+                    candidates.add(verb + opt);
+                }
+            }
+        }
+        // 14. Sugerencias para subcomandos HISTORY
+        else if (pUpper.startsWith("HISTORY ") || pTrimUpper.equals("HISTORY")) {
+            int lastSpace = prefix.lastIndexOf(' ');
+            String verb = lastSpace != -1 ? prefix.substring(0, lastSpace + 1) : prefix + " ";
+            String sub = lastSpace != -1 ? prefix.substring(lastSpace + 1).trim().toUpperCase() : "";
+            for (String opt : List.of("CLEAR", "SEARCH ")) {
+                if (sub.isEmpty() || opt.startsWith(sub)) {
+                    candidates.add(verb + opt);
+                }
+            }
+        }
 
+        // Si el prefijo está vacío, devolver las palabras clave maestras
+        if (pTrim.isEmpty()) {
+            candidates.addAll(baseKeywords);
+            return new ArrayList<>(candidates);
+        }
+
+        // Búsqueda general en baseKeywords
         for (String kw : baseKeywords) {
-            if (kw.toUpperCase().startsWith(pUpper)) {
+            if (kw.toUpperCase().startsWith(pUpper) || kw.toUpperCase().startsWith(pTrimUpper)) {
                 candidates.add(kw);
             }
         }
 
+        // Búsqueda en historial de comandos ejecutados
         for (int i = commandHistory.size() - 1; i >= 0; i--) {
             String h = commandHistory.get(i);
-            if (h.toUpperCase().startsWith(pUpper) && !candidates.contains(h)) {
+            if ((h.toUpperCase().startsWith(pUpper) || h.toUpperCase().startsWith(pTrimUpper)) && !candidates.contains(h)) {
                 candidates.add(h);
-                if (candidates.size() >= 25) break;
+                if (candidates.size() >= 40) break;
             }
         }
 
         return new ArrayList<>(candidates);
+    }
+
+    public String resolveCandidateGroup(String command) {
+        if (command == null) return "Comandos";
+        String u = command.toUpperCase().trim();
+        if (u.startsWith("SHOW DATA") || u.startsWith("SHOW DB") || u.startsWith("USE ") || u.startsWith("CREATE DATA") || u.startsWith("CREATE DB") || u.startsWith("DROP DATA") || u.startsWith("DROP DB") || u.startsWith("DB ") || u.startsWith("LIST DATA") || u.startsWith("LIST DB") || u.startsWith("SHOW SAMPLE")) {
+            return "Bases de Datos";
+        }
+        if (u.startsWith("SHOW BUCKET") || u.startsWith("SHOW UNIT") || u.startsWith("SHOW COLL") || u.startsWith("SHOW TAB") || u.startsWith("CREATE COLL") || u.startsWith("DROP COLL") || u.startsWith("CREATE BUCKET") || u.startsWith("DROP BUCKET") || u.startsWith("COUNT") || u.startsWith("SHOW RECORDS")) {
+            return "Colecciones y Buckets";
+        }
+        if (u.startsWith("CREATE INDEX") || u.startsWith("DROP INDEX") || u.startsWith("SHOW INDEX") || u.startsWith("LIST INDEX") || u.startsWith("REINDEX") || u.startsWith("ALTER INDEX")) {
+            return "Índices";
+        }
+        if (u.startsWith("SHOW USER") || u.startsWith("LIST USER") || u.startsWith("CREATE USER") || u.startsWith("DROP USER") || u.startsWith("ALTER USER") || u.startsWith("GRANT") || u.startsWith("REVOKE") || u.startsWith("SHOW GRANTS")) {
+            return "Seguridad y Usuarios";
+        }
+        if (u.startsWith("CLUSTER") || u.startsWith("MULTINODE") || u.startsWith("SHOW NODE") || u.startsWith("LIST NODE") || u.startsWith("ADD NODE") || u.startsWith("REMOVE NODE") || u.startsWith("START NODE") || u.startsWith("STOP NODE")) {
+            return "Cluster y Nodos";
+        }
+        if (u.startsWith("SELECT") || u.startsWith("INSERT") || u.startsWith("UPDATE") || u.startsWith("DELETE") || u.startsWith("GET ") || u.startsWith("FIND") || u.startsWith("SCAN") || u.startsWith("RESOLVE") || u.startsWith("SHOW REFS")) {
+            return "CRUD y Consultas";
+        }
+        if (u.startsWith("KV ") || u.startsWith("VEC ") || u.startsWith("VECTOR ") || u.startsWith("GRAPH ") || u.startsWith("TS ") || u.startsWith("SERIES ") || u.startsWith("GEO ") || u.startsWith("COL ") || u.startsWith("JQL ") || u.startsWith("JETTRAQL ") || u.startsWith("SQL ") || u.startsWith("AGG") || u.startsWith("MATH") || u.startsWith("FINANCE") || u.startsWith("STATS")) {
+            return "Motores Multimodelo";
+        }
+        if (u.startsWith("CONNECT") || u.startsWith("LOGIN") || u.startsWith("LOGOUT") || u.startsWith("SAVE CONN") || u.startsWith("REMOVE CONN") || u.startsWith("LIST CONN")) {
+            return "Conexiones y Perfiles";
+        }
+        if (u.startsWith("STORAGE_MODE") || u.startsWith("SET STORAGE_MODE") || u.startsWith("LAZY REFERENCE")) {
+            return "Almacenamiento y Memoria";
+        }
+        if (u.startsWith("INSTALL SAMPLE") || u.startsWith("LOAD SAMPLE") || u.startsWith("BACKUP") || u.startsWith("RESTORE")) {
+            return "Muestras y Respaldo";
+        }
+        if (u.startsWith("PAGE") || u.equals("FIRST") || u.equals("PREV") || u.equals("NEXT") || u.equals("LAST")) {
+            return "Paginación";
+        }
+        if (u.startsWith("HISTORY")) {
+            return "Historial";
+        }
+        return "Sistema y Ayuda";
+    }
+
+    public String resolveCandidateDescription(String command) {
+        if (command == null) return null;
+        String u = command.toUpperCase().trim();
+        if (u.equals("HELP") || u.equals("?")) return "Guía completa de comandos disponibles";
+        if (u.equals("MENU")) return "Abre el menú interactivo guiado";
+        if (u.equals("STATUS")) return "Muestra telemetría de Panama FFM y estado del motor";
+        if (u.equals("SHOW DATABASES") || u.equals("SHOW DBS")) return "Lista todas las bases de datos registradas";
+        if (u.startsWith("USE ")) return "Conmuta la base de datos activa para la sesión";
+        if (u.startsWith("CREATE DATABASE ") || u.startsWith("CREATE DB ")) return "Crea una nueva base de datos distribuida";
+        if (u.startsWith("DROP DATABASE ") || u.startsWith("DROP DB ")) return "Elimina permanentemente una base de datos";
+        if (u.equals("SHOW BUCKETS") || u.equals("SHOW UNITS")) return "Lista colecciones/buckets de la base de datos activa";
+        if (u.equals("SHOW COLLECTIONS") || u.equals("SHOW TABLES")) return "Lista colecciones o tablas de la base de datos activa";
+        if (u.startsWith("SHOW RECORDS ")) return "Muestra registros de una colección o bucket";
+        if (u.startsWith("COUNT ")) return "Retorna la cantidad total de registros";
+        if (u.equals("SHOW INDEXES") || u.equals("LIST INDEXES")) return "Lista índices secundarios y vectoriales creados";
+        if (u.startsWith("CREATE INDEX ")) return "Crea un índice secundario sobre una colección";
+        if (u.startsWith("DROP INDEX ")) return "Elimina un índice secundario existente";
+        if (u.equals("SHOW USERS") || u.equals("LIST USERS")) return "Lista cuentas de usuario del sistema";
+        if (u.startsWith("CREATE USER ")) return "Crea un nuevo usuario en JettraStore";
+        if (u.startsWith("DROP USER ")) return "Elimina una cuenta de usuario";
+        if (u.equals("SHOW NODES") || u.equals("LIST NODES")) return "Lista la topología de nodos del clúster";
+        if (u.startsWith("MULTINODE ON")) return "Habilita replicación distribuida con consenso Raft";
+        if (u.startsWith("MULTINODE OFF")) return "Establece el nodo en modo autónomo independiente";
+        if (u.startsWith("MULTINODE")) return "Consulta el estado actual de sincronización multinodo";
+        if (u.startsWith("CLUSTER-DISTRIBUTED ALL")) return "Distribuye todas las bases de datos a nodos secundarios";
+        if (u.startsWith("CLUSTER-DISTRIBUTED INFO")) return "Muestra la matriz de distribución del clúster";
+        if (u.startsWith("CLUSTER LIVE")) return "Monitorea eventos de replicación en vivo por SSE";
+        if (u.startsWith("SHOW STORAGE_MODE") || u.equals("STORAGE_MODE")) return "Muestra el modo de almacenamiento activo";
+        if (u.startsWith("STORAGE_MODE JVM-RAM") || u.startsWith("SET STORAGE_MODE JVM-RAM")) return "Establece almacenamiento en Heap estándar de JVM";
+        if (u.startsWith("STORAGE_MODE DISK-MEMORY") || u.startsWith("SET STORAGE_MODE DISK-MEMORY")) return "Establece almacenamiento Off-Heap directo LSM (JettraMemory)";
+        if (u.equals("SHOW SAMPLES") || u.equals("SHOW SAMPLE DATABASES")) return "Muestra bases de datos de demostración predefinidas";
+        if (u.startsWith("INSTALL SAMPLES")) return "Inicializa bases de datos de prueba predefinidas";
+        if (u.startsWith("LOAD SAMPLE ")) return "Carga una muestra específica (factura, hospital, ambiental)";
+        if (u.startsWith("BACKUP DATABASE")) return "Genera copia de respaldo física de la base de datos";
+        if (u.startsWith("RESTORE DATABASE")) return "Restaura base de datos a partir de respaldo";
+        if (u.startsWith("CONNECT ")) return "Configura endpoint de nodo o carga perfil guardado";
+        if (u.startsWith("LOGIN ")) return "Autentica credenciales y genera token JettraJWT";
+        if (u.equals("LOGOUT")) return "Cierra la sesión autenticada actual";
+        if (u.equals("LIST CONNECTIONS")) return "Lista perfiles guardados en jettra.config";
+        if (u.startsWith("SAVE CONNECTION ")) return "Guarda perfil de conexión en configuración";
+        if (u.startsWith("REMOVE CONNECTION ")) return "Elimina perfil de conexión guardado";
+        if (u.startsWith("SELECT ")) return "Ejecuta consulta SQL/JQL sobre una colección";
+        if (u.startsWith("INSERT INTO ")) return "Inserta documento en la colección especificada";
+        if (u.startsWith("DELETE FROM ")) return "Elimina documentos de la colección especificada";
+        if (u.startsWith("KV PUT ")) return "Guarda par clave-valor en motor Key-Value";
+        if (u.startsWith("KV GET ")) return "Recupera valor por clave del motor Key-Value";
+        if (u.startsWith("VEC SEARCH ") || u.startsWith("VECTOR SEARCH ")) return "Búsqueda vectorial por similitud de coseno";
+        if (u.startsWith("GRAPH ")) return "Operaciones sobre motor de grafos topológicos";
+        if (u.startsWith("TS ")) return "Operaciones sobre motor de series de tiempo";
+        if (u.startsWith("PAGE NEXT")) return "Navega a la página siguiente de resultados";
+        if (u.startsWith("PAGE PREV")) return "Navega a la página anterior de resultados";
+        if (u.startsWith("HISTORY CLEAR")) return "Limpia historial de comandos ejecutados";
+        if (u.equals("HISTORY")) return "Muestra historial reciente de comandos";
+        return null;
     }
 
     public String handleAutocomplete(String command) {
@@ -3581,12 +3872,34 @@ Ejecute el comando 'connect <host> <puerto>' (o presione Enter para [127.0.0.1 9
                 .build();
 
             org.jline.reader.Completer completer = (reader, parsedLine, candidates) -> {
-                String word = parsedLine.word();
-                String line = parsedLine.line();
-                String toComplete = (word != null && !word.isEmpty()) ? word : line;
-                List<String> suggestions = shell.autocomplete(line);
+                String rawLine = parsedLine.line();
+                int cursor = parsedLine.cursor();
+                String buffer = rawLine.substring(0, Math.min(cursor, rawLine.length()));
+                String currentWord = parsedLine.word();
+                String prefixBeforeWord = buffer.substring(0, buffer.length() - currentWord.length());
+
+                List<String> suggestions = shell.autocomplete(buffer);
                 for (String s : suggestions) {
-                    candidates.add(new org.jline.reader.Candidate(s));
+                    if (s == null || s.isBlank()) continue;
+                    String valToInsert = s;
+                    if (!prefixBeforeWord.isEmpty() && s.toUpperCase().startsWith(prefixBeforeWord.toUpperCase())) {
+                        valToInsert = s.substring(prefixBeforeWord.length());
+                    }
+                    if (valToInsert.isBlank()) continue;
+
+                    String group = shell.resolveCandidateGroup(s);
+                    String descr = shell.resolveCandidateDescription(s);
+
+                    boolean isComplete = !valToInsert.endsWith(" ");
+                    candidates.add(new org.jline.reader.Candidate(
+                        valToInsert,
+                        valToInsert,
+                        group,
+                        descr,
+                        null,
+                        null,
+                        isComplete
+                    ));
                 }
             };
 
@@ -3594,6 +3907,12 @@ Ejecute el comando 'connect <host> <puerto>' (o presione Enter para [127.0.0.1 9
                 .terminal(terminal)
                 .completer(completer)
                 .variable(org.jline.reader.LineReader.HISTORY_FILE, JLINE_HISTORY_FILE)
+                .option(org.jline.reader.LineReader.Option.AUTO_MENU_LIST, true)
+                .option(org.jline.reader.LineReader.Option.AUTO_GROUP, true)
+                .option(org.jline.reader.LineReader.Option.CASE_INSENSITIVE, true)
+                .option(org.jline.reader.LineReader.Option.COMPLETE_IN_WORD, true)
+                .option(org.jline.reader.LineReader.Option.INSERT_TAB, false)
+                .option(org.jline.reader.LineReader.Option.DISABLE_EVENT_EXPANSION, true)
                 .build();
         } catch (Throwable t) {
             // Fallback elegante a System.console o Scanner si la terminal interactiva no está disponible (ej. entornos de test o redirección)
