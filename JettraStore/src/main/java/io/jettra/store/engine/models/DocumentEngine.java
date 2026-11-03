@@ -348,9 +348,16 @@ public final class DocumentEngine implements Iterable<Map<String, Object>> {
             for (Map.Entry<String, Map<String, Object>> entry : batch.entrySet()) {
                 String id = entry.getKey();
                 Map<String, Object> doc = entry.getValue();
-                Map<String, Object> copy = UnifiedMap.newMap(Math.max(4, doc.size() + 1));
-                copy.putAll(doc);
-                copy.put("_id", id);
+                Map<String, Object> copy;
+                if (doc instanceof UnifiedMap<String, Object> uMap) {
+                    uMap.put("_id", id);
+                    copy = uMap;
+                } else {
+                    int cap = doc.containsKey("_id") ? doc.size() : (doc.size() + 1);
+                    copy = UnifiedMap.newMap(Math.max(4, cap));
+                    copy.putAll(doc);
+                    copy.put("_id", id);
+                }
                 documents.put(id, copy);
                 if (database != null && database.getStorageMode().isDiskMemory()) {
                     persistToDiskMemory(id, copy);

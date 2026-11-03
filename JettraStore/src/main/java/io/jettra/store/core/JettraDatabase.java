@@ -595,6 +595,7 @@ public final class JettraDatabase implements AutoCloseable {
                 writer.write("],\n      \"edges\": {\n");
                 boolean firstEdge = true;
                 for (var edgeEntry : entry.getValue().getAllEdges().entrySet()) {
+                    if (edgeEntry.getValue() == null || edgeEntry.getValue().isEmpty()) continue;
                     if (!firstEdge) writer.write(",\n");
                     firstEdge = false;
                     writer.write("        \"" + JettraJson.escapeString(edgeEntry.getKey()) + "\": [\n");
@@ -712,9 +713,30 @@ public final class JettraDatabase implements AutoCloseable {
 
             // Usar Scanner Off-Heap de Project Panama si el archivo existe
             return loadUsingPanamaOffHeap(metaFile, shouldRing);
-        } catch (Exception e) {
+        } catch (Throwable e) {
             return false;
         }
+    }
+
+    private boolean isHeapCriticallyLow() {
+        Runtime rt = Runtime.getRuntime();
+        long max = rt.maxMemory();
+        long used = rt.totalMemory() - rt.freeMemory();
+        long free = max - used;
+        if (free < Math.max(64L * 1024L * 1024L, (long) (max * 0.12))) {
+            System.gc();
+            used = rt.totalMemory() - rt.freeMemory();
+            free = max - used;
+            return free < Math.max(48L * 1024L * 1024L, (long) (max * 0.10));
+        }
+        return false;
+    }
+
+    private void triggerLowMemoryRingGuard() {
+        this.distributedRingActive.set(true);
+        activateDistributedRingTransition("DENSIDAD_OFF_HEAP_MASIVA");
+        JettraPolice.getInstance().recordAlert("HEAP_EXHAUSTION_PREVENTED",
+            String.format("[CENTINELA OFF-HEAP] Base de datos '%s': Prevención activa de OutOfMemoryError activada durante carga masiva.", databaseName));
     }
 
     private boolean loadUsingPanamaOffHeap(Path metaFile, boolean ringModeActive) {
@@ -731,7 +753,8 @@ public final class JettraDatabase implements AutoCloseable {
 
             while (scanner.hasMore() && scanner.peek() != '}') {
                 scanner.skipWhitespaceAndSeparators();
-                String sectionKey = scanner.readQuotedString();
+                if (scanner.peek() == '}') break;
+                String sectionKey = scanner.readKeyString();
                 if (sectionKey == null) break;
                 scanner.skipWhitespaceAndSeparators();
 
@@ -742,7 +765,8 @@ public final class JettraDatabase implements AutoCloseable {
                             scanner.read();
                             while (scanner.hasMore() && scanner.peek() != '}') {
                                 scanner.skipWhitespaceAndSeparators();
-                                String colName = scanner.readQuotedString();
+                                if (scanner.peek() == '}') break;
+                                String colName = scanner.readKeyString();
                                 if (colName == null) break;
                                 scanner.skipWhitespaceAndSeparators();
                                 if (scanner.peek() == '[') {
@@ -750,36 +774,42 @@ public final class JettraDatabase implements AutoCloseable {
                                     var docEng = getDocumentEngine(colName);
                                     docEng.applyReplicatedClear();
                                     Map<String, Map<String, Object>> batch = new HashMap<>(5000);
+                                    boolean hasColIndexes = !indexManager.listIndexes(colName).isEmpty();
+                                    long docCount = 0;
 
                                     while (scanner.hasMore() && scanner.peek() != ']') {
                                         scanner.skipWhitespaceAndSeparators();
-                                        String docStr = scanner.readBalancedObject();
-                                        if (docStr != null) {
-                                            JsonObject d = json.fromJson(docStr, JsonObject.class);
-                                            if (d != null) {
-                                                String id = d.has("_id") ? d.getAsString("_id") : UUID.randomUUID().toString();
-                                                Map<String, Object> map = new HashMap<>();
-                                                for (String k : d.keySet()) {
-                                                    map.put(k, d.get(k));
-                                                }
-                                                if (!map.containsKey("_id")) {
-                                                    map.put("_id", id);
-                                                }
-                                                batch.put(id, map);
-                                                if (batch.size() >= 5000) {
-                                                    docEng.applyReplicatedBatch(batch);
+                                        if (scanner.peek() == ']') break;
+                                        if ((++docCount & 0x3FFF) == 0 && isHeapCriticallyLow()) {
+                                            triggerLowMemoryRingGuard();
+                                            scanner.skipToArrayEnd();
+                                            break;
+                                        }
+                                        io.jettra.collections.map.UnifiedMap<String, Object> map = scanner.readDocumentObject(json);
+                                        if (map != null) {
+                                            Object rawId = map.get("_id");
+                                            String id = (rawId != null) ? rawId.toString() : UUID.randomUUID().toString();
+                                            map.put("_id", id);
+                                            batch.put(id, map);
+                                            if (batch.size() >= 5000) {
+                                                docEng.applyReplicatedBatch(batch);
+                                                if (hasColIndexes) {
                                                     for (var entry : batch.entrySet()) {
-                                                        getIndexManager().onDocumentInsert(colName, entry.getKey(), entry.getValue());
+                                                        indexManager.onDocumentInsert(colName, entry.getKey(), entry.getValue());
                                                     }
-                                                    batch.clear();
                                                 }
+                                                batch.clear();
                                             }
+                                        } else {
+                                            scanner.skipValue();
                                         }
                                     }
                                     if (!batch.isEmpty()) {
                                         docEng.applyReplicatedBatch(batch);
-                                        for (var entry : batch.entrySet()) {
-                                            getIndexManager().onDocumentInsert(colName, entry.getKey(), entry.getValue());
+                                        if (hasColIndexes) {
+                                            for (var entry : batch.entrySet()) {
+                                                indexManager.onDocumentInsert(colName, entry.getKey(), entry.getValue());
+                                            }
                                         }
                                         batch.clear();
                                     }
@@ -801,21 +831,39 @@ public final class JettraDatabase implements AutoCloseable {
                             scanner.read();
                             while (scanner.hasMore() && scanner.peek() != '}') {
                                 scanner.skipWhitespaceAndSeparators();
-                                String ns = scanner.readQuotedString();
+                                if (scanner.peek() == '}') break;
+                                String ns = scanner.readKeyString();
                                 if (ns == null) break;
                                 scanner.skipWhitespaceAndSeparators();
                                 if (scanner.peek() == '{') {
                                     scanner.read();
                                     var kvEng = getKeyValueEngine(ns);
                                     kvEng.applyReplicatedClear();
+                                    String lastValStr = null;
+                                    byte[] lastValBytes = null;
+                                    long kvCount = 0;
                                     while (scanner.hasMore() && scanner.peek() != '}') {
                                         scanner.skipWhitespaceAndSeparators();
+                                        if (scanner.peek() == '}') break;
+                                        if ((++kvCount & 0x3FFF) == 0 && isHeapCriticallyLow()) {
+                                            triggerLowMemoryRingGuard();
+                                            scanner.skipToObjectEnd();
+                                            break;
+                                        }
                                         String k = scanner.readQuotedString();
                                         if (k == null) break;
                                         scanner.skipWhitespaceAndSeparators();
-                                        String v = scanner.readQuotedString();
+                                        String v = scanner.readCachedValueString();
                                         if (v != null) {
-                                            kvEng.applyReplicatedPut(k, v.getBytes(StandardCharsets.UTF_8));
+                                            byte[] bytes;
+                                            if (v.equals(lastValStr) && lastValBytes != null) {
+                                                bytes = lastValBytes;
+                                            } else {
+                                                bytes = v.getBytes(StandardCharsets.UTF_8);
+                                                lastValStr = v;
+                                                lastValBytes = bytes;
+                                            }
+                                            kvEng.applyReplicatedPut(k, bytes);
                                         } else {
                                             scanner.skipValue();
                                         }
@@ -838,24 +886,31 @@ public final class JettraDatabase implements AutoCloseable {
                             scanner.read();
                             while (scanner.hasMore() && scanner.peek() != '}') {
                                 scanner.skipWhitespaceAndSeparators();
-                                String metric = scanner.readQuotedString();
+                                if (scanner.peek() == '}') break;
+                                String metric = scanner.readKeyString();
                                 if (metric == null) break;
                                 scanner.skipWhitespaceAndSeparators();
                                 if (scanner.peek() == '{') {
                                     scanner.read();
                                     var tsEng = getTimeSeriesEngine(metric);
                                     tsEng.clear();
+                                    long tsCount = 0;
                                     while (scanner.hasMore() && scanner.peek() != '}') {
                                         scanner.skipWhitespaceAndSeparators();
+                                        if (scanner.peek() == '}') break;
+                                        if ((++tsCount & 0x3FFF) == 0 && isHeapCriticallyLow()) {
+                                            triggerLowMemoryRingGuard();
+                                            scanner.skipToObjectEnd();
+                                            break;
+                                        }
                                         String tsStr = scanner.readQuotedString();
                                         if (tsStr == null) break;
                                         scanner.skipWhitespaceAndSeparators();
-                                        String valStr = scanner.readPrimitiveToken();
-                                        if (valStr != null) {
+                                        Number valNum = scanner.readNumberValue();
+                                        if (valNum != null) {
                                             try {
                                                 long ts = Long.parseLong(tsStr);
-                                                double val = Double.parseDouble(valStr);
-                                                tsEng.record(ts, val);
+                                                tsEng.record(ts, valNum.doubleValue());
                                             } catch (Exception ignored) {}
                                         }
                                     }
@@ -877,24 +932,35 @@ public final class JettraDatabase implements AutoCloseable {
                             scanner.read();
                             while (scanner.hasMore() && scanner.peek() != '}') {
                                 scanner.skipWhitespaceAndSeparators();
-                                String layer = scanner.readQuotedString();
+                                if (scanner.peek() == '}') break;
+                                String layer = scanner.readKeyString();
                                 if (layer == null) break;
                                 scanner.skipWhitespaceAndSeparators();
                                 if (scanner.peek() == '[') {
                                     scanner.read();
                                     var geoEng = getGeospatialEngine(layer);
                                     geoEng.clear();
+                                    long geoCount = 0;
                                     while (scanner.hasMore() && scanner.peek() != ']') {
                                         scanner.skipWhitespaceAndSeparators();
-                                        String ptStr = scanner.readBalancedObject();
-                                        if (ptStr != null) {
-                                            JsonObject gp = json.fromJson(ptStr, JsonObject.class);
-                                            if (gp != null && gp.has("id") && gp.has("lat") && gp.has("lon")) {
-                                                String id = gp.getAsString("id");
-                                                double lat = Double.parseDouble(gp.getAsString("lat"));
-                                                double lon = Double.parseDouble(gp.getAsString("lon"));
-                                                geoEng.insertPoint(id, lat, lon);
+                                        if (scanner.peek() == ']') break;
+                                        if ((++geoCount & 0x3FFF) == 0 && isHeapCriticallyLow()) {
+                                            triggerLowMemoryRingGuard();
+                                            scanner.skipToArrayEnd();
+                                            break;
+                                        }
+                                        io.jettra.collections.map.UnifiedMap<String, Object> gp = scanner.readDocumentObject(json);
+                                        if (gp != null) {
+                                            Object idObj = gp.get("id");
+                                            Object latObj = gp.get("lat");
+                                            Object lonObj = gp.get("lon");
+                                            if (idObj != null && latObj != null && lonObj != null) {
+                                                double lat = (latObj instanceof Number n) ? n.doubleValue() : Double.parseDouble(latObj.toString());
+                                                double lon = (lonObj instanceof Number n) ? n.doubleValue() : Double.parseDouble(lonObj.toString());
+                                                geoEng.insertPoint(idObj.toString(), lat, lon);
                                             }
+                                        } else {
+                                            scanner.skipValue();
                                         }
                                     }
                                     scanner.skipWhitespace();
@@ -915,28 +981,69 @@ public final class JettraDatabase implements AutoCloseable {
                             scanner.read();
                             while (scanner.hasMore() && scanner.peek() != '}') {
                                 scanner.skipWhitespaceAndSeparators();
-                                String vName = scanner.readQuotedString();
+                                if (scanner.peek() == '}') break;
+                                String vName = scanner.readKeyString();
                                 if (vName == null) break;
                                 scanner.skipWhitespaceAndSeparators();
-                                String vecObjStr = scanner.readBalancedObject();
-                                if (vecObjStr != null) {
-                                    JsonObject vo = json.fromJson(vecObjStr, JsonObject.class);
-                                    if (vo != null) {
-                                        int dims = vo.has("dimensions") ? vo.getAsInt("dimensions") : 3;
-                                        var vecEng = getVectorEngine(vName, dims);
-                                        vecEng.clear();
-                                        if (vo.has("vectors")) {
-                                            JsonObject vData = vo.getAsJsonObject("vectors");
-                                            for (String vid : vData.keySet()) {
-                                                JsonArray va = vData.getAsJsonArray(vid);
-                                                float[] fa = new float[va.size()];
-                                                for (int idx = 0; idx < va.size(); idx++) {
-                                                    fa[idx] = Float.parseFloat(va.get(idx).toString());
-                                                }
-                                                vecEng.index(vid, fa);
+                                if (scanner.peek() == '{') {
+                                    scanner.read();
+                                    int dims = 3;
+                                    VectorEngine vecEng = null;
+                                    float[] lastVec = null;
+                                    while (scanner.hasMore() && scanner.peek() != '}') {
+                                        scanner.skipWhitespaceAndSeparators();
+                                        if (scanner.peek() == '}') break;
+                                        String prop = scanner.readKeyString();
+                                        if (prop == null) break;
+                                        scanner.skipWhitespaceAndSeparators();
+                                        if ("dimensions".equals(prop)) {
+                                            Number n = scanner.readNumberValue();
+                                            dims = (n != null) ? n.intValue() : 3;
+                                            vecEng = getVectorEngine(vName, dims);
+                                            vecEng.clear();
+                                        } else if ("vectors".equals(prop)) {
+                                            if (vecEng == null) {
+                                                vecEng = getVectorEngine(vName, dims);
+                                                vecEng.clear();
                                             }
+                                            scanner.skipWhitespace();
+                                            if (scanner.peek() == '{') {
+                                                scanner.read();
+                                                long vecCount = 0;
+                                                while (scanner.hasMore() && scanner.peek() != '}') {
+                                                    scanner.skipWhitespaceAndSeparators();
+                                                    if (scanner.peek() == '}') break;
+                                                    if ((++vecCount & 0x3FFF) == 0 && isHeapCriticallyLow()) {
+                                                        triggerLowMemoryRingGuard();
+                                                        scanner.skipToObjectEnd();
+                                                        break;
+                                                    }
+                                                    String vid = scanner.readQuotedString();
+                                                    if (vid == null) break;
+                                                    scanner.skipWhitespaceAndSeparators();
+                                                    float[] fa = scanner.readFloatArray(dims);
+                                                    if (fa != null && fa.length == dims) {
+                                                        if (lastVec != null && Arrays.equals(fa, lastVec)) {
+                                                            fa = lastVec;
+                                                        } else {
+                                                            lastVec = fa;
+                                                        }
+                                                        vecEng.index(vid, fa);
+                                                    }
+                                                }
+                                                scanner.skipWhitespace();
+                                                if (scanner.peek() == '}') scanner.read();
+                                            } else {
+                                                scanner.skipValue();
+                                            }
+                                        } else {
+                                            scanner.skipValue();
                                         }
                                     }
+                                    scanner.skipWhitespace();
+                                    if (scanner.peek() == '}') scanner.read();
+                                } else {
+                                    scanner.skipValue();
                                 }
                             }
                             scanner.skipWhitespace();
@@ -951,34 +1058,96 @@ public final class JettraDatabase implements AutoCloseable {
                             scanner.read();
                             while (scanner.hasMore() && scanner.peek() != '}') {
                                 scanner.skipWhitespaceAndSeparators();
-                                String gName = scanner.readQuotedString();
+                                if (scanner.peek() == '}') break;
+                                String gName = scanner.readKeyString();
                                 if (gName == null) break;
                                 scanner.skipWhitespaceAndSeparators();
-                                String grObjStr = scanner.readBalancedObject();
-                                if (grObjStr != null) {
-                                    JsonObject go = json.fromJson(grObjStr, JsonObject.class);
-                                    if (go != null) {
-                                        var gEng = getGraphEngine(gName);
-                                        gEng.clear();
-                                        if (go.has("vertices")) {
-                                            JsonArray va = go.getAsJsonArray("vertices");
-                                            for (int i = 0; i < va.size(); i++) {
-                                                gEng.addVertex(va.get(i).toString());
-                                            }
-                                        }
-                                        if (go.has("edges")) {
-                                            JsonObject edges = go.getAsJsonObject("edges");
-                                            for (String src : edges.keySet()) {
-                                                JsonArray ea = edges.getAsJsonArray(src);
-                                                for (int i = 0; i < ea.size(); i++) {
-                                                    JsonObject eo = ea.getAsJsonObject(i);
-                                                    String tgt = eo.getAsString("target");
-                                                    String lbl = eo.getAsString("label");
-                                                    gEng.addEdge(src, tgt, lbl, Map.of());
+                                if (scanner.peek() == '{') {
+                                    scanner.read();
+                                    var gEng = getGraphEngine(gName);
+                                    gEng.clear();
+                                    while (scanner.hasMore() && scanner.peek() != '}') {
+                                        scanner.skipWhitespaceAndSeparators();
+                                        if (scanner.peek() == '}') break;
+                                        String prop = scanner.readKeyString();
+                                        if (prop == null) break;
+                                        scanner.skipWhitespaceAndSeparators();
+                                        if ("vertices".equals(prop)) {
+                                            scanner.skipWhitespace();
+                                            if (scanner.peek() == '[') {
+                                                scanner.read();
+                                                long vCount = 0;
+                                                while (scanner.hasMore() && scanner.peek() != ']') {
+                                                    scanner.skipWhitespaceAndSeparators();
+                                                    if (scanner.peek() == ']') break;
+                                                    if ((++vCount & 0x3FFF) == 0 && isHeapCriticallyLow()) {
+                                                        triggerLowMemoryRingGuard();
+                                                        scanner.skipToArrayEnd();
+                                                        break;
+                                                    }
+                                                    String vId = scanner.readCachedValueString();
+                                                    if (vId != null) {
+                                                        gEng.addVertex(vId);
+                                                    } else {
+                                                        scanner.skipValue();
+                                                    }
                                                 }
+                                                scanner.skipWhitespace();
+                                                if (scanner.peek() == ']') scanner.read();
+                                            } else {
+                                                scanner.skipValue();
                                             }
+                                        } else if ("edges".equals(prop)) {
+                                            scanner.skipWhitespace();
+                                            if (scanner.peek() == '{') {
+                                                scanner.read();
+                                                long eCount = 0;
+                                                while (scanner.hasMore() && scanner.peek() != '}') {
+                                                    scanner.skipWhitespaceAndSeparators();
+                                                    if (scanner.peek() == '}') break;
+                                                    if ((++eCount & 0x3FFF) == 0 && isHeapCriticallyLow()) {
+                                                        triggerLowMemoryRingGuard();
+                                                        scanner.skipToObjectEnd();
+                                                        break;
+                                                    }
+                                                    String src = scanner.readCachedValueString();
+                                                    if (src == null) break;
+                                                    scanner.skipWhitespaceAndSeparators();
+                                                    if (scanner.peek() == '[') {
+                                                        scanner.read();
+                                                        while (scanner.hasMore() && scanner.peek() != ']') {
+                                                            scanner.skipWhitespaceAndSeparators();
+                                                            if (scanner.peek() == ']') break;
+                                                            io.jettra.collections.map.UnifiedMap<String, Object> eo = scanner.readDocumentObject(json);
+                                                            if (eo != null) {
+                                                                Object tgtObj = eo.get("target");
+                                                                Object lblObj = eo.get("label");
+                                                                if (tgtObj != null && lblObj != null) {
+                                                                    gEng.addEdge(src, tgtObj.toString(), lblObj.toString(), Map.of());
+                                                                }
+                                                            } else {
+                                                                scanner.skipValue();
+                                                            }
+                                                        }
+                                                        scanner.skipWhitespace();
+                                                        if (scanner.peek() == ']') scanner.read();
+                                                    } else {
+                                                        scanner.skipValue();
+                                                    }
+                                                }
+                                                scanner.skipWhitespace();
+                                                if (scanner.peek() == '}') scanner.read();
+                                            } else {
+                                                scanner.skipValue();
+                                            }
+                                        } else {
+                                            scanner.skipValue();
                                         }
                                     }
+                                    scanner.skipWhitespace();
+                                    if (scanner.peek() == '}') scanner.read();
+                                } else {
+                                    scanner.skipValue();
                                 }
                             }
                             scanner.skipWhitespace();
@@ -993,7 +1162,8 @@ public final class JettraDatabase implements AutoCloseable {
                             scanner.read();
                             while (scanner.hasMore() && scanner.peek() != '}') {
                                 scanner.skipWhitespaceAndSeparators();
-                                String tableName = scanner.readQuotedString();
+                                if (scanner.peek() == '}') break;
+                                String tableName = scanner.readKeyString();
                                 if (tableName == null) break;
                                 scanner.skipWhitespaceAndSeparators();
                                 String tableObjStr = scanner.readBalancedObject();
@@ -1053,42 +1223,78 @@ public final class JettraDatabase implements AutoCloseable {
                             scanner.read();
                             while (scanner.hasMore() && scanner.peek() != '}') {
                                 scanner.skipWhitespaceAndSeparators();
-                                String entityName = scanner.readQuotedString();
+                                if (scanner.peek() == '}') break;
+                                String entityName = scanner.readKeyString();
                                 if (entityName == null) break;
                                 scanner.skipWhitespaceAndSeparators();
-                                String recEngStr = scanner.readBalancedObject();
-                                if (recEngStr != null) {
-                                    JsonObject ro = json.fromJson(recEngStr, JsonObject.class);
-                                    if (ro != null) {
-                                        String clsName = ro.has("recordClass") ? ro.getAsString("recordClass") : null;
-                                        Class<?> recClass = null;
-                                        if (clsName != null && !clsName.isBlank()) {
-                                            try {
-                                                recClass = Class.forName(clsName);
-                                            } catch (Exception ignored) {}
-                                        }
-                                        if (ro.has("records")) {
-                                            JsonObject recordsObj = ro.getAsJsonObject("records");
-                                            if (recordsObj != null && recClass != null && Record.class.isAssignableFrom(recClass)) {
-                                                @SuppressWarnings("unchecked")
-                                                Class<? extends Record> checkedClass = (Class<? extends Record>) recClass;
-                                                var engine = getRecordsEngine(entityName, checkedClass);
-                                                @SuppressWarnings({"rawtypes", "unchecked"})
-                                                io.jettra.store.engine.models.RecordsEngine rawEng = (io.jettra.store.engine.models.RecordsEngine) engine;
-                                                rawEng.clear();
-                                                for (String rid : recordsObj.keySet()) {
-                                                    try {
-                                                        Object rawVal = recordsObj.get(rid);
-                                                        String recJsonStr = (rawVal instanceof JsonObject) ? rawVal.toString() : json.toJson(rawVal);
-                                                        Record inst = (Record) json.fromJson(recJsonStr, recClass);
-                                                        if (inst != null) {
-                                                            rawEng.persist(rid, inst);
+                                if (scanner.peek() == '{') {
+                                    scanner.read();
+                                    Class<?> recClass = null;
+                                    java.lang.reflect.RecordComponent[] recComps = null;
+                                    Class<?>[] recCompTypes = null;
+                                    java.lang.reflect.Constructor<?> recCtor = null;
+                                    io.jettra.store.engine.models.RecordsEngine rawEng = null;
+
+                                    while (scanner.hasMore() && scanner.peek() != '}') {
+                                        scanner.skipWhitespaceAndSeparators();
+                                        if (scanner.peek() == '}') break;
+                                        String prop = scanner.readKeyString();
+                                        if (prop == null) break;
+                                        scanner.skipWhitespaceAndSeparators();
+                                        if ("recordClass".equals(prop)) {
+                                            String clsName = scanner.readQuotedString();
+                                            if (clsName != null && !clsName.isBlank()) {
+                                                try {
+                                                    recClass = Class.forName(clsName);
+                                                    if (Record.class.isAssignableFrom(recClass)) {
+                                                        @SuppressWarnings("unchecked")
+                                                        Class<? extends Record> checkedClass = (Class<? extends Record>) recClass;
+                                                        rawEng = (io.jettra.store.engine.models.RecordsEngine) getRecordsEngine(entityName, checkedClass);
+                                                        rawEng.clear();
+                                                        recComps = recClass.getRecordComponents();
+                                                        recCompTypes = new Class<?>[recComps.length];
+                                                        for (int i = 0; i < recComps.length; i++) {
+                                                            recCompTypes[i] = recComps[i].getType();
                                                         }
-                                                    } catch (Exception ignored) {}
-                                                }
+                                                        recCtor = recClass.getDeclaredConstructor(recCompTypes);
+                                                        recCtor.setAccessible(true);
+                                                    }
+                                                } catch (Exception ignored) {}
                                             }
+                                        } else if ("records".equals(prop)) {
+                                            scanner.skipWhitespace();
+                                            if (scanner.peek() == '{' && rawEng != null && recCtor != null && recComps != null) {
+                                                scanner.read();
+                                                long recCount = 0;
+                                                while (scanner.hasMore() && scanner.peek() != '}') {
+                                                    scanner.skipWhitespaceAndSeparators();
+                                                    if (scanner.peek() == '}') break;
+                                                    if ((++recCount & 0x3FFF) == 0 && isHeapCriticallyLow()) {
+                                                        triggerLowMemoryRingGuard();
+                                                        scanner.skipToObjectEnd();
+                                                        break;
+                                                    }
+                                                    String rid = scanner.readQuotedString();
+                                                    if (rid == null) break;
+                                                    scanner.skipWhitespaceAndSeparators();
+                                                    Record inst = scanner.readRecordInstance(rid, recComps, recCompTypes, recCtor, json);
+                                                    if (inst != null) {
+                                                        rawEng.persist(rid, inst);
+                                                    }
+                                                }
+                                                scanner.skipWhitespace();
+                                                if (scanner.peek() == '}') scanner.read();
+                                            } else {
+                                                scanner.skipValue();
+                                            }
+                                        } else {
+                                            scanner.skipValue();
                                         }
                                     }
+                                    scanner.skipWhitespace();
+                                    if (scanner.peek() == '}') scanner.read();
+                                } else {
+                                    scanner.skipValue();
                                 }
                             }
                             scanner.skipWhitespace();
@@ -1103,6 +1309,7 @@ public final class JettraDatabase implements AutoCloseable {
                             scanner.read();
                             while (scanner.hasMore() && scanner.peek() != ']') {
                                 scanner.skipWhitespaceAndSeparators();
+                                if (scanner.peek() == ']') break;
                                 String idxStr = scanner.readBalancedObject();
                                 if (idxStr != null) {
                                     JsonObject io = json.fromJson(idxStr, JsonObject.class);
@@ -1127,6 +1334,11 @@ public final class JettraDatabase implements AutoCloseable {
                 }
             }
             return true;
+        } catch (OutOfMemoryError oom) {
+            triggerLowMemoryRingGuard();
+            System.err.printf("[JettraDatabase:%s] Aviso: Límite de Heap alcanzado cargando '%s'. Activado modo Anillo/Off-Heap.%n",
+                databaseName, metaFile);
+            return true;
         } catch (Exception e) {
             System.err.printf("[JettraDatabase:%s] Error cargando metadatos y registros desde '%s': %s%n",
                 databaseName, metaFile, e.getMessage());
@@ -1140,9 +1352,22 @@ public final class JettraDatabase implements AutoCloseable {
      * eliminando cualquier riesgo de OutOfMemoryError.
      */
     public static final class PanamaOffHeapScanner {
+        private static final int KEY_CACHE_SIZE = 512;
+        private static final int KEY_CACHE_MASK = KEY_CACHE_SIZE - 1;
+        private static final int VAL_CACHE_SIZE = 65536;
+        private static final int VAL_CACHE_MASK = VAL_CACHE_SIZE - 1;
+        private static final int DOUBLE_CACHE_SIZE = 8192;
+        private static final int DOUBLE_CACHE_MASK = DOUBLE_CACHE_SIZE - 1;
+
         private final MemorySegment segment;
         private final long size;
         private long offset = 0;
+
+        private final String[] keyCacheValues = new String[KEY_CACHE_SIZE];
+        private final long[] keyCacheSlices = new long[KEY_CACHE_SIZE];
+        private final String[] valCacheValues = new String[VAL_CACHE_SIZE];
+        private final long[] valCacheSlices = new long[VAL_CACHE_SIZE];
+        private final Double[] doubleCache = new Double[DOUBLE_CACHE_SIZE];
 
         public PanamaOffHeapScanner(MemorySegment segment, long size) {
             this.segment = segment;
@@ -1185,25 +1410,371 @@ public final class JettraDatabase implements AutoCloseable {
             }
         }
 
-        public String readQuotedString() {
+        private boolean sliceEquals(long posA, long posB, int len) {
+            int i = 0;
+            while (i + 8 <= len) {
+                if (segment.get(ValueLayout.JAVA_LONG_UNALIGNED, posA + i) != segment.get(ValueLayout.JAVA_LONG_UNALIGNED, posB + i)) {
+                    return false;
+                }
+                i += 8;
+            }
+            while (i < len) {
+                if (segment.get(ValueLayout.JAVA_BYTE, posA + i) != segment.get(ValueLayout.JAVA_BYTE, posB + i)) {
+                    return false;
+                }
+                i++;
+            }
+            return true;
+        }
+
+        private String unescapeSlice(long startPos, int len) {
+            byte[] raw = segment.asSlice(startPos, len).toArray(ValueLayout.JAVA_BYTE);
+            String s = new String(raw, StandardCharsets.UTF_8);
+            StringBuilder sb = new StringBuilder(s.length());
+            for (int i = 0; i < s.length(); i++) {
+                char c = s.charAt(i);
+                if (c == '\\' && i + 1 < s.length()) {
+                    char esc = s.charAt(++i);
+                    switch (esc) {
+                        case '"' -> sb.append('"');
+                        case '\\' -> sb.append('\\');
+                        case '/' -> sb.append('/');
+                        case 'b' -> sb.append('\b');
+                        case 'f' -> sb.append('\f');
+                        case 'n' -> sb.append('\n');
+                        case 'r' -> sb.append('\r');
+                        case 't' -> sb.append('\t');
+                        case 'u' -> {
+                            if (i + 4 < s.length()) {
+                                try {
+                                    sb.append((char) Integer.parseInt(s.substring(i + 1, i + 5), 16));
+                                    i += 4;
+                                } catch (Exception ignored) {}
+                            }
+                        }
+                        default -> sb.append(esc);
+                    }
+                } else {
+                    sb.append(c);
+                }
+            }
+            return sb.toString();
+        }
+
+        private String readStringInternal(String[] cacheVals, long[] cacheSlices, int cacheMask) {
             skipWhitespace();
             if (offset >= size || segment.get(ValueLayout.JAVA_BYTE, offset) != '"') return null;
             offset++; // consume "
             long startPos = offset;
             boolean escaped = false;
+            boolean hasEscape = false;
+            int hash = 0x811c9dc5;
             while (offset < size) {
                 byte b = segment.get(ValueLayout.JAVA_BYTE, offset++);
                 if (escaped) {
                     escaped = false;
                 } else if (b == '\\') {
                     escaped = true;
+                    hasEscape = true;
                 } else if (b == '"') {
                     long len = (offset - 1) - startPos;
                     if (len <= 0) return "";
+                    if (hasEscape) {
+                        return unescapeSlice(startPos, (int) len);
+                    }
+                    if (cacheVals != null && len <= 96 && startPos < (1L << 47)) {
+                        int slot = (hash ^ (hash >>> 16)) & cacheMask;
+                        String cached = cacheVals[slot];
+                        if (cached != null) {
+                            long prevSlice = cacheSlices[slot];
+                            int prevLen = (int) (prevSlice & 0xFFFFL);
+                            long prevStart = prevSlice >>> 16;
+                            if (prevLen == len && sliceEquals(prevStart, startPos, (int) len)) {
+                                return cached;
+                            }
+                        }
+                        String created = new String(segment.asSlice(startPos, len).toArray(ValueLayout.JAVA_BYTE), StandardCharsets.UTF_8);
+                        cacheVals[slot] = created;
+                        cacheSlices[slot] = (startPos << 16) | (len & 0xFFFFL);
+                        return created;
+                    }
                     return new String(segment.asSlice(startPos, len).toArray(ValueLayout.JAVA_BYTE), StandardCharsets.UTF_8);
+                } else if (cacheVals != null) {
+                    hash = (hash ^ (b & 0xFF)) * 0x01000193;
                 }
             }
             return null;
+        }
+
+        public String readQuotedString() {
+            return readStringInternal(null, null, 0);
+        }
+
+        public String readKeyString() {
+            return readStringInternal(keyCacheValues, keyCacheSlices, KEY_CACHE_MASK);
+        }
+
+        public String readCachedValueString() {
+            return readStringInternal(valCacheValues, valCacheSlices, VAL_CACHE_MASK);
+        }
+
+        private Double cacheDouble(double d) {
+            long bits = Double.doubleToRawLongBits(d);
+            int slot = (int) ((bits ^ (bits >>> 32)) ^ (bits >>> 16)) & DOUBLE_CACHE_MASK;
+            Double cached = doubleCache[slot];
+            if (cached != null && Double.doubleToRawLongBits(cached) == bits) {
+                return cached;
+            }
+            Double boxed = Double.valueOf(d);
+            doubleCache[slot] = boxed;
+            return boxed;
+        }
+
+        public Number readNumberValue() {
+            skipWhitespace();
+            if (offset >= size) return 0;
+            long startPos = offset;
+            boolean negative = false;
+            byte first = segment.get(ValueLayout.JAVA_BYTE, offset);
+            if (first == '-') {
+                negative = true;
+                offset++;
+            } else if (first == '+') {
+                offset++;
+            }
+            long intPart = 0;
+            int intDigits = 0;
+            boolean isFloating = false;
+            boolean hasExponent = false;
+            while (offset < size) {
+                byte b = segment.get(ValueLayout.JAVA_BYTE, offset);
+                if (b >= '0' && b <= '9') {
+                    intPart = intPart * 10 + (b - '0');
+                    intDigits++;
+                    offset++;
+                } else {
+                    break;
+                }
+            }
+            long fracPart = 0;
+            long fracDiv = 1;
+            int fracDigits = 0;
+            if (offset < size && segment.get(ValueLayout.JAVA_BYTE, offset) == '.') {
+                isFloating = true;
+                offset++;
+                while (offset < size) {
+                    byte b = segment.get(ValueLayout.JAVA_BYTE, offset);
+                    if (b >= '0' && b <= '9') {
+                        if (fracDigits < 15) {
+                            fracPart = fracPart * 10 + (b - '0');
+                            fracDiv *= 10;
+                        }
+                        fracDigits++;
+                        offset++;
+                    } else {
+                        break;
+                    }
+                }
+            }
+            if (offset < size) {
+                byte b = segment.get(ValueLayout.JAVA_BYTE, offset);
+                if (b == 'e' || b == 'E') {
+                    isFloating = true;
+                    hasExponent = true;
+                    offset++;
+                    while (offset < size) {
+                        byte eb = segment.get(ValueLayout.JAVA_BYTE, offset);
+                        if ((eb >= '0' && eb <= '9') || eb == '-' || eb == '+') {
+                            offset++;
+                        } else {
+                            break;
+                        }
+                    }
+                }
+            }
+            if (intDigits == 0 && fracDigits == 0) {
+                return 0;
+            }
+            if (hasExponent || intDigits > 18 || fracDigits > 9) {
+                long len = offset - startPos;
+                String numStr = new String(segment.asSlice(startPos, len).toArray(ValueLayout.JAVA_BYTE), StandardCharsets.UTF_8);
+                try {
+                    if (isFloating) return cacheDouble(Double.parseDouble(numStr));
+                    long l = Long.parseLong(numStr);
+                    if (l >= Integer.MIN_VALUE && l <= Integer.MAX_VALUE) return (int) l;
+                    return l;
+                } catch (Exception e) {
+                    return 0;
+                }
+            }
+            if (!isFloating) {
+                long val = negative ? -intPart : intPart;
+                if (val >= Integer.MIN_VALUE && val <= Integer.MAX_VALUE) {
+                    return Integer.valueOf((int) val);
+                }
+                return Long.valueOf(val);
+            }
+            double d = intPart + ((double) fracPart / (double) fracDiv);
+            if (negative) d = -d;
+            return cacheDouble(d);
+        }
+
+        public float[] readFloatArray(int expectedDims) {
+            skipWhitespace();
+            if (offset >= size || segment.get(ValueLayout.JAVA_BYTE, offset) != '[') {
+                skipValue();
+                return null;
+            }
+            offset++; // consume '['
+            float[] arr = new float[Math.max(1, expectedDims)];
+            int idx = 0;
+            while (offset < size) {
+                skipWhitespaceAndSeparators();
+                if (offset >= size) break;
+                if (segment.get(ValueLayout.JAVA_BYTE, offset) == ']') {
+                    offset++;
+                    break;
+                }
+                Number n = readNumberValue();
+                if (idx == arr.length) {
+                    arr = Arrays.copyOf(arr, arr.length * 2);
+                }
+                arr[idx++] = (n != null) ? n.floatValue() : 0f;
+            }
+            return (idx == arr.length) ? arr : Arrays.copyOf(arr, idx);
+        }
+
+        public io.jettra.collections.map.UnifiedMap<String, Object> readDocumentObject(JettraJson fallbackJson) {
+            skipWhitespace();
+            if (offset >= size || segment.get(ValueLayout.JAVA_BYTE, offset) != '{') return null;
+            offset++; // consume '{'
+            io.jettra.collections.map.UnifiedMap<String, Object> map = io.jettra.collections.map.UnifiedMap.newMap(8);
+            while (offset < size) {
+                skipWhitespaceAndSeparators();
+                if (offset >= size) break;
+                if (segment.get(ValueLayout.JAVA_BYTE, offset) == '}') {
+                    offset++;
+                    break;
+                }
+                String key = readKeyString();
+                if (key == null) {
+                    skipObjectBody();
+                    break;
+                }
+                skipWhitespaceAndSeparators();
+                Object val = readJsonValue(key, fallbackJson);
+                map.put(key, val);
+            }
+            return map;
+        }
+
+        public Record readRecordInstance(
+                String rid,
+                java.lang.reflect.RecordComponent[] comps,
+                Class<?>[] compTypes,
+                java.lang.reflect.Constructor<?> ctor,
+                JettraJson fallbackJson) {
+            skipWhitespace();
+            if (offset >= size || segment.get(ValueLayout.JAVA_BYTE, offset) != '{') {
+                skipValue();
+                return null;
+            }
+            offset++; // consume '{'
+            Object[] args = new Object[comps.length];
+            while (offset < size) {
+                skipWhitespaceAndSeparators();
+                if (offset >= size) break;
+                if (segment.get(ValueLayout.JAVA_BYTE, offset) == '}') {
+                    offset++;
+                    break;
+                }
+                String key = readKeyString();
+                if (key == null) {
+                    skipObjectBody();
+                    break;
+                }
+                skipWhitespaceAndSeparators();
+                int compIdx = -1;
+                for (int i = 0; i < comps.length; i++) {
+                    if (comps[i].getName().equals(key)) {
+                        compIdx = i;
+                        break;
+                    }
+                }
+                if (compIdx >= 0) {
+                    Object rawVal = readJsonValue(key, fallbackJson);
+                    if (rawVal instanceof String s && s.equals(rid)) {
+                        rawVal = rid;
+                    }
+                    args[compIdx] = coerceRecordValue(rawVal, compTypes[compIdx]);
+                } else {
+                    skipValue();
+                }
+            }
+            for (int i = 0; i < args.length; i++) {
+                if (args[i] == null && compTypes[i].isPrimitive()) {
+                    args[i] = coerceRecordValue(0, compTypes[i]);
+                }
+            }
+            try {
+                return (Record) ctor.newInstance(args);
+            } catch (Exception e) {
+                return null;
+            }
+        }
+
+        private Object coerceRecordValue(Object val, Class<?> targetType) {
+            if (val == null) return null;
+            if (targetType.isInstance(val)) return val;
+            if (targetType == String.class) return val.toString();
+            if (targetType == double.class || targetType == Double.class) {
+                return (val instanceof Number n) ? n.doubleValue() : Double.parseDouble(val.toString());
+            }
+            if (targetType == long.class || targetType == Long.class) {
+                return (val instanceof Number n) ? n.longValue() : Long.parseLong(val.toString());
+            }
+            if (targetType == int.class || targetType == Integer.class) {
+                return (val instanceof Number n) ? n.intValue() : Integer.parseInt(val.toString());
+            }
+            if (targetType == float.class || targetType == Float.class) {
+                return (val instanceof Number n) ? n.floatValue() : Float.parseFloat(val.toString());
+            }
+            if (targetType == boolean.class || targetType == Boolean.class) {
+                return (val instanceof Boolean b) ? b : Boolean.parseBoolean(val.toString());
+            }
+            return val;
+        }
+
+        private Object readJsonValue(String key, JettraJson fallbackJson) {
+            skipWhitespace();
+            if (offset >= size) return null;
+            byte b = segment.get(ValueLayout.JAVA_BYTE, offset);
+            if (b == '"') {
+                boolean isUniqueKey = "_id".equals(key) || "_ref_detalle".equals(key) || "_ref_factura".equals(key)
+                    || "razon_social".equals(key) || "rfc_tax_id".equals(key) || "auditId".equals(key)
+                    || "folioFiscal".equals(key) || "hashSha256".equals(key) || "rfcReceptor".equals(key);
+                return isUniqueKey ? readQuotedString() : readCachedValueString();
+            }
+            if (b == '-' || b == '+' || (b >= '0' && b <= '9')) {
+                return readNumberValue();
+            }
+            if (b == 't' || b == 'T' || b == 'f' || b == 'F') {
+                String tok = readPrimitiveToken();
+                return "true".equalsIgnoreCase(tok) ? Boolean.TRUE : Boolean.FALSE;
+            }
+            if (b == 'n' || b == 'N') {
+                readPrimitiveToken();
+                return null;
+            }
+            if (b == '{') {
+                String nested = readBalancedObject();
+                return (nested != null && fallbackJson != null) ? fallbackJson.parse(nested) : null;
+            }
+            if (b == '[') {
+                String nested = readBalancedArray();
+                return (nested != null && fallbackJson != null) ? fallbackJson.parse(nested) : null;
+            }
+            return readPrimitiveToken();
         }
 
         public String readPrimitiveToken() {
@@ -1246,6 +1817,47 @@ public final class JettraDatabase implements AutoCloseable {
                 return null;
             }
             return new String(segment.asSlice(startPos, len).toArray(ValueLayout.JAVA_BYTE), StandardCharsets.UTF_8);
+        }
+
+        public String readBalancedArray() {
+            skipWhitespace();
+            if (offset >= size || segment.get(ValueLayout.JAVA_BYTE, offset) != '[') return null;
+            long startPos = offset++;
+            int depth = 1;
+            boolean inString = false;
+            boolean escaped = false;
+            while (offset < size && depth > 0) {
+                byte b = segment.get(ValueLayout.JAVA_BYTE, offset++);
+                if (inString) {
+                    if (escaped) escaped = false;
+                    else if (b == '\\') escaped = true;
+                    else if (b == '"') inString = false;
+                } else {
+                    if (b == '"') inString = true;
+                    else if (b == '[') depth++;
+                    else if (b == ']') depth--;
+                }
+            }
+            if (depth != 0) return null;
+            long len = offset - startPos;
+            if (len > 67_108_864L) {
+                return null;
+            }
+            return new String(segment.asSlice(startPos, len).toArray(ValueLayout.JAVA_BYTE), StandardCharsets.UTF_8);
+        }
+
+        public void skipToArrayEnd() {
+            skipArrayBody();
+            if (offset > 0 && segment.get(ValueLayout.JAVA_BYTE, offset - 1) == ']') {
+                offset--;
+            }
+        }
+
+        public void skipToObjectEnd() {
+            skipObjectBody();
+            if (offset > 0 && segment.get(ValueLayout.JAVA_BYTE, offset - 1) == '}') {
+                offset--;
+            }
         }
 
         public void skipArrayBody() {

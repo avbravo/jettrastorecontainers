@@ -28,7 +28,7 @@ RUN chown -R 1000:1000 /home/jettra
 ENV HOME=/home/jettra \
     JETTRA_HOST=jettra-node-01 \
     JETTRA_PORT=9091 \
-    JAVA_OPTS="-XX:+UnlockExperimentalVMOptions -XX:+UseCompactObjectHeaders --enable-preview --enable-native-access=ALL-UNNAMED"
+    JAVA_OPTS="-Xms512m -Xmx4g -XX:+UseZGC -XX:+UnlockExperimentalVMOptions -XX:+UseCompactObjectHeaders --enable-preview --enable-native-access=ALL-UNNAMED"
 
 USER 1000:1000
 

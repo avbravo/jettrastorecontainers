@@ -17,13 +17,13 @@ public final class GraphEngine {
 
     public void addVertex(String vertexId) {
         vertices.add(vertexId);
-        adjacencyList.computeIfAbsent(vertexId, k -> new CopyOnWriteArrayList<>());
     }
 
     public void addEdge(String fromVertex, String toVertex, String label, Map<String, Object> props) {
-        addVertex(fromVertex);
-        addVertex(toVertex);
-        adjacencyList.get(fromVertex).add(new Edge(toVertex, label, props));
+        vertices.add(fromVertex);
+        vertices.add(toVertex);
+        adjacencyList.computeIfAbsent(fromVertex, k -> new CopyOnWriteArrayList<>())
+            .add(new Edge(toVertex, label, props));
     }
 
     public List<Edge> getOutboundEdges(String vertexId) {

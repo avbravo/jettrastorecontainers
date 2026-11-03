@@ -1,0 +1,20 @@
+[package]
+name = "jettrardb"
+version = "1.0.0"
+edition = "2021"
+authors = ["JettraStack Team"]
+description = "JettraRDB: High-Performance Distributed Multi-Model Database Engine in Rust (compatible with JettraStore)"
+
+[lib]
+name = "jettrardb"
+path = "src/lib.rs"
+
+[[bin]]
+name = "jettrardb"
+path = "src/main.rs"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+
