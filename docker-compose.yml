@@ -7,6 +7,11 @@ services:
     container_name: jettra-node-01
     hostname: jettra-node-01
     restart: unless-stopped
+    cap_add:
+      - CHECKPOINT_RESTORE
+      - SYS_PTRACE
+    security_opt:
+      - seccomp:unconfined
     ports:
       - "8081:8080"
       - "9091:9091"
@@ -14,14 +19,18 @@ services:
       - JETTRA_NODE_ID=node-01
       - JETTRA_NODE_ROLE=PRIMARY
       - JETTRA_STORAGE_PATH=/jettra/data
+      - JETTRA_STORAGE_MODE=${JETTRA_STORAGE_MODE:-OFF_HEAP}
+      - JETTRA_CRAC_CHECKPOINT_PATH=/jettra/checkpoint
+      - JETTRA_CRAC_RESTORE=${JETTRA_CRAC_RESTORE:-false}
       - JETTRA_REST_PORT=8080
       - JETTRA_GRPC_PORT=9091
       - JETTRA_ADMIN_USERNAME=admin
       - JETTRA_ADMIN_PASSWORD=admin-jettra
       - JETTRA_CLUSTER_PEERS=node-02:jettra-node-02:9091:SECONDARY,node-03:jettra-node-03:9091:SECONDARY
-      - JAVA_OPTS=-Xms512m -Xmx2g -XX:+UseZGC -XX:+UseCompactObjectHeaders --enable-preview --enable-native-access=ALL-UNNAMED
+      - JAVA_OPTS=--enable-preview --enable-native-access=ALL-UNNAMED -XX:+UnlockExperimentalVMOptions -XX:+UseCompactObjectHeaders -XX:+UseZGC -Xms2g -Xmx4g -Djettra.storage.mode=${JETTRA_STORAGE_MODE:-OFF_HEAP}
     volumes:
       - jettra_data_node01:/jettra/data
+      - jettra_checkpoint_node01:/jettra/checkpoint
     networks:
       - jettra-cluster-net
     healthcheck:
@@ -39,6 +48,11 @@ services:
     container_name: jettra-node-02
     hostname: jettra-node-02
     restart: unless-stopped
+    cap_add:
+      - CHECKPOINT_RESTORE
+      - SYS_PTRACE
+    security_opt:
+      - seccomp:unconfined
     depends_on:
       jettra-node-01:
         condition: service_healthy
@@ -49,14 +63,18 @@ services:
       - JETTRA_NODE_ID=node-02
       - JETTRA_NODE_ROLE=SECONDARY
       - JETTRA_STORAGE_PATH=/jettra/data
+      - JETTRA_STORAGE_MODE=${JETTRA_STORAGE_MODE:-OFF_HEAP}
+      - JETTRA_CRAC_CHECKPOINT_PATH=/jettra/checkpoint
+      - JETTRA_CRAC_RESTORE=${JETTRA_CRAC_RESTORE:-false}
       - JETTRA_REST_PORT=8080
       - JETTRA_GRPC_PORT=9091
       - JETTRA_ADMIN_USERNAME=admin
       - JETTRA_ADMIN_PASSWORD=admin-jettra
       - JETTRA_CLUSTER_PEERS=node-01:jettra-node-01:9091:PRIMARY,node-03:jettra-node-03:9091:SECONDARY
-      - JAVA_OPTS=-Xms512m -Xmx2g -XX:+UseZGC -XX:+UseCompactObjectHeaders --enable-preview --enable-native-access=ALL-UNNAMED
+      - JAVA_OPTS=--enable-preview --enable-native-access=ALL-UNNAMED -XX:+UnlockExperimentalVMOptions -XX:+UseCompactObjectHeaders -XX:+UseZGC -Xms2g -Xmx4g -Djettra.storage.mode=${JETTRA_STORAGE_MODE:-OFF_HEAP}
     volumes:
       - jettra_data_node02:/jettra/data
+      - jettra_checkpoint_node02:/jettra/checkpoint
     networks:
       - jettra-cluster-net
     healthcheck:
@@ -74,6 +92,11 @@ services:
     container_name: jettra-node-03
     hostname: jettra-node-03
     restart: unless-stopped
+    cap_add:
+      - CHECKPOINT_RESTORE
+      - SYS_PTRACE
+    security_opt:
+      - seccomp:unconfined
     depends_on:
       jettra-node-01:
         condition: service_healthy
@@ -84,14 +107,18 @@ services:
       - JETTRA_NODE_ID=node-03
       - JETTRA_NODE_ROLE=SECONDARY
       - JETTRA_STORAGE_PATH=/jettra/data
+      - JETTRA_STORAGE_MODE=${JETTRA_STORAGE_MODE:-OFF_HEAP}
+      - JETTRA_CRAC_CHECKPOINT_PATH=/jettra/checkpoint
+      - JETTRA_CRAC_RESTORE=${JETTRA_CRAC_RESTORE:-false}
       - JETTRA_REST_PORT=8080
       - JETTRA_GRPC_PORT=9091
       - JETTRA_ADMIN_USERNAME=admin
       - JETTRA_ADMIN_PASSWORD=admin-jettra
       - JETTRA_CLUSTER_PEERS=node-01:jettra-node-01:9091:PRIMARY,node-02:jettra-node-02:9091:SECONDARY
-      - JAVA_OPTS=-Xms512m -Xmx2g -XX:+UseZGC -XX:+UseCompactObjectHeaders --enable-preview --enable-native-access=ALL-UNNAMED
+      - JAVA_OPTS=--enable-preview --enable-native-access=ALL-UNNAMED -XX:+UnlockExperimentalVMOptions -XX:+UseCompactObjectHeaders -XX:+UseZGC -Xms2g -Xmx4g -Djettra.storage.mode=${JETTRA_STORAGE_MODE:-OFF_HEAP}
     volumes:
       - jettra_data_node03:/jettra/data
+      - jettra_checkpoint_node03:/jettra/checkpoint
     networks:
       - jettra-cluster-net
     healthcheck:
@@ -159,6 +186,15 @@ volumes:
     driver: local
   jettra_data_node03:
     name: jettra_data_node03
+    driver: local
+  jettra_checkpoint_node01:
+    name: jettra_checkpoint_node01
+    driver: local
+  jettra_checkpoint_node02:
+    name: jettra_checkpoint_node02
+    driver: local
+  jettra_checkpoint_node03:
+    name: jettra_checkpoint_node03
     driver: local
 
 networks:

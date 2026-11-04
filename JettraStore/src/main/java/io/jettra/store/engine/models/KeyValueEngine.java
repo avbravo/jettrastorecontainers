@@ -1,5 +1,7 @@
 package io.jettra.store.engine.models;
 
+import io.jettra.store.offheap.OffHeapSlottedMap;
+import java.lang.foreign.MemorySegment;
 import java.util.Collections;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -8,6 +10,7 @@ public final class KeyValueEngine {
     private final String namespace;
     private final io.jettra.store.core.JettraDatabase database;
     private final Map<String, byte[]> store = new ConcurrentHashMap<>();
+    private final OffHeapSlottedMap offHeapStore = new OffHeapSlottedMap();
 
     public KeyValueEngine(String namespace) {
         this(namespace, null);
@@ -16,6 +19,10 @@ public final class KeyValueEngine {
     public KeyValueEngine(String namespace, io.jettra.store.core.JettraDatabase database) {
         this.namespace = namespace;
         this.database = database;
+    }
+
+    private boolean isOffHeap() {
+        return database != null && database.getStorageMode().isOffHeap();
     }
 
     public void put(String key, byte[] value) {
@@ -29,11 +36,25 @@ public final class KeyValueEngine {
     }
 
     public void applyReplicatedPut(String key, byte[] value) {
-        store.put(key, value);
+        if (isOffHeap()) {
+            offHeapStore.put(key, value);
+        } else {
+            store.put(key, value);
+        }
     }
 
     public byte[] get(String key) {
+        if (isOffHeap()) {
+            return offHeapStore.get(key);
+        }
         return store.get(key);
+    }
+
+    /**
+     * Lectura Cero-Copia de alto rendimiento que devuelve una vista directa de memoria nativa.
+     */
+    public MemorySegment getSlice(String key) {
+        return offHeapStore.getSlice(key);
     }
 
     public boolean remove(String key) {
@@ -48,10 +69,16 @@ public final class KeyValueEngine {
     }
 
     public boolean applyReplicatedRemove(String key) {
+        if (isOffHeap()) {
+            return offHeapStore.remove(key);
+        }
         return store.remove(key) != null;
     }
 
     public boolean containsKey(String key) {
+        if (isOffHeap()) {
+            return offHeapStore.containsKey(key);
+        }
         return store.containsKey(key);
     }
 
@@ -60,7 +87,14 @@ public final class KeyValueEngine {
     }
 
     public String getNamespace() { return namespace; }
-    public int size() { return store.size(); }
+
+    public int size() { 
+        return isOffHeap() ? offHeapStore.size() : store.size(); 
+    }
+
+    public OffHeapSlottedMap getOffHeapStore() {
+        return offHeapStore;
+    }
 
     public void putBatch(Map<String, byte[]> batch) {
         if (database != null) {
@@ -75,7 +109,13 @@ public final class KeyValueEngine {
     }
 
     public void applyReplicatedPutBatch(Map<String, byte[]> batch) {
-        store.putAll(batch);
+        if (isOffHeap()) {
+            for (var entry : batch.entrySet()) {
+                offHeapStore.put(entry.getKey(), entry.getValue());
+            }
+        } else {
+            store.putAll(batch);
+        }
     }
 
     public void clear() {
@@ -86,6 +126,9 @@ public final class KeyValueEngine {
     }
 
     public void applyReplicatedClear() {
+        if (isOffHeap()) {
+            offHeapStore.close();
+        }
         store.clear();
     }
 }

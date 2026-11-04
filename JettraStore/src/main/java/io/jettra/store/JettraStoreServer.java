@@ -86,6 +86,8 @@ public final class JettraStoreServer {
             config.getNodeId(), config.getNodeIp(), config.getRestPort(), config.getGrpcPort(), config.getNodeRole(), config.getStoragePath());
         System.out.printf("Project Panama Off-Heap Direct: %s | MemTable: %d MB%n",
             config.isOffHeapDirect(), config.getMemTableSizeMb());
+        System.out.printf("Modo de Almacenamiento (jettra.storage.mode): %s (%s)%n",
+            config.getStorageMode().name(), config.getStorageMode().getDescription());
         System.out.printf("Cluster Multi-Node Active: %s (%s)%n",
             config.getClusterMultinodeActive(),
             config.isClusterMultinodeActive()
@@ -1088,6 +1090,10 @@ public final class JettraStoreServer {
     public static void main(String[] args) throws IOException {
         JettraConfigValidator.validateAndBootstrapOrHalt();
         JettraStoreConfig cfg = JettraStoreConfig.load();
+        System.out.println("--------------------------------------------------------------------------------");
+        System.out.printf("[JettraStore] Modo de almacenamiento activo (jettra.storage.mode): %s (%s)%n",
+            cfg.getStorageMode().name(), cfg.getStorageMode().getDescription());
+        System.out.println("--------------------------------------------------------------------------------");
         JettraStoreServer server = new JettraStoreServer(cfg);
         server.start();
 

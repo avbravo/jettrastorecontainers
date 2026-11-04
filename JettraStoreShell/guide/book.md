@@ -49,7 +49,7 @@
    - [15.13 Fase 12: Analítica CLI y Cálculos Financieros (AGGREGATE, MATH, FINANCE)](#1513-fase-12-analítica-cli-y-cálculos-financieros-aggregate-math-finance)
    - [15.14 Fase 13: Verificación con DB STATS, Conteo Global y Snapshot de Respaldo](#1514-fase-13-verificación-con-db-stats-conteo-global-y-snapshot-de-respaldo)
 16. [Respaldos Físicos en Caliente y Restauración (Backup & Restore)](#16-respaldos-físicos-en-caliente-y-restauración-backup--restore)
-17. [Gestión del Modo de Almacenamiento: `JVM-RAM` vs `DISK-MEMORY (JettraMemory)`](#17-gestión-del-modo-de-almacenamiento-jvm-ram-vs-disk-memory-jettramemory)
+17. [Gestión del Modo de Almacenamiento: `JVM-RAM`, `DISK-MEMORY` y `OFF-HEAP`](#17-gestión-del-modo-de-almacenamiento-jvm-ram-disk-memory-y-off-heap)
 18. [Módulo de Analítica, Cálculos Cuantitativos y Álgebra Vectorial CLI](#18-módulo-de-analítica-cálculos-cuantitativos-y-álgebra-vectorial-cli)
 19. [Historial Persistente, Expansión Bang y Autocompletado de Comandos CLI (TAB y Flechas ↑/↓)](#19-historial-persistente-expansión-bang-y-autocompletado-de-comandos-cli)
 20. [Estadísticas Multimodelo Completas (DB STATS con 8 Motores Especializados y Java Records)](#20-estadísticas-multimodelo-completas-db-stats-con-8-motores-especializados-y-java-records)
@@ -2060,9 +2060,9 @@ RESTORE DATABASE sample_enterprise_db FROM '/var/backups/enterprise_2026.snap';
 
 ---
 
-## 17. Gestión del Modo de Almacenamiento: `JVM-RAM` vs `DISK-MEMORY (JettraMemory)`
+## 17. Gestión del Modo de Almacenamiento: `JVM-RAM`, `DISK-MEMORY` y `OFF-HEAP`
 
-`JettraStoreShell` permite consultar y conmutar en caliente el modo de almacenamiento entre la memoria RAM de la JVM y el motor de disco off-heap `JettraMemory`:
+`JettraStoreShell` permite consultar y conmutar en caliente el modo de almacenamiento entre la memoria RAM de la JVM, el motor de disco off-heap LSM `JettraMemory` y el motor de páginas ranuradas nativas `JettraStore-OffHeap`:
 
 ### 17.1 Comandos de Consola
 * **Consultar Modo Activo:**
@@ -2070,20 +2070,26 @@ RESTORE DATABASE sample_enterprise_db FROM '/var/backups/enterprise_2026.snap';
   jettra-shell> STORAGE_MODE
   jettra-shell> SHOW STORAGE_MODE
   ```
-* **Conmutar a Memoria RAM (JVM Heap/Stack):**
+* **Conmutar a Memoria RAM (JVM Heap/Stack - Predeterminado):**
   ```text
-  jettra-shell> STORAGE_MODE JVM_RAM
+  jettra-shell> STORAGE_MODE JVM-RAM
   jettra-shell> SET STORAGE_MODE = JVM-RAM
   ```
 * **Conmutar a Disco Directo Off-Heap (JettraMemory LSM):**
   ```text
-  jettra-shell> STORAGE_MODE DISK_MEMORY
+  jettra-shell> STORAGE_MODE DISK-MEMORY
   jettra-shell> SET STORAGE_MODE = DISK-MEMORY
   ```
+* **Conmutar a Páginas Ranuradas Nativa Off-Heap (JettraStore-OffHeap):**
+  ```text
+  jettra-shell> STORAGE_MODE OFF-HEAP
+  jettra-shell> SET STORAGE_MODE = OFF-HEAP
+  ```
 
-### 17.2 Comportamiento de los Modos
-* **`JVM-RAM`:** Las colecciones se cargan y consultan en las áreas de memoria Stack y Heap de Java con estructuras `UnifiedMap`, aprovechando ZGC y Compact Object Headers.
-* **`DISK-MEMORY`:** Los registros se escriben y leen directamente en disco mediante `JettraMemory` utilizando punteros nativos Panama `MemorySegment`, asegurando 0% de impacto en el montículo.
+### 17.2 Comportamiento de los Tres Modos
+* **`JVM-RAM` (Predeterminado):** Las colecciones se cargan y consultan en las áreas de memoria Stack y Heap de Java con estructuras `UnifiedMap`, aprovechando ZGC y Compact Object Headers de 8 bytes (Project Lilliput).
+* **`DISK-MEMORY`:** Los registros se escriben y leen directamente en disco mediante `JettraMemory` utilizando punteros nativos Panama `MemorySegment` y compactación autónoma LSM, asegurando 0% de impacto en el montículo para grandes datasets.
+* **`OFF-HEAP`:** Los registros residen en páginas ranuradas nativas contiguas de 64 KB o 256 KB administradas por `JettraStore-OffHeap`, con soporte para deserialización selectiva cero-copia (Zero-Copy) y ámbitos transaccionales deterministas RAII que devuelven la memoria al sistema operativo sin pausas de Garbage Collector.
 
 ---
 

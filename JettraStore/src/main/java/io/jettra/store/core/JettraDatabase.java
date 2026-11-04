@@ -29,6 +29,10 @@ import java.nio.file.StandardOpenOption;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
+import io.jettra.store.offheap.JettraTransactionContext;
+import io.jettra.store.offheap.OffHeapPageBuffer;
+import io.jettra.store.offheap.OffHeapPageManager;
+import io.jettra.store.offheap.OffHeapSlottedMap;
 
 public final class JettraDatabase implements AutoCloseable {
     private final String databaseName;
@@ -38,6 +42,8 @@ public final class JettraDatabase implements AutoCloseable {
     private final DynamicRingEngine ringEngine;
     private final AtomicBoolean distributedRingActive = new AtomicBoolean(false);
     private final JettraMemoryEngine memoryEngine;
+    private final OffHeapSlottedMap offHeapDatabaseStore = new OffHeapSlottedMap();
+    private final OffHeapPageManager offHeapPageManager;
     private volatile StorageMode storageMode;
 
     private final Map<String, DocumentEngine> documentEngines = new ConcurrentHashMap<>();
@@ -79,6 +85,19 @@ public final class JettraDatabase implements AutoCloseable {
             System.err.printf("[JettraDatabase] Aviso: JettraMemory off-heap fallback: %s%n", ex.getMessage());
         }
         this.memoryEngine = memEngine;
+
+        // Inicialización de JettraStore-OffHeap (Gestor de páginas ranuradas Slotted-Page)
+        OffHeapPageManager pageMgr = null;
+        try {
+            Path offHeapPath = Path.of(this.config.getStoragePath(), databaseName, databaseName + "_offheap.pages");
+            if (offHeapPath.getParent() != null) {
+                Files.createDirectories(offHeapPath.getParent());
+            }
+            pageMgr = new OffHeapPageManager(offHeapPath);
+        } catch (Exception ex) {
+            System.err.printf("[JettraDatabase] Aviso: JettraStore-OffHeap page manager fallback: %s%n", ex.getMessage());
+        }
+        this.offHeapPageManager = pageMgr;
         this.storageMode = (this.config != null && this.config.getStorageMode() != null) ? this.config.getStorageMode() : StorageMode.JVM_RAM;
 
         if (this.config.isClusterMultinodeActive() && this.ringEngine.getPeers().isEmpty()) {
@@ -1923,6 +1942,14 @@ public final class JettraDatabase implements AutoCloseable {
     @Override
     public void close() {
         try {
+            if (offHeapPageManager != null) {
+                offHeapPageManager.close();
+            }
+        } catch (Exception ignored) {}
+        try {
+            offHeapDatabaseStore.close();
+        } catch (Exception ignored) {}
+        try {
             if (memoryEngine != null) {
                 memoryEngine.close();
             }
@@ -2127,6 +2154,34 @@ public final class JettraDatabase implements AutoCloseable {
 
     public boolean deleteOffHeapBinary(String key) throws IOException {
         return memoryEngine != null && memoryEngine.delete(key);
+    }
+
+    public void putRecordOffHeap(String key, byte[] payload) {
+        offHeapDatabaseStore.put(key, payload);
+    }
+
+    public byte[] getRecordOffHeap(String key) {
+        return offHeapDatabaseStore.get(key);
+    }
+
+    public MemorySegment getRecordOffHeapSlice(String key) {
+        return offHeapDatabaseStore.getSlice(key);
+    }
+
+    public boolean deleteRecordOffHeap(String key) {
+        return offHeapDatabaseStore.remove(key);
+    }
+
+    public OffHeapSlottedMap getOffHeapDatabaseStore() {
+        return offHeapDatabaseStore;
+    }
+
+    public OffHeapPageManager getOffHeapPageManager() {
+        return offHeapPageManager;
+    }
+
+    public JettraTransactionContext newTransactionContext(long txId) {
+        return new JettraTransactionContext(txId);
     }
 
     public io.jettra.store.calc.JettraAggregation.AggregationResult aggregate(

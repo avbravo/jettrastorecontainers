@@ -47,6 +47,8 @@ public final class DocumentEngine implements Iterable<Map<String, Object>> {
             documents.put(id, copy);
             if (database != null && database.getStorageMode().isDiskMemory()) {
                 persistToDiskMemory(id, copy);
+            } else if (database != null && database.getStorageMode().isOffHeap()) {
+                persistToOffHeap(id, copy);
             }
         } finally {
             wLock.unlock();
@@ -68,6 +70,8 @@ public final class DocumentEngine implements Iterable<Map<String, Object>> {
             documents.put(id, copy);
             if (database != null && database.getStorageMode().isDiskMemory()) {
                 persistToDiskMemory(id, copy);
+            } else if (database != null && database.getStorageMode().isOffHeap()) {
+                persistToOffHeap(id, copy);
             }
         } finally {
             wLock.unlock();
@@ -83,6 +87,8 @@ public final class DocumentEngine implements Iterable<Map<String, Object>> {
             boolean removed = documents.remove(id) != null;
             if (database != null && database.getStorageMode().isDiskMemory()) {
                 removeFromDiskMemory(id);
+            } else if (database != null && database.getStorageMode().isOffHeap()) {
+                removeFromOffHeap(id);
             }
             return removed;
         } finally {
@@ -96,6 +102,9 @@ public final class DocumentEngine implements Iterable<Map<String, Object>> {
             Map<String, Object> doc = documents.get(id);
             if (doc == null && database != null && database.getStorageMode().isDiskMemory()) {
                 doc = loadFromDiskMemory(id);
+            }
+            if (doc == null && database != null && database.getStorageMode().isOffHeap()) {
+                doc = loadFromOffHeap(id);
             }
             return doc;
         } finally {
@@ -119,6 +128,30 @@ public final class DocumentEngine implements Iterable<Map<String, Object>> {
     private Map<String, Object> loadFromDiskMemory(String id) {
         try {
             byte[] bytes = database.getRecordDiskMemory((byte) 1, collectionName + ":" + id);
+            if (bytes != null) {
+                String jsonStr = new String(bytes, java.nio.charset.StandardCharsets.UTF_8);
+                return new io.jettra.json.JettraJson().fromJson(jsonStr, Map.class);
+            }
+        } catch (Exception ignored) {}
+        return null;
+    }
+
+    private void persistToOffHeap(String id, Map<String, Object> doc) {
+        try {
+            String jsonStr = new io.jettra.json.JettraJson().toJson(doc);
+            database.putRecordOffHeap(collectionName + ":" + id, jsonStr.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        } catch (Exception ignored) {}
+    }
+
+    private void removeFromOffHeap(String id) {
+        try {
+            database.deleteRecordOffHeap(collectionName + ":" + id);
+        } catch (Exception ignored) {}
+    }
+
+    private Map<String, Object> loadFromOffHeap(String id) {
+        try {
+            byte[] bytes = database.getRecordOffHeap(collectionName + ":" + id);
             if (bytes != null) {
                 String jsonStr = new String(bytes, java.nio.charset.StandardCharsets.UTF_8);
                 return new io.jettra.json.JettraJson().fromJson(jsonStr, Map.class);
@@ -266,6 +299,8 @@ public final class DocumentEngine implements Iterable<Map<String, Object>> {
                 existing.putAll(updates);
                 if (database != null && database.getStorageMode().isDiskMemory()) {
                     persistToDiskMemory(id, existing);
+                } else if (database != null && database.getStorageMode().isOffHeap()) {
+                    persistToOffHeap(id, existing);
                 }
                 updatedCopy = existing;
             }
@@ -287,6 +322,8 @@ public final class DocumentEngine implements Iterable<Map<String, Object>> {
             removed = documents.remove(id) != null;
             if (database != null && database.getStorageMode().isDiskMemory()) {
                 removeFromDiskMemory(id);
+            } else if (database != null && database.getStorageMode().isOffHeap()) {
+                removeFromOffHeap(id);
             }
         } finally {
             wLock.unlock();
@@ -361,6 +398,8 @@ public final class DocumentEngine implements Iterable<Map<String, Object>> {
                 documents.put(id, copy);
                 if (database != null && database.getStorageMode().isDiskMemory()) {
                     persistToDiskMemory(id, copy);
+                } else if (database != null && database.getStorageMode().isOffHeap()) {
+                    persistToOffHeap(id, copy);
                 }
             }
         } finally {

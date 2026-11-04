@@ -942,11 +942,86 @@ for (var alert : alerts) {
 
 ---
 
-## 9. Integración de Almacenamiento Off-Heap de Ultra-Baja Latencia con `JettraMemory`
+## 9. Integración de Almacenamiento Off-Heap con `JettraMemory` y `JettraStore-OffHeap`
 
-`JettraStoreDriver` integra de forma nativa el motor off-heap `JettraMemory`, permitiendo almacenar y recuperar buffers binarios nativos fuera del Garbage Collector mediante Project Panama (FFM API):
+`JettraStoreDriver` soporta de forma nativa los tres modos de almacenamiento del motor `JettraStore`:
+* **Modo `JVM-RAM` (Predeterminado):** Almacenamiento en Heap y Stack de la JVM optimizado con colecciones `UnifiedMap` y cabeceras compactas de 8 bytes de Project Lilliput.
+* **Modo `DISK-MEMORY` (Integración Nativa JettraMemory):** Motor directo en disco con arquitectura LSM basado en Project Panama (`MemorySegment`), eliminando el consumo de heap en grandes volúmenes.
+* **Modo `OFF-HEAP` (Integración Nativa JettraStore-OffHeap):** Motor de páginas ranuradas nativas contiguas (Slotted-Page de 64 KB / 256 KB) con Project Panama (`Arena` y `MemorySegment`), deserialización selectiva cero-copia y liberación transaccional determinista RAII sin intervención del Garbage Collector.
 
-### 9.1 Almacenamiento y Recuperación Binaria Off-Heap
+### 9.1 Configuración Inicial del Modo de Almacenamiento con `JettraClientConfig`
+Al construir el cliente, se puede especificar el modo de almacenamiento predeterminado para todas las bases de datos:
+
+```java
+import io.jettra.driver.JettraClient;
+import io.jettra.driver.config.JettraClientConfig;
+import io.jettra.store.core.StorageMode;
+
+// Configurar cliente con modo OFF-HEAP por defecto
+JettraClientConfig config = JettraClientConfig.builder()
+    .addClusterNode("127.0.0.1", 9091)
+    .credentials("admin", "admin-jettra")
+    .storageMode(StorageMode.OFF_HEAP) // Opciones: StorageMode.JVM_RAM, StorageMode.DISK_MEMORY, StorageMode.OFF_HEAP
+    .enableVirtualThreads(true)
+    .build();
+
+try (JettraClient client = JettraClient.connect(config)) {
+    System.out.println("Cliente conectado con modo predeterminado: " + config.getDefaultStorageMode());
+}
+```
+
+### 9.2 Conmutación Programática de los Tres Modos en Caliente
+El driver permite conmutar dinámicamente el modo de almacenamiento por base de datos o de forma global sin detener el servidor:
+
+```java
+// 1. Consultar el modo actual de una base de datos
+StorageMode currentMode = client.getStorageMode("facturacion_db");
+System.out.println("Modo actual: " + currentMode.getCode());
+
+// 2. Conmutar a Modo OFF-HEAP (JettraStore-OffHeap Slotted-Page)
+client.setStorageMode("facturacion_db", StorageMode.OFF_HEAP);
+
+// 3. Conmutar a Modo DISK-MEMORY (JettraMemory LSM en disco)
+client.setStorageMode("historico_db", StorageMode.DISK_MEMORY);
+
+// 4. Conmutar a Modo JVM-RAM (Memoria RAM estándar de la JVM)
+client.setStorageMode("cache_db", StorageMode.JVM_RAM);
+
+// 5. Conmutación global para todas las bases de datos abiertas
+client.setGlobalStorageMode(StorageMode.OFF_HEAP);
+```
+
+### 9.3 Operaciones Cero-Copia (`MemorySegment`) y Transacciones RAII en Modo Off-Heap
+Al operar en `StorageMode.OFF_HEAP`, el driver interactúa directamente con los motores off-heap de `JettraStore`:
+
+```java
+import io.jettra.store.core.JettraDatabase;
+import io.jettra.store.engine.models.KeyValueEngine;
+import io.jettra.store.offheap.JettraTransactionContext;
+import io.jettra.store.offheap.OffHeapPageBuffer;
+import java.lang.foreign.MemorySegment;
+import java.nio.charset.StandardCharsets;
+
+JettraDatabase db = client.getDatabase("facturacion_db");
+
+// A. Almacenamiento y Lectura Cero-Copia en KeyValueEngine Off-Heap
+KeyValueEngine kv = db.getKeyValueEngine("sesiones");
+kv.put("token:9001", "{\"role\":\"ADMIN\",\"exp\":17400000}".getBytes(StandardCharsets.UTF_8));
+
+// Obtener vista directa MemorySegment sin crear objetos en el Heap:
+MemorySegment slice = kv.getSlice("token:9001");
+System.out.printf("Slice nativo en dirección 0x%x (%d bytes)%n", slice.address(), slice.byteSize());
+
+// B. Transacciones RAII con liberación determinista instantánea
+try (JettraTransactionContext tx = db.newTransactionContext(7001L)) {
+    OffHeapPageBuffer page = tx.createPage(1L);
+    int slot = page.insertRecord("Registro Transaccional".getBytes(StandardCharsets.UTF_8));
+    MemorySegment recordSlice = page.getRecordSlice(slot);
+    // Operaciones transaccionales...
+} // La Arena confinada se cierra en O(1), liberando la memoria nativa sin pausas de GC
+```
+
+### 9.4 Almacenamiento y Recuperación Binaria Off-Heap con `JettraMemory`
 ```java
 // 1. Obtener acceso al motor JettraMemoryEngine para una base de datos
 JettraMemoryEngine memEngine = client.getMemoryEngine("example_factura_db");
@@ -968,19 +1043,6 @@ System.out.printf("Off-Heap en uso: %s bytes | Segmentos activos: %s%n",
 
 // Ejecutar compactación fuera de banda
 client.compactMemory("example_factura_db");
-```
-
-### 9.2 Gestión Programática de Modos: `JVM-RAM` vs `DISK-MEMORY`
-El driver permite configurar el modo de almacenamiento por base de datos o de manera global:
-```java
-// Consultar el modo actual
-StorageMode mode = client.getStorageMode("example_factura_db");
-
-// Conmutar a modo DISK-MEMORY (JettraMemory Off-Heap LSM)
-client.setStorageMode("example_factura_db", StorageMode.DISK_MEMORY);
-
-// O conmutar a modo JVM-RAM
-client.setStorageMode("example_factura_db", StorageMode.JVM_RAM);
 ```
 
 

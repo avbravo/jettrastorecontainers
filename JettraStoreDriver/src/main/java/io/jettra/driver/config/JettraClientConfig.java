@@ -1,5 +1,6 @@
 package io.jettra.driver.config;
 
+import io.jettra.store.core.StorageMode;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -11,6 +12,7 @@ public final class JettraClientConfig {
     private final Duration connectionTimeout;
     private final boolean enableVirtualThreads;
     private final boolean clusterMultinodeActive;
+    private final StorageMode defaultStorageMode;
 
     private JettraClientConfig(Builder builder) {
         this.clusterEndpoints = List.copyOf(builder.clusterEndpoints);
@@ -19,6 +21,7 @@ public final class JettraClientConfig {
         this.connectionTimeout = builder.connectionTimeout;
         this.enableVirtualThreads = builder.enableVirtualThreads;
         this.clusterMultinodeActive = builder.clusterMultinodeActive;
+        this.defaultStorageMode = builder.defaultStorageMode;
     }
 
     public static Builder builder() {
@@ -32,6 +35,7 @@ public final class JettraClientConfig {
     public boolean isEnableVirtualThreads() { return enableVirtualThreads; }
     public boolean isClusterMultinodeActive() { return clusterMultinodeActive; }
     public String getClusterMultinodeActive() { return clusterMultinodeActive ? "on" : "off"; }
+    public StorageMode getDefaultStorageMode() { return defaultStorageMode; }
 
     public static class Builder {
         private final List<String> clusterEndpoints = new ArrayList<>();
@@ -40,6 +44,7 @@ public final class JettraClientConfig {
         private Duration connectionTimeout = Duration.ofMillis(1000);
         private boolean enableVirtualThreads = true;
         private boolean clusterMultinodeActive = true;
+        private StorageMode defaultStorageMode = StorageMode.JVM_RAM;
 
         public Builder addClusterNode(String host, int port) {
             clusterEndpoints.add(host + ":" + port);
@@ -59,6 +64,11 @@ public final class JettraClientConfig {
 
         public Builder enableVirtualThreads(boolean enable) {
             this.enableVirtualThreads = enable;
+            return this;
+        }
+
+        public Builder storageMode(StorageMode mode) {
+            this.defaultStorageMode = mode != null ? mode : StorageMode.JVM_RAM;
             return this;
         }
 

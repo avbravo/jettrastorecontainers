@@ -285,7 +285,7 @@ public final class JettraStoreShellApp implements AutoCloseable {
 
         List<String> baseKeywords = List.of(
             // Sistema & Ayuda
-            "HELP", "HELP CLUSTER-DISTRIBUTED", "HELP CLUSTER LIVE", "MENU", "MENU CONNECTIONS", "STATUS",
+            "HELP", "HELP STORAGE_MODE", "HELP CLUSTER-DISTRIBUTED", "HELP CLUSTER LIVE", "MENU", "MENU CONNECTIONS", "STATUS",
             "HISTORY", "HISTORY CLEAR", "HISTORY SEARCH ", "COMPLETE ", "TAB ", "EXIT", "QUIT",
             // Conexión & Autenticación
             "CONNECT ", "LOGIN ", "LOGOUT", "SAVE CONNECTION ", "REMOVE CONNECTION ", "LIST CONNECTIONS",
@@ -309,8 +309,8 @@ public final class JettraStoreShellApp implements AutoCloseable {
             "CLUSTER-DISTRIBUTED", "CLUSTER-DISTRIBUTED ALL", "CLUSTER-DISTRIBUTED <ALL>", "CLUSTER-DISTRIBUTED INFO", "CLUSTER-DISTRIBUTED ",
             "CLUSTER LIVE", "CLUSTER LIVE 10", "CLUSTER LIVE 30", "CLUSTER LIVE 60", "CLUSTER_LIVE",
             // Modos de Almacenamiento & Lazy Reference
-            "STORAGE_MODE", "SHOW STORAGE_MODE", "STORAGE_MODE JVM-RAM", "STORAGE_MODE DISK-MEMORY",
-            "SET STORAGE_MODE JVM-RAM", "SET STORAGE_MODE DISK-MEMORY",
+            "STORAGE_MODE", "SHOW STORAGE_MODE", "STORAGE_MODE JVM-RAM", "STORAGE_MODE DISK-MEMORY", "STORAGE_MODE OFF-HEAP",
+            "SET STORAGE_MODE JVM-RAM", "SET STORAGE_MODE DISK-MEMORY", "SET STORAGE_MODE OFF-HEAP",
             "LAZY REFERENCE ON", "LAZY REFERENCE OFF", "LAZY REFERENCE STATUS",
             // Motores Multimodelo
             "KV PUT ", "KV GET ", "KV DELETE ", "KV SCAN ",
@@ -452,7 +452,7 @@ public final class JettraStoreShellApp implements AutoCloseable {
             int lastSpace = prefix.lastIndexOf(' ');
             String verb = lastSpace != -1 ? prefix.substring(0, lastSpace + 1) : prefix + " ";
             String sub = lastSpace != -1 ? prefix.substring(lastSpace + 1).trim().toUpperCase() : "";
-            for (String mode : List.of("JVM-RAM", "DISK-MEMORY")) {
+            for (String mode : List.of("JVM-RAM", "DISK-MEMORY", "OFF-HEAP")) {
                 if (sub.isEmpty() || mode.startsWith(sub)) {
                     candidates.add(verb + mode);
                 }
@@ -659,6 +659,7 @@ public final class JettraStoreShellApp implements AutoCloseable {
         if (u.startsWith("SHOW STORAGE_MODE") || u.equals("STORAGE_MODE")) return "Muestra el modo de almacenamiento activo";
         if (u.startsWith("STORAGE_MODE JVM-RAM") || u.startsWith("SET STORAGE_MODE JVM-RAM")) return "Establece almacenamiento en Heap estándar de JVM";
         if (u.startsWith("STORAGE_MODE DISK-MEMORY") || u.startsWith("SET STORAGE_MODE DISK-MEMORY")) return "Establece almacenamiento Off-Heap directo LSM (JettraMemory)";
+        if (u.startsWith("STORAGE_MODE OFF-HEAP") || u.startsWith("SET STORAGE_MODE OFF-HEAP")) return "Establece almacenamiento Off-Heap Slotted-Page FFM (JettraStore-OffHeap)";
         if (u.equals("SHOW SAMPLES") || u.equals("SHOW SAMPLE DATABASES")) return "Muestra bases de datos de demostración predefinidas";
         if (u.startsWith("INSTALL SAMPLES")) return "Inicializa bases de datos de prueba predefinidas";
         if (u.startsWith("LOAD SAMPLE ")) return "Carga una muestra específica (factura, hospital, ambiental)";
@@ -824,6 +825,9 @@ Seleccione una conexión para iniciar:
             String topic = upper.substring(upper.indexOf(' ') + 1).trim();
             if (topic.contains("CLUSTER") || topic.contains("DISTRIBUTED") || topic.contains("LIVE")) {
                 return getClusterDistributedHelpText();
+            }
+            if (topic.contains("STORAGE") || topic.contains("MODO") || topic.contains("ALMACEN") || topic.contains("OFF_HEAP") || topic.contains("OFF-HEAP") || topic.contains("MEMORY")) {
+                return getStorageModeHelpText();
             }
             return getHelpText();
         } else if (upper.equals("MENU CONNECTIONS") || upper.equals("CONNECTIONS MENU")) {
@@ -3590,8 +3594,8 @@ return String.format("[NOT FOUND] No se encontró el bucket/unit '%s' en la base
               SQL UPDATE <col> SET k = v WHERE _id = id Actualiza campos de un registro.
               SQL DELETE FROM <col> WHERE _id = id  Elimina un registro mediante sintaxis SQL.
 
-              STORAGE_MODE                          Muestra el modo de almacenamiento activo (JVM-RAM o DISK-MEMORY).
-              STORAGE_MODE <JVM_RAM | DISK_MEMORY>  Conmuta el modo entre RAM JVM (Heap/Stack) o DISK-MEMORY (JettraMemory LSM).
+              STORAGE_MODE                          Muestra el modo de almacenamiento activo (JVM-RAM, DISK-MEMORY u OFF-HEAP).
+              STORAGE_MODE <JVM_RAM|DISK_MEMORY|OFF_HEAP>  Conmuta el modo entre RAM JVM, DISK-MEMORY o páginas nativas OFF-HEAP.
 
             5. CÁLCULO, AGREGACIONES, ESTADÍSTICA, FINANZAS Y ÁLGEBRA VECTORIAL:
               AGGREGATE <col> [GROUP BY c] [SUM f] [AVG f] [MIN f] [MAX f] [MEDIAN f] [COUNT]
@@ -3673,6 +3677,39 @@ return String.format("[NOT FOUND] No se encontró el bucket/unit '%s' en la base
             """;
     }
 
+    public String getStorageModeHelpText() {
+        return """
+            ==============================================================================================
+                                  AYUDA DE COMANDOS: STORAGE_MODE (MODOS DE ALMACENAMIENTO)
+            ==============================================================================================
+              El comando STORAGE_MODE permite consultar y conmutar el motor de almacenamiento de JettraStore
+              en tiempo de ejecución para la base de datos seleccionada o a nivel global.
+
+              SINTAXIS:
+                STORAGE_MODE                              Muestra el modo de almacenamiento activo.
+                STORAGE_MODE <JVM_RAM|DISK_MEMORY|OFF_HEAP>  Cambia el modo de almacenamiento.
+                SET STORAGE_MODE <JVM_RAM|DISK_MEMORY|OFF_HEAP> Forma alternativa de asignación.
+
+              OPCIONES DISPONIBLES:
+                1. JVM_RAM (o JVM-RAM)
+                   -> Modo memoria RAM estándar de la JVM (Heap & Stack).
+                   -> Ideal para desarrollo, pruebas unitarias y micro-servicios de bajo volumen.
+                   -> Sujeto al recolector de basura (GC) convencional.
+
+                2. DISK_MEMORY (o DISK-MEMORY)
+                   -> Motor de disco directo Off-Heap LSM (JettraMemory).
+                   -> Utiliza Project Panama FFM (Foreign Function & Memory API) y buffers de archivo mapeados.
+                   -> Persistencia directa en disco sin pausas de Garbage Collector.
+
+                3. OFF_HEAP (o OFF-HEAP)
+                   -> Motor de páginas ranuradas nativas Slotted-Page (JettraStore-OffHeap).
+                   -> Asignación contigua en memoria virtual nativa fuera del Heap con Project Panama.
+                   -> Cero pausas de GC (GC pauses = 0) y liberación determinista por ámbito RAII (Arena).
+                   -> Acceso Cero-Copia mediante MemorySegment y VarHandles nativos.
+            ==============================================================================================
+            """;
+    }
+
     public String getInteractiveMenu() {
         return """
             ================================================================================
@@ -3712,7 +3749,8 @@ return String.format("[NOT FOUND] No se encontró el bucket/unit '%s' en la base
                   Modos Disponibles:
                    * JVM_RAM      : Trabaja en memoria RAM usando áreas de Heap y Stack de la JVM.
                    * DISK_MEMORY  : Modo directo en disco sin pausas GC usando JettraMemory (LSM Panama FFM).
-                  Comando para cambiar: STORAGE_MODE <JVM_RAM | DISK_MEMORY>
+                   * OFF_HEAP     : Motor de páginas ranuradas nativas Slotted-Page Off-Heap FFM (JettraStore-OffHeap).
+                  Comando para cambiar: STORAGE_MODE <JVM_RAM | DISK_MEMORY | OFF_HEAP>
                 ==============================================================================================""";
         }
         var mode = client.getStorageMode(currentDatabase);
@@ -3722,8 +3760,8 @@ return String.format("[NOT FOUND] No se encontró el bucket/unit '%s' en la base
             ==============================================================================================
               Modo Actual      : %s (%s)
               Descripción      : %s
-              Motor Off-Heap   : JettraMemory (LSM Direct Panama FFM)
-              Comando para conmutar: STORAGE_MODE <JVM_RAM | DISK_MEMORY>
+              Motor Off-Heap   : JettraMemory (LSM Panama FFM) / JettraStore-OffHeap (Slotted-Page RAII)
+              Comando para conmutar: STORAGE_MODE <JVM_RAM | DISK_MEMORY | OFF_HEAP>
             ==============================================================================================""",
             currentDatabase, mode.name(), mode.getCode(), mode.getDescription()
         );

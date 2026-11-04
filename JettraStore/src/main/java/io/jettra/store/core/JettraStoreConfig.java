@@ -193,7 +193,13 @@ public final class JettraStoreConfig {
         this.ramGlobalLimitMb = Integer.parseInt(props.getProperty("jettra.storage.ram.global.limit.mb", "2048"));
         this.offHeapDirect = Boolean.parseBoolean(props.getProperty("jettra.storage.offheap.direct", "true"));
         this.fileExtension = props.getProperty("jettra.storage.file.extension", ".jettra");
-        this.storageMode = StorageMode.fromString(props.getProperty("jettra.storage.mode", "JVM_RAM"));
+        String modeStr = getPropOrEnv(props, 
+            new String[]{"jettra.storage.mode", "storage.mode"}, 
+            new String[]{"JETTRA_STORAGE_MODE", "STORAGE_MODE"}, 
+            "JVM_RAM");
+        this.storageMode = StorageMode.fromString(modeStr);
+        System.out.printf("[JettraStoreConfig] Parámetro 'jettra.storage.mode' configurado como: %s (%s)%n",
+            this.storageMode.name(), this.storageMode.getDescription());
         this.ringSaturationThresholdPercent = Integer.parseInt(props.getProperty("jettra.ring.saturation.threshold.percent", "85"));
         this.ringReleaseTargetPercent = Integer.parseInt(props.getProperty("jettra.ring.release.target.percent", "45"));
         this.jettraPoliceActive = Boolean.parseBoolean(props.getProperty("jettrapolice.active", "true"));

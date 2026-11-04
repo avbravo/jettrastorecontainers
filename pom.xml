@@ -6,6 +6,7 @@
     <version>1.0-SNAPSHOT</version>
     <packaging>pom</packaging>
     <modules>
+        <module>JettraStore-OffHeap</module>
         <module>JettraMemory</module>
         <module>JettraStore</module>
         <module>JettraStoreDriver</module>
