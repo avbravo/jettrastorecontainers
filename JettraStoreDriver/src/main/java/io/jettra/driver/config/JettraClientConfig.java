@@ -13,6 +13,7 @@ public final class JettraClientConfig {
     private final boolean enableVirtualThreads;
     private final boolean clusterMultinodeActive;
     private final StorageMode defaultStorageMode;
+    private final String defaultDatabase;
 
     private JettraClientConfig(Builder builder) {
         this.clusterEndpoints = List.copyOf(builder.clusterEndpoints);
@@ -22,6 +23,8 @@ public final class JettraClientConfig {
         this.enableVirtualThreads = builder.enableVirtualThreads;
         this.clusterMultinodeActive = builder.clusterMultinodeActive;
         this.defaultStorageMode = builder.defaultStorageMode;
+        this.defaultDatabase = builder.defaultDatabase != null && !builder.defaultDatabase.isBlank()
+            ? builder.defaultDatabase : "default_db";
     }
 
     public static Builder builder() {
@@ -36,6 +39,7 @@ public final class JettraClientConfig {
     public boolean isClusterMultinodeActive() { return clusterMultinodeActive; }
     public String getClusterMultinodeActive() { return clusterMultinodeActive ? "on" : "off"; }
     public StorageMode getDefaultStorageMode() { return defaultStorageMode; }
+    public String getDefaultDatabase() { return defaultDatabase; }
 
     public static class Builder {
         private final List<String> clusterEndpoints = new ArrayList<>();
@@ -45,9 +49,15 @@ public final class JettraClientConfig {
         private boolean enableVirtualThreads = true;
         private boolean clusterMultinodeActive = true;
         private StorageMode defaultStorageMode = StorageMode.JVM_RAM;
+        private String defaultDatabase = "default_db";
 
         public Builder addClusterNode(String host, int port) {
             clusterEndpoints.add(host + ":" + port);
+            return this;
+        }
+
+        public Builder defaultDatabase(String defaultDatabase) {
+            this.defaultDatabase = defaultDatabase;
             return this;
         }
 

@@ -2070,21 +2070,33 @@ RESTORE DATABASE sample_enterprise_db FROM '/var/backups/enterprise_2026.snap';
   jettra-shell> STORAGE_MODE
   jettra-shell> SHOW STORAGE_MODE
   ```
+  *Sintaxis soportada:* Muestra el modo activo tanto para la base de datos seleccionada como a nivel global del shell y cliente.
+
 * **Conmutar a Memoria RAM (JVM Heap/Stack - Predeterminado):**
   ```text
+  jettra-shell> STORAGE_MODE JVM_RAM
   jettra-shell> STORAGE_MODE JVM-RAM
-  jettra-shell> SET STORAGE_MODE = JVM-RAM
+  jettra-shell> SET STORAGE_MODE JVM_RAM
   ```
 * **Conmutar a Disco Directo Off-Heap (JettraMemory LSM):**
   ```text
+  jettra-shell> STORAGE_MODE DISK_MEMORY
   jettra-shell> STORAGE_MODE DISK-MEMORY
-  jettra-shell> SET STORAGE_MODE = DISK-MEMORY
+  jettra-shell> SET STORAGE_MODE DISK_MEMORY
   ```
 * **Conmutar a Páginas Ranuradas Nativa Off-Heap (JettraStore-OffHeap):**
   ```text
+  jettra-shell> STORAGE_MODE OFF_HEAP
   jettra-shell> STORAGE_MODE OFF-HEAP
-  jettra-shell> SET STORAGE_MODE = OFF-HEAP
+  jettra-shell> SET STORAGE_MODE OFF_HEAP
   ```
+
+> [!NOTE]
+> Las opciones de comando aceptan guión bajo (`_`) o guión medio (`-`) indistintamente:
+> * `JVM_RAM` / `JVM-RAM`
+> * `DISK_MEMORY` / `DISK-MEMORY`
+> * `OFF_HEAP` / `OFF-HEAP`
+> La conmutación se aplica de inmediato a nivel de sesión interactiva de `JettraStoreShell` y se propaga a la base de datos activa y al motor `JettraClient`.
 
 ### 17.2 Comportamiento de los Tres Modos
 * **`JVM-RAM` (Predeterminado):** Las colecciones se cargan y consultan en las áreas de memoria Stack y Heap de Java con estructuras `UnifiedMap`, aprovechando ZGC y Compact Object Headers de 8 bytes (Project Lilliput).

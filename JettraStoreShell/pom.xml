@@ -14,7 +14,7 @@
     <properties>
         <maven.compiler.release>25</maven.compiler.release>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <mainClass>io.jettra.shell.JettraStoreShellApp</mainClass>
+        <mainClass>io.jettra.shell.JettraStoreShellLauncher</mainClass>
         <jettra.frameworks.version>1.0.0-SNAPSHOT</jettra.frameworks.version>
     </properties>
 
@@ -96,7 +96,7 @@
                 </configuration>
             </plugin>
 
-            <!-- Generación de Uber JAR (Fat JAR con todas las librerías embebidas) adicional al JAR normal -->
+            <!-- Generación de Uber JAR (Fat JAR con todas las librerías embebidas) reemplazando el artefacto principal -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-shade-plugin</artifactId>
@@ -109,8 +109,7 @@
                         </goals>
                         <configuration>
                             <createDependencyReducedPom>false</createDependencyReducedPom>
-                            <shadedArtifactAttached>true</shadedArtifactAttached>
-                            <shadedClassifierName>uber</shadedClassifierName>
+                            <shadedArtifactAttached>false</shadedArtifactAttached>
                             <transformers>
                                 <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
                                     <mainClass>${mainClass}</mainClass>

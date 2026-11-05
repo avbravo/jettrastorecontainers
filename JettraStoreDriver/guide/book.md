@@ -970,16 +970,19 @@ try (JettraClient client = JettraClient.connect(config)) {
 }
 ```
 
-### 9.2 Conmutación Programática de los Tres Modos en Caliente
-El driver permite conmutar dinámicamente el modo de almacenamiento por base de datos o de forma global sin detener el servidor:
+### 9.2 Conmutación Programática y Ejecución de Comandos de los Tres Modos
+El driver permite conmutar dinámicamente el modo de almacenamiento por base de datos, de forma global o mediante ejecución directa de comandos administrativos:
 
 ```java
-// 1. Consultar el modo actual de una base de datos
-StorageMode currentMode = client.getStorageMode("facturacion_db");
-System.out.println("Modo actual: " + currentMode.getCode());
+// 1. Consultar el modo actual a nivel de cliente o base de datos específica
+StorageMode currentDefaultMode = client.getStorageMode();
+StorageMode currentDbMode = client.getStorageMode("facturacion_db");
+System.out.println("Modo predeterminado del driver: " + currentDefaultMode.getCode());
+System.out.println("Modo actual para facturacion_db: " + currentDbMode.getCode());
 
 // 2. Conmutar a Modo OFF-HEAP (JettraStore-OffHeap Slotted-Page)
 client.setStorageMode("facturacion_db", StorageMode.OFF_HEAP);
+client.setStorageMode(StorageMode.OFF_HEAP); // Conmuta la base de datos predeterminada
 
 // 3. Conmutar a Modo DISK-MEMORY (JettraMemory LSM en disco)
 client.setStorageMode("historico_db", StorageMode.DISK_MEMORY);
@@ -989,6 +992,14 @@ client.setStorageMode("cache_db", StorageMode.JVM_RAM);
 
 // 5. Conmutación global para todas las bases de datos abiertas
 client.setGlobalStorageMode(StorageMode.OFF_HEAP);
+
+// 6. Ejecución directa mediante comando STORAGE_MODE en JettraClient
+String activeModeInfo = client.executeCommand("STORAGE_MODE");
+System.out.println(activeModeInfo);
+
+String switchResult = client.executeCommand("STORAGE_MODE OFF_HEAP");
+System.out.println(switchResult);
+// Opciones válidas: JVM_RAM / JVM-RAM, DISK_MEMORY / DISK-MEMORY, OFF_HEAP / OFF-HEAP
 ```
 
 ### 9.3 Operaciones Cero-Copia (`MemorySegment`) y Transacciones RAII en Modo Off-Heap

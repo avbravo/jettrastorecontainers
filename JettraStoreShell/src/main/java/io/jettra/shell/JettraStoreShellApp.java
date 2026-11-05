@@ -1272,80 +1272,145 @@ Seleccione una conexión para iniciar:
         sb.append("+----------+----------------------+-------+-----------+--------------+----------+--------------+\n");
         sb.append("| Nodo ID  | Dirección IP         | Puerto| Rol       | Estado Raft  | Estado   | Offload Bytes|\n");
         sb.append("+----------+----------------------+-------+-----------+--------------+----------+--------------+\n");
-        JettraStoreConfig storeCfg = null;
+
+        record TargetNode(String id, String ip, int grpcPort, int restPort, String configuredRole) {}
+        Map<String, TargetNode> topology = new LinkedHashMap<>();
+
+        // 1. Cargar topología completa desde jettra.config si existe
         try {
-            storeCfg = JettraStoreConfig.load();
+            Path clusterPath = JettraConfigValidator.locateJettraConfigFile();
+            if (clusterPath != null && Files.exists(clusterPath)) {
+                Properties clusterProps = JettraConfigValidator.loadProperties(clusterPath, "/jettra.config");
+                List<JettraConfigValidator.ClusterNodeInfo> nodes = JettraConfigValidator.parseClusterNodes(clusterProps);
+                for (JettraConfigValidator.ClusterNodeInfo n : nodes) {
+                    String host = (n.ip() != null && !n.ip().isBlank()) ? n.ip() : "127.0.0.1";
+                    int gPort = n.grpcPort() > 0 ? n.grpcPort() : 9091;
+                    int rPort = n.restPort() > 0 ? n.restPort() : 8080;
+                    topology.put(n.id(), new TargetNode(n.id(), host, gPort, rPort, n.role()));
+                }
+            }
         } catch (Exception ignored) {}
 
-        String leaderIp = currentHost;
-        int leaderPort = currentPort;
-        if (storeCfg != null) {
-            if (("127.0.0.1".equals(currentHost) || "localhost".equalsIgnoreCase(currentHost))
-                && storeCfg.getNodeIp() != null && !storeCfg.getNodeIp().isBlank()) {
-                leaderIp = storeCfg.getNodeIp();
-            }
-            if (storeCfg.getGrpcPort() > 0) {
-                leaderPort = storeCfg.getGrpcPort();
-            }
-        }
-
-        // Sondeo concurrente en tiempo real de la salud y conectividad de todos los nodos del clúster
-        final String fLeaderIp = leaderIp;
-        final int fLeaderPort = leaderPort;
-        CompletableFuture<Boolean> leaderCheckFuture = CompletableFuture.supplyAsync(() ->
-            isNodeReachable(fLeaderIp, fLeaderPort, 250) || isNodeReachable(currentHost, currentPort, 250)
+        // Fallbacks conocidos si no se cargó jettra.config o para entornos con puertos mapeados (Docker Compose / Local)
+        Map<String, TargetNode> standardDockerPorts = Map.of(
+            "node-01", new TargetNode("node-01", "127.0.0.1", 9091, 8081, "PRIMARY"),
+            "node-02", new TargetNode("node-02", "127.0.0.1", 9092, 8082, "SECONDARY"),
+            "node-03", new TargetNode("node-03", "127.0.0.1", 9093, 8083, "SECONDARY")
         );
-
-        List<ClusterNode> peers = ring.getPeers();
-        List<CompletableFuture<Boolean>> peerFutures = new ArrayList<>();
-        for (ClusterNode peer : peers) {
-            peerFutures.add(CompletableFuture.supplyAsync(() ->
-                isNodeReachable(peer.getIp(), peer.getPort(), 250)
-            ));
+        if (topology.isEmpty()) {
+            topology.putAll(standardDockerPorts);
+        } else {
+            // Si los puertos gRPC o REST en jettra.config coinciden todos en 9091/8080 (modelo contenedor puro),
+            // ajustar a los puertos expuestos de mapeo de puertos estándar si los puertos mapeados responden
+            for (Map.Entry<String, TargetNode> entry : standardDockerPorts.entrySet()) {
+                String id = entry.getKey();
+                TargetNode defNode = entry.getValue();
+                TargetNode cur = topology.get(id);
+                if (cur != null && isNodeReachable(defNode.ip(), defNode.grpcPort(), 150)) {
+                    topology.put(id, new TargetNode(id, defNode.ip(), defNode.grpcPort(), defNode.restPort(), cur.configuredRole()));
+                }
+            }
         }
 
-        boolean leaderOnline = (client != null && authenticated);
-        try {
-            Boolean lRes = leaderCheckFuture.get(350, TimeUnit.MILLISECONDS);
-            if (lRes != null && lRes) {
-                leaderOnline = true;
+        // Incorporar nodos pares registrados dinámicamente en ringEngine
+        for (ClusterNode peer : ring.getPeers()) {
+            if (!topology.containsKey(peer.getId())) {
+                topology.put(peer.getId(), new TargetNode(peer.getId(), peer.getIp(), peer.getPort(), 8080, peer.getRole().name()));
             }
+        }
+
+        record LiveStatus(boolean isUp, String role, String raftState, long offloadBytes) {}
+        Map<String, LiveStatus> liveStates = new ConcurrentHashMap<>();
+
+        // Consultar concurrentemente la salud en tiempo real de cada nodo
+        List<CompletableFuture<Void>> futures = new ArrayList<>();
+        for (TargetNode node : topology.values()) {
+            futures.add(CompletableFuture.runAsync(() -> {
+                boolean reachable = isNodeReachable(node.ip(), node.grpcPort(), 200) || isNodeReachable(node.ip(), node.restPort(), 200);
+                if (!reachable) {
+                    liveStates.put(node.id(), new LiveStatus(false, "SECONDARY", "DISCONNECTED", 0));
+                    return;
+                }
+
+                // Sondear /api/v1/health del nodo vía REST
+                int[] probeRestPorts = new int[]{node.restPort(), 8080, 8081, 8082, 8083};
+                boolean polled = false;
+                for (int p : probeRestPorts) {
+                    try {
+                        java.net.http.HttpClient httpClient = java.net.http.HttpClient.newBuilder()
+                            .connectTimeout(java.time.Duration.ofMillis(250))
+                            .build();
+                        java.net.http.HttpRequest req = java.net.http.HttpRequest.newBuilder()
+                            .uri(java.net.URI.create(String.format("http://%s:%d/api/v1/health", node.ip(), p)))
+                            .timeout(java.time.Duration.ofMillis(350))
+                            .GET()
+                            .build();
+                        java.net.http.HttpResponse<String> resp = httpClient.send(req, java.net.http.HttpResponse.BodyHandlers.ofString());
+                        if (resp.statusCode() == 200) {
+                            String body = resp.body();
+                            String role = body.contains("\"role\":\"PRIMARY\"") ? "PRIMARY" : "SECONDARY";
+                            String raft = "PRIMARY".equals(role) ? "LEADER" : "FOLLOWER";
+                            liveStates.put(node.id(), new LiveStatus(true, role, raft, 0));
+                            polled = true;
+                            break;
+                        }
+                    } catch (Exception ignored) {}
+                }
+
+                if (!polled) {
+                    // Si el puerto gRPC o Socket respondió pero REST falló
+                    boolean isConfigPrimary = "PRIMARY".equalsIgnoreCase(node.configuredRole());
+                    liveStates.put(node.id(), new LiveStatus(true, isConfigPrimary ? "PRIMARY" : "SECONDARY", isConfigPrimary ? "LEADER" : "FOLLOWER", 0));
+                }
+            }));
+        }
+
+        try {
+            CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).get(800, TimeUnit.MILLISECONDS);
         } catch (Exception ignored) {}
 
-        String leaderStatus = leaderOnline ? "RUNNING" : "STOPPED";
-        String leaderRaft = leaderOnline ? "LEADER" : "DISCONNECTED";
-
-        sb.append(String.format("| %-8s | %-20s | %-5d | %-9s | %-12s | %-8s | %-12d |\n",
-            ring.getNodeId(), leaderIp, leaderPort, "PRIMARY", leaderRaft, leaderStatus, 0));
-
-        int onlinePeers = 0;
-        for (int i = 0; i < peers.size(); i++) {
-            ClusterNode peer = peers.get(i);
-            boolean pOnline = false;
-            try {
-                Boolean res = peerFutures.get(i).get(350, TimeUnit.MILLISECONDS);
-                pOnline = (res != null && res);
-            } catch (Exception ignored) {
-                pOnline = false;
+        // Si ningún nodo online fue marcado como PRIMARY, pero hay nodos activos, el primer nodo activo asume LEADER
+        boolean hasPrimary = liveStates.values().stream().anyMatch(s -> s.isUp() && "PRIMARY".equals(s.role()));
+        if (!hasPrimary) {
+            for (TargetNode node : topology.values()) {
+                LiveStatus ls = liveStates.get(node.id());
+                if (ls != null && ls.isUp()) {
+                    liveStates.put(node.id(), new LiveStatus(true, "PRIMARY", "LEADER", ls.offloadBytes()));
+                    break;
+                }
             }
-            if (pOnline) {
-                peer.start();
-                onlinePeers++;
-            } else {
-                peer.stop();
-            }
-            sb.append(String.format("| %-8s | %-20s | %-5d | %-9s | %-12s | %-8s | %-12d |\n",
-                peer.getId(), peer.getIp(), peer.getPort(), peer.getRole(), peer.getRaftState(),
-                peer.getStatus(), peer.getReceivedOffloadedBytes()));
         }
+
+        // Renderizar la tabla de topología en tiempo real
+        int activeNodes = 0;
+        for (TargetNode node : topology.values()) {
+            LiveStatus ls = liveStates.getOrDefault(node.id(), new LiveStatus(false, "SECONDARY", "DISCONNECTED", 0));
+            String status = ls.isUp() ? "RUNNING" : "STOPPED";
+            String role = ls.role();
+            String raft = ls.raftState();
+            if (ls.isUp()) {
+                activeNodes++;
+            }
+
+            // Sincronizar en memoria con el DynamicRingEngine
+            ClusterNode peer = ring.getPeer(node.id());
+            if (peer != null) {
+                peer.setRole("PRIMARY".equals(role) ? ClusterNode.Role.PRIMARY : ClusterNode.Role.SECONDARY);
+                peer.setRaftState(ClusterNode.RaftState.valueOf(raft));
+                if (ls.isUp()) peer.start(); else peer.stop();
+            }
+
+            sb.append(String.format("| %-8s | %-20s | %-5d | %-9s | %-12s | %-8s | %-12d |\n",
+                node.id(), node.ip(), node.grpcPort(), role, raft, status, ls.offloadBytes()));
+        }
+
         sb.append("+----------+----------------------+-------+-----------+--------------+----------+--------------+\n");
         boolean multiActive = ring.isMultinodeActive();
         sb.append(String.format("Modo Multinodo (cluster.multinode.active): %s\n",
             multiActive ? "ON (Algoritmo de consenso y distribución de datos ACTIVO)"
                         : "OFF (Servidor Único / Standalone - Distribución de datos DESACTIVADA)"));
 
-        int totalNodes = peers.size() + 1;
-        int activeNodes = (leaderOnline ? 1 : 0) + onlinePeers;
+        int totalNodes = topology.size();
         boolean quorumReached = multiActive && (activeNodes >= (totalNodes / 2 + 1));
 
         String quorumStr;

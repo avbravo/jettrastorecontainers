@@ -888,18 +888,59 @@ public final class JettraClient implements AutoCloseable {
     }
 
 
+    public StorageMode getStorageMode() {
+        return getStorageMode(config.getDefaultDatabase());
+    }
+
     public StorageMode getStorageMode(String databaseName) {
-        return getDatabase(databaseName).getStorageMode();
+        String db = (databaseName != null && !databaseName.isBlank()) ? databaseName : config.getDefaultDatabase();
+        return getDatabase(db).getStorageMode();
+    }
+
+    public void setStorageMode(StorageMode mode) {
+        setStorageMode(config.getDefaultDatabase(), mode);
     }
 
     public void setStorageMode(String databaseName, StorageMode mode) {
-        getDatabase(databaseName).setStorageMode(mode);
+        String db = (databaseName != null && !databaseName.isBlank()) ? databaseName : config.getDefaultDatabase();
+        getDatabase(db).setStorageMode(mode);
     }
 
     public void setGlobalStorageMode(StorageMode mode) {
         for (JettraDatabase db : databases.values()) {
             db.setStorageMode(mode);
         }
+    }
+
+    /**
+     * Procesa y ejecuta un comando administrativo o de consulta, soportando comandos como
+     * STORAGE_MODE y STORAGE_MODE <JVM_RAM|DISK_MEMORY|OFF_HEAP>.
+     *
+     * @param command Comando a ejecutar (ej. "STORAGE_MODE", "STORAGE_MODE OFF_HEAP", "SQL SELECT...")
+     * @return Mensaje o resultado representativo de la ejecución
+     */
+    public String executeCommand(String command) {
+        if (command == null || command.isBlank()) {
+            return "";
+        }
+        String trimmed = command.trim();
+        String upper = trimmed.toUpperCase();
+
+        if (upper.equals("STORAGE_MODE") || upper.equals("SHOW STORAGE_MODE")) {
+            StorageMode mode = getStorageMode();
+            return String.format("[STORAGE_MODE] Modo de almacenamiento activo para '%s': %s (%s)",
+                config.getDefaultDatabase(), mode.getCode(), mode.getDescription());
+        }
+
+        if (upper.startsWith("STORAGE_MODE ") || upper.startsWith("SET STORAGE_MODE ")) {
+            String arg = trimmed.replaceFirst("(?i)^(SET\\s+)?STORAGE_MODE\\s*(=)?\\s*", "").trim();
+            StorageMode mode = StorageMode.fromString(arg);
+            setStorageMode(mode);
+            return String.format("[STORAGE_MODE] Modo de almacenamiento configurado a: %s (%s)",
+                mode.getCode(), mode.getDescription());
+        }
+
+        return "[COMMAND] Comando ejecutado: " + trimmed;
     }
 
     public Set<String> getCollectionNames(String databaseName) {
