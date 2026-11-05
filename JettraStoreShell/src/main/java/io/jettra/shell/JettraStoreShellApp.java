@@ -1256,7 +1256,7 @@ Seleccione una conexión para iniciar:
     private static boolean isNodeReachable(String host, int port, int timeoutMs) {
         if (host == null || host.isBlank() || port <= 0) return false;
         try (Socket socket = new Socket()) {
-            socket.connect(new InetSocketAddress(host, port), timeoutMs);
+            socket.connect(new InetSocketAddress(host, port), Math.min(timeoutMs, 100));
             return true;
         } catch (Exception ignored) {
             return false;
@@ -1333,29 +1333,26 @@ Seleccione una conexión para iniciar:
                 }
 
                 // Sondear /api/v1/health del nodo vía REST
-                int[] probeRestPorts = new int[]{node.restPort(), 8080, 8081, 8082, 8083};
+                int p = node.restPort() > 0 ? node.restPort() : 8080;
                 boolean polled = false;
-                for (int p : probeRestPorts) {
-                    try {
-                        java.net.http.HttpClient httpClient = java.net.http.HttpClient.newBuilder()
-                            .connectTimeout(java.time.Duration.ofMillis(250))
-                            .build();
-                        java.net.http.HttpRequest req = java.net.http.HttpRequest.newBuilder()
-                            .uri(java.net.URI.create(String.format("http://%s:%d/api/v1/health", node.ip(), p)))
-                            .timeout(java.time.Duration.ofMillis(350))
-                            .GET()
-                            .build();
-                        java.net.http.HttpResponse<String> resp = httpClient.send(req, java.net.http.HttpResponse.BodyHandlers.ofString());
-                        if (resp.statusCode() == 200) {
-                            String body = resp.body();
-                            String role = body.contains("\"role\":\"PRIMARY\"") ? "PRIMARY" : "SECONDARY";
-                            String raft = "PRIMARY".equals(role) ? "LEADER" : "FOLLOWER";
-                            liveStates.put(node.id(), new LiveStatus(true, role, raft, 0));
-                            polled = true;
-                            break;
-                        }
-                    } catch (Exception ignored) {}
-                }
+                try {
+                    java.net.http.HttpClient httpClient = java.net.http.HttpClient.newBuilder()
+                        .connectTimeout(java.time.Duration.ofMillis(80))
+                        .build();
+                    java.net.http.HttpRequest req = java.net.http.HttpRequest.newBuilder()
+                        .uri(java.net.URI.create(String.format("http://%s:%d/api/v1/health", node.ip(), p)))
+                        .timeout(java.time.Duration.ofMillis(120))
+                        .GET()
+                        .build();
+                    java.net.http.HttpResponse<String> resp = httpClient.send(req, java.net.http.HttpResponse.BodyHandlers.ofString());
+                    if (resp.statusCode() == 200) {
+                        String body = resp.body();
+                        String role = body.contains("\"role\":\"PRIMARY\"") ? "PRIMARY" : "SECONDARY";
+                        String raft = "PRIMARY".equals(role) ? "LEADER" : "FOLLOWER";
+                        liveStates.put(node.id(), new LiveStatus(true, role, raft, 0));
+                        polled = true;
+                    }
+                } catch (Exception ignored) {}
 
                 if (!polled) {
                     // Si el puerto gRPC o Socket respondió pero REST falló
@@ -1366,7 +1363,7 @@ Seleccione una conexión para iniciar:
         }
 
         try {
-            CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).get(800, TimeUnit.MILLISECONDS);
+            CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).get(250, TimeUnit.MILLISECONDS);
         } catch (Exception ignored) {}
 
         // Si ningún nodo online fue marcado como PRIMARY, pero hay nodos activos, el primer nodo activo asume LEADER

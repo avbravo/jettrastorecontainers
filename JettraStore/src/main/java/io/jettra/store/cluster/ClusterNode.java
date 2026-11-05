@@ -49,6 +49,7 @@ public final class ClusterNode {
     public void markOffline() {
         this.status = NodeStatus.OFFLINE;
         this.raftState = RaftState.DISCONNECTED;
+        this.lastHeartbeat = System.currentTimeMillis();
     }
 
     public boolean isOnline() {

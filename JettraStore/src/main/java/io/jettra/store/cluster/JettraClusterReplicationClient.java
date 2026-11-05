@@ -22,7 +22,7 @@ public final class JettraClusterReplicationClient implements AutoCloseable {
     private final AtomicLong currentTerm = new AtomicLong(1);
     private final AtomicLong logIndex = new AtomicLong(0);
     private final ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
-    private static final int TIMEOUT_MS = 1000;
+    private static final int TIMEOUT_MS = 250;
 
     public JettraClusterReplicationClient(String localNodeId, List<ClusterNode> peers) {
         this.localNodeId = localNodeId != null ? localNodeId : "node-01";
@@ -42,7 +42,11 @@ public final class JettraClusterReplicationClient implements AutoCloseable {
             if (payload == null || payload.length == 0) {
                 java.nio.file.Path meta = io.jettra.store.core.JettraDatabase.resolveMetaFile(dbName, io.jettra.store.core.JettraStoreConfig.load());
                 if (meta != null && java.nio.file.Files.exists(meta)) {
-                    payload = java.nio.file.Files.readAllBytes(meta);
+                    if (java.nio.file.Files.size(meta) <= 16 * 1024 * 1024) {
+                        payload = java.nio.file.Files.readAllBytes(meta);
+                    } else {
+                        payload = ("{\"databaseName\":\"" + dbName + "\",\"large\":true}").getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                    }
                 }
             }
         } catch (Exception ignored) {}
@@ -193,7 +197,11 @@ public final class JettraClusterReplicationClient implements AutoCloseable {
     private boolean broadcastFrameWithQuorum(JettraRaftFrame frame) {
         int acks = 1;
         List<CompletableFuture<PeerVote>> futures = new ArrayList<>();
+        long now = System.currentTimeMillis();
         for (ClusterNode peer : peers) {
+            if (peer.getStatus() == ClusterNode.NodeStatus.OFFLINE && (now - peer.getLastHeartbeat() < 3000)) {
+                continue;
+            }
             futures.add(CompletableFuture.supplyAsync(() -> {
                 try {
                     JettraRaftFrame resp = sendFrameToPeer(peer, frame);

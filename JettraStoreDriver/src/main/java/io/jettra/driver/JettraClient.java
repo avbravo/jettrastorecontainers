@@ -309,7 +309,11 @@ public final class JettraClient implements AutoCloseable {
         Path meta = JettraDatabase.resolveMetaFile(databaseName, scfg);
         if (meta != null && Files.exists(meta)) {
             try {
-                payload = Files.readAllBytes(meta);
+                if (Files.size(meta) <= 16 * 1024 * 1024) {
+                    payload = Files.readAllBytes(meta);
+                } else {
+                    payload = ("{\"databaseName\":\"" + databaseName + "\",\"large\":true}").getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                }
             } catch (Exception ignored) {}
         }
 

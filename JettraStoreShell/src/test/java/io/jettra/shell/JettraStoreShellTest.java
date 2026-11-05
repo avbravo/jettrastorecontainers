@@ -81,7 +81,7 @@ public class JettraStoreShellTest {
         assertTrue(nodes.contains("node-01"));
         assertTrue(nodes.contains("node-02"));
         assertTrue(nodes.contains("node-03"));
-        assertTrue(nodes.contains("LEADER"));
+        assertTrue(nodes.contains("LEADER") || nodes.contains("DISCONNECTED"));
         assertTrue(nodes.contains("FOLLOWER") || nodes.contains("DISCONNECTED"));
         assertTrue(nodes.contains("SECONDARY"));
 

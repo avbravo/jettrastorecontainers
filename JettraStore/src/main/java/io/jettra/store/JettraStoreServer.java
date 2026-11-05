@@ -590,7 +590,7 @@ public final class JettraStoreServer {
             byte[] payload = getDatabaseSnapshotBytes(name);
             JettraClusterReplicationClient client = getOrCreateReplicationClient();
             boolean replicated = false;
-            if (client != null) {
+            if (client != null && config.isClusterMultinodeActive() && config.getNodeRole() == ClusterNode.Role.PRIMARY) {
                 replicated = client.broadcastCreateDatabase(name, payload);
             }
             JettraClusterEventBus.getInstance().publish(
@@ -1031,7 +1031,11 @@ public final class JettraStoreServer {
             }
             Path metaFile = JettraDatabase.resolveMetaFile(dbName, config);
             if (metaFile != null && Files.exists(metaFile)) {
-                return Files.readAllBytes(metaFile);
+                if (Files.size(metaFile) <= 16 * 1024 * 1024) {
+                    return Files.readAllBytes(metaFile);
+                } else {
+                    return ("{\"databaseName\":\"" + dbName + "\",\"large\":true}").getBytes(StandardCharsets.UTF_8);
+                }
             }
         } catch (Exception ignored) {}
         return new byte[0];
