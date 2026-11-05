@@ -23,4 +23,4 @@ java --enable-preview \
      -Djettra.node.role="${NODE_ROLE}" \
      -Djettra.config.path=jettra.config \
      -Ddatabase.properties.path=database.properties \
-     -jar JettraStore-1.0-SNAPSHOT-uber.jar
+     -jar target/JettraStore-1.0-SNAPSHOT-uber.jar
