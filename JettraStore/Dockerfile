@@ -8,7 +8,7 @@ LABEL description="JettraStore - Motor de Base de Datos Multimodelo Distribuido 
 
 # Instalar curl para healthchecks y utilidades del sistema (compatible con Alpine/musl y Debian/glibc)
 RUN if command -v apk > /dev/null; then \
-        apk add --no-cache curl ca-certificates tzdata; \
+        apk add --no-cache curl ca-certificates tzdata && rm -rf /var/cache/apk/*; \
     elif command -v apt-get > /dev/null; then \
         apt-get update && apt-get install -y --no-install-recommends curl ca-certificates tzdata && rm -rf /var/lib/apt/lists/*; \
     fi
@@ -16,24 +16,26 @@ RUN if command -v apk > /dev/null; then \
 WORKDIR /app
 
 # Crear directorio de datos persistentes, punto de checkpoint CRaC y permisos
-RUN mkdir -p /jettra/data /jettra/config /jettra/checkpoint /app/lib && \
+RUN mkdir -p /jettra/data /jettra/config /jettra/checkpoint && \
     chown -R 1000:1000 /jettra /app
 
-# Copiar librerías de dependencias y JAR autónomo (Uber Fat JAR) o JAR estándar
-COPY target/lib* /app/lib/
+# Copiar JAR autónomo optimizado y archivo de configuración base (sin capas redundantes)
 COPY target/JettraStore-*.jar /app/
 COPY src/main/resources/database.properties /app/config/database.properties
 
-# Garantizar el archivo /app/JettraStore.jar independientemente del clasificador
+# Garantizar el archivo /app/JettraStore.jar sin duplicar capas pesadas en la imagen
 RUN if [ -f /app/JettraStore-*-uber.jar ]; then \
-        cp /app/JettraStore-*-uber.jar /app/JettraStore.jar; \
+        mv /app/JettraStore-*-uber.jar /app/JettraStore.jar && rm -f /app/JettraStore-*.jar; \
     elif [ -f /app/JettraStore-*.jar ]; then \
-        cp /app/JettraStore-*.jar /app/JettraStore.jar; \
+        mv /app/JettraStore-*.jar /app/JettraStore.jar; \
     fi
 
 # Variables de entorno predeterminadas para nodo autónomo o clúster
-# Soporta los 3 modos de almacenamiento: JVM_RAM, DISK_MEMORY y OFF_HEAP (predeterminado)
-# Soporta arranque instantáneo con CRaC / CRIU mediante JETTRA_CRAC_RESTORE=true
+# Configuración de alto rendimiento para base de datos con ZGC (Zero Garbage Collection Pauses < 1ms):
+# -XX:+UseContainerSupport respeta los cgroups y límites de memoria del contenedor Docker.
+# -XX:+UseZGC recolector de ultra-baja latencia concurrente para bases de datos de alto rendimiento.
+# -XX:+UseCompactObjectHeaders (Java 25 Lilliput) reduce la sobrecarga de encabezados de objetos a 64 bits.
+# -Xms512m -Xmx2g balance equilibrado entre alta tasa de transacciones concurrentes y consumo controlado de RAM.
 ENV JETTRA_NODE_ID=node-01 \
     JETTRA_NODE_ROLE=PRIMARY \
     JETTRA_STORAGE_PATH=/jettra/data \
@@ -44,7 +46,7 @@ ENV JETTRA_NODE_ID=node-01 \
     JETTRA_REST_PORT=8080 \
     JETTRA_ADMIN_USERNAME=admin \
     JETTRA_ADMIN_PASSWORD=admin-jettra \
-    JAVA_OPTS="--enable-preview --enable-native-access=ALL-UNNAMED -XX:+UnlockExperimentalVMOptions -XX:+UseCompactObjectHeaders -XX:+UseZGC -Xms2g -Xmx4g"
+    JAVA_OPTS="--enable-preview --enable-native-access=ALL-UNNAMED -XX:+UnlockExperimentalVMOptions -XX:+UseCompactObjectHeaders -XX:+UseContainerSupport -XX:+UseZGC -Xms512m -Xmx2g"
 
 # Exponer puertos: REST HTTP (8080) y Puerto de Clúster / gRPC (9091)
 EXPOSE 8080 9091

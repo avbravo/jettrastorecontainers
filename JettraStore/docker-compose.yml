@@ -32,7 +32,9 @@ services:
       - JETTRA_ADMIN_USERNAME=admin
       - JETTRA_ADMIN_PASSWORD=admin-jettra
       - JETTRA_CLUSTER_PEERS=node-02:jettra-node-02:9091:SECONDARY,node-03:jettra-node-03:9091:SECONDARY
-      - JAVA_OPTS=--enable-preview --enable-native-access=ALL-UNNAMED -XX:+UnlockExperimentalVMOptions -XX:+UseCompactObjectHeaders -XX:+UseZGC -Xms2g -Xmx4g -Djettra.storage.mode=${JETTRA_STORAGE_MODE:-OFF_HEAP}
+      - JAVA_OPTS=--enable-preview --enable-native-access=ALL-UNNAMED -XX:+UnlockExperimentalVMOptions -XX:+UseCompactObjectHeaders -XX:+UseContainerSupport -XX:+UseZGC -Xms512m -Xmx2g -Djettra.storage.mode=${JETTRA_STORAGE_MODE:-OFF_HEAP}
+    mem_limit: 3g
+    mem_reservation: 512m
     volumes:
       - jettra_data_node01:/jettra/data
       - jettra_checkpoint_node01:/jettra/checkpoint
@@ -79,7 +81,9 @@ services:
       - JETTRA_ADMIN_USERNAME=admin
       - JETTRA_ADMIN_PASSWORD=admin-jettra
       - JETTRA_CLUSTER_PEERS=node-01:jettra-node-01:9091:PRIMARY,node-03:jettra-node-03:9091:SECONDARY
-      - JAVA_OPTS=--enable-preview --enable-native-access=ALL-UNNAMED -XX:+UnlockExperimentalVMOptions -XX:+UseCompactObjectHeaders -XX:+UseZGC -Xms2g -Xmx4g -Djettra.storage.mode=${JETTRA_STORAGE_MODE:-OFF_HEAP}
+      - JAVA_OPTS=--enable-preview --enable-native-access=ALL-UNNAMED -XX:+UnlockExperimentalVMOptions -XX:+UseCompactObjectHeaders -XX:+UseContainerSupport -XX:+UseZGC -Xms512m -Xmx2g -Djettra.storage.mode=${JETTRA_STORAGE_MODE:-OFF_HEAP}
+    mem_limit: 3g
+    mem_reservation: 512m
     volumes:
       - jettra_data_node02:/jettra/data
       - jettra_checkpoint_node02:/jettra/checkpoint
@@ -126,7 +130,9 @@ services:
       - JETTRA_ADMIN_USERNAME=admin
       - JETTRA_ADMIN_PASSWORD=admin-jettra
       - JETTRA_CLUSTER_PEERS=node-01:jettra-node-01:9091:PRIMARY,node-02:jettra-node-02:9091:SECONDARY
-      - JAVA_OPTS=--enable-preview --enable-native-access=ALL-UNNAMED -XX:+UnlockExperimentalVMOptions -XX:+UseCompactObjectHeaders -XX:+UseZGC -Xms2g -Xmx4g -Djettra.storage.mode=${JETTRA_STORAGE_MODE:-OFF_HEAP}
+      - JAVA_OPTS=--enable-preview --enable-native-access=ALL-UNNAMED -XX:+UnlockExperimentalVMOptions -XX:+UseCompactObjectHeaders -XX:+UseContainerSupport -XX:+UseZGC -Xms512m -Xmx2g -Djettra.storage.mode=${JETTRA_STORAGE_MODE:-OFF_HEAP}
+    mem_limit: 3g
+    mem_reservation: 512m
     volumes:
       - jettra_data_node03:/jettra/data
       - jettra_checkpoint_node03:/jettra/checkpoint

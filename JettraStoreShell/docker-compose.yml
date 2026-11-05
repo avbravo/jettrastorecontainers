@@ -11,10 +11,12 @@ services:
     stdin_open: true
     tty: true
     restart: "no"
+    mem_limit: 512m
+    mem_reservation: 64m
     environment:
       - JETTRA_HOST=jettra-node-01
       - JETTRA_PORT=9091
-      - JAVA_OPTS=-XX:+UnlockExperimentalVMOptions -XX:+UseCompactObjectHeaders --enable-preview --enable-native-access=ALL-UNNAMED
+      - JAVA_OPTS=-Xms64m -Xmx512m -XX:+UseG1GC -XX:+UnlockExperimentalVMOptions -XX:+UseCompactObjectHeaders --enable-preview --enable-native-access=ALL-UNNAMED
     volumes:
       - jettra_shell_data:/home/jettra/.jettra
     networks:

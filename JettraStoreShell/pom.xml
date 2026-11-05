@@ -182,9 +182,8 @@
                             <mainClass>${mainClass}</mainClass>
                             <executable>java</executable>
                             <arguments>
-                                <!--<argument>-Xms512m</argument>-->
-                                <argument>-Xms2g</argument>
-                                <argument>-Xmx4g</argument>
+                                <argument>-Xms128m</argument>
+                                <argument>-Xmx1g</argument>
                                 <argument>-XX:+UseZGC</argument>
                                 <argument>-XX:+UseCompactObjectHeaders</argument>
                                 <argument>--enable-preview</argument>

@@ -27,7 +27,9 @@ services:
       - JETTRA_ADMIN_USERNAME=admin
       - JETTRA_ADMIN_PASSWORD=admin-jettra
       - JETTRA_CLUSTER_PEERS=node-02:jettra-node-02:9091:SECONDARY,node-03:jettra-node-03:9091:SECONDARY
-      - JAVA_OPTS=--enable-preview --enable-native-access=ALL-UNNAMED -XX:+UnlockExperimentalVMOptions -XX:+UseCompactObjectHeaders -XX:+UseZGC -Xms2g -Xmx4g -Djettra.storage.mode=${JETTRA_STORAGE_MODE:-OFF_HEAP}
+      - JAVA_OPTS=--enable-preview --enable-native-access=ALL-UNNAMED -XX:+UnlockExperimentalVMOptions -XX:+UseCompactObjectHeaders -XX:+UseContainerSupport -XX:+UseZGC -Xms512m -Xmx2g -Djettra.storage.mode=${JETTRA_STORAGE_MODE:-OFF_HEAP}
+    mem_limit: 3g
+    mem_reservation: 512m
     volumes:
       - jettra_data_node01:/jettra/data
       - jettra_checkpoint_node01:/jettra/checkpoint
@@ -71,7 +73,9 @@ services:
       - JETTRA_ADMIN_USERNAME=admin
       - JETTRA_ADMIN_PASSWORD=admin-jettra
       - JETTRA_CLUSTER_PEERS=node-01:jettra-node-01:9091:PRIMARY,node-03:jettra-node-03:9091:SECONDARY
-      - JAVA_OPTS=--enable-preview --enable-native-access=ALL-UNNAMED -XX:+UnlockExperimentalVMOptions -XX:+UseCompactObjectHeaders -XX:+UseZGC -Xms2g -Xmx4g -Djettra.storage.mode=${JETTRA_STORAGE_MODE:-OFF_HEAP}
+      - JAVA_OPTS=--enable-preview --enable-native-access=ALL-UNNAMED -XX:+UnlockExperimentalVMOptions -XX:+UseCompactObjectHeaders -XX:+UseContainerSupport -XX:+UseZGC -Xms512m -Xmx2g -Djettra.storage.mode=${JETTRA_STORAGE_MODE:-OFF_HEAP}
+    mem_limit: 3g
+    mem_reservation: 512m
     volumes:
       - jettra_data_node02:/jettra/data
       - jettra_checkpoint_node02:/jettra/checkpoint
@@ -115,7 +119,9 @@ services:
       - JETTRA_ADMIN_USERNAME=admin
       - JETTRA_ADMIN_PASSWORD=admin-jettra
       - JETTRA_CLUSTER_PEERS=node-01:jettra-node-01:9091:PRIMARY,node-02:jettra-node-02:9091:SECONDARY
-      - JAVA_OPTS=--enable-preview --enable-native-access=ALL-UNNAMED -XX:+UnlockExperimentalVMOptions -XX:+UseCompactObjectHeaders -XX:+UseZGC -Xms2g -Xmx4g -Djettra.storage.mode=${JETTRA_STORAGE_MODE:-OFF_HEAP}
+      - JAVA_OPTS=--enable-preview --enable-native-access=ALL-UNNAMED -XX:+UnlockExperimentalVMOptions -XX:+UseCompactObjectHeaders -XX:+UseContainerSupport -XX:+UseZGC -Xms512m -Xmx2g -Djettra.storage.mode=${JETTRA_STORAGE_MODE:-OFF_HEAP}
+    mem_limit: 3g
+    mem_reservation: 512m
     volumes:
       - jettra_data_node03:/jettra/data
       - jettra_checkpoint_node03:/jettra/checkpoint
@@ -139,13 +145,15 @@ services:
     container_name: jettra-shell
     stdin_open: true
     tty: true
+    mem_limit: 512m
+    mem_reservation: 64m
     depends_on:
       jettra-node-01:
         condition: service_healthy
     environment:
       - JETTRA_HOST=jettra-node-01
       - JETTRA_PORT=9091
-      - JAVA_OPTS=-XX:+UnlockExperimentalVMOptions -XX:+UseCompactObjectHeaders --enable-preview --enable-native-access=ALL-UNNAMED
+      - JAVA_OPTS=-Xms64m -Xmx512m -XX:+UseG1GC -XX:+UnlockExperimentalVMOptions -XX:+UseCompactObjectHeaders --enable-preview --enable-native-access=ALL-UNNAMED
     volumes:
       - jettra_shell_data:/home/jettra/.jettra
     networks:
@@ -159,6 +167,8 @@ services:
     image: jettrastorepolice3d:1.0
     container_name: jettra-police-3d
     restart: unless-stopped
+    mem_limit: 768m
+    mem_reservation: 128m
     depends_on:
       jettra-node-01:
         condition: service_healthy
@@ -166,7 +176,7 @@ services:
       - DISPLAY=${DISPLAY:-:0}
       - HEADLESS=false
       - JETTRA_DOCKER_COMPOSE=false
-      - JAVA_OPTS=-Xms512m -Xmx2g -XX:+UnlockExperimentalVMOptions -XX:+UseCompactObjectHeaders --enable-preview --enable-native-access=ALL-UNNAMED -Djettra.config.path=/app/config/jettra.config
+      - JAVA_OPTS=-Xms128m -Xmx512m -XX:+UseG1GC -XX:SoftRefLRUPolicyMSPerMB=0 -XX:+UnlockExperimentalVMOptions -XX:+UseCompactObjectHeaders --enable-preview --enable-native-access=ALL-UNNAMED -Djettra.config.path=/app/config/jettra.config
     volumes:
       - /tmp/.X11-unix:/tmp/.X11-unix
       - ./JettraStorePolice3D/config/jettra.config:/app/config/jettra.config:ro

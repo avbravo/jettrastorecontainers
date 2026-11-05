@@ -10,7 +10,7 @@
             <goal>org.codehaus.mojo:exec-maven-plugin:3.5.0:exec</goal>
         </goals>
         <properties>
-            <exec.vmArgs>-Xms2g -Xmx4g -XX:+UseZGC -XX:+UseCompactObjectHeaders --enable-preview --enable-native-access=ALL-UNNAMED</exec.vmArgs>
+            <exec.vmArgs>-Xms64m -Xmx512m -XX:+UseG1GC -XX:+UnlockExperimentalVMOptions -XX:+UseCompactObjectHeaders --enable-preview --enable-native-access=ALL-UNNAMED</exec.vmArgs>
             <exec.args>${exec.vmArgs} -classpath %classpath ${exec.mainClass} ${exec.appArgs}</exec.args>
             <exec.appArgs></exec.appArgs>
             <exec.mainClass>io.jettra.shell.JettraStoreShellApp</exec.mainClass>
@@ -27,7 +27,7 @@
             <goal>org.codehaus.mojo:exec-maven-plugin:3.5.0:exec</goal>
         </goals>
         <properties>
-            <exec.vmArgs>-Xms2g -Xmx4g -XX:+UseZGC -XX:+UseCompactObjectHeaders --enable-preview --enable-native-access=ALL-UNNAMED -Xdebug -Xrunjdwp:transport=dt_socket,server=n,address=${jpda.address}</exec.vmArgs>
+            <exec.vmArgs>-Xms64m -Xmx512m -XX:+UseG1GC -XX:+UnlockExperimentalVMOptions -XX:+UseCompactObjectHeaders --enable-preview --enable-native-access=ALL-UNNAMED -Xdebug -Xrunjdwp:transport=dt_socket,server=n,address=${jpda.address}</exec.vmArgs>
             <exec.args>${exec.vmArgs} -classpath %classpath ${exec.mainClass} ${exec.appArgs}</exec.args>
             <exec.appArgs></exec.appArgs>
             <exec.mainClass>io.jettra.shell.JettraStoreShellApp</exec.mainClass>

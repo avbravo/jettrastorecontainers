@@ -1466,58 +1466,82 @@ Para validar el ecosistema bajo condiciones extremas de concurrencia y volumen d
 
 `JettraStore` provee empaquetado nativo en contenedores Docker y orquestación multi-nodo mediante `docker-compose.yml`, optimizado para producción sobre **Java 25 LTS** con persistencia durable y seguridad criptográfica mandatoria.
 
-### 15.1 Arquitectura e Imagen Docker (`Dockerfile` / `DockerFile`)
+### 15.1 Arquitectura e Imagen Docker Optimizada (`Dockerfile`)
 
-La imagen oficial se construye a partir de la distribución base de alto rendimiento `eclipse-temurin:25-jdk` e incorpora directivas de seguridad para ejecución sin privilegios de root (`non-root user`):
+La imagen oficial se construye a partir de la distribución base ligera y de ultra-alto rendimiento `bellsoft/liberica-runtime-container:jre-25-stream-musl` (o glibc para CRIU completo), e incorpora directivas de seguridad para ejecución sin privilegios de root (`non-root user`), reducción de capas y recolección de memoria eficiente:
 
 ```dockerfile
 # ==============================================================================
-# JettraStore Official High-Performance Container Image
-# Runtime: Java 25 LTS (Eclipse Temurin) + ZGC + Panama FFM Off-Heap
+# JettraStore Distributed Multi-Model Database (Java 25+ Panama FFM & Raft)
+# Compatible con CRaC / CRIU para arranque instantáneo en caliente (< 20 ms)
+# Optimizado para bajo consumo de RAM con G1GC, Compact Headers y límites cgroup
 # ==============================================================================
-FROM eclipse-temurin:25-jdk
+FROM bellsoft/liberica-runtime-container:jre-25-stream-musl
+LABEL maintainer="Jettra Ecosystem <dev@jettra.io>"
+LABEL description="JettraStore - Motor de Base de Datos Multimodelo Distribuido en Java 25+ con CRaC y Off-Heap FFM"
 
-LABEL maintainer="Jettra Architecture Team <dev@jettra.io>"
-LABEL description="JettraStore Distributed Multi-Model NoSQL Database"
-LABEL version="1.0"
-
-# Instalar utilidades operativas y crear usuario sin privilegios
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl \
-    procps \
-    && rm -rf /var/lib/apt/lists/* \
-    && groupadd -g 1001 jettra \
-    && useradd -u 1001 -g jettra -m -s /bin/bash jettra
+# Instalar curl para healthchecks y utilidades del sistema
+RUN if command -v apk > /dev/null; then \
+        apk add --no-cache curl ca-certificates tzdata && rm -rf /var/cache/apk/*; \
+    elif command -v apt-get > /dev/null; then \
+        apt-get update && apt-get install -y --no-install-recommends curl ca-certificates tzdata && rm -rf /var/lib/apt/lists/*; \
+    fi
 
 WORKDIR /app
 
-# Crear jerarquía de almacenamiento para archivos .jettra y logs
-RUN mkdir -p /app/data /app/config /app/logs \
-    && chown -R jettra:jettra /app
+# Crear directorio de datos persistentes, punto de checkpoint CRaC y permisos
+RUN mkdir -p /jettra/data /jettra/config /jettra/checkpoint && \
+    chown -R 1000:1000 /jettra /app
 
-# Copiar el Uber JAR autónomo (Fat JAR con todas las librerías integradas)
-COPY --chown=jettra:jettra target/JettraStore-*-uber.jar /app/JettraStore.jar
+# Copiar JAR autónomo optimizado y archivo de configuración base (sin capas redundantes)
+COPY target/JettraStore-*.jar /app/
+COPY src/main/resources/database.properties /app/config/database.properties
 
-# Exponer puertos: REST API (8080) y Clúster Raft/gRPC (9091)
+# Garantizar el archivo /app/JettraStore.jar sin duplicar capas pesadas en la imagen
+RUN if [ -f /app/JettraStore-*-uber.jar ]; then \
+        mv /app/JettraStore-*-uber.jar /app/JettraStore.jar && rm -f /app/JettraStore-*.jar; \
+    elif [ -f /app/JettraStore-*.jar ]; then \
+        mv /app/JettraStore-*.jar /app/JettraStore.jar; \
+    fi
+
+# Variables de entorno predeterminadas para nodo autónomo o clúster
+# Configuración de alto rendimiento para base de datos con ZGC (Zero Garbage Collection Pauses < 1ms):
+# -XX:+UseContainerSupport respeta los cgroups y límites de memoria del contenedor Docker.
+# -XX:+UseZGC recolector de ultra-baja latencia concurrente para bases de datos de alto rendimiento.
+# -XX:+UseCompactObjectHeaders (Java 25 Lilliput) reduce la sobrecarga de encabezados de objetos a 64 bits.
+# -Xms512m -Xmx2g balance equilibrado entre alta tasa de transacciones concurrentes y consumo controlado de RAM.
+ENV JETTRA_NODE_ID=node-01 \
+    JETTRA_NODE_ROLE=PRIMARY \
+    JETTRA_STORAGE_PATH=/jettra/data \
+    JETTRA_STORAGE_MODE=OFF_HEAP \
+    JETTRA_CRAC_CHECKPOINT_PATH=/jettra/checkpoint \
+    JETTRA_CRAC_RESTORE=false \
+    JETTRA_GRPC_PORT=9091 \
+    JETTRA_REST_PORT=8080 \
+    JETTRA_ADMIN_USERNAME=admin \
+    JETTRA_ADMIN_PASSWORD=admin-jettra \
+    JAVA_OPTS="--enable-preview --enable-native-access=ALL-UNNAMED -XX:+UnlockExperimentalVMOptions -XX:+UseCompactObjectHeaders -XX:+UseContainerSupport -XX:+UseZGC -Xms512m -Xmx2g"
+
+# Exponer puertos: REST HTTP (8080) y Puerto de Clúster / gRPC (9091)
 EXPOSE 8080 9091
 
-# Definir volumen persistente para datos .jettra
-VOLUME ["/app/data"]
+# Volúmenes para almacenamiento persistente y snapshots de memoria CRaC
+VOLUME ["/jettra/data", "/jettra/checkpoint"]
 
-USER jettra:jettra
+# Verificación de salud periódica mediante endpoint REST
+HEALTHCHECK --interval=10s --timeout=5s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:${JETTRA_REST_PORT}/api/v1/health || exit 1
 
-# Flags JVM de máxima optimización (Java 25 Preview + ZGC + Panama FFM)
-ENV JAVA_OPTS="-Xms512m -Xmx2g \
-  --enable-preview \
-  -XX:+UseZGC \
-  --enable-native-access=ALL-UNNAMED \
-  -Djava.awt.headless=true"
+# Usuario no root seguro
+USER 1000:1000
 
-# Healthcheck nativo contra el endpoint REST del clúster
-HEALTHCHECK --interval=10s --timeout=5s --start-period=15s --retries=3 \
-  CMD curl -f http://localhost:8080/api/v1/cluster/health || exit 1
-
-ENTRYPOINT ["sh", "-c", "exec java $JAVA_OPTS -jar /app/JettraStore.jar"]
+# Inicio del servidor autónomo JettraStore
+ENTRYPOINT ["sh", "-c", "if [ \"$JETTRA_CRAC_RESTORE\" = \"true\" ] && [ -d \"$JETTRA_CRAC_CHECKPOINT_PATH\" ] && [ \"$(ls -A $JETTRA_CRAC_CHECKPOINT_PATH 2>/dev/null)\" ]; then \
+        echo '[CRaC] Restaurando JettraStore instantáneamente desde checkpoint CRIU en '$JETTRA_CRAC_CHECKPOINT_PATH'...'; \
+        exec java -XX:CRaCRestoreFrom=$JETTRA_CRAC_CHECKPOINT_PATH; \
+    else \
+        exec java $JAVA_OPTS -Djettra.storage.mode=${JETTRA_STORAGE_MODE:-OFF_HEAP} -jar /app/JettraStore.jar; \
+    fi"]
 ```
 
 > [!TIP]
@@ -1527,7 +1551,7 @@ ENTRYPOINT ["sh", "-c", "exec java $JAVA_OPTS -jar /app/JettraStore.jar"]
 
 ### 15.2 Despliegue de Clúster de 3 Nodos en Docker Compose (1 Primario + 2 Secundarios)
 
-El archivo [`docker-compose.yml`](file:///home/avbravo/NetBeansProjects/jettrastack_local/jettrastoreworkspace/JettraStore/docker-compose.yml) orquesta la topología de consenso Raft de tres nodos sobre una red bridge aislada (`jettra-net`):
+El archivo [`docker-compose.yml`](file:///home/avbravo/NetBeansProjects/jettrastack_local/jettrastorecontainers/JettraStore/docker-compose.yml) orquesta la topología de consenso Raft de tres nodos sobre una red bridge aislada (`jettra-cluster-net`), incorporando soporte para CRaC/CRIU, límites estrictos de memoria por contenedor y selección del modo de almacenamiento (`JVM_RAM`, `DISK_MEMORY` u `OFF_HEAP`):
 
 ```yaml
 version: '3.8'
@@ -1540,24 +1564,44 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    image: jettrastore:1.0
     container_name: jettra-node-01
     hostname: jettra-node-01
     restart: unless-stopped
+    cap_add:
+      - CHECKPOINT_RESTORE
+      - SYS_PTRACE
+    security_opt:
+      - seccomp:unconfined
+    ports:
+      - "8081:8080" # API REST / Token JettraJWT en Host
+      - "9091:9091" # Protocolo de Clúster / Raft Sync
     environment:
       - JETTRA_NODE_ID=node-01
       - JETTRA_NODE_ROLE=PRIMARY
+      - JETTRA_STORAGE_PATH=/jettra/data
+      - JETTRA_STORAGE_MODE=${JETTRA_STORAGE_MODE:-OFF_HEAP}
+      - JETTRA_CRAC_CHECKPOINT_PATH=/jettra/checkpoint
+      - JETTRA_CRAC_RESTORE=${JETTRA_CRAC_RESTORE:-false}
       - JETTRA_REST_PORT=8080
       - JETTRA_GRPC_PORT=9091
-      - JETTRA_DATA_DIR=/app/data
-      - JETTRA_CLUSTER_SEEDS=jettra-node-01:9091,jettra-node-02:9091,jettra-node-03:9091
-      - JAVA_OPTS=-Xms512m -Xmx2g --enable-preview -XX:+UseZGC --enable-native-access=ALL-UNNAMED -Djava.awt.headless=true
-    ports:
-      - "8081:8080" # REST API (Host 8081 -> Container 8080)
-      - "9091:9091" # gRPC / Raft Consensus
+      - JETTRA_ADMIN_USERNAME=admin
+      - JETTRA_ADMIN_PASSWORD=admin-jettra
+      - JETTRA_CLUSTER_PEERS=node-02:jettra-node-02:9091:SECONDARY,node-03:jettra-node-03:9091:SECONDARY
+      - JAVA_OPTS=--enable-preview --enable-native-access=ALL-UNNAMED -XX:+UnlockExperimentalVMOptions -XX:+UseCompactObjectHeaders -XX:+UseContainerSupport -XX:+UseZGC -Xms512m -Xmx2g -Djettra.storage.mode=${JETTRA_STORAGE_MODE:-OFF_HEAP}
+    mem_limit: 3g
+    mem_reservation: 512m
     volumes:
-      - jettra_data_node01:/app/data
+      - jettra_data_node01:/jettra/data
+      - jettra_checkpoint_node01:/jettra/checkpoint
     networks:
-      - jettra-net
+      - jettra-cluster-net
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/api/v1/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
 
   # ----------------------------------------------------------------------------
   # Nodo 02: Nodo Secundario 1 (Raft Follower / Secondary)
@@ -1566,26 +1610,47 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    image: jettrastore:1.0
     container_name: jettra-node-02
     hostname: jettra-node-02
     restart: unless-stopped
+    cap_add:
+      - CHECKPOINT_RESTORE
+      - SYS_PTRACE
+    security_opt:
+      - seccomp:unconfined
     depends_on:
-      - jettra-node-01
+      jettra-node-01:
+        condition: service_healthy
+    ports:
+      - "8082:8080"
+      - "9092:9091"
     environment:
       - JETTRA_NODE_ID=node-02
       - JETTRA_NODE_ROLE=SECONDARY
+      - JETTRA_STORAGE_PATH=/jettra/data
+      - JETTRA_STORAGE_MODE=${JETTRA_STORAGE_MODE:-OFF_HEAP}
+      - JETTRA_CRAC_CHECKPOINT_PATH=/jettra/checkpoint
+      - JETTRA_CRAC_RESTORE=${JETTRA_CRAC_RESTORE:-false}
       - JETTRA_REST_PORT=8080
       - JETTRA_GRPC_PORT=9091
-      - JETTRA_DATA_DIR=/app/data
-      - JETTRA_CLUSTER_SEEDS=jettra-node-01:9091,jettra-node-02:9091,jettra-node-03:9091
-      - JAVA_OPTS=-Xms512m -Xmx2g --enable-preview -XX:+UseZGC --enable-native-access=ALL-UNNAMED -Djava.awt.headless=true
-    ports:
-      - "8082:8080" # REST API (Host 8082 -> Container 8080)
-      - "9092:9091" # gRPC / Raft Consensus
+      - JETTRA_ADMIN_USERNAME=admin
+      - JETTRA_ADMIN_PASSWORD=admin-jettra
+      - JETTRA_CLUSTER_PEERS=node-01:jettra-node-01:9091:PRIMARY,node-03:jettra-node-03:9091:SECONDARY
+      - JAVA_OPTS=--enable-preview --enable-native-access=ALL-UNNAMED -XX:+UnlockExperimentalVMOptions -XX:+UseCompactObjectHeaders -XX:+UseContainerSupport -XX:+UseZGC -Xms512m -Xmx2g -Djettra.storage.mode=${JETTRA_STORAGE_MODE:-OFF_HEAP}
+    mem_limit: 3g
+    mem_reservation: 512m
     volumes:
-      - jettra_data_node02:/app/data
+      - jettra_data_node02:/jettra/data
+      - jettra_checkpoint_node02:/jettra/checkpoint
     networks:
-      - jettra-net
+      - jettra-cluster-net
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/api/v1/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
 
   # ----------------------------------------------------------------------------
   # Nodo 03: Nodo Secundario 2 (Raft Follower / Secondary)
@@ -1594,26 +1659,47 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    image: jettrastore:1.0
     container_name: jettra-node-03
     hostname: jettra-node-03
     restart: unless-stopped
+    cap_add:
+      - CHECKPOINT_RESTORE
+      - SYS_PTRACE
+    security_opt:
+      - seccomp:unconfined
     depends_on:
-      - jettra-node-01
+      jettra-node-01:
+        condition: service_healthy
+    ports:
+      - "8083:8080"
+      - "9093:9091"
     environment:
       - JETTRA_NODE_ID=node-03
       - JETTRA_NODE_ROLE=SECONDARY
+      - JETTRA_STORAGE_PATH=/jettra/data
+      - JETTRA_STORAGE_MODE=${JETTRA_STORAGE_MODE:-OFF_HEAP}
+      - JETTRA_CRAC_CHECKPOINT_PATH=/jettra/checkpoint
+      - JETTRA_CRAC_RESTORE=${JETTRA_CRAC_RESTORE:-false}
       - JETTRA_REST_PORT=8080
       - JETTRA_GRPC_PORT=9091
-      - JETTRA_DATA_DIR=/app/data
-      - JETTRA_CLUSTER_SEEDS=jettra-node-01:9091,jettra-node-02:9091,jettra-node-03:9091
-      - JAVA_OPTS=-Xms512m -Xmx2g --enable-preview -XX:+UseZGC --enable-native-access=ALL-UNNAMED -Djava.awt.headless=true
-    ports:
-      - "8083:8080" # REST API (Host 8083 -> Container 8080)
-      - "9093:9091" # gRPC / Raft Consensus
+      - JETTRA_ADMIN_USERNAME=admin
+      - JETTRA_ADMIN_PASSWORD=admin-jettra
+      - JETTRA_CLUSTER_PEERS=node-01:jettra-node-01:9091:PRIMARY,node-02:jettra-node-02:9091:SECONDARY
+      - JAVA_OPTS=--enable-preview --enable-native-access=ALL-UNNAMED -XX:+UnlockExperimentalVMOptions -XX:+UseCompactObjectHeaders -XX:+UseContainerSupport -XX:+UseZGC -Xms512m -Xmx2g -Djettra.storage.mode=${JETTRA_STORAGE_MODE:-OFF_HEAP}
+    mem_limit: 3g
+    mem_reservation: 512m
     volumes:
-      - jettra_data_node03:/app/data
+      - jettra_data_node03:/jettra/data
+      - jettra_checkpoint_node03:/jettra/checkpoint
     networks:
-      - jettra-net
+      - jettra-cluster-net
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/api/v1/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
 
 volumes:
   jettra_data_node01:
@@ -1622,9 +1708,15 @@ volumes:
     driver: local
   jettra_data_node03:
     driver: local
+  jettra_checkpoint_node01:
+    driver: local
+  jettra_checkpoint_node02:
+    driver: local
+  jettra_checkpoint_node03:
+    driver: local
 
 networks:
-  jettra-net:
+  jettra-cluster-net:
     driver: bridge
 ```
 
@@ -2231,6 +2323,11 @@ services:
     container_name: jettra-node-01
     hostname: jettra-node-01
     restart: unless-stopped
+    cap_add:
+      - CHECKPOINT_RESTORE
+      - SYS_PTRACE
+    security_opt:
+      - seccomp:unconfined
     ports:
       - "8081:8080"
       - "9091:9091"
@@ -2238,14 +2335,20 @@ services:
       - JETTRA_NODE_ID=node-01
       - JETTRA_NODE_ROLE=PRIMARY
       - JETTRA_STORAGE_PATH=/jettra/data
+      - JETTRA_STORAGE_MODE=${JETTRA_STORAGE_MODE:-OFF_HEAP}
+      - JETTRA_CRAC_CHECKPOINT_PATH=/jettra/checkpoint
+      - JETTRA_CRAC_RESTORE=${JETTRA_CRAC_RESTORE:-false}
       - JETTRA_REST_PORT=8080
       - JETTRA_GRPC_PORT=9091
       - JETTRA_ADMIN_USERNAME=admin
       - JETTRA_ADMIN_PASSWORD=admin-jettra
       - JETTRA_CLUSTER_PEERS=node-02:jettra-node-02:9091:SECONDARY,node-03:jettra-node-03:9091:SECONDARY
-      - JAVA_OPTS=-Xms512m -Xmx2g -XX:+UseZGC -XX:+UnlockExperimentalVMOptions -XX:+UseCompactObjectHeaders --enable-preview --enable-native-access=ALL-UNNAMED
+      - JAVA_OPTS=--enable-preview --enable-native-access=ALL-UNNAMED -XX:+UnlockExperimentalVMOptions -XX:+UseCompactObjectHeaders -XX:+UseContainerSupport -XX:+UseZGC -Xms512m -Xmx2g -Djettra.storage.mode=${JETTRA_STORAGE_MODE:-OFF_HEAP}
+    mem_limit: 3g
+    mem_reservation: 512m
     volumes:
       - jettra_data_node01:/jettra/data
+      - jettra_checkpoint_node01:/jettra/checkpoint
     networks:
       - jettra-cluster-net
     healthcheck:
@@ -2263,6 +2366,11 @@ services:
     container_name: jettra-node-02
     hostname: jettra-node-02
     restart: unless-stopped
+    cap_add:
+      - CHECKPOINT_RESTORE
+      - SYS_PTRACE
+    security_opt:
+      - seccomp:unconfined
     depends_on:
       jettra-node-01:
         condition: service_healthy
@@ -2273,14 +2381,20 @@ services:
       - JETTRA_NODE_ID=node-02
       - JETTRA_NODE_ROLE=SECONDARY
       - JETTRA_STORAGE_PATH=/jettra/data
+      - JETTRA_STORAGE_MODE=${JETTRA_STORAGE_MODE:-OFF_HEAP}
+      - JETTRA_CRAC_CHECKPOINT_PATH=/jettra/checkpoint
+      - JETTRA_CRAC_RESTORE=${JETTRA_CRAC_RESTORE:-false}
       - JETTRA_REST_PORT=8080
       - JETTRA_GRPC_PORT=9091
       - JETTRA_ADMIN_USERNAME=admin
       - JETTRA_ADMIN_PASSWORD=admin-jettra
       - JETTRA_CLUSTER_PEERS=node-01:jettra-node-01:9091:PRIMARY,node-03:jettra-node-03:9091:SECONDARY
-      - JAVA_OPTS=-Xms512m -Xmx2g -XX:+UseZGC -XX:+UnlockExperimentalVMOptions -XX:+UseCompactObjectHeaders --enable-preview --enable-native-access=ALL-UNNAMED
+      - JAVA_OPTS=--enable-preview --enable-native-access=ALL-UNNAMED -XX:+UnlockExperimentalVMOptions -XX:+UseCompactObjectHeaders -XX:+UseContainerSupport -XX:+UseZGC -Xms512m -Xmx2g -Djettra.storage.mode=${JETTRA_STORAGE_MODE:-OFF_HEAP}
+    mem_limit: 3g
+    mem_reservation: 512m
     volumes:
       - jettra_data_node02:/jettra/data
+      - jettra_checkpoint_node02:/jettra/checkpoint
     networks:
       - jettra-cluster-net
     healthcheck:
@@ -2298,6 +2412,11 @@ services:
     container_name: jettra-node-03
     hostname: jettra-node-03
     restart: unless-stopped
+    cap_add:
+      - CHECKPOINT_RESTORE
+      - SYS_PTRACE
+    security_opt:
+      - seccomp:unconfined
     depends_on:
       jettra-node-01:
         condition: service_healthy
@@ -2308,14 +2427,20 @@ services:
       - JETTRA_NODE_ID=node-03
       - JETTRA_NODE_ROLE=SECONDARY
       - JETTRA_STORAGE_PATH=/jettra/data
+      - JETTRA_STORAGE_MODE=${JETTRA_STORAGE_MODE:-OFF_HEAP}
+      - JETTRA_CRAC_CHECKPOINT_PATH=/jettra/checkpoint
+      - JETTRA_CRAC_RESTORE=${JETTRA_CRAC_RESTORE:-false}
       - JETTRA_REST_PORT=8080
       - JETTRA_GRPC_PORT=9091
       - JETTRA_ADMIN_USERNAME=admin
       - JETTRA_ADMIN_PASSWORD=admin-jettra
       - JETTRA_CLUSTER_PEERS=node-01:jettra-node-01:9091:PRIMARY,node-02:jettra-node-02:9091:SECONDARY
-      - JAVA_OPTS=-Xms512m -Xmx2g -XX:+UseZGC -XX:+UnlockExperimentalVMOptions -XX:+UseCompactObjectHeaders --enable-preview --enable-native-access=ALL-UNNAMED
+      - JAVA_OPTS=--enable-preview --enable-native-access=ALL-UNNAMED -XX:+UnlockExperimentalVMOptions -XX:+UseCompactObjectHeaders -XX:+UseContainerSupport -XX:+UseZGC -Xms512m -Xmx2g -Djettra.storage.mode=${JETTRA_STORAGE_MODE:-OFF_HEAP}
+    mem_limit: 3g
+    mem_reservation: 512m
     volumes:
       - jettra_data_node03:/jettra/data
+      - jettra_checkpoint_node03:/jettra/checkpoint
     networks:
       - jettra-cluster-net
     healthcheck:
@@ -2327,8 +2452,17 @@ services:
 
 volumes:
   jettra_data_node01:
+    driver: local
   jettra_data_node02:
+    driver: local
   jettra_data_node03:
+    driver: local
+  jettra_checkpoint_node01:
+    driver: local
+  jettra_checkpoint_node02:
+    driver: local
+  jettra_checkpoint_node03:
+    driver: local
 
 networks:
   jettra-cluster-net:

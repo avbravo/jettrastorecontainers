@@ -144,49 +144,42 @@ public final class IndexManager implements AutoCloseable {
         if (indexPath == null) return;
         Path tempIdx = indexPath.resolveSibling(indexPath.getFileName() + ".tmp");
 
-        try (Arena arena = Arena.ofConfined();
-             FileChannel channel = FileChannel.open(tempIdx,
+        try (FileChannel channel = FileChannel.open(tempIdx,
                      StandardOpenOption.CREATE, StandardOpenOption.WRITE, StandardOpenOption.TRUNCATE_EXISTING)) {
 
-            // Encabezado del índice: MAGIC (4) + VERSION (2) + ENTRY_COUNT (4)
-            int headerSize = 4 + 2 + 4;
-            MemorySegment headerSegment = arena.allocate(headerSize);
-            headerSegment.set(ValueLayout.JAVA_BYTE, 0, INDEX_MAGIC[0]);
-            headerSegment.set(ValueLayout.JAVA_BYTE, 1, INDEX_MAGIC[1]);
-            headerSegment.set(ValueLayout.JAVA_BYTE, 2, INDEX_MAGIC[2]);
-            headerSegment.set(ValueLayout.JAVA_BYTE, 3, INDEX_MAGIC[3]);
-            headerSegment.set(ValueLayout.JAVA_SHORT_UNALIGNED, 4, INDEX_VERSION);
-            headerSegment.set(ValueLayout.JAVA_INT_UNALIGNED, 6, indexMap.size());
-            channel.write(headerSegment.asByteBuffer());
+            ByteBuffer buf = ByteBuffer.allocate(64 * 1024).order(ByteOrder.nativeOrder());
 
-            // Escribir cada entrada: keyLength (2) + keyBytes + entryRecord (37)
+            // Encabezado del índice: MAGIC (4) + VERSION (2) + ENTRY_COUNT (4)
+            buf.put(INDEX_MAGIC);
+            buf.putShort(INDEX_VERSION);
+            buf.putInt(indexMap.size());
+
+            // Escribir cada entrada con buffer eficiente
             for (Map.Entry<String, IndexEntry> e : indexMap.entrySet()) {
                 byte[] keyBytes = e.getKey().getBytes(StandardCharsets.UTF_8);
                 IndexEntry entry = e.getValue();
                 int recordLen = 2 + keyBytes.length + IndexEntry.SERIALIZED_BYTE_SIZE;
 
-                MemorySegment seg = arena.allocate(recordLen);
-                long pos = 0;
-                seg.set(ValueLayout.JAVA_SHORT_UNALIGNED, pos, (short) keyBytes.length);
-                pos += 2;
-                MemorySegment.copy(MemorySegment.ofArray(keyBytes), 0, seg, pos, keyBytes.length);
-                pos += keyBytes.length;
+                if (buf.remaining() < recordLen) {
+                    buf.flip();
+                    channel.write(buf);
+                    buf.clear();
+                }
 
-                seg.set(ValueLayout.JAVA_LONG_UNALIGNED, pos, entry.offset());
-                pos += 8;
-                seg.set(ValueLayout.JAVA_INT_UNALIGNED, pos, entry.length());
-                pos += 4;
-                seg.set(ValueLayout.JAVA_INT_UNALIGNED, pos, entry.payloadLength());
-                pos += 4;
-                seg.set(ValueLayout.JAVA_INT_UNALIGNED, pos, entry.version());
-                pos += 4;
-                seg.set(ValueLayout.JAVA_LONG_UNALIGNED, pos, entry.timestamp());
-                pos += 8;
-                seg.set(ValueLayout.JAVA_BYTE, pos, (byte) (entry.isTombstone() ? 1 : 0));
-                pos += 1;
-                seg.set(ValueLayout.JAVA_LONG_UNALIGNED, pos, entry.checksum());
+                buf.putShort((short) keyBytes.length);
+                buf.put(keyBytes);
+                buf.putLong(entry.offset());
+                buf.putInt(entry.length());
+                buf.putInt(entry.payloadLength());
+                buf.putInt(entry.version());
+                buf.putLong(entry.timestamp());
+                buf.put((byte) (entry.isTombstone() ? 1 : 0));
+                buf.putLong(entry.checksum());
+            }
 
-                channel.write(seg.asByteBuffer());
+            if (buf.position() > 0) {
+                buf.flip();
+                channel.write(buf);
             }
             channel.force(true);
         }
