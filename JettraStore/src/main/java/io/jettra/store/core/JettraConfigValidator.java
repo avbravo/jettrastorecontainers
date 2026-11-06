@@ -27,6 +27,7 @@ public final class JettraConfigValidator {
     public static final String DEFAULT_CONFIG_DIR = "config";
     public static final String DEFAULT_DATABASE_PROPERTIES_PATH = "config/database.properties";
     public static final String DEFAULT_JETTRA_CONFIG_PATH = "config/jettra.config";
+    public static final String DEFAULT_JETTRASERVER_CONFIG_PATH = "config/jettraserver.config";
 
     public record ClusterNodeInfo(
         String id,
@@ -235,6 +236,49 @@ public final class JettraConfigValidator {
     }
 
     /**
+     * Localiza el archivo jettraserver.config en las rutas estándar o configuradas.
+     */
+    public static Path locateJettraServerConfigFile() {
+        String[] sysKeys = {
+            "jettraserver.config.path",
+            "jettraserver.config",
+            "jettra.server.config.path",
+            "jettra.server.config"
+        };
+        for (String k : sysKeys) {
+            String sysProp = System.getProperty(k);
+            if (sysProp != null && !sysProp.isBlank()) {
+                Path p = Path.of(sysProp.trim());
+                if (Files.exists(p)) return p;
+            }
+        }
+
+        String[] envKeys = {
+            "JETTRASERVER_CONFIG_PATH",
+            "JETTRASERVER_CONFIG",
+            "JETTRA_SERVER_CONFIG"
+        };
+        for (String k : envKeys) {
+            String env = System.getenv(k);
+            if (env != null && !env.isBlank()) {
+                Path p = Path.of(env.trim());
+                if (Files.exists(p)) return p;
+            }
+        }
+
+        Path p1 = Path.of(DEFAULT_JETTRASERVER_CONFIG_PATH);
+        if (Files.exists(p1)) return p1;
+        Path p2 = Path.of("jettraserver.config");
+        if (Files.exists(p2)) return p2;
+        Path p3 = Path.of("../config/jettraserver.config");
+        if (Files.exists(p3)) return p3;
+        Path p4 = Path.of("../jettraserver.config");
+        if (Files.exists(p4)) return p4;
+
+        return null;
+    }
+
+    /**
      * Asegura que los archivos de configuración existan en disco. Si no existen, los genera
      * de manera automática en la carpeta 'config/' con los valores y la sintaxis recomendada.
      */
@@ -249,6 +293,61 @@ public final class JettraConfigValidator {
         if (clusterPath == null) {
             Path target = Path.of(DEFAULT_JETTRA_CONFIG_PATH);
             generateDefaultJettraConfig(target);
+        }
+
+        Path serverPath = locateJettraServerConfigFile();
+        if (serverPath == null) {
+            Path target = Path.of(DEFAULT_JETTRASERVER_CONFIG_PATH);
+            generateDefaultJettraServerConfig(target);
+        }
+    }
+
+    /**
+     * Genera automáticamente el archivo jettraserver.config con la configuración predeterminada y recomendada.
+     */
+    public static void generateDefaultJettraServerConfig(Path target) {
+        try {
+            if (target.getParent() != null && !Files.exists(target.getParent())) {
+                Files.createDirectories(target.getParent());
+            }
+            String content = """
+# ==============================================================================
+# JettraStore - Configuración Oficial de JettraServer (jettraserver.config)
+# Servidor REST Modular de Alto Rendimiento para Java 25 & Project Loom
+# ==============================================================================
+
+# Dirección IP y puerto de escucha del servidor REST de JettraStore
+# (Configurado en 8082 para coexistir de forma no conflictiva con JettraServer en 8080)
+server.host=0.0.0.0
+server.port=8082
+
+# Ruta base de contexto (Context Path)
+contextpath=/
+server.contextpath=/
+
+# Modo de almacenamiento operativo de JettraStore:
+#   JVM_RAM     -> Modo memoria RAM estándar de la JVM (UnifiedMap, Heap & Stack).
+#   DISK_MEMORY -> Motor de disco directo Off-Heap LSM (JettraMemory).
+#   OFF_HEAP    -> Motor de páginas nativas Slotted-Page Off-Heap FFM (JettraStore-OffHeap).
+storage.mode=OFF_HEAP
+jettra.storage.mode=OFF_HEAP
+
+# Directorio base para datos persistentes
+data.dir=~/jettra/data
+jettra.storage.path=~/jettra/data
+jettra.index.storage.path=~/jettra/data/indexes
+
+# Concurrencia impulsada por hilos virtuales de Java 25 (Project Loom)
+server.virtual-threads=true
+
+# Clave secreta y expiración para tokens criptográficos JettraJWT
+jwt.secret=jettra_store_super_secure_jwt_key_2026
+jwt.expiration-millis=86400000
+""";
+            Files.writeString(target, content, StandardCharsets.UTF_8);
+            System.out.printf("[JettraStore] Archivo de configuración '%s' generado automáticamente con éxito.%n", target);
+        } catch (IOException e) {
+            System.err.printf("[JettraStore] Error al generar archivo '%s': %s%n", target, e.getMessage());
         }
     }
 

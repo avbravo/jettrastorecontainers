@@ -37,11 +37,11 @@
     </dependencyManagement>
 
     <dependencies>
-        <!-- Servidor backend JettraEE empotrado -->
+        <!-- Servidor backend JettraServer empotrado -->
         <dependency>
             <groupId>io.jettra</groupId>
-            <artifactId>JettraEE</artifactId>
-            <version>${jettra.frameworks.version}</version>
+            <artifactId>jettra-server-core</artifactId>
+            <version>1.0.0-SNAPSHOT</version>
         </dependency>
 
         <!-- Framework reactivo UI JettraFlux -->

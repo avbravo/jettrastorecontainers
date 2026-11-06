@@ -75,11 +75,16 @@ public final class JettraStoreConfig {
     }
 
     public JettraStoreConfig(Properties props) {
-        this(props, new Properties());
+        this(props, new Properties(), new Properties());
     }
 
     public JettraStoreConfig(Properties props, Properties clusterProps) {
+        this(props, clusterProps, new Properties());
+    }
+
+    public JettraStoreConfig(Properties props, Properties clusterProps, Properties serverProps) {
         Properties effectiveClusterProps = clusterProps != null ? clusterProps : new Properties();
+        Properties effectiveServerProps = serverProps != null ? serverProps : new Properties();
         List<JettraConfigValidator.ClusterNodeInfo> clusterNodes = JettraConfigValidator.parseClusterNodes(effectiveClusterProps);
         this.allClusterNodes = Collections.unmodifiableList(clusterNodes);
 
@@ -105,11 +110,12 @@ public final class JettraStoreConfig {
             defaultRole);
         this.nodeRole = "PRIMARY".equalsIgnoreCase(roleStr) ? ClusterNode.Role.PRIMARY : ClusterNode.Role.SECONDARY;
 
-        String defaultIp = (currentNode != null && currentNode.ip() != null && !currentNode.ip().isBlank())
-            ? currentNode.ip() : "127.0.0.1";
+        String defaultIp = effectiveServerProps.getProperty("server.host",
+            (currentNode != null && currentNode.ip() != null && !currentNode.ip().isBlank())
+            ? currentNode.ip() : "127.0.0.1");
         this.nodeIp = getPropOrEnv(props, 
-            new String[]{"jettra.node.ip", "jettra.network.ip", "jettra.cluster.node.ip", "node.ip"}, 
-            new String[]{"JETTRA_NODE_IP", "JETTRA_IP", "JETTRA_NETWORK_IP"}, 
+            new String[]{"jettra.node.ip", "jettra.network.ip", "jettra.cluster.node.ip", "node.ip", "server.host"}, 
+            new String[]{"JETTRA_NODE_IP", "JETTRA_IP", "JETTRA_NETWORK_IP", "JETTRA_SERVER_HOST"}, 
             defaultIp);
 
         int defaultGrpc = (currentNode != null) ? currentNode.grpcPort() : 9091;
@@ -119,10 +125,26 @@ public final class JettraStoreConfig {
             String.valueOf(defaultGrpc)));
 
         int defaultRest = (currentNode != null) ? currentNode.restPort() : 8080;
-        this.restPort = Integer.parseInt(getPropOrEnv(props, 
-            new String[]{"jettra.network.rest.port", "jettra.rest.port", "rest.port"}, 
-            new String[]{"JETTRA_REST_PORT", "JETTRA_NETWORK_REST_PORT"}, 
-            String.valueOf(defaultRest)));
+        if (effectiveServerProps.containsKey("server.port")) {
+            try {
+                defaultRest = Integer.parseInt(effectiveServerProps.getProperty("server.port").trim());
+            } catch (Exception ignored) {}
+        } else if (effectiveServerProps.containsKey("jettra.network.rest.port")) {
+            try {
+                defaultRest = Integer.parseInt(effectiveServerProps.getProperty("jettra.network.rest.port").trim());
+            } catch (Exception ignored) {}
+        }
+        String configuredRest = getPropOrEnv(effectiveServerProps,
+            new String[]{"server.port", "jettra.server.port"},
+            new String[]{"JETTRA_SERVER_PORT", "SERVER_PORT"},
+            null);
+        if (configuredRest == null) {
+            configuredRest = getPropOrEnv(props, 
+                new String[]{"jettra.network.rest.port", "jettra.rest.port", "rest.port", "server.port"}, 
+                new String[]{"JETTRA_REST_PORT", "JETTRA_NETWORK_REST_PORT", "JETTRA_SERVER_PORT"}, 
+                String.valueOf(defaultRest));
+        }
+        this.restPort = Integer.parseInt(configuredRest);
 
         this.clusterPeers = getPropOrEnv(props, 
             new String[]{"jettra.cluster.peers", "cluster.peers"}, 
@@ -137,11 +159,12 @@ public final class JettraStoreConfig {
             defaultMultinode).trim();
         this.clusterMultinodeActive = "on".equalsIgnoreCase(multinodeStr) || "true".equalsIgnoreCase(multinodeStr);
 
-        String defaultStorage = (currentNode != null && currentNode.storagePath() != null && !currentNode.storagePath().isBlank())
-            ? currentNode.storagePath() : "/jettra/data";
+        String defaultStorage = effectiveServerProps.getProperty("data.dir",
+            (currentNode != null && currentNode.storagePath() != null && !currentNode.storagePath().isBlank())
+            ? currentNode.storagePath() : "/jettra/data");
         String configuredPath = getPropOrEnv(props, 
-            new String[]{"jettra.storage.path", "storage.path"}, 
-            new String[]{"JETTRA_STORAGE_PATH"}, 
+            new String[]{"jettra.storage.path", "storage.path", "data.dir"}, 
+            new String[]{"JETTRA_STORAGE_PATH", "JETTRA_DATA_DIR"}, 
             defaultStorage);
         this.rawConfiguredPath = configuredPath;
         
@@ -275,11 +298,13 @@ public final class JettraStoreConfig {
 
         Path dbPath = JettraConfigValidator.locateDatabasePropertiesFile();
         Path clusterPath = JettraConfigValidator.locateJettraConfigFile();
+        Path serverConfigPath = JettraConfigValidator.locateJettraServerConfigFile();
 
         Properties dbProps = JettraConfigValidator.loadProperties(dbPath, "/database.properties");
         Properties clusterProps = JettraConfigValidator.loadProperties(clusterPath, "/jettra.config");
+        Properties serverProps = JettraConfigValidator.loadProperties(serverConfigPath, "/jettraserver.config");
 
-        return new JettraStoreConfig(dbProps, clusterProps);
+        return new JettraStoreConfig(dbProps, clusterProps, serverProps);
     }
 
     public String getConfiguredStoragePath() { return rawConfiguredPath; }

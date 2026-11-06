@@ -106,7 +106,21 @@ public final class JettraStoreServer {
         JettraPolice.getInstance().start(config.isJettraPoliceActive(), config.getJettraPoliceIntervalMs());
 
         // Iniciar servidor REST con Virtual Threads
-        httpServer = HttpServer.create(new InetSocketAddress(config.getRestPort()), 0);
+        int targetRestPort = config.getRestPort();
+        try {
+            httpServer = HttpServer.create(new InetSocketAddress(targetRestPort), 0);
+        } catch (java.net.BindException be) {
+            System.err.printf("[JettraStoreServer] ⚠️ Advertencia de enlace: El puerto REST %d ya se encuentra en uso por otro proceso.%n", targetRestPort);
+            int fallbackPort = (targetRestPort == 8080) ? 8082 : targetRestPort + 1;
+            try {
+                System.out.printf("[JettraStoreServer] 🔄 Conmutando automáticamente al puerto alternativo %d (definido en jettraserver.config)...%n", fallbackPort);
+                httpServer = HttpServer.create(new InetSocketAddress(fallbackPort), 0);
+                targetRestPort = fallbackPort;
+                System.out.printf("[JettraStoreServer] ✅ Servidor REST enlazado exitosamente en puerto alternativo %d.%n", targetRestPort);
+            } catch (Exception ex) {
+                throw new RuntimeException("Error fatal iniciando JettraStore REST: El puerto " + config.getRestPort() + " y el alternativo " + fallbackPort + " ya se encuentran en uso. Configure 'server.port' en jettraserver.config.", be);
+            }
+        }
         httpServer.setExecutor(Executors.newVirtualThreadPerTaskExecutor());
 
         // Endpoints REST de la API JettraStore
@@ -128,7 +142,7 @@ public final class JettraStoreServer {
             ClusterLiveEvent.TYPE_NODE_ONLINE,
             config.getNodeId(), "cluster",
             String.format("Nodo '%s' iniciado exitosamente con rol %s.", config.getNodeId(), config.getNodeRole()),
-            "rest_port=" + config.getRestPort() + ",grpc_port=" + config.getGrpcPort()
+            "rest_port=" + targetRestPort + ",grpc_port=" + config.getGrpcPort()
         );
 
         // Iniciar Servidor de Transporte Raft Inter-Nodo (puerto gRPC/TCP) si multinodo está activo
@@ -165,7 +179,10 @@ public final class JettraStoreServer {
             }
         }
 
-        System.out.printf("REST Service running with Virtual Threads on http://0.0.0.0:%d/%n", config.getRestPort());
+        int boundRestPort = (httpServer != null && httpServer.getAddress() != null) 
+            ? httpServer.getAddress().getPort() 
+            : config.getRestPort();
+        System.out.printf("REST Service running with Virtual Threads on http://0.0.0.0:%d/%n", boundRestPort);
         System.out.println("JettraStore Server is fully ready for high-performance transactions.");
     }
 
