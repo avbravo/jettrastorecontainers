@@ -113,12 +113,12 @@ public final class JettraStoreServer {
             System.err.printf("[JettraStoreServer] ⚠️ Advertencia de enlace: El puerto REST %d ya se encuentra en uso por otro proceso.%n", targetRestPort);
             int fallbackPort = (targetRestPort == 8080) ? 8082 : targetRestPort + 1;
             try {
-                System.out.printf("[JettraStoreServer] 🔄 Conmutando automáticamente al puerto alternativo %d (definido en jettraserver.config)...%n", fallbackPort);
+                System.out.printf("[JettraStoreServer] 🔄 Conmutando automáticamente al puerto alternativo %d (definido en microprofile-config.properties)...%n", fallbackPort);
                 httpServer = HttpServer.create(new InetSocketAddress(fallbackPort), 0);
                 targetRestPort = fallbackPort;
                 System.out.printf("[JettraStoreServer] ✅ Servidor REST enlazado exitosamente en puerto alternativo %d.%n", targetRestPort);
             } catch (Exception ex) {
-                throw new RuntimeException("Error fatal iniciando JettraStore REST: El puerto " + config.getRestPort() + " y el alternativo " + fallbackPort + " ya se encuentran en uso. Configure 'server.port' en jettraserver.config.", be);
+                throw new RuntimeException("Error fatal iniciando JettraStore REST: El puerto " + config.getRestPort() + " y el alternativo " + fallbackPort + " ya se encuentran en uso. Configure 'server.port' en microprofile-config.properties.", be);
             }
         }
         httpServer.setExecutor(Executors.newVirtualThreadPerTaskExecutor());

@@ -25,9 +25,11 @@ import java.util.regex.Pattern;
 public final class JettraConfigValidator {
 
     public static final String DEFAULT_CONFIG_DIR = "config";
-    public static final String DEFAULT_DATABASE_PROPERTIES_PATH = "config/database.properties";
-    public static final String DEFAULT_JETTRA_CONFIG_PATH = "config/jettra.config";
-    public static final String DEFAULT_JETTRASERVER_CONFIG_PATH = "config/jettraserver.config";
+    public static final String DEFAULT_MICROPROFILE_CONFIG_PATH = "config/microprofile-config.properties";
+    public static final String DEFAULT_CLUSTER_CONFIG_PATH = "config/cluster.config";
+    public static final String DEFAULT_DATABASE_PROPERTIES_PATH = DEFAULT_MICROPROFILE_CONFIG_PATH;
+    public static final String DEFAULT_JETTRA_CONFIG_PATH = DEFAULT_CLUSTER_CONFIG_PATH;
+    public static final String DEFAULT_JETTRASERVER_CONFIG_PATH = DEFAULT_MICROPROFILE_CONFIG_PATH;
 
     public record ClusterNodeInfo(
         String id,
@@ -112,15 +114,22 @@ public final class JettraConfigValidator {
     }
 
     /**
-     * Localiza el archivo database.properties en las rutas estándar o configuradas.
+     * Localiza el archivo de configuración MicroProfile (microprofile-config.properties) o database.properties.
      */
-    public static Path locateDatabasePropertiesFile() {
+    public static Path locateMicroProfileConfigFile() {
         String[] sysKeys = {
+            "microprofile.config.file",
+            "mp.config.file",
+            "microprofile-config.file",
+            "microprofile-config.properties",
+            "microprofile.config.path",
             "database.properties.path",
             "jettra.database.properties.path",
             "jettra.database.properties",
             "database.properties",
-            "jettra.database.path"
+            "jettra.database.path",
+            "jettraserver.config.path",
+            "jettraserver.config"
         };
         for (String k : sysKeys) {
             String sysProp = System.getProperty(k);
@@ -131,10 +140,14 @@ public final class JettraConfigValidator {
         }
 
         String[] envKeys = {
+            "MP_CONFIG_FILE",
+            "MICROPROFILE_CONFIG_FILE",
             "DATABASE_PROPERTIES_PATH",
             "JETTRA_DATABASE_PROPERTIES_PATH",
             "DATABASE_PROPERTIES",
-            "JETTRA_DATABASE_PROPERTIES"
+            "JETTRA_DATABASE_PROPERTIES",
+            "JETTRASERVER_CONFIG_PATH",
+            "JETTRASERVER_CONFIG"
         };
         for (String k : envKeys) {
             String env = System.getenv(k);
@@ -144,19 +157,26 @@ public final class JettraConfigValidator {
             }
         }
 
-        // Si se especificó jettra.config.path, buscar database.properties en la misma carpeta
-        String cfgPathStr = System.getProperty("jettra.config.path");
-        if (cfgPathStr == null || cfgPathStr.isBlank()) {
-            cfgPathStr = System.getProperty("jettra.config");
-        }
-        if (cfgPathStr == null || cfgPathStr.isBlank()) {
-            cfgPathStr = System.getenv("JETTRA_CONFIG_PATH");
-        }
+        // Si se especificó cluster.config.path o jettra.config.path, buscar en la misma carpeta
+        String cfgPathStr = System.getProperty("cluster.config.path");
+        if (cfgPathStr == null || cfgPathStr.isBlank()) cfgPathStr = System.getProperty("cluster.config");
+        if (cfgPathStr == null || cfgPathStr.isBlank()) cfgPathStr = System.getProperty("jettra.config.path");
+        if (cfgPathStr == null || cfgPathStr.isBlank()) cfgPathStr = System.getProperty("jettra.config");
+        if (cfgPathStr == null || cfgPathStr.isBlank()) cfgPathStr = System.getenv("CLUSTER_CONFIG_PATH");
+        if (cfgPathStr == null || cfgPathStr.isBlank()) cfgPathStr = System.getenv("JETTRA_CONFIG_PATH");
+
         if (cfgPathStr != null && !cfgPathStr.isBlank()) {
             try {
                 Path cfgPath = Path.of(cfgPathStr.trim()).toAbsolutePath().normalize();
                 Path parent = cfgPath.getParent();
                 if (parent != null) {
+                    Path siblingMp = parent.resolve("microprofile-config.properties");
+                    if (Files.exists(siblingMp)) return siblingMp;
+                    Path siblingCfgMp = parent.resolve("config/microprofile-config.properties");
+                    if (Files.exists(siblingCfgMp)) return siblingCfgMp;
+                    Path siblingMetaMp = parent.resolve("META-INF/microprofile-config.properties");
+                    if (Files.exists(siblingMetaMp)) return siblingMetaMp;
+
                     Path sibling = parent.resolve("database.properties");
                     if (Files.exists(sibling)) return sibling;
                     Path siblingCfg = parent.resolve("config/database.properties");
@@ -165,23 +185,44 @@ public final class JettraConfigValidator {
             } catch (Exception ignored) {}
         }
 
-        Path p1 = Path.of(DEFAULT_DATABASE_PROPERTIES_PATH);
-        if (Files.exists(p1)) return p1;
-        Path p2 = Path.of("database.properties");
-        if (Files.exists(p2)) return p2;
-        Path p3 = Path.of("../config/database.properties");
-        if (Files.exists(p3)) return p3;
-        Path p4 = Path.of("../database.properties");
-        if (Files.exists(p4)) return p4;
+        Path[] candidates = {
+            Path.of(DEFAULT_MICROPROFILE_CONFIG_PATH),
+            Path.of("microprofile-config.properties"),
+            Path.of("src/main/resources/META-INF/microprofile-config.properties"),
+            Path.of("../config/microprofile-config.properties"),
+            Path.of("../microprofile-config.properties"),
+            Path.of("config/database.properties"),
+            Path.of("database.properties"),
+            Path.of("../config/database.properties"),
+            Path.of("../database.properties"),
+            Path.of("config/jettraserver.config"),
+            Path.of("jettraserver.config"),
+            Path.of("../config/jettraserver.config"),
+            Path.of("../jettraserver.config")
+        };
+        for (Path c : candidates) {
+            if (Files.exists(c)) return c;
+        }
 
         return null;
     }
 
     /**
-     * Localiza el archivo jettra.config en las rutas estándar o configuradas.
+     * Localiza el archivo database.properties o microprofile-config.properties (compatibilidad hacia atrás).
      */
-    public static Path locateJettraConfigFile() {
+    public static Path locateDatabasePropertiesFile() {
+        return locateMicroProfileConfigFile();
+    }
+
+    /**
+     * Localiza el archivo cluster.config (o legacy jettra.config) en las rutas estándar o configuradas.
+     */
+    public static Path locateClusterConfigFile() {
         String[] sysKeys = {
+            "cluster.config.path",
+            "cluster.config",
+            "jettra.cluster.config.path",
+            "jettra.cluster.config",
             "jettra.config.path",
             "jettra.config"
         };
@@ -194,6 +235,10 @@ public final class JettraConfigValidator {
         }
 
         String[] envKeys = {
+            "CLUSTER_CONFIG_PATH",
+            "CLUSTER_CONFIG",
+            "JETTRA_CLUSTER_CONFIG_PATH",
+            "JETTRA_CLUSTER_CONFIG",
             "JETTRA_CONFIG_PATH",
             "JETTRA_CONFIG"
         };
@@ -205,16 +250,20 @@ public final class JettraConfigValidator {
             }
         }
 
-        // Si se especificó database.properties.path, buscar jettra.config en la misma carpeta
-        String dbPathStr = System.getProperty("database.properties.path");
-        if (dbPathStr == null || dbPathStr.isBlank()) {
-            dbPathStr = System.getProperty("jettra.database.properties.path");
-        }
+        // Si se especificó microprofile.config.file o database.properties.path, buscar cluster.config en la misma carpeta
+        String dbPathStr = System.getProperty("microprofile.config.file");
+        if (dbPathStr == null || dbPathStr.isBlank()) dbPathStr = System.getProperty("database.properties.path");
+        if (dbPathStr == null || dbPathStr.isBlank()) dbPathStr = System.getProperty("jettra.database.properties.path");
         if (dbPathStr != null && !dbPathStr.isBlank()) {
             try {
                 Path dbPath = Path.of(dbPathStr.trim()).toAbsolutePath().normalize();
                 Path parent = dbPath.getParent();
                 if (parent != null) {
+                    Path siblingCluster = parent.resolve("cluster.config");
+                    if (Files.exists(siblingCluster)) return siblingCluster;
+                    Path siblingCfgCluster = parent.resolve("config/cluster.config");
+                    if (Files.exists(siblingCfgCluster)) return siblingCfgCluster;
+
                     Path sibling = parent.resolve("jettra.config");
                     if (Files.exists(sibling)) return sibling;
                     Path siblingCfg = parent.resolve("config/jettra.config");
@@ -223,132 +272,171 @@ public final class JettraConfigValidator {
             } catch (Exception ignored) {}
         }
 
-        Path p1 = Path.of(DEFAULT_JETTRA_CONFIG_PATH);
-        if (Files.exists(p1)) return p1;
-        Path p2 = Path.of("jettra.config");
-        if (Files.exists(p2)) return p2;
-        Path p3 = Path.of("../config/jettra.config");
-        if (Files.exists(p3)) return p3;
-        Path p4 = Path.of("../jettra.config");
-        if (Files.exists(p4)) return p4;
+        Path[] candidates = {
+            Path.of(DEFAULT_CLUSTER_CONFIG_PATH),
+            Path.of("cluster.config"),
+            Path.of("../config/cluster.config"),
+            Path.of("../cluster.config"),
+            Path.of("config/jettra.config"),
+            Path.of("jettra.config"),
+            Path.of("../config/jettra.config"),
+            Path.of("../jettra.config")
+        };
+        for (Path c : candidates) {
+            if (Files.exists(c)) return c;
+        }
 
         return null;
     }
 
     /**
-     * Localiza el archivo jettraserver.config en las rutas estándar o configuradas.
+     * Localiza el archivo de topología de clúster (compatibilidad hacia atrás).
+     */
+    public static Path locateJettraConfigFile() {
+        return locateClusterConfigFile();
+    }
+
+    /**
+     * Localiza el archivo de servidor (compatibilidad hacia atrás con JettraServer).
      */
     public static Path locateJettraServerConfigFile() {
-        String[] sysKeys = {
-            "jettraserver.config.path",
-            "jettraserver.config",
-            "jettra.server.config.path",
-            "jettra.server.config"
-        };
-        for (String k : sysKeys) {
-            String sysProp = System.getProperty(k);
-            if (sysProp != null && !sysProp.isBlank()) {
-                Path p = Path.of(sysProp.trim());
-                if (Files.exists(p)) return p;
-            }
-        }
-
-        String[] envKeys = {
-            "JETTRASERVER_CONFIG_PATH",
-            "JETTRASERVER_CONFIG",
-            "JETTRA_SERVER_CONFIG"
-        };
-        for (String k : envKeys) {
-            String env = System.getenv(k);
-            if (env != null && !env.isBlank()) {
-                Path p = Path.of(env.trim());
-                if (Files.exists(p)) return p;
-            }
-        }
-
-        Path p1 = Path.of(DEFAULT_JETTRASERVER_CONFIG_PATH);
-        if (Files.exists(p1)) return p1;
-        Path p2 = Path.of("jettraserver.config");
-        if (Files.exists(p2)) return p2;
-        Path p3 = Path.of("../config/jettraserver.config");
-        if (Files.exists(p3)) return p3;
-        Path p4 = Path.of("../jettraserver.config");
-        if (Files.exists(p4)) return p4;
-
-        return null;
+        return locateMicroProfileConfigFile();
     }
 
     /**
      * Asegura que los archivos de configuración existan en disco. Si no existen, los genera
      * de manera automática en la carpeta 'config/' con los valores y la sintaxis recomendada.
      */
+    /**
+     * Asegura que los archivos de configuración existan en disco. Si no existen, los genera
+     * de manera automática en la carpeta 'config/' con los valores y la sintaxis recomendada.
+     */
     public static void ensureConfigFilesExist() {
-        Path dbPath = locateDatabasePropertiesFile();
+        Path dbPath = locateMicroProfileConfigFile();
         if (dbPath == null) {
-            Path target = Path.of(DEFAULT_DATABASE_PROPERTIES_PATH);
-            generateDefaultDatabaseProperties(target);
+            Path target = Path.of(DEFAULT_MICROPROFILE_CONFIG_PATH);
+            generateDefaultMicroProfileConfig(target);
         }
 
-        Path clusterPath = locateJettraConfigFile();
+        Path clusterPath = locateClusterConfigFile();
         if (clusterPath == null) {
-            Path target = Path.of(DEFAULT_JETTRA_CONFIG_PATH);
-            generateDefaultJettraConfig(target);
-        }
-
-        Path serverPath = locateJettraServerConfigFile();
-        if (serverPath == null) {
-            Path target = Path.of(DEFAULT_JETTRASERVER_CONFIG_PATH);
-            generateDefaultJettraServerConfig(target);
+            Path target = Path.of(DEFAULT_CLUSTER_CONFIG_PATH);
+            generateDefaultClusterConfig(target);
         }
     }
 
     /**
-     * Genera automáticamente el archivo jettraserver.config con la configuración predeterminada y recomendada.
+     * Genera automáticamente el archivo microprofile-config.properties con la configuración predeterminada y recomendada.
      */
-    public static void generateDefaultJettraServerConfig(Path target) {
+    public static void generateDefaultMicroProfileConfig(Path target) {
         try {
             if (target.getParent() != null && !Files.exists(target.getParent())) {
                 Files.createDirectories(target.getParent());
             }
             String content = """
 # ==============================================================================
-# JettraStore - Configuración Oficial de JettraServer (jettraserver.config)
-# Servidor REST Modular de Alto Rendimiento para Java 25 & Project Loom
+# ECLIPSE MICROPROFILE CONFIGURATION (MicroProfile Config 3.1)
+# JettraStore Multi-Model Distributed Database (Java 25+ & Project Loom)
 # ==============================================================================
 
-# Dirección IP y puerto de escucha del servidor REST de JettraStore
-# (Configurado en 8082 para coexistir de forma no conflictiva con JettraServer en 8080)
-server.host=0.0.0.0
-server.port=8082
+# Perfil activo de configuración MicroProfile
+mp.config.profile=production
 
-# Ruta base de contexto (Context Path)
-contextpath=/
-server.contextpath=/
+# Identificador y Rol del Nodo Local en el Clúster
+jettra.node.id=node-01
+jettra.node.role=PRIMARY
+cluster.node.id=node-01
+cluster.node.role=PRIMARY
 
-# Modo de almacenamiento operativo de JettraStore:
-#   JVM_RAM     -> Modo memoria RAM estándar de la JVM (UnifiedMap, Heap & Stack).
-#   DISK_MEMORY -> Motor de disco directo Off-Heap LSM (JettraMemory).
-#   OFF_HEAP    -> Motor de páginas nativas Slotted-Page Off-Heap FFM (JettraStore-OffHeap).
-storage.mode=OFF_HEAP
-jettra.storage.mode=OFF_HEAP
+# Topología Multinodo y Consenso
+cluster.multinode.active=on
 
-# Directorio base para datos persistentes
-data.dir=~/jettra/data
+# Directorios de Almacenamiento y Persistencia
 jettra.storage.path=~/jettra/data
+storage.path=~/jettra/data
+data.dir=~/jettra/data
 jettra.index.storage.path=~/jettra/data/indexes
 
-# Concurrencia impulsada por hilos virtuales de Java 25 (Project Loom)
+# Modo de Almacenamiento (OFF_HEAP, DISK_MEMORY, JVM_RAM)
+jettra.storage.mode=OFF_HEAP
+storage.mode=OFF_HEAP
+jettra.storage.file.extension=.jettra
+
+# Red y Puertos de Escucha
+server.host=0.0.0.0
+server.port=8082
+contextpath=/
+server.contextpath=/
+jettra.network.grpc.port=9091
+jettra.network.rest.port=8082
+jettra.network.virtualthreads.enabled=true
 server.virtual-threads=true
 
-# Clave secreta y expiración para tokens criptográficos JettraJWT
+# MemTable y Memoria Off-Heap (Panama FFM)
+jettra.storage.memtable.size.mb=128
+jettra.storage.ram.global.limit.mb=2048
+jettra.storage.offheap.direct=true
+storage.offheap.page-size=65536
+
+# Umbrales del Motor de Anillo Distribuido
+jettra.ring.saturation.threshold.percent=85
+jettra.ring.release.target.percent=45
+
+# JettraPolice (Supervisión Preventiva Anti-OOM)
+jettrapolice.active=true
+jettrapolice.interval.ms=500
+jettrapolice.ram.warning.threshold=75
+jettrapolice.disk.warning.threshold=90
+jettrapolice.ram.critical.threshold=85
+jettrapolice.auto.pagination.enabled=true
+jettrapolice.max.safe.batch.size=100
+
+# Índices y Optimización de Consultas
+jettra.index.initial.capacity=65536
+jettra.index.max.inmemory.keys=100000
+jettra.index.compact.storage=true
+jettra.storage.autoflush.batch.size=50000
+jettra.query.default.limit=50
+jettra.query.max.limit=5000
+jettra.query.pagesize=50
+
+# Seguridad Criptográfica y JWT
+jettra.security.jwt.algorithm=Ed25519
+jettra.security.jwt.expiration.seconds=86400
+jettra.security.jwt.issuer=jettra-store-authority
 jwt.secret=jettra_store_super_secure_jwt_key_2026
 jwt.expiration-millis=86400000
+
+# Superusuario por Defecto
+jettra.security.default.admin.username=admin
+jettra.security.default.admin.password=admin-jettra
+
+# Métricas y MicroProfile
+jmh.metrics.active=false
+mp.health.default.readiness.empty.response=UP
+mp.metrics.appName=JettraStore
+mp.metrics.tags=platform=JettraStore,runtime=Java25,engine=PanamaFFM
+cors.enabled=true
 """;
             Files.writeString(target, content, StandardCharsets.UTF_8);
             System.out.printf("[JettraStore] Archivo de configuración '%s' generado automáticamente con éxito.%n", target);
         } catch (IOException e) {
             System.err.printf("[JettraStore] Error al generar archivo '%s': %s%n", target, e.getMessage());
         }
+    }
+
+    /**
+     * Genera automáticamente el archivo cluster.config con la topología de clúster recomendada.
+     */
+    public static void generateDefaultClusterConfig(Path target) {
+        generateDefaultJettraConfig(target);
+    }
+
+    /**
+     * Genera automáticamente el archivo jettraserver.config (compatibilidad).
+     */
+    public static void generateDefaultJettraServerConfig(Path target) {
+        generateDefaultMicroProfileConfig(target);
     }
 
     /**
@@ -413,7 +501,7 @@ jettra.security.default.admin.password = admin-jettra
 
 # Red y Puertos de Escucha
 jettra.network.grpc.port = 9091
-jettra.network.rest.port = 8080
+jettra.network.rest.port = 8082
 jettra.network.virtualthreads.enabled = true
 
 # Optimización de Almacenamiento de Índices
@@ -464,7 +552,7 @@ cluster.node.1.id = node-01
 cluster.node.1.role = PRIMARY
 cluster.node.1.ip = 127.0.0.1
 cluster.node.1.grpc.port = 9091
-cluster.node.1.rest.port = 8080
+cluster.node.1.rest.port = 8082
 cluster.node.1.storage.path = ~/jettra/data
 
 # ==============================================================================
@@ -474,7 +562,7 @@ cluster.node.2.id = node-02
 cluster.node.2.role = SECONDARY
 cluster.node.2.ip = 127.0.0.1
 cluster.node.2.grpc.port = 9091
-cluster.node.2.rest.port = 8080
+cluster.node.2.rest.port = 8082
 cluster.node.2.storage.path = ~/jettra/data
 
 # ==============================================================================
@@ -484,7 +572,7 @@ cluster.node.3.id = node-03
 cluster.node.3.role = SECONDARY
 cluster.node.3.ip = 127.0.0.1
 cluster.node.3.grpc.port = 9091
-cluster.node.3.rest.port = 8080
+cluster.node.3.rest.port = 8082
 cluster.node.3.storage.path = ~/jettra/data
 
 # Asignación de Capacidad de Índices y Buffers en Clúster
@@ -533,7 +621,7 @@ cluster.index.max.inmemory.keys = 100000
             if (!matchedNode) {
                 List<String> validIds = nodes.stream().map(ClusterNodeInfo::id).toList();
                 errors.add(String.format(
-                    "El identificador de nodo '%s' (definido en database.properties o vía -Djettra.node.id) no coincide con ningún nodo registrado en jettra.config %s.",
+                    "El identificador de nodo '%s' (definido en microprofile-config.properties o vía -Djettra.node.id) no coincide con ningún nodo registrado en cluster.config %s.",
                     configuredNodeId, validIds
                 ));
             }
@@ -542,16 +630,16 @@ cluster.index.max.inmemory.keys = 100000
         // 2. Verificar jettra.storage.path y jettra.index.storage.path
         // Los valores de ambas propiedades pueden ser cualquier ruta que el usuario indique
         // para dar libertad a una mejor configuración.
-        // Lo único que debe verificar es que si en el archivo database.properties se especifica
+        // Lo único que debe verificar es que si en el archivo microprofile-config.properties se especifica
         // el valor de jettra.node.id, deben coincidir el valor de jettra.storage.path del archivo
-        // database.properties con el valor de la propiedad cluster.node.<numero-nodo>.storage.path
-        // del archivo jettra.config. Si no coinciden, se envía una advertencia.
+        // microprofile-config.properties con el valor de la propiedad cluster.node.<numero-nodo>.storage.path
+        // del archivo cluster.config. Si no coinciden, se envía una advertencia.
         String dbStoragePath = getPropOrEnv(dbProps, 
             new String[]{"jettra.storage.path", "storage.path"}, 
             new String[]{"JETTRA_STORAGE_PATH"}, "").trim();
 
         if (dbStoragePath.isEmpty()) {
-            errors.add("La propiedad 'jettra.storage.path' no está definida en database.properties.");
+            errors.add("La propiedad 'jettra.storage.path' no está definida en microprofile-config.properties.");
         } else if (!configuredNodeId.isEmpty()) {
             String nodeNum = extractNodeNumber(configuredNodeId);
             ClusterNodeInfo targetNode = null;
@@ -582,7 +670,7 @@ cluster.index.max.inmemory.keys = 100000
             if (clusterNodeStoragePath != null && !clusterNodeStoragePath.isBlank()) {
                 if (!pathsMatch(dbStoragePath, clusterNodeStoragePath.trim())) {
                     String warnMsg = String.format(
-                        "ADVERTENCIA: La propiedad 'jettra.storage.path' ('%s') de database.properties no coincide con la propiedad 'cluster.node.%s.storage.path' ('%s') de jettra.config para el nodo %s ('%s').",
+                        "ADVERTENCIA: La propiedad 'jettra.storage.path' ('%s') de microprofile-config.properties no coincide con la propiedad 'cluster.node.%s.storage.path' ('%s') de cluster.config para el nodo %s ('%s').",
                         dbStoragePath, nodeIdxStr, clusterNodeStoragePath.trim(), nodeIdxStr, configuredNodeId
                     );
                     warnings.add(warnMsg);
@@ -596,13 +684,13 @@ cluster.index.max.inmemory.keys = 100000
             new String[]{"jettra.network.grpc.port", "jettra.grpc.port", "grpc.port"}, 
             new String[]{"JETTRA_GRPC_PORT", "JETTRA_NETWORK_GRPC_PORT"}, "").trim();
         if (grpcPortStr.isEmpty()) {
-            errors.add("La propiedad 'jettra.network.grpc.port' no está definida en database.properties.");
+            errors.add("La propiedad 'jettra.network.grpc.port' no está definida en microprofile-config.properties.");
         } else {
             try {
                 int grpcPort = Integer.parseInt(grpcPortStr);
                 if (!nodeGrpcPorts.contains(grpcPort)) {
                     errors.add(String.format(
-                        "El puerto 'jettra.network.grpc.port' (%d) de database.properties no coincide con ningún puerto cluster.node.X.grpc.port de jettra.config %s.",
+                        "El puerto 'jettra.network.grpc.port' (%d) de microprofile-config.properties no coincide con ningún puerto cluster.node.X.grpc.port de cluster.config %s.",
                         grpcPort, nodeGrpcPorts
                     ));
                 }
@@ -611,23 +699,23 @@ cluster.index.max.inmemory.keys = 100000
             }
         }
 
-        // 4. Verificar jettra.network.rest.port
+        // 4. Verificar puerto REST (server.port o jettra.network.rest.port)
         String restPortStr = getPropOrEnv(dbProps, 
-            new String[]{"jettra.network.rest.port", "jettra.rest.port", "rest.port"}, 
-            new String[]{"JETTRA_REST_PORT", "JETTRA_NETWORK_REST_PORT"}, "").trim();
+            new String[]{"server.port", "jettra.network.rest.port", "jettra.rest.port", "rest.port", "jettra.server.port"}, 
+            new String[]{"JETTRA_REST_PORT", "JETTRA_NETWORK_REST_PORT", "JETTRA_SERVER_PORT", "SERVER_PORT"}, "").trim();
         if (restPortStr.isEmpty()) {
-            errors.add("La propiedad 'jettra.network.rest.port' no está definida en database.properties.");
+            errors.add("La propiedad 'server.port' / 'jettra.network.rest.port' no está definida en microprofile-config.properties.");
         } else {
             try {
                 int restPort = Integer.parseInt(restPortStr);
                 if (!nodeRestPorts.contains(restPort)) {
                     errors.add(String.format(
-                        "El puerto 'jettra.network.rest.port' (%d) de database.properties no coincide con ningún puerto cluster.node.X.rest.port de jettra.config %s.",
+                        "El puerto 'server.port' / 'jettra.network.rest.port' (%d) de microprofile-config.properties no coincide con ningún puerto cluster.node.X.rest.port de cluster.config %s.",
                         restPort, nodeRestPorts
                     ));
                 }
             } catch (NumberFormatException e) {
-                errors.add("El valor de 'jettra.network.rest.port' ('" + restPortStr + "') no es un número de puerto válido.");
+                errors.add("El valor de 'server.port' / 'jettra.network.rest.port' ('" + restPortStr + "') no es un número de puerto válido.");
             }
         }
 
@@ -638,14 +726,14 @@ cluster.index.max.inmemory.keys = 100000
         if (!multinodeVal.equalsIgnoreCase("on") && !multinodeVal.equalsIgnoreCase("off")
             && !multinodeVal.equalsIgnoreCase("true") && !multinodeVal.equalsIgnoreCase("false")) {
             errors.add(String.format(
-                "El valor de 'cluster.multinode.active' ('%s') en database.properties es inválido. Debe ser 'on' u 'off'.",
+                "El valor de 'cluster.multinode.active' ('%s') en microprofile-config.properties es inválido. Debe ser 'on' u 'off'.",
                 multinodeVal
             ));
         }
 
         if (errors.isEmpty()) {
             String msg = warnings.isEmpty() 
-                ? "[JettraStore] Validación exitosa: database.properties y jettra.config están debidamente sincronizados."
+                ? "[JettraStore] Validación exitosa: microprofile-config.properties y cluster.config están debidamente sincronizados."
                 : "[JettraStore] Validación completada con advertencias: " + String.join("; ", warnings);
             return new ValidationResult(true, List.of(), warnings, msg);
         }
@@ -662,7 +750,7 @@ cluster.index.max.inmemory.keys = 100000
         sb.append("\n");
         sb.append("╔══════════════════════════════════════════════════════════════════════════════╗\n");
         sb.append("║            ERROR DE CONFIGURACIÓN AL INICIAR JETTRASTORE                     ║\n");
-        sb.append("║           (Incompatibilidad entre database.properties y jettra.config)       ║\n");
+        sb.append("║     (Incompatibilidad entre microprofile-config.properties y cluster.config) ║\n");
         sb.append("╚══════════════════════════════════════════════════════════════════════════════╝\n");
         sb.append("Se han detectado las siguientes incoherencias que impiden el inicio seguro:\n\n");
         for (int i = 0; i < errors.size(); i++) {
@@ -670,10 +758,10 @@ cluster.index.max.inmemory.keys = 100000
         }
         sb.append("────────────────────────────────────────────────────────────────────────────────\n");
         sb.append("DIRECTIVAS DE CORRECCIÓN:\n");
-        sb.append(" 1. Si especifica 'jettra.node.id' en database.properties, verifique que\n");
-        sb.append("    'jettra.storage.path' coincida con 'cluster.node.<numero-nodo>.storage.path' en jettra.config.\n");
+        sb.append(" 1. Si especifica 'jettra.node.id' en microprofile-config.properties, verifique que\n");
+        sb.append("    'jettra.storage.path' coincida con 'cluster.node.<numero-nodo>.storage.path' en cluster.config.\n");
         sb.append(" 2. Verifique que 'jettra.network.grpc.port' coincida con cluster.node.[1|2|3].grpc.port\n");
-        sb.append(" 3. Verifique que 'jettra.network.rest.port' coincida con cluster.node.[1|2|3].rest.port\n");
+        sb.append(" 3. Verifique que 'server.port' / 'jettra.network.rest.port' coincida con cluster.node.[1|2|3].rest.port\n");
         sb.append(" 4. Verifique que 'cluster.multinode.active' sea 'on' u 'off' (on=consenso distribuido, off=servidor local).\n");
         sb.append("────────────────────────────────────────────────────────────────────────────────\n");
         sb.append("[JettraStore] La ejecución se detiene de forma preventiva. Corrija los archivos para iniciar.\n");
@@ -796,9 +884,9 @@ cluster.index.max.inmemory.keys = 100000
         }
 
         if (list.isEmpty()) {
-            list.add(new ClusterNodeInfo("node-01", "PRIMARY", "127.0.0.1", 9091, 8080, "~/jettra/data", "1"));
-            list.add(new ClusterNodeInfo("node-02", "SECONDARY", "127.0.0.1", 9091, 8080, "~/jettra/data", "2"));
-            list.add(new ClusterNodeInfo("node-03", "SECONDARY", "127.0.0.1", 9091, 8080, "~/jettra/data", "3"));
+            list.add(new ClusterNodeInfo("node-01", "PRIMARY", "127.0.0.1", 9091, 8082, "~/jettra/data", "1"));
+            list.add(new ClusterNodeInfo("node-02", "SECONDARY", "127.0.0.1", 9091, 8082, "~/jettra/data", "2"));
+            list.add(new ClusterNodeInfo("node-03", "SECONDARY", "127.0.0.1", 9091, 8082, "~/jettra/data", "3"));
         }
 
         return list;
@@ -808,13 +896,20 @@ cluster.index.max.inmemory.keys = 100000
      * Carga propiedades buscando primero en el classpath y sobreescribiendo con el archivo en disco si existe.
      */
     public static Properties loadProperties(Path diskPath, String classpathResource) {
+        return loadProperties(diskPath, new String[]{classpathResource});
+    }
+
+    public static Properties loadProperties(Path diskPath, String... classpathResources) {
         Properties props = new Properties();
-        if (classpathResource != null) {
-            try (InputStream is = JettraConfigValidator.class.getResourceAsStream(classpathResource)) {
-                if (is != null) {
-                    props.load(is);
-                }
-            } catch (IOException ignored) {}
+        if (classpathResources != null) {
+            for (String cpRes : classpathResources) {
+                if (cpRes == null) continue;
+                try (InputStream is = JettraConfigValidator.class.getResourceAsStream(cpRes)) {
+                    if (is != null) {
+                        props.load(is);
+                    }
+                } catch (IOException ignored) {}
+            }
         }
         if (diskPath != null && Files.exists(diskPath)) {
             try (InputStream is = Files.newInputStream(diskPath)) {
@@ -845,18 +940,21 @@ cluster.index.max.inmemory.keys = 100000
         ensureConfigFilesExist();
 
         // 2. Cargar configuraciones
-        Path dbPath = locateDatabasePropertiesFile();
-        Path clusterPath = locateJettraConfigFile();
+        Path dbPath = locateMicroProfileConfigFile();
+        Path clusterPath = locateClusterConfigFile();
+
+        String dbFileName = dbPath != null ? dbPath.getFileName().toString() : "microprofile-config.properties";
+        String clusterFileName = clusterPath != null ? clusterPath.getFileName().toString() : "cluster.config";
 
         System.out.println("[JettraStore] ================================================================================");
-        System.out.printf("[JettraStore] Leyendo configuración de nodo (database.properties): %s%n", 
-            dbPath != null ? dbPath.toAbsolutePath().normalize() : "classpath:/database.properties");
-        System.out.printf("[JettraStore] Leyendo topología de clúster (jettra.config):      %s%n", 
-            clusterPath != null ? clusterPath.toAbsolutePath().normalize() : "classpath:/jettra.config");
+        System.out.printf("[JettraStore] Leyendo configuración de nodo (%s): %s%n", 
+            dbFileName, dbPath != null ? dbPath.toAbsolutePath().normalize() : "classpath:/META-INF/microprofile-config.properties");
+        System.out.printf("[JettraStore] Leyendo topología de clúster (%s):      %s%n", 
+            clusterFileName, clusterPath != null ? clusterPath.toAbsolutePath().normalize() : "classpath:/cluster.config");
         System.out.println("[JettraStore] ================================================================================");
 
-        Properties dbProps = loadProperties(dbPath, "/database.properties");
-        Properties clusterProps = loadProperties(clusterPath, "/jettra.config");
+        Properties dbProps = loadProperties(dbPath, "/META-INF/microprofile-config.properties", "/microprofile-config.properties", "/database.properties");
+        Properties clusterProps = loadProperties(clusterPath, "/cluster.config", "/jettra.config");
 
         // 3. Ejecutar validaciones
         ValidationResult result = validate(dbProps, clusterProps);

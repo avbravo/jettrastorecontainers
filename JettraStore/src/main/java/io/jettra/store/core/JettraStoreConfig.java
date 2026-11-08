@@ -296,15 +296,15 @@ public final class JettraStoreConfig {
     public static JettraStoreConfig load() {
         JettraConfigValidator.ensureConfigFilesExist();
 
-        Path dbPath = JettraConfigValidator.locateDatabasePropertiesFile();
-        Path clusterPath = JettraConfigValidator.locateJettraConfigFile();
-        Path serverConfigPath = JettraConfigValidator.locateJettraServerConfigFile();
+        Path configPath = JettraConfigValidator.locateMicroProfileConfigFile();
+        Path clusterPath = JettraConfigValidator.locateClusterConfigFile();
 
-        Properties dbProps = JettraConfigValidator.loadProperties(dbPath, "/database.properties");
-        Properties clusterProps = JettraConfigValidator.loadProperties(clusterPath, "/jettra.config");
-        Properties serverProps = JettraConfigValidator.loadProperties(serverConfigPath, "/jettraserver.config");
+        Properties configProps = JettraConfigValidator.loadProperties(configPath, 
+            "/META-INF/microprofile-config.properties", "/microprofile-config.properties", "/database.properties", "/jettraserver.config");
+        Properties clusterProps = JettraConfigValidator.loadProperties(clusterPath, 
+            "/cluster.config", "/jettra.config");
 
-        return new JettraStoreConfig(dbProps, clusterProps, serverProps);
+        return new JettraStoreConfig(configProps, clusterProps, configProps);
     }
 
     public String getConfiguredStoragePath() { return rawConfiguredPath; }
