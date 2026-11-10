@@ -21,7 +21,7 @@
         <jettra.frameworks.version>1.0.0-SNAPSHOT</jettra.frameworks.version>
         <jettra.store.version>1.0-SNAPSHOT</jettra.store.version>
         <jackson.version>2.18.2</jackson.version>
-        <skipTests>true</skipTests>
+        <skipTests>false</skipTests>
     </properties>
 
     <dependencyManagement>
@@ -41,6 +41,11 @@
         <dependency>
             <groupId>io.jettra</groupId>
             <artifactId>jettra-server-core</artifactId>
+            <version>1.0.0-SNAPSHOT</version>
+        </dependency>
+        <dependency>
+            <groupId>io.jettra</groupId>
+            <artifactId>jettra-server-flux</artifactId>
             <version>1.0.0-SNAPSHOT</version>
         </dependency>
 
@@ -216,14 +221,26 @@
                 <version>3.5.1</version>
                 <configuration>
                     <mainClass>${main.class.path}</mainClass>
-                    <executable>java</executable>
-                    <arguments>
-                        <argument>--enable-preview</argument>
-                        <argument>-classpath</argument>
-                        <classpath/>
-                        <argument>${main.class.path}</argument>
-                    </arguments>
+                    <cleanupDaemonThreads>false</cleanupDaemonThreads>
                 </configuration>
+                <executions>
+                    <execution>
+                        <id>jettra-test</id>
+                        <phase>test</phase>
+                        <goals>
+                            <goal>java</goal>
+                        </goals>
+                        <configuration>
+                            <mainClass>io.jettra.test.runner.JettraTestRunner</mainClass>
+                            <classpathScope>test</classpathScope>
+                            <cleanupDaemonThreads>false</cleanupDaemonThreads>
+                            <arguments>
+                                <argument>${project.build.testOutputDirectory}</argument>
+                                <argument>${project.build.outputDirectory}</argument>
+                            </arguments>
+                        </configuration>
+                    </execution>
+                </executions>
             </plugin>
         </plugins>
     </build>

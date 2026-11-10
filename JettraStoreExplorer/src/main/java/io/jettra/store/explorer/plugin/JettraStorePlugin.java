@@ -284,6 +284,36 @@ public class JettraStorePlugin {
         return serverNodes.stream().filter(n -> n.getId().equalsIgnoreCase(id)).findFirst().orElse(null);
     }
 
+    public synchronized boolean addNode(String id, String name, String role, String host, int port, long heapMaxMb) {
+        if (id == null || id.isBlank()) return false;
+        if (getNodeById(id) != null) return false;
+        String r = (role != null && !role.isBlank()) ? role.toUpperCase() : "FOLLOWER";
+        String h = (host != null && !host.isBlank()) ? host : "127.0.0.1";
+        int p = port > 0 ? port : 8770;
+        long maxM = heapMaxMb > 0 ? heapMaxMb : 2048;
+        ServerNodeInfo node = new ServerNodeInfo(id.trim(), (name != null && !name.isBlank()) ? name.trim() : id.trim(), r, h.trim(), p, 15.0f, 320, maxM, 850, 5000, 200, 10500, 0.65f, 8, true);
+        serverNodes.add(node);
+        logPoliceIncident("Raft Quorum K9", "Nuevo nodo registrado en clúster: " + id + " (" + h + ":" + p + ")", "OK", "Incorporado a quórum");
+        return true;
+    }
+
+    public synchronized boolean removeNode(String id) {
+        if ("node-01".equalsIgnoreCase(id)) return false; // Proteger nodo master principal
+        boolean removed = serverNodes.removeIf(n -> n.getId().equalsIgnoreCase(id));
+        if (removed) {
+            logPoliceIncident("Raft Quorum K9", "Nodo expulsado del clúster: " + id, "WARN", "Rebalanceo de réplicas Raft");
+        }
+        return removed;
+    }
+
+    public synchronized void toggleNode(String id) {
+        ServerNodeInfo n = getNodeById(id);
+        if (n != null) {
+            n.setOnline(!n.isOnline());
+            logPoliceIncident("Raft Quorum K9", "Nodo " + id + " conmutado a estado: " + (n.isOnline() ? "ONLINE" : "OFFLINE"), n.isOnline() ? "OK" : "WARN", "Detección de latido");
+        }
+    }
+
     // --- Catálogo Multimodelo y Buckets ---
     private void initDatabaseCatalog() {
         databasesCatalog.clear();
@@ -382,6 +412,66 @@ public class JettraStorePlugin {
             if (b.getBucketName().equalsIgnoreCase(bucketName)) return b;
         }
         return list.isEmpty() ? null : list.get(0);
+    }
+
+    public synchronized boolean createDatabase(String dbName, String defaultBucket, String engineType, String description) {
+        if (dbName == null || dbName.isBlank()) return false;
+        String cleanName = dbName.trim().toLowerCase().replaceAll("[^a-z0-9_]", "_");
+        if (databasesCatalog.containsKey(cleanName)) return false;
+        List<EngineBucketInfo> buckets = new ArrayList<>();
+        String bName = (defaultBucket != null && !defaultBucket.isBlank()) ? defaultBucket.trim() : "DefaultBucket";
+        String eType = (engineType != null && !engineType.isBlank()) ? engineType.trim().toUpperCase() : "DOCUMENT";
+        String desc = (description != null && !description.isBlank()) ? description.trim() : "Almacén inicial de base de datos " + cleanName;
+        EngineBucketInfo b = new EngineBucketInfo(cleanName, bName, eType, 0L, 0L, desc);
+        b.getIndexes().add(new EngineIndexInfo("idx_" + bName.toLowerCase() + "_id", "id", "BTREE", true, "READY"));
+        buckets.add(b);
+        databasesCatalog.put(cleanName, buckets);
+        logPoliceIncident("Catalog Patrol", "Base de datos '" + cleanName + "' creada con motor " + eType, "OK", "Metadatos registrados en catálogo");
+        return true;
+    }
+
+    public synchronized boolean deleteDatabase(String dbName) {
+        if (dbName == null || dbName.isBlank() || "system_metadata_db".equalsIgnoreCase(dbName)) return false;
+        boolean removed = databasesCatalog.remove(dbName.trim()) != null;
+        if (removed) {
+            logPoliceIncident("Catalog Patrol", "Base de datos '" + dbName + "' eliminada del clúster", "WARN", "Recursos liberados en disco y memoria");
+        }
+        return removed;
+    }
+
+    public synchronized boolean addBucket(String dbName, String bucketName, String engineType, String description) {
+        if (dbName == null || bucketName == null || bucketName.isBlank()) return false;
+        List<EngineBucketInfo> buckets = databasesCatalog.get(dbName);
+        if (buckets == null) return false;
+        for (EngineBucketInfo b : buckets) {
+            if (b.getBucketName().equalsIgnoreCase(bucketName.trim())) return false;
+        }
+        String eType = (engineType != null && !engineType.isBlank()) ? engineType.trim().toUpperCase() : "DOCUMENT";
+        String desc = (description != null && !description.isBlank()) ? description.trim() : "Bucket " + bucketName;
+        EngineBucketInfo newB = new EngineBucketInfo(dbName, bucketName.trim(), eType, 0L, 0L, desc);
+        newB.getIndexes().add(new EngineIndexInfo("idx_" + bucketName.toLowerCase().replaceAll("[^a-z0-9]", "_") + "_id", "id", "BTREE", true, "READY"));
+        buckets.add(newB);
+        logPoliceIncident("Catalog Patrol", "Nuevo Bucket/Motor '" + bucketName + "' [" + eType + "] añadido a " + dbName, "OK", "MemTable y Bloom Filters asignados");
+        return true;
+    }
+
+    public synchronized boolean deleteBucket(String dbName, String bucketName) {
+        List<EngineBucketInfo> buckets = databasesCatalog.get(dbName);
+        if (buckets == null || buckets.size() <= 1) return false;
+        boolean removed = buckets.removeIf(b -> b.getBucketName().equalsIgnoreCase(bucketName.trim()));
+        if (removed) {
+            logPoliceIncident("Catalog Patrol", "Bucket '" + bucketName + "' eliminado de " + dbName, "WARN", "Compactación forzada");
+        }
+        return removed;
+    }
+
+    public synchronized EngineRecordInfo getRecord(String dbName, String bucketName, String id) {
+        EngineBucketInfo b = getBucket(dbName, bucketName);
+        if (b == null) return null;
+        for (EngineRecordInfo r : b.getSampleRecords()) {
+            if (r.getId().equalsIgnoreCase(id)) return r;
+        }
+        return null;
     }
 
     // --- Consultas JettraSQL y JettraQL ---

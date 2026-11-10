@@ -1,0 +1,11 @@
+services:
+  jettrastore-explorer:
+    build: .
+    container_name: jettrastore-explorer
+    ports:
+      - "8085:8085"
+    environment:
+      - SERVER_PORT=8085
+      - STORAGE_MODE=OFF_HEAP
+    restart: unless-stopped
+
