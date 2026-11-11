@@ -449,8 +449,13 @@ public class JettraStorePlugin {
                         if (port > 0) {
                             primaryNode.setPort(port);
                         }
+                        if (parts.length >= 4 && !parts[3].isBlank()) {
+                            primaryNode.setRole(parts[3].trim().toUpperCase());
+                        }
                     } else {
-                        String role = id.toLowerCase().contains("edge") ? "EDGE" : "FOLLOWER";
+                        String role = (parts.length >= 4 && !parts[3].isBlank())
+                            ? parts[3].trim().toUpperCase()
+                            : (id.toLowerCase().contains("edge") ? "EDGE" : "SECONDARY");
                         serverNodes.add(new ServerNodeInfo(id, id + "-replica", role, host, port, 18.0f, 380, 2048, 980, 12000, 240, 14000, 0.0f, 8, false));
                     }
                 }
@@ -684,7 +689,9 @@ public class JettraStorePlugin {
                     try { port = Integer.parseInt(parts[2].trim()); } catch (Exception ignored) {}
                     ServerNodeInfo existing = getNodeById(id);
                     if (existing == null && !id.isBlank() && port > 0) {
-                        String role = id.toLowerCase().contains("edge") ? "EDGE" : (id.toLowerCase().contains("primary") ? "PRIMARY" : "FOLLOWER");
+                        String role = (parts.length >= 4 && !parts[3].isBlank())
+                            ? parts[3].trim().toUpperCase()
+                            : (id.toLowerCase().contains("edge") ? "EDGE" : (id.toLowerCase().contains("primary") ? "PRIMARY" : "SECONDARY"));
                         ServerNodeInfo newNode = new ServerNodeInfo(id, id + "-replica", role, host, port, 15.0f, 320, 2048, 850, 10000, 200, 10000, 0.0f, 8, false);
                         serverNodes.add(newNode);
                         checkNodeRealReachability(newNode, this.healthCheckTimeoutMs);

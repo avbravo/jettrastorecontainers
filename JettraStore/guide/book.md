@@ -69,8 +69,8 @@
     - [14.2 Métricas de Rendimiento Verificadas](#142-métricas-de-rendimiento-verificadas)
 15. [Contenedorización con Docker y Orquestación con Docker Compose](#15-contenedorización-con-docker-y-orquestación-con-docker-compose)
     - [15.1 Arquitectura e Imagen Docker (`Dockerfile` / `DockerFile`)](#151-arquitectura-e-imagen-docker-dockerfile--dockerfile)
-    - [15.2 Despliegue de Clúster de 3 Nodos en Docker Compose (1 Primario + 2 Secundarios)](#152-despliegue-de-clúster-de-3-nodos-en-docker-compose-1-primario--2-secundarios)
-    - [15.3 Almacenamiento Persistente y Mapeo de Volúmenes (`/app/data`)](#153-almacenamiento-persistente-y-mapeo-de-volúmenes-appdata)
+    - [15.2 Despliegue de Clúster de 3 Nodos en Docker Compose (`docker-compose.yml` / `docker-compose.xml`)](#152-despliegue-de-clúster-de-3-nodos-en-docker-compose-docker-composeyml--docker-composexml)
+    - [15.3 Almacenamiento Persistente y Mapeo de Volúmenes (`/jettra/data`)](#153-almacenamiento-persistente-y-mapeo-de-volúmenes-jettradata)
     - [15.4 Autenticación Obligatoria mediante Tokens `JettraJWT` en Contenedores](#154-autenticación-obligatoria-mediante-tokens-jettrajwt-en-contenedores)
     - [15.5 Operaciones del Ciclo de Vida, Monitoreo y Comandos CLI](#155-operaciones-del-ciclo-de-vida-monitoreo-y-comandos-cli)
 16. [Ecosistema de Herramientas Avanzadas y Resiliencia de Plataforma](#16-ecosistema-de-herramientas-avanzadas-y-resiliencia-de-plataforma)
@@ -87,6 +87,9 @@
 18. [Guía de Despliegue de Clúster de Nodos en Producción: JARs Distribuidos y Docker Compose](#18-guía-de-despliegue-de-clúster-de-nodos-en-producción-jars-distribuidos-y-docker-compose)
     - [18.1 Despliegue Mediante Archivos JAR en Máquinas Diferentes](#181-despliegue-mediante-archivos-jar-en-máquinas-diferentes)
     - [18.2 Despliegue Mediante Docker Compose Monolítico (Todos los Nodos en la Misma Máquina)](#182-despliegue-mediante-docker-compose-monolítico-todos-los-nodos-en-la-misma-máquina)
+        - [18.2.1 Archivo `docker-compose.yml` / `docker-compose.xml` Completo](#1821-archivo-docker-composeyml--docker-composexml-completo)
+        - [18.2.2 Comandos Operativos](#1822-comandos-operativos)
+        - [18.2.3 Conexión e Integración con JettraStoreExplorer (`cluster.nodes`)](#1823-conexión-e-integración-con-jettrastoreexplorer-clusternodes)
     - [18.3 Despliegue Distribuido Mediante Docker Compose (Un Nodo por Máquina Física o VM)](#183-despliegue-distribuido-mediante-docker-compose-un-nodo-por-máquina-física-o-vm)
 
 ---
@@ -1559,33 +1562,36 @@ ENTRYPOINT ["sh", "-c", "if [ \"$JETTRA_CRAC_RESTORE\" = \"true\" ] && [ -d \"$J
 
 ---
 
-### 15.2 Despliegue de Clúster de 3 Nodos en Docker Compose (1 Primario + 2 Secundarios)
+### 15.2 Despliegue de Clúster de 3 Nodos en Docker Compose (`docker-compose.yml` / `docker-compose.xml`)
 
-El archivo [`docker-compose.yml`](file:///home/avbravo/NetBeansProjects/jettrastack_local/jettrastorecontainers/JettraStore/docker-compose.yml) orquesta la topología de consenso Raft de tres nodos sobre una red bridge aislada (`jettra-cluster-net`), incorporando soporte para CRaC/CRIU, límites estrictos de memoria por contenedor y selección del modo de almacenamiento (`JVM_RAM`, `DISK_MEMORY` u `OFF_HEAP`):
+El archivo [`docker-compose.yml`](file:///home/avbravo/NetBeansProjects/jettrastack_local/jettrastorecontainers/JettraStore/docker-compose.yml) (disponible también como alias de compatibilidad [`docker-compose.xml`](file:///home/avbravo/NetBeansProjects/jettrastack_local/jettrastorecontainers/JettraStore/docker-compose.xml)) orquesta la topología de consenso Raft de tres nodos sobre una red bridge privada (`jettra-cluster-net`). 
+
+Incorpora soporte para CRaC/CRIU, límites estrictos de memoria por contenedor, compilación automatizada (`pull_policy: build`) para garantizar que la imagen local `jettrastore:1.0` se construya sin intentar descargas no autorizadas de registros remotos, y selección del modo de almacenamiento (`JVM_RAM`, `DISK_MEMORY` u `OFF_HEAP`):
 
 ```yaml
-version: '3.8'
-
 services:
-  # ----------------------------------------------------------------------------
-  # Nodo 01: Nodo Principal (Raft Leader / Primary)
-  # ----------------------------------------------------------------------------
+  # ==============================================================================
+  # NODO 01: NODO PRINCIPAL / LÍDER (Primary Raft Master)
+  # Compatible con CRaC / CRIU y conmutación de modos de almacenamiento
+  # ==============================================================================
   jettra-node-01:
     build:
       context: .
       dockerfile: Dockerfile
+    pull_policy: build
     image: jettrastore:1.0
     container_name: jettra-node-01
     hostname: jettra-node-01
     restart: unless-stopped
+    # Capacidades requeridas por el kernel Linux para CRIU / CRaC (Checkpoint & Restore)
     cap_add:
       - CHECKPOINT_RESTORE
       - SYS_PTRACE
     security_opt:
       - seccomp:unconfined
     ports:
-      - "8081:8080" # API REST / Token JettraJWT en Host
-      - "9091:9091" # Protocolo de Clúster / Raft Sync
+      - "8081:8080"   # API REST / Autenticación JettraJWT en Host
+      - "9091:9091"   # Protocolo de Clúster / Raft Sync
     environment:
       - JETTRA_NODE_ID=node-01
       - JETTRA_NODE_ROLE=PRIMARY
@@ -1613,13 +1619,14 @@ services:
       retries: 3
       start_period: 5s
 
-  # ----------------------------------------------------------------------------
-  # Nodo 02: Nodo Secundario 1 (Raft Follower / Secondary)
-  # ----------------------------------------------------------------------------
+  # ==============================================================================
+  # NODO 02: PRIMER NODO SECUNDARIO (Secondary Raft Replica 1)
+  # ==============================================================================
   jettra-node-02:
     build:
       context: .
       dockerfile: Dockerfile
+    pull_policy: build
     image: jettrastore:1.0
     container_name: jettra-node-02
     hostname: jettra-node-02
@@ -1633,8 +1640,8 @@ services:
       jettra-node-01:
         condition: service_healthy
     ports:
-      - "8082:8080"
-      - "9092:9091"
+      - "8082:8080"   # API REST Nodo 2
+      - "9092:9091"   # Protocolo de Clúster Nodo 2
     environment:
       - JETTRA_NODE_ID=node-02
       - JETTRA_NODE_ROLE=SECONDARY
@@ -1662,13 +1669,14 @@ services:
       retries: 3
       start_period: 5s
 
-  # ----------------------------------------------------------------------------
-  # Nodo 03: Nodo Secundario 2 (Raft Follower / Secondary)
-  # ----------------------------------------------------------------------------
+  # ==============================================================================
+  # NODO 03: SEGUNDO NODO SECUNDARIO (Secondary Raft Replica 2)
+  # ==============================================================================
   jettra-node-03:
     build:
       context: .
       dockerfile: Dockerfile
+    pull_policy: build
     image: jettrastore:1.0
     container_name: jettra-node-03
     hostname: jettra-node-03
@@ -1682,8 +1690,8 @@ services:
       jettra-node-01:
         condition: service_healthy
     ports:
-      - "8083:8080"
-      - "9093:9091"
+      - "8083:8080"   # API REST Nodo 3
+      - "9093:9091"   # Protocolo de Clúster Nodo 3
     environment:
       - JETTRA_NODE_ID=node-03
       - JETTRA_NODE_ROLE=SECONDARY
@@ -1711,31 +1719,46 @@ services:
       retries: 3
       start_period: 5s
 
+# ==============================================================================
+# VOLÚMENES PERSISTENTES PARA CADA NODO (Datos .jettra y Checkpoints CRaC)
+# ==============================================================================
 volumes:
   jettra_data_node01:
+    name: jettra_data_node01
     driver: local
   jettra_data_node02:
+    name: jettra_data_node02
     driver: local
   jettra_data_node03:
+    name: jettra_data_node03
     driver: local
   jettra_checkpoint_node01:
+    name: jettra_checkpoint_node01
     driver: local
   jettra_checkpoint_node02:
+    name: jettra_checkpoint_node02
     driver: local
   jettra_checkpoint_node03:
+    name: jettra_checkpoint_node03
     driver: local
 
+# ==============================================================================
+# RED BRIDGE PRIVADA PARA EL CLÚSTER RAFT DISTRIBUIDO
+# ==============================================================================
 networks:
   jettra-cluster-net:
+    name: jettra-cluster-net
     driver: bridge
 ```
 
 ---
 
-### 15.3 Almacenamiento Persistente y Mapeo de Volúmenes (`/app/data`)
+### 15.3 Almacenamiento Persistente y Mapeo de Volúmenes (`/jettra/data`)
 
 Para asegurar durabilidad ACID y supervivencia de los datos ante reinicios o recreaciones de contenedores:
-* Cada nodo posee un volumen de Docker independiente (`jettra_data_node01`, `jettra_data_node02`, `jettra_data_node03`) montado en `/app/data`.
+* Cada nodo posee un volumen de Docker independiente (`jettra_data_node01`, `jettra_data_node02`, `jettra_data_node03`) montado en `/jettra/data`.
+* Dentro de `/jettra/data`, el motor `JettraStore` escribe los segmentos binarios `.jettra`, el registro de transacciones Write-Ahead Log (`wal.bin`) y los metadatos de índices dispersos.
+* Los volúmenes son desacoplados del ciclo de vida del contenedor, garantizando que un `docker compose down` mantenga íntegro el estado del clúster.
 * Dentro de `/app/data`, el motor `JettraStore` escribe los segmentos binarios `.jettra`, el registro de transacciones Write-Ahead Log (`wal.bin`) y los metadatos de índices dispersos.
 * Los volúmenes son desacoplados del ciclo de vida del contenedor, garantizando que un `docker compose down` mantenga íntegro el estado del clúster.
 
@@ -2319,28 +2342,38 @@ Para evitar colisiones de puertos en la misma interfaz de red del host:
 * Cada contenedor expone un puerto REST y gRPC externo diferente (`8081`, `8082`, `8083` / `9091`, `9092`, `9093`).
 * Internamente, los contenedores se comunican a través de la red virtual tipo bridge `jettra-cluster-net` utilizando sus nombres DNS internos (`jettra-node-01`, `jettra-node-02`, `jettra-node-03`).
 
-#### 18.2.1 Archivo `docker-compose.yml` Completo
+#### 18.2.1 Archivo `docker-compose.yml` / `docker-compose.xml` Completo
+
+El siguiente archivo define la orquestación integral del clúster de 3 nodos. Está disponible tanto con el nombre estándar [`docker-compose.yml`](file:///home/avbravo/NetBeansProjects/jettrastack_local/jettrastorecontainers/JettraStore/docker-compose.yml) como mediante el enlace simbólico [`docker-compose.xml`](file:///home/avbravo/NetBeansProjects/jettrastack_local/jettrastorecontainers/JettraStore/docker-compose.xml) para herramientas o flujos de trabajo que requieran dicha extensión.
+
+> **Nota sobre el contexto de construcción (`context`):**
+> * Si ejecuta `docker compose` desde el directorio **`JettraStore/`**, utilice `context: .`.
+> * Si ejecuta `docker compose` desde el directorio raíz **`jettrastorecontainers/`**, utilice `context: ./JettraStore`.
 
 ```yaml
-version: "3.8"
-
 services:
+  # ==============================================================================
+  # NODO 01: NODO PRINCIPAL / LÍDER (Primary Raft Master)
+  # Compatible con CRaC / CRIU y conmutación de modos de almacenamiento
+  # ==============================================================================
   jettra-node-01:
     build:
-      context: ./JettraStore
+      context: .
       dockerfile: Dockerfile
+    pull_policy: build
     image: jettrastore:1.0
     container_name: jettra-node-01
     hostname: jettra-node-01
     restart: unless-stopped
+    # Capacidades requeridas por el kernel Linux para CRIU / CRaC (Checkpoint & Restore)
     cap_add:
       - CHECKPOINT_RESTORE
       - SYS_PTRACE
     security_opt:
       - seccomp:unconfined
     ports:
-      - "8081:8080"
-      - "9091:9091"
+      - "8081:8080"   # API REST / Autenticación JettraJWT en Host
+      - "9091:9091"   # Protocolo de Clúster / Raft Sync
     environment:
       - JETTRA_NODE_ID=node-01
       - JETTRA_NODE_ROLE=PRIMARY
@@ -2368,10 +2401,14 @@ services:
       retries: 3
       start_period: 5s
 
+  # ==============================================================================
+  # NODO 02: PRIMER NODO SECUNDARIO (Secondary Raft Replica 1)
+  # ==============================================================================
   jettra-node-02:
     build:
-      context: ./JettraStore
+      context: .
       dockerfile: Dockerfile
+    pull_policy: build
     image: jettrastore:1.0
     container_name: jettra-node-02
     hostname: jettra-node-02
@@ -2385,8 +2422,8 @@ services:
       jettra-node-01:
         condition: service_healthy
     ports:
-      - "8082:8080"
-      - "9092:9091"
+      - "8082:8080"   # API REST Nodo 2
+      - "9092:9091"   # Protocolo de Clúster Nodo 2
     environment:
       - JETTRA_NODE_ID=node-02
       - JETTRA_NODE_ROLE=SECONDARY
@@ -2414,10 +2451,14 @@ services:
       retries: 3
       start_period: 5s
 
+  # ==============================================================================
+  # NODO 03: SEGUNDO NODO SECUNDARIO (Secondary Raft Replica 2)
+  # ==============================================================================
   jettra-node-03:
     build:
-      context: ./JettraStore
+      context: .
       dockerfile: Dockerfile
+    pull_policy: build
     image: jettrastore:1.0
     container_name: jettra-node-03
     hostname: jettra-node-03
@@ -2431,8 +2472,8 @@ services:
       jettra-node-01:
         condition: service_healthy
     ports:
-      - "8083:8080"
-      - "9093:9091"
+      - "8083:8080"   # API REST Nodo 3
+      - "9093:9091"   # Protocolo de Clúster Nodo 3
     environment:
       - JETTRA_NODE_ID=node-03
       - JETTRA_NODE_ROLE=SECONDARY
@@ -2460,30 +2501,45 @@ services:
       retries: 3
       start_period: 5s
 
+# ==============================================================================
+# VOLÚMENES PERSISTENTES PARA CADA NODO (Datos .jettra y Checkpoints CRaC)
+# ==============================================================================
 volumes:
   jettra_data_node01:
+    name: jettra_data_node01
     driver: local
   jettra_data_node02:
+    name: jettra_data_node02
     driver: local
   jettra_data_node03:
+    name: jettra_data_node03
     driver: local
   jettra_checkpoint_node01:
+    name: jettra_checkpoint_node01
     driver: local
   jettra_checkpoint_node02:
+    name: jettra_checkpoint_node02
     driver: local
   jettra_checkpoint_node03:
+    name: jettra_checkpoint_node03
     driver: local
 
+# ==============================================================================
+# RED BRIDGE PRIVADA PARA EL CLÚSTER RAFT DISTRIBUIDO
+# ==============================================================================
 networks:
   jettra-cluster-net:
+    name: jettra-cluster-net
     driver: bridge
 ```
 
 #### 18.2.2 Comandos Operativos
 
 ```bash
-# 1. Construir imágenes y levantar clúster completo en segundo plano
+# 1. Construir imágenes y levantar clúster completo en segundo plano (usando docker-compose.yml o docker-compose.xml)
 docker compose up -d --build
+# o explícitamente:
+docker compose -f docker-compose.xml up -d --build
 
 # 2. Verificar estado de los contenedores
 docker compose ps
@@ -2495,6 +2551,50 @@ curl http://localhost:8083/api/v1/health
 
 # 4. Detener el clúster preservando los volúmenes de datos
 docker compose down
+```
+
+#### 18.2.3 Conexión e Integración con JettraStoreExplorer (`cluster.nodes`)
+
+El panel de administración web **`JettraStoreExplorer`** monitorea en tiempo real mediante *Virtual Threads* (Loom) el estado de salud, disponibilidad y latencia de todos los nodos del clúster en la vista `/cluster`.
+
+Para que `JettraStoreExplorer` detecte y consulte adecuadamente los 3 nodos definidos en `docker-compose.yml`, se debe configurar la propiedad `cluster.nodes` en su archivo `microprofile-config.properties`:
+
+##### 1. Estructura y Sintaxis de la Propiedad `cluster.nodes`
+```properties
+cluster.nodes=<id>:<host>:<puerto-tcp>[:<rol>],...
+```
+* **`<id>`:** Identificador del nodo registrado (`node-01`, `node-02`, `node-03`).
+* **`<host>`:** Dirección IP o nombre de host accesible desde donde se ejecuta `JettraStoreExplorer`.
+* **`<puerto-tcp>`:** Puerto TCP asignado al clúster (puerto expuesto en el host en despliegues con Docker Compose).
+* **`[:<rol>]` (Opcional):** Rol asignado en la topología (`PRIMARY` o `SECONDARY`). Si se omite, `node-01` se asume como `PRIMARY` y los demás como `SECONDARY`.
+
+##### 2. Mapeo frente a `docker-compose.yml` (JettraStoreExplorer ejecutándose en el Host)
+Cuando `docker-compose.yml` corre en una máquina de desarrollo local y `JettraStoreExplorer` se ejecuta desde la estación de trabajo (ej. IDE o consola en el Host), los contenedores exponen sus puertos al host de la siguiente manera:
+
+| Contenedor Docker | Rol Raft | Puerto Interno Contenedor | Puerto Mapeado al Host | Entrada en `cluster.nodes` |
+|:---|:---:|:---:|:---:|:---|
+| `jettra-node-01` | **PRIMARY** | `9091` (gRPC), `8080` (REST) | **`9091`** (gRPC), `8081` (REST) | `node-01:127.0.0.1:9091` (o `:PRIMARY`) |
+| `jettra-node-02` | **SECONDARY** | `9091` (gRPC), `8080` (REST) | **`9092`** (gRPC), `8082` (REST) | `node-02:127.0.0.1:9092` (o `:SECONDARY`) |
+| `jettra-node-03` | **SECONDARY** | `9091` (gRPC), `8080` (REST) | **`9093`** (gRPC), `8083` (REST) | `node-03:127.0.0.1:9093` (o `:SECONDARY`) |
+
+> **¿Por qué los puertos cambian a `9091`, `9092` y `9093` en el host?**  
+> Para evitar colisiones en la interfaz `127.0.0.1` del sistema anfitrión, Docker Compose mapea el puerto interno `9091` de `jettra-node-02` hacia el puerto externo `9092`, y el de `jettra-node-03` hacia el puerto externo `9093`. Por tanto, cualquier cliente externo en el host debe comunicarse usando dichos puertos redirigidos.
+
+**Configuración recomendada en `JettraStoreExplorer/src/main/resources/microprofile-config.properties`:**
+```properties
+# Nodos del Clúster JettraStore en Docker Compose (Host Local)
+cluster.nodes=node-01:127.0.0.1:9091,node-02:127.0.0.1:9092,node-03:127.0.0.1:9093
+```
+*O con roles explícitos:*
+```properties
+cluster.nodes=node-01:127.0.0.1:9091:PRIMARY,node-02:127.0.0.1:9092:SECONDARY,node-03:127.0.0.1:9093:SECONDARY
+```
+
+##### 3. Escenario Alternativo: JettraStoreExplorer dentro de la Red Docker (`jettra-cluster-net`)
+Si `JettraStoreExplorer` se empaqueta e inicia dentro de un contenedor Docker conectado a la misma red bridge `jettra-cluster-net`, la comunicación ocurre mediante los nombres de servicio DNS internos en el puerto nativo `9091`:
+```properties
+# Nodos del Clúster JettraStore dentro de la Red Bridge Docker
+cluster.nodes=node-01:jettra-node-01:9091,node-02:jettra-node-02:9091,node-03:jettra-node-03:9091
 ```
 
 ---

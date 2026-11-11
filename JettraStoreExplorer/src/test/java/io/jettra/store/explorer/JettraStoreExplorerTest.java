@@ -507,6 +507,13 @@ public class JettraStoreExplorerTest {
             // 5. Nodos secundarios desconectados deben figurar como OFFLINE
             ServerNodeInfo replicaNode = plugin.getNodeById("node-02");
             JettraAssert.assertNotNull(replicaNode, "El nodo node-02 debe existir");
+            int originalReplicaPort = replicaNode.getPort();
+            int closedReplicaPort;
+            try (java.net.ServerSocket tmpSocket = new java.net.ServerSocket(0)) {
+                closedReplicaPort = tmpSocket.getLocalPort();
+            }
+            replicaNode.setPort(closedReplicaPort);
+            plugin.checkNodeRealReachability(replicaNode, 50);
             JettraAssert.assertFalse(replicaNode.isOnline(), "Un nodo cuya IP/puerto no está escuchando debe marcarse OFFLINE");
 
             // 6. Simulación de nodo PRIMARY conectado vía ServerSocket
@@ -525,6 +532,8 @@ public class JettraStoreExplorerTest {
                 HttpResponse<String> apiResUp = get("/api/cluster/status");
                 JettraAssert.assertEquals(200, apiResUp.statusCode(), "API /api/cluster/status debe responder HTTP 200");
                 JettraAssert.assertTrue(apiResUp.body().contains("\"primaryOnline\":true"), "JSON debe indicar primaryOnline:true");
+            } finally {
+                replicaNode.setPort(originalReplicaPort);
             }
 
             // 7. Tras cerrar el socket
