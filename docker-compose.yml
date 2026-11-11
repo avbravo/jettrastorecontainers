@@ -3,6 +3,7 @@ services:
     build:
       context: ./JettraStore
       dockerfile: Dockerfile
+    pull_policy: build
     image: jettrastore:1.0
     container_name: jettra-node-01
     hostname: jettra-node-01
@@ -46,6 +47,7 @@ services:
     build:
       context: ./JettraStore
       dockerfile: Dockerfile
+    pull_policy: build
     image: jettrastore:1.0
     container_name: jettra-node-02
     hostname: jettra-node-02
@@ -92,6 +94,7 @@ services:
     build:
       context: ./JettraStore
       dockerfile: Dockerfile
+    pull_policy: build
     image: jettrastore:1.0
     container_name: jettra-node-03
     hostname: jettra-node-03
@@ -141,6 +144,7 @@ services:
     build:
       context: ./JettraStoreShell
       dockerfile: Dockerfile
+    pull_policy: build
     image: jettrastoreshell:1.0
     container_name: jettra-shell
     stdin_open: true
@@ -164,6 +168,7 @@ services:
     build:
       context: ./JettraStorePolice3D
       dockerfile: Dockerfile
+    pull_policy: build
     image: jettrastorepolice3d:1.0
     container_name: jettra-police-3d
     restart: unless-stopped

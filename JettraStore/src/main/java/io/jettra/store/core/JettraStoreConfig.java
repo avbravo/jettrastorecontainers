@@ -135,15 +135,9 @@ public final class JettraStoreConfig {
             } catch (Exception ignored) {}
         }
         String configuredRest = getPropOrEnv(effectiveServerProps,
-            new String[]{"server.port", "jettra.server.port"},
-            new String[]{"JETTRA_SERVER_PORT", "SERVER_PORT"},
-            null);
-        if (configuredRest == null) {
-            configuredRest = getPropOrEnv(props, 
-                new String[]{"jettra.network.rest.port", "jettra.rest.port", "rest.port", "server.port"}, 
-                new String[]{"JETTRA_REST_PORT", "JETTRA_NETWORK_REST_PORT", "JETTRA_SERVER_PORT"}, 
-                String.valueOf(defaultRest));
-        }
+            new String[]{"jettra.network.rest.port", "jettra.rest.port", "server.port", "jettra.server.port", "rest.port"},
+            new String[]{"JETTRA_REST_PORT", "JETTRA_SERVER_PORT", "SERVER_PORT", "JETTRA_NETWORK_REST_PORT"},
+            String.valueOf(defaultRest));
         this.restPort = Integer.parseInt(configuredRest);
 
         this.clusterPeers = getPropOrEnv(props, 

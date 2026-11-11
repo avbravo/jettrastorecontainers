@@ -19,12 +19,15 @@ WORKDIR /app
 RUN mkdir -p /jettra/data /jettra/config /jettra/checkpoint && \
     chown -R 1000:1000 /jettra /app
 
-# Copiar JAR autónomo optimizado y archivo de configuración base (sin capas redundantes)
+# Copiar JAR autónomo optimizado y archivos de configuración base
 COPY target/JettraStore-*.jar /app/
+COPY src/main/resources/microprofile-config.properties /app/config/microprofile-config.properties
+COPY src/main/resources/cluster.config /app/config/cluster.config
 COPY src/main/resources/database.properties /app/config/database.properties
 
-# Garantizar el archivo /app/JettraStore.jar sin duplicar capas pesadas en la imagen
-RUN if [ -f /app/JettraStore-*-uber.jar ]; then \
+# Garantizar compatibilidad y el archivo /app/JettraStore.jar sin duplicar capas pesadas en la imagen
+RUN cp /app/config/cluster.config /app/config/jettra.config && \
+    if [ -f /app/JettraStore-*-uber.jar ]; then \
         mv /app/JettraStore-*-uber.jar /app/JettraStore.jar && rm -f /app/JettraStore-*.jar; \
     elif [ -f /app/JettraStore-*.jar ]; then \
         mv /app/JettraStore-*.jar /app/JettraStore.jar; \

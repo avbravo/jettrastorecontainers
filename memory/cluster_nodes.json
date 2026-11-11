@@ -1,0 +1,15 @@
+[ {
+  "id" : "node-02",
+  "name" : "node-02-replica",
+  "role" : "FOLLOWER",
+  "host" : "127.0.0.1",
+  "port" : 9092,
+  "heapMaxMb" : 2048
+}, {
+  "id" : "node-03",
+  "name" : "node-03-replica",
+  "role" : "FOLLOWER",
+  "host" : "127.0.0.1",
+  "port" : 9093,
+  "heapMaxMb" : 2048
+} ]

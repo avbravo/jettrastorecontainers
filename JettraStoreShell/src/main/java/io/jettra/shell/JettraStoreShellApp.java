@@ -1693,41 +1693,20 @@ Seleccione una conexión para iniciar:
 
     private String handleShowSampleDatabases() {
         List<String> allDbs = client.listDatabases();
-        String[] samples = {
-            "sample_enterprise_db",
-            "sample_ecommerce_db",
-            "sample_ai_graph_db",
-            "sample_iot_telemetry_db",
-            "sample_financial_db",
-            "example_factura_db",
-            "samples_hostipal_db",
-            "samples_ambiental_db"
-        };
-
         StringBuilder sb = new StringBuilder();
         sb.append("==============================================================================================\n");
-        sb.append("                        BASES DE DATOS DE EJEMPLO (JettraStore Samples)                      \n");
+        sb.append("                        BASE DE DATOS DE EJEMPLO (JettraStore Sample)                        \n");
         sb.append("==============================================================================================\n");
         sb.append("+-------------------------+--------------------+---------------------------------------------+\n");
         sb.append("| Base de Datos           | Estado en Disco    | Motores & Propósito                         |\n");
         sb.append("+-------------------------+--------------------+---------------------------------------------+\n");
-        for (String s : samples) {
-            boolean installed = allDbs.contains(s);
-            String desc = switch (s) {
-                case "sample_enterprise_db"    -> "Documentos, Vectores 3D, Grafos de Catálogo, KV, Series";
-                case "sample_ecommerce_db"     -> "Clientes, Órdenes, Analítica Columnar, Carritos KV";
-                case "sample_ai_graph_db"      -> "Red de Grafos de Conocimiento, Embeddings, Prompts";
-                case "sample_iot_telemetry_db" -> "Sensores Temperatura/Vibración, Smart Devices, Geo";
-                case "sample_financial_db"     -> "Transacciones de Cuentas, Ledger y Cotizaciones";
-                case "example_factura_db"      -> "Facturación 3M Objetos (1M Fac, 1M Det, 200k Cli, KV, Vec, Graph)";
-                case "samples_hostipal_db"     -> "Salud 2M Objetos (Pacientes, CIE10, Medicamentos, Hospitales)";
-                case "samples_ambiental_db"    -> "Medio Ambiente 3M Objetos (Estaciones, Calidad Aire, Biomas)";
-                default -> "Muestra Multimodelo";
-            };
-            sb.append(String.format("| %-23s | %-18s | %-43s |\n", s, installed ? "INSTALADA (Lista)" : "NO INSTALADA", desc));
-        }
+        boolean installed = allDbs.contains("example_factura_db");
+        sb.append(String.format("| %-23s | %-18s | %-43s |\n",
+            "example_factura_db",
+            installed ? "INSTALADA (Lista)" : "NO INSTALADA",
+            "Facturación Multimodelo (Máx 500 registros)"));
         sb.append("+-------------------------+--------------------+---------------------------------------------+\n");
-        sb.append("Para instalar o re-inicializar todas las muestras completas, ejecute: INSTALL SAMPLES\n");
+        sb.append("Para instalar o re-inicializar la muestra, ejecute: INSTALL SAMPLES o LOAD SAMPLE example_factura_db\n");
         return sb.toString();
     }
 
@@ -2676,100 +2655,7 @@ Seleccione una conexión para iniciar:
 
     // --- 12. Persistencia y Muestras ---
     public String installAllSampleDatabases() {
-        // 1. sample_enterprise_db
-        JettraDatabase enterprise = client.getDatabase("sample_enterprise_db");
-        enterprise.getDocumentEngine("departments").insert("dep_rd", Map.of(
-            "name", "Research & Advanced Computing", "budget", 15000000.0, "floor", 12
-        ));
-        enterprise.getDocumentEngine("employees").insert("emp_01", Map.of(
-            "name", "Ada Lovelace", "title", "Lead Architect", "salary", 185000.0,
-            "_ref_department", "document::departments#dep_rd",
-            "_ref_vector", "vector::employee_biometrics#bio_01",
-            "_ref_equipment", "kv::inventory_cache#laptop_mac_m3"
-        ));
-        enterprise.getDocumentEngine("products").insert("prod_01", Map.of(
-            "name", "Quantum Neural Accelerator", "category", "Hardware", "price", 4500.0,
-            "_ref_vector", "vector::product_embeddings#emb_01",
-            "_ref_category", "graph::catalog_graph#cat_hardware"
-        ));
-        enterprise.getVectorEngine("product_embeddings", 3).index("emb_01", new float[]{0.15f, -0.42f, 0.88f});
-        enterprise.getVectorEngine("employee_biometrics", 3).index("bio_01", new float[]{0.92f, 0.11f, -0.05f});
-        enterprise.getGraphEngine("catalog_graph").addEdge("prod_01", "cat_hardware", "BELONGS_TO", Map.of("weight", 1.0));
-        enterprise.getTimeSeriesEngine("telemetry").record(System.currentTimeMillis(), 42.5);
-        enterprise.getKeyValueEngine("inventory_cache").put("laptop_mac_m3", "MacBook Pro M3 Max 64GB".getBytes(StandardCharsets.UTF_8));
-        try {
-            enterprise.getIndexManager().createIndex("employees", "idx_emp_name", "name", "BTREE", false, enterprise.getDocumentEngine("employees"));
-            enterprise.getIndexManager().createIndex("products", "idx_prod_cat", "category", "HASH", false, enterprise.getDocumentEngine("products"));
-        } catch (Exception ignored) {}
-
-        // 2. sample_ecommerce_db
-        JettraDatabase ecommerce = client.getDatabase("sample_ecommerce_db");
-        ecommerce.getDocumentEngine("customers").insert("cust_101", Map.of(
-            "name", "Elena Rostova", "tier", "VIP_PLATINUM", "country", "ES", "email", "elena@quantum.io"
-        ));
-        ecommerce.getDocumentEngine("orders").insert("ord_9901", Map.of(
-            "customer_id", "cust_101", "total", 899.50, "status", "PAID",
-            "_ref_customer", "document::customers#cust_101",
-            "_ref_product", "document::products#prod_01"
-        ));
-        ecommerce.getColumnarEngine("order_analytics").appendRow(Map.of("revenue", 899.50));
-        ecommerce.getKeyValueEngine("shopping_carts").put("cart_cust_101", "item_quantum_gpu:2".getBytes(StandardCharsets.UTF_8));
-        try {
-            ecommerce.getIndexManager().createIndex("customers", "idx_cust_tier", "tier", "HASH", false, ecommerce.getDocumentEngine("customers"));
-        } catch (Exception ignored) {}
-
-        // 3. sample_ai_graph_db
-        JettraDatabase aiGraph = client.getDatabase("sample_ai_graph_db");
-        aiGraph.getGraphEngine("knowledge_network").addEdge("DeepLearning", "TransformerModel", "FOUNDATION_OF", Map.of("depth", 4.0));
-        aiGraph.getGraphEngine("knowledge_network").addEdge("TransformerModel", "AttentionMechanism", "USES", Map.of("weight", 0.95));
-        aiGraph.getVectorEngine("concept_embeddings", 3).index("vec_transformer", new float[]{0.85f, 0.12f, -0.33f});
-        aiGraph.getDocumentEngine("prompts_corpus").insert("prompt_01", Map.of(
-            "role", "system", "text", "You are an autonomous distributed DB engine expert.",
-            "_ref_concept", "graph::knowledge_network#TransformerModel",
-            "_ref_embedding", "vector::concept_embeddings#vec_transformer"
-        ));
-
-        // 4. sample_iot_telemetry_db
-        JettraDatabase iot = client.getDatabase("sample_iot_telemetry_db");
-        long now = System.currentTimeMillis();
-        iot.getTimeSeriesEngine("sensor_temperature").record(now - 2000, 24.5);
-        iot.getTimeSeriesEngine("sensor_temperature").record(now - 1000, 25.1);
-        iot.getTimeSeriesEngine("sensor_temperature").record(now, 24.8);
-        iot.getTimeSeriesEngine("sensor_vibration").record(now, 0.042);
-        iot.getDocumentEngine("smart_devices").insert("iot_gateway_01", Map.of(
-            "model", "EdgeGate-X25", "firmware", "v2.5.0-LTS", "status", "ONLINE"
-        ));
-        iot.getGeospatialEngine("device_locations").insertPoint("iot_gateway_01", 40.4168, -3.7038);
-
-        // 5. sample_financial_db
-        JettraDatabase finance = client.getDatabase("sample_financial_db");
-        finance.getDocumentEngine("transactions").insert("tx_001", Map.of(
-            "from_account", "ACC_7712", "to_account", "ACC_9941", "amount", 15000.0, "currency", "USD",
-            "_ref_client", "document::customers#cust_101"
-        ));
-        finance.getTimeSeriesEngine("stock_feed").record(now, 184.50);
-
-        // Flush de persistencia física a disco
-        try {
-            enterprise.flushMemTable();
-            ecommerce.flushMemTable();
-            aiGraph.flushMemTable();
-            iot.flushMemTable();
-            finance.flushMemTable();
-        } catch (Exception ignored) {}
-
-        this.currentDatabase = "sample_enterprise_db";
-
-        return """
-            [SUCCESS] ¡Todas las 5 bases de datos de ejemplo instaladas y persistidas exitosamente!
-              1. 'sample_enterprise_db'   -> Empleados, Departamentos, Índices B-Tree, Vectores Biométricos, Grafos
-              2. 'sample_ecommerce_db'    -> Clientes VIP, Órdenes con JettraRef, Analítica Columnar, Carritos KV
-              3. 'sample_ai_graph_db'     -> Red de Conocimiento de Grafos, Embeddings Conceptuales, Prompts
-              4. 'sample_iot_telemetry_db'-> Sensores Temperatura/Vibración, Dispositivos Smart, Geo-localización
-              5. 'sample_financial_db'    -> Transacciones Financieras con JettraRef a Clientes, Series Temporales
-              * Para cargar la base de datos masiva de 3 millones de objetos ejecute: LOAD SAMPLE example_factura_db
-            Base de datos activa conmutada a: 'sample_enterprise_db'
-            """;
+        return "[SUCCESS] Base de datos de ejemplo instalada y persistida exitosamente:\n" + installFacturaSampleDatabase();
     }
 
 
@@ -2845,146 +2731,122 @@ Seleccione una conexión para iniciar:
         JettraDatabase db = client.getDatabase("example_factura_db");
 
         try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
-            // Task 1: Clientes (200,000)
+            // Task 1: Clientes (100)
             executor.submit(() -> {
                 var docEngine = db.getDocumentEngine("clientes");
-                int total = 200_000;
-                int chunkSize = 25_000;
-                for (int base = 0; base < total; base += chunkSize) {
-                    Map<String, Map<String, Object>> batch = io.jettra.collections.map.UnifiedMap.newMap(chunkSize);
-                    int end = Math.min(base + chunkSize, total);
-                    for (int i = base; i < end; i++) {
-                        String id = "cli_" + i;
-                        batch.put(id, Map.of(
-                            "_id", id,
-                            "razon_social", "Corporación Comercial " + i + " S.A.",
-                            "rfc_tax_id", "RFC-PAN-" + (1000000 + i),
-                            "ciudad", (i % 2 == 0) ? "Ciudad de Panamá" : "Colón",
-                            "limite_credito", 50000.0 + (i % 1000) * 100
-                        ));
-                    }
-                    docEngine.insertBatch(batch);
+                int total = 100;
+                Map<String, Map<String, Object>> batch = io.jettra.collections.map.UnifiedMap.newMap(total);
+                for (int i = 0; i < total; i++) {
+                    String id = "cli_" + i;
+                    batch.put(id, Map.of(
+                        "_id", id,
+                        "razon_social", "Corporación Comercial " + i + " S.A.",
+                        "rfc_tax_id", "RFC-PAN-" + (1000000 + i),
+                        "ciudad", (i % 2 == 0) ? "Ciudad de Panamá" : "Colón",
+                        "limite_credito", 50000.0 + (i % 1000) * 100
+                    ));
                 }
+                docEngine.insertBatch(batch);
             });
 
-            // Task 2: Facturas (1,000,000 con referencias cruzadas)
+            // Task 2: Facturas (100 con referencias cruzadas)
             executor.submit(() -> {
                 var docEngine = db.getDocumentEngine("facturas");
-                int total = 1_000_000;
-                int chunkSize = 50_000;
-                for (int base = 0; base < total; base += chunkSize) {
-                    Map<String, Map<String, Object>> batch = io.jettra.collections.map.UnifiedMap.newMap(chunkSize);
-                    int end = Math.min(base + chunkSize, total);
-                    for (int i = base; i < end; i++) {
-                        String id = "fac_" + i;
-                        batch.put(id, Map.of(
-                            "_id", id,
-                            "fecha", "2026-09-29",
-                            "total", 250.0 + (i % 2000),
-                            "estado", "TIMBRADA",
-                            "_ref_cliente", "document::clientes#cli_" + (i % 200_000),
-                            "_ref_detalle", "document::detalles_factura#det_" + i,
-                            "_ref_folio", "kv::cache_folios#fol_" + (i % 300_000),
-                            "_ref_vector", "vector::factura_embeddings#emb_" + (i % 200_000),
-                            "_ref_sucursal", "geospatial::sucursales_fiscales#suc_" + (i % 25_000)
-                        ));
-                    }
-                    docEngine.insertBatch(batch);
+                int total = 100;
+                Map<String, Map<String, Object>> batch = io.jettra.collections.map.UnifiedMap.newMap(total);
+                for (int i = 0; i < total; i++) {
+                    String id = "fac_" + i;
+                    batch.put(id, Map.of(
+                        "_id", id,
+                        "fecha", "2026-09-29",
+                        "total", 250.0 + (i % 2000),
+                        "estado", "TIMBRADA",
+                        "_ref_cliente", "document::clientes#cli_" + (i % 100),
+                        "_ref_detalle", "document::detalles_factura#det_" + i,
+                        "_ref_folio", "kv::cache_folios#fol_" + (i % 50),
+                        "_ref_vector", "vector::factura_embeddings#emb_" + (i % 50),
+                        "_ref_sucursal", "geospatial::sucursales_fiscales#suc_" + (i % 20)
+                    ));
                 }
+                docEngine.insertBatch(batch);
             });
 
-            // Task 3: Detalles de Factura (1,000,000)
+            // Task 3: Detalles de Factura (100)
             executor.submit(() -> {
                 var docEngine = db.getDocumentEngine("detalles_factura");
-                int total = 1_000_000;
-                int chunkSize = 50_000;
-                for (int base = 0; base < total; base += chunkSize) {
-                    Map<String, Map<String, Object>> batch = io.jettra.collections.map.UnifiedMap.newMap(chunkSize);
-                    int end = Math.min(base + chunkSize, total);
-                    for (int i = base; i < end; i++) {
-                        String id = "det_" + i;
-                        int qty = (i % 10) + 1;
-                        double price = 50.0 + (i % 200);
-                        batch.put(id, Map.of(
-                            "_id", id,
-                            "concepto", "Servicio Cloud / Licencia Empresarial #" + (i % 100),
-                            "cantidad", qty,
-                            "precio_unitario", price,
-                            "subtotal", qty * price,
-                            "_ref_factura", "document::facturas#fac_" + i
-                        ));
-                    }
-                    docEngine.insertBatch(batch);
+                int total = 100;
+                Map<String, Map<String, Object>> batch = io.jettra.collections.map.UnifiedMap.newMap(total);
+                for (int i = 0; i < total; i++) {
+                    String id = "det_" + i;
+                    int qty = (i % 10) + 1;
+                    double price = 50.0 + (i % 200);
+                    batch.put(id, Map.of(
+                        "_id", id,
+                        "concepto", "Servicio Cloud / Licencia Empresarial #" + (i % 100),
+                        "cantidad", qty,
+                        "precio_unitario", price,
+                        "subtotal", qty * price,
+                        "_ref_factura", "document::facturas#fac_" + i
+                    ));
                 }
+                docEngine.insertBatch(batch);
             });
 
-            // Task 4: KV Cache de Folios (300,000)
+            // Task 4: KV Cache de Folios (50)
             executor.submit(() -> {
                 var kvEngine = db.getKeyValueEngine("cache_folios");
-                int total = 300_000;
-                int chunkSize = 30_000;
+                int total = 50;
                 byte[] rawVal = "TIMBRADO_OK_CFDI_2026_SAT".getBytes(StandardCharsets.UTF_8);
-                for (int base = 0; base < total; base += chunkSize) {
-                    Map<String, byte[]> batch = new HashMap<>(chunkSize);
-                    int end = Math.min(base + chunkSize, total);
-                    for (int i = base; i < end; i++) {
-                        batch.put("fol_" + i, rawVal);
-                    }
-                    kvEngine.putBatch(batch);
+                Map<String, byte[]> batch = new HashMap<>(total);
+                for (int i = 0; i < total; i++) {
+                    batch.put("fol_" + i, rawVal);
                 }
+                kvEngine.putBatch(batch);
             });
 
-            // Task 5: Factura Embeddings (200,000 vectores 3d)
+            // Task 5: Factura Embeddings (50 vectores 3d)
             executor.submit(() -> {
                 var vecEngine = db.getVectorEngine("factura_embeddings", 3);
-                int total = 200_000;
-                int chunkSize = 25_000;
+                int total = 50;
                 float[] emb = new float[]{0.75f, -0.20f, 0.60f};
-                for (int base = 0; base < total; base += chunkSize) {
-                    Map<String, float[]> batch = new HashMap<>(chunkSize);
-                    int end = Math.min(base + chunkSize, total);
-                    for (int i = base; i < end; i++) {
-                        batch.put("emb_" + i, emb);
-                    }
-                    vecEngine.indexBatch(batch);
+                Map<String, float[]> batch = new HashMap<>(total);
+                for (int i = 0; i < total; i++) {
+                    batch.put("emb_" + i, emb);
                 }
+                vecEngine.indexBatch(batch);
             });
 
-            // Task 6: Red Comercial Graph (200,000 vértices de clientes y facturas conectadas)
+            // Task 6: Red Comercial Graph (40 vértices de clientes y facturas conectadas)
             executor.submit(() -> {
                 var graphEngine = db.getGraphEngine("red_comercial");
-                int totalEdges = 100_000; // 100k aristas conectando 100k clientes y 100k facturas = 200k vértices
-                int chunkSize = 25_000;
-                for (int base = 0; base < totalEdges; base += chunkSize) {
-                    Map<String, List<io.jettra.store.engine.models.GraphEngine.Edge>> batch = new HashMap<>(chunkSize);
-                    int end = Math.min(base + chunkSize, totalEdges);
-                    for (int i = base; i < end; i++) {
-                        String from = "cli_" + i;
-                        String to = "fac_" + i;
-                        batch.put(from, List.of(new io.jettra.store.engine.models.GraphEngine.Edge(
-                            to, "FACTURA_EMITIDA", Map.of("weight", 1.0)
-                        )));
-                    }
-                    graphEngine.addEdgesBatch(batch);
+                int totalEdges = 20;
+                Map<String, List<io.jettra.store.engine.models.GraphEngine.Edge>> batch = new HashMap<>(totalEdges);
+                for (int i = 0; i < totalEdges; i++) {
+                    String from = "cli_" + i;
+                    String to = "fac_" + i;
+                    batch.put(from, List.of(new io.jettra.store.engine.models.GraphEngine.Edge(
+                        to, "FACTURA_EMITIDA", Map.of("weight", 1.0)
+                    )));
                 }
+                graphEngine.addEdgesBatch(batch);
             });
 
-            // Task 7: TimeSeries Volumen Facturación (50,000)
+            // Task 7: TimeSeries Volumen Facturación (20)
             executor.submit(() -> {
                 var tsEngine = db.getTimeSeriesEngine("volumen_facturacion");
                 long now = System.currentTimeMillis();
-                Map<Long, Double> batch = new HashMap<>(50_000);
-                for (int i = 0; i < 50_000; i++) {
+                Map<Long, Double> batch = new HashMap<>(20);
+                for (int i = 0; i < 20; i++) {
                     batch.put(now - (i * 1000L), 2500.0 + (i % 500));
                 }
                 tsEngine.recordBatch(batch);
             });
 
-            // Task 8: Geospatial Sucursales (25,000)
+            // Task 8: Geospatial Sucursales (20)
             executor.submit(() -> {
                 var geoEngine = db.getGeospatialEngine("sucursales_fiscales");
-                Map<String, io.jettra.store.engine.models.GeospatialEngine.GeoPoint> batch = new HashMap<>(25_000);
-                for (int i = 0; i < 25_000; i++) {
+                Map<String, io.jettra.store.engine.models.GeospatialEngine.GeoPoint> batch = new HashMap<>(20);
+                for (int i = 0; i < 20; i++) {
                     String id = "suc_" + i;
                     batch.put(id, new io.jettra.store.engine.models.GeospatialEngine.GeoPoint(
                         id, 8.9800 + (i % 100) * 0.001, -79.5200 + (i % 100) * 0.001
@@ -2993,13 +2855,13 @@ Seleccione una conexión para iniciar:
                 geoEngine.insertBatch(batch);
             });
 
-            // Task 9: Columnar Analítica Fiscal (25,000)
+            // Task 9: Columnar Analítica Fiscal (10)
             executor.submit(() -> {
                 var colEngine = db.getColumnarEngine("analitica_fiscal");
-                List<Double> sub = new ArrayList<>(25_000);
-                List<Double> iva = new ArrayList<>(25_000);
-                List<Double> tot = new ArrayList<>(25_000);
-                for (int i = 0; i < 25_000; i++) {
+                List<Double> sub = new ArrayList<>(10);
+                List<Double> iva = new ArrayList<>(10);
+                List<Double> tot = new ArrayList<>(10);
+                for (int i = 0; i < 10; i++) {
                     double s = 1000.0 + (i % 500);
                     double iv = s * 0.07;
                     sub.add(s);
@@ -3009,33 +2871,29 @@ Seleccione una conexión para iniciar:
                 colEngine.appendBatch(
                     Map.of("subtotal", sub, "iva", iva, "total", tot),
                     Map.of(),
-                    25_000
+                    10
                 );
             });
 
-            // Task 10: Pure Java 25 Records (100,000 auditoria_records)
+            // Task 10: Pure Java 25 Records (10 auditoria_records)
             executor.submit(() -> {
                 var recordsEngine = db.getRecordsEngine("auditoria_records", io.jettra.store.sample.model.FacturaAuditRecord.class);
-                int totalRecords = 100_000;
-                int chunkSize = 25_000;
+                int totalRecords = 10;
                 long now = System.currentTimeMillis();
-                for (int base = 0; base < totalRecords; base += chunkSize) {
-                    Map<String, io.jettra.store.sample.model.FacturaAuditRecord> batch = new HashMap<>(chunkSize);
-                    int end = Math.min(base + chunkSize, totalRecords);
-                    for (int i = base; i < end; i++) {
-                        String id = "rec_" + i;
-                        batch.put(id, new io.jettra.store.sample.model.FacturaAuditRecord(
-                            id,
-                            "FOL-SAT-2026-" + i,
-                            "RFC-EMISOR-PAN-" + (i % 500),
-                            "RFC-REC-PAN-" + (i % 200_000),
-                            150.0 + (i % 1500),
-                            "sha256-hash-audit-" + i,
-                            now - (i * 500L)
-                        ));
-                    }
-                    recordsEngine.insertBatch(batch);
+                Map<String, io.jettra.store.sample.model.FacturaAuditRecord> batch = new HashMap<>(totalRecords);
+                for (int i = 0; i < totalRecords; i++) {
+                    String id = "rec_" + i;
+                    batch.put(id, new io.jettra.store.sample.model.FacturaAuditRecord(
+                        id,
+                        "FOL-SAT-2026-" + i,
+                        "RFC-EMISOR-PAN-" + (i % 500),
+                        "RFC-REC-PAN-" + (i % 100),
+                        150.0 + (i % 1500),
+                        "sha256-hash-audit-" + i,
+                        now - (i * 500L)
+                    ));
                 }
+                recordsEngine.insertBatch(batch);
             });
         }
 
@@ -3044,8 +2902,7 @@ Seleccione una conexión para iniciar:
             db.flushMemTable();
         } catch (Exception ignored) {}
 
-        // Liberación preventiva de memoria y creación de índices compactos (Zero-Set Singletons)
-        System.gc();
+        // Creación de índices compactos (Zero-Set Singletons)
         try {
             db.getIndexManager().createIndex("facturas", "idx_fac_cliente", "_ref_cliente", "HASH", false, db.getDocumentEngine("facturas"));
             db.getIndexManager().createIndex("clientes", "idx_cli_rfc", "rfc_tax_id", "BTREE", false, db.getDocumentEngine("clientes"));
@@ -3056,22 +2913,22 @@ Seleccione una conexión para iniciar:
 
         return String.format("""
             ==============================================================================================
-                    CARGA MASIVA EXITOSA: BASE DE DATOS 'example_factura_db' (3,100,000 OBJETOS)
+                    CARGA DE BASE DE DATOS DE EJEMPLO: 'example_factura_db' (500 OBJETOS MULTIMODELO)
             ==============================================================================================
             [OK] Tiempo de Inserción y Timbrado Multimodelo: %d ms (Java 25 Virtual Threads)
-            [OK] Objetos Repartidos en 10 Buckets Especializados:
-              * [DOCUMENT]   'facturas'              : 1,000,000 facturas electrónicas timbradas
-              * [DOCUMENT]   'detalles_factura'      : 1,000,000 renglones/items vinculados
-              * [DOCUMENT]   'clientes'              :   200,000 clientes empresariales con RFC/RUC
-              * [KEYVALUE]   'cache_folios'          :   300,000 folios fiscales en caché ultrarrápida
-              * [VECTOR]     'factura_embeddings'    :   200,000 vectores 3D indexados para IA
-              * [GRAPH]      'red_comercial'         :   200,000 vértices conectados (clientes -> facturas)
-              * [TIMESERIES] 'volumen_facturacion'   :    50,000 métricas históricas de facturación
-              * [GEOSPATIAL] 'sucursales_fiscales'   :    25,000 puntos GIS de sucursales emisoras
-              * [COLUMNAR]   'analitica_fiscal'      :    25,000 filas de cálculo analítico de IVA/Totales
-              * [RECORDS]    'auditoria_records'     :   100,000 registros tipados Java 25 (FacturaAuditRecord)
+            [OK] Objetos Repartidos en 10 Buckets Especializados (Máximo 500 registros):
+              * [DOCUMENT]   'facturas'              :        100 facturas electrónicas timbradas
+              * [DOCUMENT]   'detalles_factura'      :        100 renglones/items vinculados
+              * [DOCUMENT]   'clientes'              :        100 clientes empresariales con RFC/RUC
+              * [KEYVALUE]   'cache_folios'          :         50 folios fiscales en caché ultrarrápida
+              * [VECTOR]     'factura_embeddings'    :         50 vectores 3D indexados para IA
+              * [GRAPH]      'red_comercial'         :         40 vértices conectados (clientes -> facturas)
+              * [TIMESERIES] 'volumen_facturacion'   :         20 métricas históricas de facturación
+              * [GEOSPATIAL] 'sucursales_fiscales'   :         20 puntos GIS de sucursales emisoras
+              * [COLUMNAR]   'analitica_fiscal'      :         10 filas de cálculo analítico de IVA/Totales
+              * [RECORDS]    'auditoria_records'     :         10 registros tipados Java 25 (FacturaAuditRecord)
             ----------------------------------------------------------------------------------------------
-            GRAN TOTAL EN 'example_factura_db': 3,100,000 objetos multimodelo conectados mediante JettraRef.
+            GRAN TOTAL EN 'example_factura_db': 500 registro(s) multimodelo conectados mediante JettraRef.
             Índices Creados: idx_fac_cliente (HASH), idx_cli_rfc (BTREE)
             Base de datos activa conmutada a: 'example_factura_db'
             ==============================================================================================

@@ -121,46 +121,40 @@ public class JettraStoreShellTest {
     }
 
     @Test
-    @DisplayName("Debe instalar todas las bases de datos con INSTALL SAMPLES, mostrar show samples y ejecutar JettraQL y JettraSQL")
+    @DisplayName("Debe instalar la base de datos de ejemplo con INSTALL SAMPLES, mostrar show samples y ejecutar JettraQL y JettraSQL")
     public void testInstallAllSamplesAndQueries() {
         try (JettraClient client = JettraClient.connect("127.0.0.1", 9091, "admin", "admin-jettra")) {
             JettraStoreShellApp shell = new JettraStoreShellApp(client);
 
-            // 1. INSTALL SAMPLES debe instalar todas las 5 bases de datos de ejemplo
+            // 1. INSTALL SAMPLES debe instalar la única base de datos de ejemplo con máximo 500 registros
             String samples = shell.executeCommand("INSTALL SAMPLES");
             assertTrue(samples.contains("[SUCCESS]"));
-            assertTrue(samples.contains("sample_enterprise_db"));
-            assertTrue(samples.contains("sample_ecommerce_db"));
-            assertTrue(samples.contains("sample_ai_graph_db"));
-            assertTrue(samples.contains("sample_iot_telemetry_db"));
-            assertTrue(samples.contains("sample_financial_db"));
+            assertTrue(samples.contains("example_factura_db"));
+            assertTrue(samples.contains("500"));
 
-            // 2. Verificar que las bases de datos están registradas en show dbs y show samples
+            // 2. Verificar que la base de datos está registrada en show dbs y show samples
             String showDbs = shell.executeCommand("SHOW DATABASES");
-            assertTrue(showDbs.contains("sample_enterprise_db"));
-            assertTrue(showDbs.contains("SAMPLE"));
+            assertTrue(showDbs.contains("example_factura_db"));
 
             String showSamples = shell.executeCommand("SHOW SAMPLES");
-            assertTrue(showSamples.contains("sample_enterprise_db"));
-            assertTrue(showSamples.contains("samples_hostipal_db"));
-            assertTrue(showSamples.contains("samples_ambiental_db"));
+            assertTrue(showSamples.contains("example_factura_db"));
             assertTrue(showSamples.contains("INSTALADA"));
 
             // 3. Consultas expresivas con JettraQL
-            String jqlFrom = shell.executeCommand("FROM products");
+            String jqlFrom = shell.executeCommand("FROM facturas");
             assertTrue(jqlFrom.contains("JETTRAQL [FROM]"));
-            assertTrue(jqlFrom.contains("prod_01"));
+            assertTrue(jqlFrom.contains("fac_"));
 
-            String jqlFetch = shell.executeCommand("FETCH products prod_01 RESOLVE REFS");
+            String jqlFetch = shell.executeCommand("FETCH facturas fac_0 RESOLVE REFS");
             assertTrue(jqlFetch.contains("JETTRAQL [FETCH]"));
 
-            String jqlMatch = shell.executeCommand("MATCH (prod_01)-[BELONGS_TO]->(cat_hardware) IN catalog_graph");
+            String jqlMatch = shell.executeCommand("MATCH (cli_0)-[FACTURA_EMITIDA]->(fac_0) IN red_comercial");
             assertTrue(jqlMatch.contains("JETTRAQL [MATCH]"));
 
             // 4. Consultas con JettraSQL
-            String sqlSelect = shell.executeCommand("SQL SELECT * FROM products");
+            String sqlSelect = shell.executeCommand("SQL SELECT * FROM facturas");
             assertTrue(sqlSelect.contains("JETTRASQL RESULTADO"));
-            assertTrue(sqlSelect.contains("prod_01"));
+            assertTrue(sqlSelect.contains("fac_"));
         }
     }
 
@@ -209,16 +203,16 @@ public class JettraStoreShellTest {
             assertTrue(createUsr.contains("[SUCCESS]"));
 
             // 3. Asignar rol de base de datos
-            String grant = shell.executeCommand("GRANT READ_WRITE ON sample_ecommerce_db TO dev_user");
+            String grant = shell.executeCommand("GRANT READ_WRITE ON example_factura_db TO dev_user");
             assertTrue(grant.contains("[SUCCESS]"));
 
             // 4. Mostrar privilegios
             String grants = shell.executeCommand("SHOW GRANTS FOR dev_user");
-            assertTrue(grants.contains("sample_ecommerce_db"));
+            assertTrue(grants.contains("example_factura_db"));
             assertTrue(grants.contains("READ_WRITE"));
 
             // 5. Revocar rol
-            String revoke = shell.executeCommand("REVOKE sample_ecommerce_db FROM dev_user");
+            String revoke = shell.executeCommand("REVOKE example_factura_db FROM dev_user");
             assertTrue(revoke.contains("[SUCCESS]"));
 
             // 6. Eliminar usuario
@@ -271,18 +265,16 @@ public class JettraStoreShellTest {
             shell.executeCommand("INSTALL SAMPLES");
 
             Path tempBackup = Files.createTempFile("shell_backup", ".jettra_bak");
-            String backupOutput = shell.executeCommand("BACKUP DATABASE sample_enterprise_db TO '" + tempBackup.toAbsolutePath() + "'");
+            String backupOutput = shell.executeCommand("BACKUP DATABASE example_factura_db TO '" + tempBackup.toAbsolutePath() + "'");
             assertTrue(backupOutput.contains("[SUCCESS]"));
 
-            String restoreOutput = shell.executeCommand("RESTORE DATABASE sample_enterprise_db FROM '" + tempBackup.toAbsolutePath() + "'");
+            String restoreOutput = shell.executeCommand("RESTORE DATABASE example_factura_db FROM '" + tempBackup.toAbsolutePath() + "'");
             assertTrue(restoreOutput.contains("[SUCCESS]"));
 
             Files.deleteIfExists(tempBackup);
         }
     }
 
-    
-    
     @Test
     @DisplayName("Debe listar buckets/units, mostrar registros multimodelo y contar registros con show buckets, show records y count")
     public void testShowBucketsShowRecordsAndCount() {
@@ -290,78 +282,71 @@ public class JettraStoreShellTest {
             JettraStoreShellApp shell = new JettraStoreShellApp(client);
             shell.executeCommand("INSTALL SAMPLES");
 
-            // 1. SHOW BUCKETS / SHOW UNIT en sample_enterprise_db
-            shell.executeCommand("USE sample_enterprise_db");
+            // 1. SHOW BUCKETS / SHOW UNIT en example_factura_db
+            shell.executeCommand("USE example_factura_db");
             String buckets = shell.executeCommand("SHOW BUCKETS");
-            assertTrue(buckets.contains("sample_enterprise_db"));
-            assertTrue(buckets.contains("employees"));
+            assertTrue(buckets.contains("example_factura_db"));
+            assertTrue(buckets.contains("facturas"));
             assertTrue(buckets.contains("DOCUMENT"));
 
             String units = shell.executeCommand("SHOW UNIT");
-            assertTrue(units.contains("employees"));
+            assertTrue(units.contains("facturas"));
 
             // 2. Filtro por motor
             String docBuckets = shell.executeCommand("SHOW BUCKETS DOCUMENT");
-            assertTrue(docBuckets.contains("employees"));
+            assertTrue(docBuckets.contains("facturas"));
 
             // 3. SHOW RECORDS con paginación
-            String recs = shell.executeCommand("SHOW RECORDS employees LIMIT 3");
-            assertTrue(recs.contains("REGISTROS DE DOCUMENT BUCKET 'employees'"));
-            assertTrue(recs.contains("emp_01"));
+            String recs = shell.executeCommand("SHOW RECORDS facturas LIMIT 3");
+            assertTrue(recs.contains("REGISTROS DE DOCUMENT BUCKET 'facturas'"));
+            assertTrue(recs.contains("fac_"));
 
             // 4. COUNT para una unidad específica y COUNT ALL
-            String cntEmp = shell.executeCommand("COUNT employees");
-            assertTrue(cntEmp.contains("[COUNT] [DOCUMENT] 'employees':"));
+            String cntFac = shell.executeCommand("COUNT facturas");
+            assertTrue(cntFac.contains("[COUNT] [DOCUMENT] 'facturas':"));
 
             String cntAll = shell.executeCommand("COUNT ALL");
-            assertTrue(cntAll.contains("CONTEO TOTAL DE REGISTROS EN BASE DE DATOS: 'sample_enterprise_db'"));
-            assertTrue(cntAll.contains("Gran Total"));
+            assertTrue(cntAll.contains("CONTEO TOTAL DE REGISTROS EN BASE DE DATOS: 'example_factura_db'"));
+            assertTrue(cntAll.contains("500 registro(s) multimodelo"));
 
-            // 5. Verificar Motores Vectorial y Grafo en sample_ai_graph_db
-            shell.executeCommand("USE sample_ai_graph_db");
-            String aiBuckets = shell.executeCommand("SHOW BUCKETS");
-            assertTrue(aiBuckets.contains("VECTOR"));
-            assertTrue(aiBuckets.contains("GRAPH"));
+            // 5. Verificar Motores Vectorial y Grafo en example_factura_db
+            assertTrue(buckets.contains("VECTOR"));
+            assertTrue(buckets.contains("GRAPH"));
 
-            String vecRecs = shell.executeCommand("SHOW RECORDS concept_embeddings LIMIT 2");
-            assertTrue(vecRecs.contains("REGISTROS DE VECTOR BUCKET 'concept_embeddings'"));
+            String vecRecs = shell.executeCommand("SHOW RECORDS factura_embeddings LIMIT 2");
+            assertTrue(vecRecs.contains("REGISTROS DE VECTOR BUCKET 'factura_embeddings'"));
 
-            String graphRecs = shell.executeCommand("SHOW RECORDS knowledge_network LIMIT 2");
-            assertTrue(graphRecs.contains("REGISTROS DE GRAPH BUCKET 'knowledge_network'"));
+            String graphRecs = shell.executeCommand("SHOW RECORDS red_comercial LIMIT 2");
+            assertTrue(graphRecs.contains("REGISTROS DE GRAPH BUCKET 'red_comercial'"));
 
-            String cntVec = shell.executeCommand("COUNT concept_embeddings");
-            assertTrue(cntVec.contains("[COUNT] [VECTOR] 'concept_embeddings':"));
+            String cntVec = shell.executeCommand("COUNT factura_embeddings");
+            assertTrue(cntVec.contains("[COUNT] [VECTOR] 'factura_embeddings':"));
 
-            String cntGraph = shell.executeCommand("COUNT knowledge_network");
-            assertTrue(cntGraph.contains("[COUNT] [GRAPH] 'knowledge_network':"));
+            String cntGraph = shell.executeCommand("COUNT red_comercial");
+            assertTrue(cntGraph.contains("[COUNT] [GRAPH] 'red_comercial':"));
         }
     }
 
-    
     @Test
-    @DisplayName("Debe cargar la base de datos example_factura_db con 3 millones de objetos multimodelo y referencias cruzadas")
-    public void testLoadFacturaSampleDatabase3MObjects() {
+    @DisplayName("Debe cargar la base de datos example_factura_db como única muestra multimodelo con máximo 500 registros")
+    public void testLoadFacturaSampleDatabaseMax500Records() {
         try (JettraClient client = JettraClient.connect("127.0.0.1", 9091, "admin", "admin-jettra")) {
             JettraStoreShellApp shell = new JettraStoreShellApp(client);
 
             String samples = shell.executeCommand("SHOW SAMPLES");
-            System.out.println("DEBUG samples: " + samples);
             assertTrue(samples.contains("example_factura_db"));
 
             String loadResult = shell.executeCommand("LOAD SAMPLE example_factura_db");
-            System.out.println("DEBUG loadResult: " + loadResult);
-            assertTrue(loadResult.contains("CARGA MASIVA EXITOSA"));
+            assertTrue(loadResult.contains("CARGA DE BASE DE DATOS DE EJEMPLO"));
+            assertTrue(loadResult.contains("500"));
 
             String buckets = shell.executeCommand("SHOW BUCKETS");
-            System.out.println("DEBUG buckets: " + buckets);
 
             String countAll = shell.executeCommand("COUNT ALL");
-            System.out.println("DEBUG countAll: " + countAll);
-            assertTrue(countAll.contains("3100000 registro(s) multimodelo"));
+            assertTrue(countAll.contains("500 registro(s) multimodelo"));
             assertTrue(countAll.contains("auditoria_records"));
 
             String stats = shell.executeCommand("DB STATS");
-            System.out.println("DEBUG stats: " + stats);
             assertTrue(stats.contains("Documentos:"));
             assertTrue(stats.contains("Clave-Valor (KV):"));
             assertTrue(stats.contains("Vectores:"));
@@ -375,11 +360,9 @@ public class JettraStoreShellTest {
             assertTrue(stats.contains("analitica_fiscal"));
 
             String showRecs = shell.executeCommand("SHOW RECORDS facturas LIMIT 2");
-            System.out.println("DEBUG showRecs: " + showRecs);
             assertTrue(showRecs.contains("REGISTROS DE DOCUMENT BUCKET 'facturas'"));
 
             String showAudit = shell.executeCommand("SHOW RECORDS auditoria_records LIMIT 2");
-            System.out.println("DEBUG showAudit: " + showAudit);
             assertTrue(showAudit.contains("REGISTROS DE TYPED RECORD BUCKET 'auditoria_records'"));
         }
     }
@@ -455,7 +438,7 @@ public class JettraStoreShellTest {
             assertTrue(resLimit5.contains("5 fila(s) retornada(s)"));
 
             // 3. select con WHERE usando índice
-            String resWhere = shell.executeCommand("select * from clientes where _id = cli_100");
+            String resWhere = shell.executeCommand("select * from clientes where _id = cli_50");
             assertTrue(resWhere.contains("JETTRASQL RESULTADO"));
         }
     }

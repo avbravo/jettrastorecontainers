@@ -6,6 +6,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    pull_policy: build
     image: jettrastoreshell:1.0
     container_name: jettra-shell
     stdin_open: true

@@ -171,6 +171,7 @@ public class App {
             Runtime.getRuntime().addShutdownHook(new Thread(() -> {
                 System.out.println("[JettraStore Explorer] Apagado detectado. Cerrando todas las sesiones activas...");
                 closeAllSessions();
+                JettraStorePlugin.getInstance().stopClusterHeartbeatMonitor();
                 JettraServer running = serverInstance;
                 if (running != null && running.isRunning()) {
                     running.stop();
@@ -180,6 +181,7 @@ public class App {
 
         // Registrar el endpoint propio de JettraStoreExplorer (Web UI) sin sobrescribir el destino del nodo PRIMARY JettraStore
         plugin.setExplorerServerEndpoint(config.getHost(), config.getPort());
+        plugin.startClusterHeartbeatMonitor();
         plugin.refreshAllNodeStatuses(true);
         System.out.println("[JettraStore Explorer] Inicializado JettraStorePlugin. WebUI: " + config.getHost() + ":" + config.getPort() + " | Nodos: " + plugin.getServerNodes().size() + " | Modo: " + plugin.getMultinodeDisplay());
 
@@ -730,14 +732,22 @@ public class App {
                 .orElse(null);
 
         boolean primaryOnline = primary != null && primary.isOnline();
-        long onlineCount = nodes.stream().filter(ServerNodeInfo::isOnline).count();
-        long offlineOthers = nodes.stream().filter(n -> n != primary && !n.isOnline()).count();
+        boolean primaryActive = primary != null && primary.isActive();
+        long activeCount = nodes.stream().filter(ServerNodeInfo::isActive).count();
+        long onlineCount = activeCount;
+        long inactiveCount = nodes.size() - activeCount;
+        long inactiveOthers = nodes.stream().filter(n -> n != primary && !n.isActive()).count();
+        long offlineOthers = inactiveOthers;
 
         StringBuilder json = new StringBuilder();
         json.append("{");
+        json.append("\"primaryActive\":").append(primaryActive).append(",");
         json.append("\"primaryOnline\":").append(primaryOnline).append(",");
+        json.append("\"activeCount\":").append(activeCount).append(",");
         json.append("\"onlineCount\":").append(onlineCount).append(",");
+        json.append("\"inactiveCount\":").append(inactiveCount).append(",");
         json.append("\"totalCount\":").append(nodes.size()).append(",");
+        json.append("\"inactiveOthers\":").append(inactiveOthers).append(",");
         json.append("\"offlineOthers\":").append(offlineOthers).append(",");
         json.append("\"nodes\":[");
         for (int i = 0; i < nodes.size(); i++) {
@@ -749,6 +759,9 @@ public class App {
             json.append("\"role\":\"").append(escapeJson(n.getRole())).append("\",");
             json.append("\"host\":\"").append(escapeJson(n.getHost())).append("\",");
             json.append("\"port\":").append(n.getPort()).append(",");
+            json.append("\"status\":\"").append(n.getStatus()).append("\",");
+            json.append("\"state\":\"").append(n.isActive() ? "ONLINE" : "OFFLINE").append("\",");
+            json.append("\"active\":").append(n.isActive()).append(",");
             json.append("\"online\":").append(n.isOnline()).append(",");
             json.append("\"latencyMs\":").append(String.format(Locale.US, "%.2f", n.getLatencyMs())).append(",");
             json.append("\"lastError\":").append(n.getLastError() != null ? "\"" + escapeJson(n.getLastError()) + "\"" : "null");
@@ -782,8 +795,10 @@ public class App {
             + "\"success\":" + outcome.success() + ","
             + "\"offlineVerified\":" + outcome.offlineVerified() + ","
             + "\"nodeId\":\"" + escapeJson(node.getId()) + "\","
+            + "\"active\":" + node.isActive() + ","
             + "\"online\":" + node.isOnline() + ","
-            + "\"status\":\"" + (node.isOnline() ? "ONLINE" : "OFFLINE") + "\","
+            + "\"status\":\"" + node.getStatus() + "\","
+            + "\"state\":\"" + (node.isOnline() ? "ONLINE" : "OFFLINE") + "\","
             + "\"mechanism\":\"" + escapeJson(outcome.mechanism()) + "\","
             + "\"elapsedMs\":" + outcome.elapsedMs() + ","
             + "\"lastError\":" + (node.getLastError() != null ? "\"" + escapeJson(node.getLastError()) + "\"" : "null") + ","
@@ -815,8 +830,10 @@ public class App {
             + "\"success\":" + outcome.success() + ","
             + "\"onlineVerified\":" + outcome.onlineVerified() + ","
             + "\"nodeId\":\"" + escapeJson(node.getId()) + "\","
+            + "\"active\":" + node.isActive() + ","
             + "\"online\":" + node.isOnline() + ","
-            + "\"status\":\"" + (node.isOnline() ? "ONLINE" : "OFFLINE") + "\","
+            + "\"status\":\"" + node.getStatus() + "\","
+            + "\"state\":\"" + (node.isOnline() ? "ONLINE" : "OFFLINE") + "\","
             + "\"mechanism\":\"" + escapeJson(outcome.mechanism()) + "\","
             + "\"lastError\":" + (node.getLastError() != null ? "\"" + escapeJson(node.getLastError()) + "\"" : "null") + ","
             + "\"message\":\"" + escapeJson(outcome.message()) + "\""

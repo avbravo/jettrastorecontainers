@@ -7,6 +7,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    pull_policy: build
     image: jettrastore:1.0
     container_name: jettra-node-01
     hostname: jettra-node-01
@@ -54,6 +55,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    pull_policy: build
     image: jettrastore:1.0
     container_name: jettra-node-02
     hostname: jettra-node-02
@@ -103,6 +105,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    pull_policy: build
     image: jettrastore:1.0
     container_name: jettra-node-03
     hostname: jettra-node-03

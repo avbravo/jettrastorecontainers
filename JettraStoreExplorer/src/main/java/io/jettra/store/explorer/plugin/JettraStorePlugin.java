@@ -23,6 +23,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -76,6 +77,11 @@ public class JettraStorePlugin {
     private long totalProcessedObjects = 2_840_500L;
     private String lastPoliceStatus = "Quorum Raft Óptimo | 4 Nodos Sincronizados";
 
+    private final AtomicBoolean heartbeatRunning = new AtomicBoolean(false);
+    private volatile Thread heartbeatThread;
+    private volatile long heartbeatIntervalMs = 2000L;
+    private final String clusterNodesConfigPath = "memory/cluster_nodes.json";
+
     private JettraStorePlugin() {
         this.mapper = new ObjectMapper();
         this.mapper.enable(SerializationFeature.INDENT_OUTPUT);
@@ -86,6 +92,7 @@ public class JettraStorePlugin {
         initDatabaseCatalog();
         initPoliceSentinels();
         initBackupSnapshots();
+        startClusterHeartbeatMonitor();
     }
 
     // --- Configuración leída desde META-INF/microprofile-config.properties y microprofile-config.properties ---
@@ -197,6 +204,14 @@ public class JettraStorePlugin {
             this.healthCheckTimeoutMs = Math.max(200, Math.min(5000, t));
         } catch (Exception ignored) {
             this.healthCheckTimeoutMs = 1000;
+        }
+
+        String hbIntervalStr = System.getProperty("cluster.heartbeat.interval.ms", props.getProperty("cluster.heartbeat.interval.ms", "2000"));
+        try {
+            long hi = Long.parseLong(hbIntervalStr.trim());
+            this.heartbeatIntervalMs = Math.max(500L, Math.min(60000L, hi));
+        } catch (Exception ignored) {
+            this.heartbeatIntervalMs = 2000L;
         }
     }
 
@@ -446,6 +461,9 @@ public class JettraStorePlugin {
             serverNodes.add(new ServerNodeInfo("node-04", "node-04-edge", "EDGE", "10.0.4.15", 8768, 12.8f, 280, 1024, 650, 8900, 180, 8900, 0.0f, 8, false));
         }
 
+        // Descubrir cualquier nodo adicional persistido en memory/cluster_nodes.json o propiedades
+        autoDiscoverClusterNodes();
+
         // Realizar comprobación TCP real de todos los nodos
         refreshAllNodeStatuses(true);
     }
@@ -548,10 +566,16 @@ public class JettraStorePlugin {
                 node.setLastError(null);
                 node.setLatencyMs(Math.max(0.08f, ping));
                 node.setLastCheckedEpochMs(now);
-                if (!wasOnline && isPrimary) {
+                if (!wasOnline) {
+                    String roleLabel = isPrimary ? "PRIMARY" : node.getRole();
                     logPoliceIncident("Raft Quorum K9",
-                        "Nodo PRIMARY conectado: " + node.getName() + " (" + host + ":" + port + ")",
-                        "OK", "Latido TCP restablecido (" + String.format("%.2f ms", node.getLatencyMs()) + ")");
+                        "Nodo " + roleLabel + " detectado y conectado (ACTIVE): " + node.getName() + " (" + host + ":" + port + ")",
+                        "OK", "Latido TCP restablecido (" + String.format(Locale.US, "%.2f ms", node.getLatencyMs()) + ")");
+                    try {
+                        io.jettra.store.cluster.JettraClusterEventBus.getInstance().publish(
+                            io.jettra.store.cluster.ClusterLiveEvent.TYPE_NODE_ONLINE,
+                            node.getId(), "cluster", "Nodo en estado ACTIVE", host + ":" + port);
+                    } catch (Throwable ignored) {}
                 }
                 return true;
             }
@@ -577,12 +601,183 @@ public class JettraStorePlugin {
             node.setLastCheckedEpochMs(now);
         }
 
-        if (wasOnline && isPrimary) {
+        if (wasOnline) {
+            String roleLabel = isPrimary ? "PRIMARY" : node.getRole();
             logPoliceIncident("Raft Quorum K9",
-                "¡ALERTA! Nodo PRIMARY desconectado: " + node.getName() + " (" + host + ":" + port + ")",
-                "ERROR", node.getLastError());
+                "¡ALERTA! Nodo " + roleLabel + " desconectado (INACTIVE): " + node.getName() + " (" + host + ":" + port + ")",
+                isPrimary ? "ERROR" : "WARN",
+                node.getLastError());
+            try {
+                io.jettra.store.cluster.JettraClusterEventBus.getInstance().publish(
+                    io.jettra.store.cluster.ClusterLiveEvent.TYPE_NODE_OFFLINE,
+                    node.getId(), "cluster", "Nodo en estado INACTIVE: " + node.getLastError(), host + ":" + port);
+            } catch (Throwable ignored) {}
         }
         return false;
+    }
+
+    public void startClusterHeartbeatMonitor() {
+        if (heartbeatRunning.compareAndSet(false, true)) {
+            try {
+                io.jettra.store.cluster.JettraClusterEventBus.getInstance().subscribe(this::handleClusterLiveEvent);
+            } catch (Throwable ignored) {}
+
+            this.heartbeatThread = Thread.ofVirtual().name("jettra-cluster-heartbeat-worker").start(this::runClusterHeartbeatLoop);
+            System.out.println("[JettraStore Explorer] Monitor de latidos y autodescubrimiento del clúster iniciado en Virtual Thread Loom. Intervalo: " + this.heartbeatIntervalMs + " ms");
+        }
+    }
+
+    public void stopClusterHeartbeatMonitor() {
+        heartbeatRunning.set(false);
+        if (heartbeatThread != null) {
+            heartbeatThread.interrupt();
+        }
+    }
+
+    public boolean isHeartbeatRunning() {
+        return heartbeatRunning.get();
+    }
+
+    public long getHeartbeatIntervalMs() {
+        return heartbeatIntervalMs;
+    }
+
+    public void setHeartbeatIntervalMs(long ms) {
+        this.heartbeatIntervalMs = Math.max(500L, Math.min(60000L, ms));
+    }
+
+    private void runClusterHeartbeatLoop() {
+        while (heartbeatRunning.get()) {
+            try {
+                // 1. Pausa reactiva en hilo virtual Loom
+                Thread.sleep(this.heartbeatIntervalMs);
+
+                // 2. Detección automática de nuevos nodos en la red/configuración
+                autoDiscoverClusterNodes();
+
+                // 3. Comprobación y sondeo de salud/latidos (Heartbeats)
+                refreshAllNodeStatuses(false);
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+                break;
+            } catch (Throwable t) {
+                try {
+                    Thread.sleep(Math.max(1000L, this.heartbeatIntervalMs));
+                } catch (InterruptedException ignored) {
+                    break;
+                }
+            }
+        }
+    }
+
+    public synchronized void autoDiscoverClusterNodes() {
+        // 1. Revisar cluster.nodes de propiedad de sistema o microprofile config
+        String dynamicNodesProp = System.getProperty("cluster.nodes", loadedConfigProps.getProperty("cluster.nodes"));
+        if (dynamicNodesProp != null && !dynamicNodesProp.isBlank()) {
+            String[] entries = dynamicNodesProp.split(",");
+            for (String entry : entries) {
+                String[] parts = entry.trim().split(":");
+                if (parts.length >= 3) {
+                    String id = parts[0].trim();
+                    String host = parts[1].trim();
+                    int port = 9091;
+                    try { port = Integer.parseInt(parts[2].trim()); } catch (Exception ignored) {}
+                    ServerNodeInfo existing = getNodeById(id);
+                    if (existing == null && !id.isBlank() && port > 0) {
+                        String role = id.toLowerCase().contains("edge") ? "EDGE" : (id.toLowerCase().contains("primary") ? "PRIMARY" : "FOLLOWER");
+                        ServerNodeInfo newNode = new ServerNodeInfo(id, id + "-replica", role, host, port, 15.0f, 320, 2048, 850, 10000, 200, 10000, 0.0f, 8, false);
+                        serverNodes.add(newNode);
+                        checkNodeRealReachability(newNode, this.healthCheckTimeoutMs);
+                        logPoliceIncident("Raft Quorum K9",
+                            "Nuevo nodo descubierto automáticamente (Dynamic Discovery): " + id + " (" + host + ":" + port + ") [" + newNode.getStatus() + "]",
+                            newNode.isActive() ? "OK" : "WARN",
+                            "Incorporado dinámicamente a la topología del clúster");
+                    }
+                }
+            }
+        }
+
+        // 2. Revisar persistencia dinámica en memory/cluster_nodes.json
+        File f = new File(clusterNodesConfigPath);
+        if (f.exists() && f.length() > 0) {
+            try {
+                List<Map<String, Object>> list = mapper.readValue(f, new TypeReference<List<Map<String, Object>>>() {});
+                if (list != null) {
+                    for (Map<String, Object> map : list) {
+                        String id = (String) map.get("id");
+                        if (id != null && getNodeById(id) == null) {
+                            String name = (String) map.getOrDefault("name", id);
+                            String role = (String) map.getOrDefault("role", "FOLLOWER");
+                            String host = (String) map.getOrDefault("host", "127.0.0.1");
+                            int port = ((Number) map.getOrDefault("port", 8770)).intValue();
+                            long ram = ((Number) map.getOrDefault("heapMaxMb", 2048L)).longValue();
+                            ServerNodeInfo n = new ServerNodeInfo(id, name, role, host, port, 15.0f, 300, ram, 800, 9000, 200, 9000, 0.0f, 8, false);
+                            serverNodes.add(n);
+                            checkNodeRealReachability(n, this.healthCheckTimeoutMs);
+                        }
+                    }
+                }
+            } catch (Exception ignored) {}
+        }
+    }
+
+    public void handleClusterLiveEvent(io.jettra.store.cluster.ClusterLiveEvent event) {
+        if (event == null) return;
+        String type = event.type();
+        String srcNodeId = event.sourceNodeId();
+        if (srcNodeId == null || srcNodeId.isBlank() || "local".equalsIgnoreCase(srcNodeId) || "cluster".equalsIgnoreCase(srcNodeId)) {
+            return;
+        }
+
+        if (io.jettra.store.cluster.ClusterLiveEvent.TYPE_NODE_ONLINE.equals(type)) {
+            ServerNodeInfo node = getNodeById(srcNodeId);
+            if (node != null) {
+                if (!node.isActive()) {
+                    node.setOnline(true);
+                    node.setLastError(null);
+                    this.lastRefreshEpochMs = System.currentTimeMillis();
+                }
+            } else {
+                String details = event.details();
+                String host = "127.0.0.1";
+                int port = 8770;
+                if (details != null && details.contains(":")) {
+                    String[] parts = details.trim().split(":");
+                    host = parts[0].trim();
+                    try { port = Integer.parseInt(parts[1].trim()); } catch (Exception ignored) {}
+                }
+                addNode(srcNodeId, srcNodeId, "FOLLOWER", host, port, 2048);
+            }
+        } else if (io.jettra.store.cluster.ClusterLiveEvent.TYPE_NODE_OFFLINE.equals(type)
+                || io.jettra.store.cluster.ClusterLiveEvent.TYPE_NODE_STOPPED.equals(type)) {
+            ServerNodeInfo node = getNodeById(srcNodeId);
+            if (node != null && node.isActive()) {
+                node.setOnline(false);
+                node.setLastError(event.message() != null ? event.message() : "Desconexión notificada por el clúster");
+                this.lastRefreshEpochMs = System.currentTimeMillis();
+            }
+        }
+    }
+
+    private synchronized void saveClusterNodes() {
+        try {
+            Path p = Paths.get(clusterNodesConfigPath);
+            if (p.getParent() != null) Files.createDirectories(p.getParent());
+            List<Map<String, Object>> list = new ArrayList<>();
+            for (ServerNodeInfo n : serverNodes) {
+                if (!"node-01".equalsIgnoreCase(n.getId())) {
+                    Map<String, Object> m = new LinkedHashMap<>();
+                    m.put("id", n.getId());
+                    m.put("name", n.getName());
+                    m.put("role", n.getRole());
+                    m.put("host", n.getHost());
+                    m.put("port", n.getPort());
+                    m.put("heapMaxMb", n.getHeapMaxMb());
+                    list.add(m);
+                }
+            }
+            mapper.writeValue(new File(clusterNodesConfigPath), list);
+        } catch (Exception ignored) {}
     }
 
     public void refreshAllNodeStatuses() {
@@ -632,14 +827,31 @@ public class JettraStorePlugin {
 
     public synchronized boolean addNode(String id, String name, String role, String host, int port, long heapMaxMb) {
         if (id == null || id.isBlank()) return false;
-        if (getNodeById(id) != null) return false;
         String r = (role != null && !role.isBlank()) ? role.toUpperCase() : "FOLLOWER";
         String h = (host != null && !host.isBlank()) ? host : "127.0.0.1";
         int p = port > 0 ? port : 8770;
         long maxM = heapMaxMb > 0 ? heapMaxMb : 2048;
+        ServerNodeInfo existing = getNodeById(id);
+        if (existing != null) {
+            existing.setOnline(true);
+            existing.setRole(r);
+            existing.setHost(h);
+            existing.setPort(p);
+            existing.setLastError(null);
+            saveClusterNodes();
+            return true;
+        }
         ServerNodeInfo node = new ServerNodeInfo(id.trim(), (name != null && !name.isBlank()) ? name.trim() : id.trim(), r, h.trim(), p, 15.0f, 320, maxM, 850, 5000, 200, 10500, 0.65f, 8, true);
         serverNodes.add(node);
-        logPoliceIncident("Raft Quorum K9", "Nuevo nodo registrado en clúster: " + id + " (" + h + ":" + p + ")", "OK", "Incorporado a quórum");
+        saveClusterNodes();
+        logPoliceIncident("Raft Quorum K9", "Nuevo nodo registrado en clúster: " + id + " (" + h + ":" + p + ") [" + node.getStatus() + "]", "OK", "Incorporado a quórum");
+        try {
+            if (node.isActive()) {
+                io.jettra.store.cluster.JettraClusterEventBus.getInstance().publish(
+                    io.jettra.store.cluster.ClusterLiveEvent.TYPE_NODE_ONLINE,
+                    node.getId(), "cluster", "Nuevo nodo incorporado y ACTIVE", h + ":" + p);
+            }
+        } catch (Throwable ignored) {}
         return true;
     }
 
@@ -656,7 +868,13 @@ public class JettraStorePlugin {
         boolean removed = serverNodes.removeIf(n -> n.getId().equalsIgnoreCase(id));
         if (removed) {
             lifecycleManager.clearStopped(id);
+            saveClusterNodes();
             logPoliceIncident("Raft Quorum K9", "Nodo expulsado del clúster: " + id, "WARN", "Rebalanceo de réplicas Raft");
+            try {
+                io.jettra.store.cluster.JettraClusterEventBus.getInstance().publish(
+                    io.jettra.store.cluster.ClusterLiveEvent.TYPE_NODE_OFFLINE,
+                    id, "cluster", "Nodo expulsado del quórum", "");
+            } catch (Throwable ignored) {}
         }
         return removed;
     }

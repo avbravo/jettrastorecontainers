@@ -63,6 +63,12 @@ public class ServerNodeInfo implements Serializable {
     public long getRaftTerm() { return raftTerm; }
     public boolean isOnline() { return online; }
     public void setOnline(boolean online) { this.online = online; }
+    public boolean isActive() { return online; }
+    public void setActive(boolean active) { this.online = active; }
+    public String getStatus() { return online ? "ACTIVE" : "INACTIVE"; }
+    public String getStatusLabel() { return online ? "ACTIVE" : "INACTIVE"; }
+    public String getStatusColor() { return online ? "#10b981" : "#ef4444"; }
+    public String getStatusBgColor() { return online ? "rgba(16, 185, 129, 0.2)" : "rgba(239, 68, 68, 0.25)"; }
     public String getLastError() { return lastError; }
     public void setLastError(String lastError) { this.lastError = lastError; }
     public long getLastCheckedEpochMs() { return lastCheckedEpochMs; }

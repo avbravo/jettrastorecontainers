@@ -6,6 +6,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    pull_policy: build
     image: jettrastorepolice3d:1.0
     container_name: jettra-police-3d
     restart: unless-stopped

@@ -471,6 +471,12 @@ public class RecordExplorerFluxView extends FluxView {
                     form.submit();
                 }
             }
+            window.addEventListener('click', function(e) {
+                var modal = document.getElementById('restoreVersionModal');
+                if (modal && e.target === modal) {
+                    modal.style.display = 'none';
+                }
+            });
             </script>
             """, escapeHtml(currentDb), escapeHtml(currentBucket), escapeHtml(rec.getId())));
 
@@ -514,8 +520,8 @@ public class RecordExplorerFluxView extends FluxView {
         actionsRow.modifier(new Modifier().style("display: flex; justify-content: flex-end; gap: 0.75rem;"));
 
         Modal modal = Modal.of(modalTitle, modalPrompt, detailsBox, actionsRow).open(false);
+        modal.id("restoreVersionModal");
         modal.modifier(new Modifier()
-            .attribute("id", "restoreVersionModal")
             .style("background: #0f172a; border: 1px solid #10b981; max-width: 520px; width: 92%; color: var(--text-main);"));
         return modal;
     }

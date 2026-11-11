@@ -35,14 +35,14 @@ public class ClusterFluxView extends FluxView {
     @Override
     public Widget build() {
         JettraStorePlugin plugin = JettraStorePlugin.getInstance();
-        // Verificar en tiempo real el socket TCP de cada nodo del clúster (evita doble sondeo en la misma petición)
-        plugin.refreshAllNodeStatusesIfStale(300L);
+        // Consultar el registro del clúster en tiempo real (forzar refresco de salud para evitar datos estáticos o en caché)
+        plugin.refreshAllNodeStatusesIfStale(100L);
 
         List<ServerNodeInfo> nodes = plugin.getServerNodes();
 
-        long onlineCount = nodes.stream().filter(ServerNodeInfo::isOnline).count();
-        long totalQps = nodes.stream().filter(ServerNodeInfo::isOnline).mapToLong(ServerNodeInfo::getQps).sum();
-        long totalPanama = nodes.stream().filter(ServerNodeInfo::isOnline).mapToLong(ServerNodeInfo::getPanamaDirectMb).sum();
+        long activeCount = nodes.stream().filter(ServerNodeInfo::isActive).count();
+        long totalQps = nodes.stream().filter(ServerNodeInfo::isActive).mapToLong(ServerNodeInfo::getQps).sum();
+        long totalPanama = nodes.stream().filter(ServerNodeInfo::isActive).mapToLong(ServerNodeInfo::getPanamaDirectMb).sum();
 
         List<Widget> rootChildren = new ArrayList<>();
 
@@ -54,77 +54,77 @@ public class ClusterFluxView extends FluxView {
             rootChildren.add(flash);
         }
 
-        // Verificación y Detección de Estado OFFLINE para nodo PRIMARY y Réplicas Secundarias
+        // Verificación y Detección de Estado INACTIVE para nodo PRIMARY y Réplicas Secundarias
         ServerNodeInfo primaryNode = nodes.stream()
                 .filter(n -> "PRIMARY".equalsIgnoreCase(n.getRole()) || "LEADER".equalsIgnoreCase(n.getRole()) || "node-01".equalsIgnoreCase(n.getId()))
                 .findFirst()
                 .orElse(null);
 
-        boolean primaryOnline = primaryNode != null && primaryNode.isOnline();
-        List<ServerNodeInfo> offlineOthers = nodes.stream()
-                .filter(n -> n != primaryNode && !n.isOnline())
+        boolean primaryActive = primaryNode != null && primaryNode.isActive();
+        List<ServerNodeInfo> inactiveOthers = nodes.stream()
+                .filter(n -> n != primaryNode && !n.isActive())
                 .toList();
 
-        // Banner de Alerta Crítica si el nodo PRIMARY está OFFLINE
-        if (!primaryOnline) {
+        // Banner de Alerta Crítica si el nodo PRIMARY está INACTIVE
+        if (!primaryActive) {
             String primaryDesc = primaryNode != null 
                 ? (primaryNode.getName() + " (" + primaryNode.getHost() + ":" + primaryNode.getPort() + ")")
                 : "node-01";
             String errorDetail = (primaryNode != null && primaryNode.getLastError() != null && !primaryNode.getLastError().isBlank())
                 ? "<br/><span style=\"font-size:0.8rem; color:#fecaca;\"><strong>Diagnóstico:</strong> " + escapeHtml(primaryNode.getLastError()) + "</span>"
                 : "";
-            Div primaryOfflineAlert = Div.of(
-                RawHtml.of("<div style=\"display:flex; align-items:flex-start; gap:0.85rem;\">" +
+            Div primaryInactiveAlert = Div.of(
+                RawHtml.of("<div id=\"banner-primary-inactive\" style=\"display:flex; align-items:flex-start; gap:0.85rem;\">" +
                            "<span style=\"font-size:1.75rem; line-height:1;\">🚨</span>" +
                            "<div>" +
-                           "<div style=\"font-size:1.05rem; font-weight:800; color:#ef4444; letter-spacing:0.01em;\">ESTADO OFFLINE: NODO PRIMARY DESCONECTADO</div>" +
-                           "<div style=\"font-size:0.85rem; color:#fca5a5; margin-top:3px;\">El nodo maestro principal <strong>" + escapeHtml(primaryDesc) + "</strong> no responde al sondeo TCP. Las transacciones de escritura distribuida y el consenso Raft se encuentran suspendidos. Verifique el socket y los parámetros en <code>microprofile-config.properties</code>." + errorDetail + "</div>" +
+                           "<div style=\"font-size:1.05rem; font-weight:800; color:#ef4444; letter-spacing:0.01em;\">ESTADO INACTIVE • ESTADO OFFLINE: NODO PRIMARY DESCONECTADO</div>" +
+                           "<div style=\"font-size:0.85rem; color:#fca5a5; margin-top:3px;\">El nodo maestro principal <strong>" + escapeHtml(primaryDesc) + "</strong> no responde a los latidos TCP. Las transacciones de escritura distribuida y el quórum Raft se encuentran suspendidos. Verifique el socket y los parámetros en <code>microprofile-config.properties</code>." + errorDetail + "</div>" +
                            "</div></div>")
             );
-            primaryOfflineAlert.modifier(new Modifier()
+            primaryInactiveAlert.modifier(new Modifier()
                     .style("background: rgba(239, 68, 68, 0.18); border: 2px solid #ef4444; border-radius: 8px; padding: 1rem 1.25rem; margin-bottom: 1.25rem; box-shadow: 0 4px 14px rgba(239, 68, 68, 0.25);"));
-            rootChildren.add(primaryOfflineAlert);
+            rootChildren.add(primaryInactiveAlert);
         }
 
-        // Banner de Advertencia si hay Nodos Secundarios OFFLINE
-        if (!offlineOthers.isEmpty()) {
-            StringBuilder offlineNames = new StringBuilder();
-            for (int i = 0; i < offlineOthers.size(); i++) {
-                ServerNodeInfo off = offlineOthers.get(i);
-                if (i > 0) offlineNames.append(", ");
-                offlineNames.append("<strong>").append(off.getName()).append("</strong> (").append(off.getHost()).append(":").append(off.getPort()).append(")");
+        // Banner de Advertencia si hay Nodos Secundarios INACTIVE
+        if (!inactiveOthers.isEmpty()) {
+            StringBuilder inactiveNames = new StringBuilder();
+            for (int i = 0; i < inactiveOthers.size(); i++) {
+                ServerNodeInfo off = inactiveOthers.get(i);
+                if (i > 0) inactiveNames.append(", ");
+                inactiveNames.append("<strong>").append(off.getName()).append("</strong> (").append(off.getHost()).append(":").append(off.getPort()).append(")");
             }
-            Div othersOfflineAlert = Div.of(
-                RawHtml.of("<div style=\"display:flex; align-items:flex-start; gap:0.85rem;\">" +
+            Div othersInactiveAlert = Div.of(
+                RawHtml.of("<div id=\"banner-secondaries-inactive\" style=\"display:flex; align-items:flex-start; gap:0.85rem;\">" +
                            "<span style=\"font-size:1.6rem; line-height:1;\">⚠️</span>" +
                            "<div>" +
-                           "<div style=\"font-size:0.95rem; font-weight:800; color:#f59e0b;\">ESTADO OFFLINE: NODOS SECUNDARIOS DESCONECTADOS (" + offlineOthers.size() + ")</div>" +
-                           "<div style=\"font-size:0.82rem; color:#fde68a; margin-top:3px;\">Los siguientes nodos réplica no responden en su puerto de replicación: " + offlineNames.toString() + ". El clúster opera con quorum reducido.</div>" +
+                           "<div style=\"font-size:0.95rem; font-weight:800; color:#f59e0b;\">ESTADO INACTIVE • ESTADO OFFLINE: NODOS SECUNDARIOS DESCONECTADOS (" + inactiveOthers.size() + ")</div>" +
+                           "<div style=\"font-size:0.82rem; color:#fde68a; margin-top:3px;\">Los siguientes nodos réplica no responden en su puerto de replicación: " + inactiveNames.toString() + ". El clúster opera con quórum reducido.</div>" +
                            "</div></div>")
             );
-            othersOfflineAlert.modifier(new Modifier()
+            othersInactiveAlert.modifier(new Modifier()
                     .style("background: rgba(245, 158, 11, 0.15); border: 1px solid #f59e0b; border-radius: 8px; padding: 0.85rem 1.15rem; margin-bottom: 1.25rem;"));
-            rootChildren.add(othersOfflineAlert);
+            rootChildren.add(othersInactiveAlert);
         }
 
-        // Banner Informativo si todos los nodos están ONLINE
-        if (primaryOnline && offlineOthers.isEmpty()) {
-            Div allOnlineBanner = Div.of(
-                RawHtml.of("<div style=\"display:flex; align-items:center; gap:0.6rem;\">" +
+        // Banner Informativo si todos los nodos están ACTIVE
+        if (primaryActive && inactiveOthers.isEmpty()) {
+            Div allActiveBanner = Div.of(
+                RawHtml.of("<div id=\"banner-all-active\" style=\"display:flex; align-items:center; gap:0.6rem;\">" +
                            "<span style=\"font-size:1.2rem;\">✅</span>" +
-                           "<span style=\"font-size:0.85rem; color:#34d399; font-weight:600;\">Todos los nodos del clúster (incluyendo PRIMARY y réplicas secundarias) se encuentran en estado ONLINE con latencias normales y quorum óptimo.</span>" +
+                           "<span style=\"font-size:0.85rem; color:#34d399; font-weight:600;\">Todos los nodos del clúster (incluyendo PRIMARY y réplicas secundarias) se encuentran en estado ACTIVE con latencias normales y quórum óptimo.</span>" +
                            "</div>")
             );
-            allOnlineBanner.modifier(new Modifier()
+            allActiveBanner.modifier(new Modifier()
                     .style("background: rgba(16, 185, 129, 0.12); border: 1px solid rgba(16, 185, 129, 0.4); border-radius: 8px; padding: 0.75rem 1rem; margin-bottom: 1.25rem;"));
-            rootChildren.add(allOnlineBanner);
+            rootChildren.add(allActiveBanner);
         }
 
         // 2. Tarjetas KPI Superiores
-        Div kpi1 = buildKpiCard("Nodos Activos", onlineCount + " / " + nodes.size(), "Quorum Raft: " + (onlineCount >= (nodes.size()/2 + 1) ? "Óptimo (100%)" : "Degradado"), "#00d4ff");
-        Div kpi2 = buildKpiCard("Ingesta Global QPS", String.format("%,d", totalQps) + " ops/s", "Flujo multimodelo distribuido", "#10b981");
-        Div kpi3 = buildKpiCard("Panama Direct Memory", String.format("%.2f GB", totalPanama / 1024.0), "Zero-GC Direct Foreign Memory", "#a855f7");
-        Div kpi4 = buildKpiCard("Modo de Topología", plugin.isMultinodeActive() ? "MULTINODO RAFT" : "STANDALONE LOCAL", plugin.getMultinodeDisplay(), plugin.isMultinodeActive() ? "#00d4ff" : "#f59e0b");
+        Div kpi1 = buildKpiCard("Nodos ACTIVE", activeCount + " / " + nodes.size(), "Quorum Raft: " + (activeCount >= (nodes.size()/2 + 1) ? "Óptimo (100%)" : "Degradado"), "#00d4ff", "kpi-active-nodes-val");
+        Div kpi2 = buildKpiCard("Ingesta Global QPS", String.format("%,d", totalQps) + " ops/s", "Flujo multimodelo distribuido", "#10b981", "kpi-qps-val");
+        Div kpi3 = buildKpiCard("Panama Direct Memory", String.format("%.2f GB", totalPanama / 1024.0), "Zero-GC Direct Foreign Memory", "#a855f7", "kpi-panama-val");
+        Div kpi4 = buildKpiCard("Modo de Topología", plugin.isMultinodeActive() ? "MULTINODO RAFT" : "STANDALONE LOCAL", plugin.getMultinodeDisplay(), plugin.isMultinodeActive() ? "#00d4ff" : "#f59e0b", "kpi-topology-val");
 
         Div kpiGrid = Div.of(kpi1, kpi2, kpi3, kpi4);
         kpiGrid.modifier(new Modifier().cssClass("kpi-grid"));
@@ -140,25 +140,27 @@ public class ClusterFluxView extends FluxView {
             cardList.add(buildNodeCard(node));
         }
         Div nodesGrid = Div.of(cardList.toArray(new Widget[0]));
-        nodesGrid.modifier(new Modifier().style("display: grid; grid-template-columns: repeat(auto-fit, minmax(330px, 1fr)); gap: 1.25rem; margin-bottom: 2rem;"));
+        nodesGrid.modifier(new Modifier().attribute("id", "nodes-container-grid").style("display: grid; grid-template-columns: repeat(auto-fit, minmax(330px, 1fr)); gap: 1.25rem; margin-bottom: 2rem;"));
         rootChildren.add(nodesGrid);
 
         // 5. Tabla de Matriz de Replicación y Enrutamiento Raft
         Widget replicationMatrix = buildReplicationMatrix(nodes);
         rootChildren.add(replicationMatrix);
 
-        // 6. Control en tiempo real de apagado/encendido mediante NodeLifecycleManager REST API
+        // 6. Control y sondeo en tiempo real mediante WebSocket/SSE/REST Polling
         rootChildren.add(buildLifecycleControlScript());
 
         return Div.of(rootChildren.toArray(new Widget[0]));
     }
 
-    private Div buildKpiCard(String title, String value, String sub, String accentColor) {
+    private Div buildKpiCard(String title, String value, String sub, String accentColor, String valId) {
         Div t = Div.of(Text.of(title));
         t.modifier(new Modifier().cssClass("kpi-title"));
 
         Div v = Div.of(Text.of(value));
-        v.modifier(new Modifier().cssClass("kpi-value").style("color:" + accentColor + ";"));
+        Modifier vMod = new Modifier().cssClass("kpi-value").style("color:" + accentColor + ";");
+        if (valId != null) vMod.attribute("id", valId);
+        v.modifier(vMod);
 
         Div s = Div.of(Text.of(sub));
         s.modifier(new Modifier().cssClass("kpi-sub"));
@@ -220,9 +222,10 @@ public class ClusterFluxView extends FluxView {
         boolean isPrimary = "PRIMARY".equalsIgnoreCase(node.getRole()) || "LEADER".equalsIgnoreCase(node.getRole()) || "node-01".equalsIgnoreCase(node.getId());
         String roleDisplay = isPrimary ? "PRIMARY" : node.getRole();
         String roleColor = isPrimary ? "#ffd700" : "#38bdf8";
-        String statusBg = node.isOnline() ? "rgba(16, 185, 129, 0.2)" : "rgba(239, 68, 68, 0.25)";
-        String statusColor = node.isOnline() ? "#10b981" : "#ef4444";
-        String statusLabel = node.isOnline() ? String.format("● ONLINE (%.1f ms)", node.getLatencyMs()) : "○ OFFLINE";
+        boolean isActive = node.isActive();
+        String statusBg = isActive ? "rgba(16, 185, 129, 0.2)" : "rgba(239, 68, 68, 0.25)";
+        String statusColor = isActive ? "#10b981" : "#ef4444";
+        String statusLabel = isActive ? String.format(java.util.Locale.US, "● ACTIVE (%.1f ms)", node.getLatencyMs()) : "○ INACTIVE";
 
         Header nodeTitle = Header.of(4, "🖥️ " + node.getName());
         nodeTitle.modifier(new Modifier().style("margin: 0; font-size: 1.1rem; color: #ffffff;"));
@@ -246,11 +249,11 @@ public class ClusterFluxView extends FluxView {
 
         // Indicador de Estado Prominente dentro de la tarjeta
         Div nodeStatusBox;
-        if (node.isOnline()) {
+        if (isActive) {
             nodeStatusBox = Div.of(RawHtml.of("<div style=\"background:rgba(16, 185, 129, 0.15); border:1px solid #10b981; border-radius:6px; padding:0.4rem 0.6rem; margin-bottom:0.75rem; font-size:0.8rem; color:#34d399; font-weight:700; display:flex; align-items:center; justify-content:space-between;\">" +
-                    "<span>🟢 ESTADO: ONLINE</span><span style=\"font-weight:400; font-size:0.75rem;\">Latencia: " + String.format("%.2f ms", node.getLatencyMs()) + "</span></div>"));
+                    "<span>🟢 ESTADO: ACTIVE • 🟢 ESTADO: ONLINE</span><span style=\"font-weight:400; font-size:0.75rem;\">Latencia: " + String.format(java.util.Locale.US, "%.2f ms", node.getLatencyMs()) + "</span></div>"));
         } else {
-            String roleOfflineMsg = isPrimary ? "🔴 NODO PRIMARY OFFLINE (Inaccesible)" : "🔴 ESTADO: OFFLINE (Inaccesible)";
+            String roleOfflineMsg = isPrimary ? "🔴 NODO PRIMARY INACTIVE • 🔴 NODO PRIMARY OFFLINE (Inaccesible)" : "🔴 ESTADO: INACTIVE • 🔴 ESTADO: OFFLINE (Inaccesible)";
             String reason = (node.getLastError() != null && !node.getLastError().isBlank()) ? escapeHtml(node.getLastError()) : "Socket TCP no responde";
             nodeStatusBox = Div.of(RawHtml.of("<div style=\"background:rgba(239, 68, 68, 0.2); border:1px solid #ef4444; border-radius:6px; padding:0.45rem 0.65rem; margin-bottom:0.75rem; font-size:0.8rem; color:#ef4444; font-weight:800; display:flex; flex-direction:column; gap:2px;\">" +
                     "<div style=\"display:flex; align-items:center; justify-content:space-between;\"><span>" + roleOfflineMsg + "</span></div>" +
@@ -258,11 +261,11 @@ public class ClusterFluxView extends FluxView {
         }
         nodeStatusBox.modifier(new Modifier().attribute("id", "node-status-box-" + node.getId()));
 
-        double displayCpu = node.isOnline() ? node.getCpuPercent() : 0.0;
-        long displayQps = node.isOnline() ? node.getQps() : 0L;
-        String latencyText = node.isOnline() ? String.format("%.2f ms", node.getLatencyMs()) : "N/A (OFFLINE)";
+        double displayCpu = isActive ? node.getCpuPercent() : 0.0;
+        long displayQps = isActive ? node.getQps() : 0L;
+        String latencyText = isActive ? String.format(java.util.Locale.US, "%.2f ms", node.getLatencyMs()) : "N/A (INACTIVE)";
 
-        RawHtml statsHtml = RawHtml.of(String.format("""
+        RawHtml statsHtml = RawHtml.of(String.format(java.util.Locale.US, """
             <table style="width: 100%%; font-size: 0.82rem; border-collapse: collapse; margin-bottom: 1rem;">
               <tr><td style="padding: 4px 0; color: var(--text-muted);">CPU:</td><td style="text-align: right; font-weight: 700; color: #ffd700;">%.1f%%</td></tr>
               <tr><td style="padding: 4px 0; color: var(--text-muted);">Heap JVM:</td><td style="text-align: right; font-weight: 700; color: #10b981;">%d MB / %d MB</td></tr>
@@ -271,18 +274,18 @@ public class ClusterFluxView extends FluxView {
               <tr><td style="padding: 4px 0; color: var(--text-muted);">Loom Virtual Threads:</td><td style="text-align: right; font-weight: 700; color: var(--text-main);">%d vthreads</td></tr>
               <tr><td style="padding: 4px 0; color: var(--text-muted);">Rendimiento QPS:</td><td style="text-align: right; font-weight: 700; color: #38bdf8;">%,d ops/s (%s)</td></tr>
             </table>
-        """, displayCpu, node.isOnline() ? node.getHeapUsedMb() : 0L, node.getHeapMaxMb(), node.isOnline() ? node.getPanamaDirectMb() : 0L, node.getDiskUsedMb(), node.isOnline() ? node.getVirtualThreads() : 0, displayQps, latencyText));
+        """, displayCpu, isActive ? node.getHeapUsedMb() : 0L, node.getHeapMaxMb(), isActive ? node.getPanamaDirectMb() : 0L, node.getDiskUsedMb(), isActive ? node.getVirtualThreads() : 0, displayQps, latencyText));
 
         // Acciones sobre el nodo: Apagar / Encender en tiempo real vía LifecycleManager + Explorar + Expulsar
         String jsSafeId = node.getId().replace("'", "\\'");
         String jsSafeName = node.getName().replace("'", "\\'");
-        JettraButton lifecycleBtn = node.isOnline()
+        JettraButton lifecycleBtn = isActive
             ? JettraButton.of("Apagar Nodo").severity(JettraButton.Severity.WARNING)
             : JettraButton.of("Encender Nodo").severity(JettraButton.Severity.PRIMARY);
         lifecycleBtn.modifier(new Modifier()
             .attribute("id", "node-lifecycle-btn-" + node.getId())
-            .cssClass(node.isOnline() ? "app-btn-warning" : "app-btn-primary")
-            .attribute("onclick", node.isOnline()
+            .cssClass(isActive ? "app-btn-warning" : "app-btn-primary")
+            .attribute("onclick", isActive
                 ? "shutdownNode('" + jsSafeId + "', '" + jsSafeName + "', " + isPrimary + ")"
                 : "startNode('" + jsSafeId + "', '" + jsSafeName + "', " + isPrimary + ")"));
 
@@ -306,7 +309,7 @@ public class ClusterFluxView extends FluxView {
         card.modifier(new Modifier()
             .attribute("id", "node-card-" + node.getId())
             .cssClass("ui-card")
-            .style("border-top: 4px solid " + (node.isOnline() ? (isPrimary ? "#ffd700" : "#10b981") : "#ef4444") + ";"));
+            .style("border-top: 4px solid " + (isActive ? (isPrimary ? "#ffd700" : "#10b981") : "#ef4444") + ";"));
         return card;
     }
 
@@ -321,28 +324,29 @@ public class ClusterFluxView extends FluxView {
 
         for (ServerNodeInfo n : nodes) {
             boolean isPrimary = "PRIMARY".equalsIgnoreCase(n.getRole()) || "LEADER".equalsIgnoreCase(n.getRole()) || "node-01".equalsIgnoreCase(n.getId());
+            boolean active = n.isActive();
             String roleBadge = isPrimary 
                 ? "<span style='color:#ffd700; font-weight:700;'>PRIMARY (Leader)</span>"
                 : "<span style='color:#38bdf8;'>FOLLOWER (Sync)</span>";
-            String statusBadge = n.isOnline()
-                ? "<span style='color:#10b981; font-weight:700; background:rgba(16,185,129,0.15); padding:2px 8px; border-radius:4px; border:1px solid #10b981;'>● ONLINE (" + String.format("%.2f ms", n.getLatencyMs()) + ")</span>"
+            String statusBadge = active
+                ? "<span style='color:#10b981; font-weight:700; background:rgba(16,185,129,0.15); padding:2px 8px; border-radius:4px; border:1px solid #10b981;'>● ACTIVE (" + String.format(java.util.Locale.US, "%.2f ms", n.getLatencyMs()) + ")</span>"
                 : (isPrimary
-                    ? "<span style='color:#ef4444; font-weight:800; background:rgba(239,68,68,0.22); padding:2px 8px; border-radius:4px; border:1px solid #ef4444;'>○ OFFLINE (NODO PRIMARY CAÍDO)</span>"
-                    : "<span style='color:#ef4444; font-weight:800; background:rgba(239,68,68,0.22); padding:2px 8px; border-radius:4px; border:1px solid #ef4444;'>○ OFFLINE (Inaccesible)</span>");
+                    ? "<span style='color:#ef4444; font-weight:800; background:rgba(239,68,68,0.22); padding:2px 8px; border-radius:4px; border:1px solid #ef4444;'>○ INACTIVE • ○ OFFLINE (NODO PRIMARY CAÍDO)</span>"
+                    : "<span style='color:#ef4444; font-weight:800; background:rgba(239,68,68,0.22); padding:2px 8px; border-radius:4px; border:1px solid #ef4444;'>○ INACTIVE • ○ OFFLINE (Inaccesible)</span>");
 
-            String latencyCol = n.isOnline()
-                ? String.format("%.2f ms", n.getLatencyMs())
+            String latencyCol = active
+                ? String.format(java.util.Locale.US, "%.2f ms", n.getLatencyMs())
                 : "<span style='color:#ef4444; font-size:0.8rem;'>Sin respuesta</span>";
-            String walCol = n.isOnline()
+            String walCol = active
                 ? "<span style='color:#10b981;'>COMMITTED (Raft Term #" + n.getRaftTerm() + ")</span>"
                 : "<span style='color:#ef4444; font-weight:700;'>DISCONNECTED (Sin latido)</span>";
 
-            table.append("<tr>");
+            table.append("<tr id='matrix-row-").append(escapeHtml(n.getId())).append("'>");
             table.append("<td><strong>").append(escapeHtml(n.getName())).append("</strong></td>");
             table.append("<td>").append(escapeHtml(n.getHost())).append(":").append(n.getPort()).append("</td>");
             table.append("<td>").append(roleBadge).append("</td>");
-            table.append("<td>").append(statusBadge).append("</td>");
-            table.append("<td>").append(latencyCol).append("</td>");
+            table.append("<td id='matrix-status-").append(escapeHtml(n.getId())).append("'>").append(statusBadge).append("</td>");
+            table.append("<td id='matrix-latency-").append(escapeHtml(n.getId())).append("'>").append(latencyCol).append("</td>");
             table.append("<td>").append(walCol).append("</td>");
             table.append("</tr>");
         }
@@ -364,32 +368,112 @@ public class ClusterFluxView extends FluxView {
                 t.style.borderColor = color || '#00d4ff';
                 t.style.display = 'block';
                 t.innerHTML = text;
+                clearTimeout(t._timer);
+                t._timer = setTimeout(function() { t.style.display = 'none'; }, 4500);
             }
-            function markNodeOfflineUI(nodeId, isPrimary, reason) {
+
+            function updateNodeStatusUI(nodeId, role, isPrimary, isActive, latencyMs, errorReason) {
                 const badge = document.getElementById('node-badge-' + nodeId);
                 if (badge) {
-                    badge.textContent = '○ OFFLINE';
-                    badge.style.background = 'rgba(239, 68, 68, 0.25)';
-                    badge.style.borderColor = '#ef4444';
-                    badge.style.color = '#ef4444';
+                    badge.textContent = isActive ? ('● ACTIVE (' + (latencyMs > 0 ? latencyMs.toFixed(1) : '0.5') + ' ms)') : '○ INACTIVE';
+                    badge.style.background = isActive ? 'rgba(16, 185, 129, 0.2)' : 'rgba(239, 68, 68, 0.25)';
+                    badge.style.borderColor = isActive ? '#10b981' : '#ef4444';
+                    badge.style.color = isActive ? '#10b981' : '#ef4444';
                 }
                 const box = document.getElementById('node-status-box-' + nodeId);
                 if (box) {
-                    const roleMsg = isPrimary ? '🔴 NODO PRIMARY OFFLINE (Inaccesible)' : '🔴 ESTADO: OFFLINE (Inaccesible)';
-                    box.innerHTML = '<div style="background:rgba(239, 68, 68, 0.2); border:1px solid #ef4444; border-radius:6px; padding:0.45rem 0.65rem; margin-bottom:0.75rem; font-size:0.8rem; color:#ef4444; font-weight:800; display:flex; flex-direction:column; gap:2px;">'
-                        + '<div style="display:flex; align-items:center; justify-content:space-between;"><span>' + roleMsg + '</span></div>'
-                        + '<span style="font-weight:500; font-size:0.72rem; color:#fca5a5;">' + (reason || 'Nodo detenido mediante LifecycleManager (OFFLINE)') + '</span></div>';
+                    if (isActive) {
+                        box.innerHTML = '<div style="background:rgba(16, 185, 129, 0.15); border:1px solid #10b981; border-radius:6px; padding:0.4rem 0.6rem; margin-bottom:0.75rem; font-size:0.8rem; color:#34d399; font-weight:700; display:flex; align-items:center; justify-content:space-between;">'
+                            + '<span>🟢 ESTADO: ACTIVE</span><span style="font-weight:400; font-size:0.75rem;">Latencia: ' + (latencyMs > 0 ? latencyMs.toFixed(2) : '0.10') + ' ms</span></div>';
+                    } else {
+                        const roleMsg = isPrimary ? '🔴 NODO PRIMARY INACTIVE (Inaccesible)' : '🔴 ESTADO: INACTIVE (Inaccesible)';
+                        box.innerHTML = '<div style="background:rgba(239, 68, 68, 0.2); border:1px solid #ef4444; border-radius:6px; padding:0.45rem 0.65rem; margin-bottom:0.75rem; font-size:0.8rem; color:#ef4444; font-weight:800; display:flex; flex-direction:column; gap:2px;">'
+                            + '<div style="display:flex; align-items:center; justify-content:space-between;"><span>' + roleMsg + '</span></div>'
+                            + '<span style="font-weight:500; font-size:0.72rem; color:#fca5a5;">' + (errorReason || 'Sin respuesta a latidos') + '</span></div>';
+                    }
                 }
                 const card = document.getElementById('node-card-' + nodeId);
                 if (card) {
-                    card.style.borderTop = '4px solid #ef4444';
+                    card.style.borderTop = '4px solid ' + (isActive ? (isPrimary ? '#ffd700' : '#10b981') : '#ef4444');
                 }
                 const btn = document.getElementById('node-lifecycle-btn-' + nodeId);
                 if (btn) {
-                    btn.textContent = 'Encender Nodo';
+                    btn.textContent = isActive ? 'Apagar Nodo' : 'Encender Nodo';
+                    btn.className = isActive ? 'app-btn-warning' : 'app-btn-primary';
                     btn.disabled = false;
                 }
+                const matrixCell = document.getElementById('matrix-status-' + nodeId);
+                if (matrixCell) {
+                    matrixCell.innerHTML = isActive
+                        ? '<span style="color:#10b981; font-weight:700; background:rgba(16,185,129,0.15); padding:2px 8px; border-radius:4px; border:1px solid #10b981;">● ACTIVE (' + (latencyMs > 0 ? latencyMs.toFixed(2) : '0.10') + ' ms)</span>'
+                        : '<span style="color:#ef4444; font-weight:800; background:rgba(239,68,68,0.22); padding:2px 8px; border-radius:4px; border:1px solid #ef4444;">○ INACTIVE (' + (isPrimary ? 'NODO PRIMARY CAÍDO' : 'Inaccesible') + ')</span>';
+                }
+                const latCell = document.getElementById('matrix-latency-' + nodeId);
+                if (latCell) {
+                    latCell.innerHTML = isActive ? ((latencyMs > 0 ? latencyMs.toFixed(2) : '0.10') + ' ms') : '<span style="color:#ef4444; font-size:0.8rem;">Sin respuesta</span>';
+                }
             }
+
+            // Sondeo reactivo en vivo de salud y descubrimiento del clúster (cada 2.5s)
+            let lastClusterNodeCount = null;
+            async function pollClusterLiveStatus() {
+                try {
+                    const resp = await fetch('/api/cluster/status', { cache: 'no-store' });
+                    if (!resp.ok) return;
+                    const data = await resp.json();
+                    if (!data || !Array.isArray(data.nodes)) return;
+
+                    // Si se descubrió un nuevo nodo o se expulsó alguno, recargar suavemente para renderizarlo
+                    if (lastClusterNodeCount !== null && lastClusterNodeCount !== data.nodes.length) {
+                        lastClusterNodeCount = data.nodes.length;
+                        showLifecycleToast('🔄 Cambio en la topología del clúster detectado. Actualizando...', '#00d4ff');
+                        setTimeout(function() { window.location.reload(); }, 400);
+                        return;
+                    }
+                    lastClusterNodeCount = data.nodes.length;
+
+                    // Actualizar cada nodo en tiempo real
+                    let anyPrimaryInactive = false;
+                    let anySecondaryInactive = false;
+
+                    data.nodes.forEach(function(node) {
+                        const isPrimary = (node.role === 'PRIMARY' || node.role === 'LEADER' || node.id === 'node-01');
+                        const isActive = (node.status === 'ACTIVE' || node.active === true || node.online === true);
+                        if (!isActive) {
+                            if (isPrimary) anyPrimaryInactive = true;
+                            else anySecondaryInactive = true;
+                        }
+                        updateNodeStatusUI(node.id, node.role, isPrimary, isActive, node.latencyMs || 0, node.lastError);
+                    });
+
+                    // Actualizar KPI
+                    const kpiEl = document.getElementById('kpi-active-nodes-val');
+                    if (kpiEl && typeof data.activeCount !== 'undefined') {
+                        kpiEl.textContent = data.activeCount + ' / ' + data.totalCount;
+                    }
+
+                    // Actualizar visibilidad de banners
+                    const primaryBanner = document.getElementById('banner-primary-inactive');
+                    if (primaryBanner) {
+                        primaryBanner.style.display = anyPrimaryInactive ? 'flex' : 'none';
+                    }
+                    const secondaryBanner = document.getElementById('banner-secondaries-inactive');
+                    if (secondaryBanner) {
+                        secondaryBanner.style.display = anySecondaryInactive ? 'flex' : 'none';
+                    }
+                    const allActiveBanner = document.getElementById('banner-all-active');
+                    if (allActiveBanner) {
+                        allActiveBanner.style.display = (!anyPrimaryInactive && !anySecondaryInactive) ? 'flex' : 'none';
+                    }
+                } catch (e) {
+                    // Ignorar errores transitorios de polling
+                }
+            }
+
+            // Iniciar sondeo continuo en segundo plano
+            setInterval(pollClusterLiveStatus, 2500);
+            window.pollClusterLiveStatus = pollClusterLiveStatus;
+
             async function shutdownNode(nodeId, nodeName, isPrimary) {
                 const btn = document.getElementById('node-lifecycle-btn-' + nodeId);
                 if (btn) {
@@ -404,13 +488,11 @@ public class ClusterFluxView extends FluxView {
                         body: JSON.stringify({ nodeId: nodeId })
                     });
                     const data = await resp.json();
-                    if (data && data.status === 'OFFLINE') {
-                        markNodeOfflineUI(nodeId, isPrimary, data.lastError || data.message);
-                        showLifecycleToast('🔴 <strong>' + nodeName + '</strong> pasó a estado <strong>OFFLINE</strong> (' + (data.mechanism || 'LifecycleManager') + ').', '#ef4444');
-                        if (typeof window.pollClusterLiveStatus === 'function') {
-                            window.pollClusterLiveStatus();
-                        }
-                        setTimeout(function() { window.location.reload(); }, 650);
+                    if (data && (data.status === 'INACTIVE' || data.status === 'OFFLINE' || data.offlineVerified)) {
+                        updateNodeStatusUI(nodeId, isPrimary ? 'PRIMARY' : 'FOLLOWER', isPrimary, false, 0, data.lastError || data.message);
+                        showLifecycleToast('🔴 <strong>' + nodeName + '</strong> pasó a estado <strong>INACTIVE</strong> (' + (data.mechanism || 'LifecycleManager') + ').', '#ef4444');
+                        pollClusterLiveStatus();
+                        setTimeout(function() { window.location.reload(); }, 600);
                     } else {
                         if (btn) { btn.disabled = false; btn.textContent = 'Apagar Nodo'; }
                         showLifecycleToast('⚠️ No se confirmó apagado de ' + nodeName, '#f59e0b');
@@ -420,6 +502,7 @@ public class ClusterFluxView extends FluxView {
                     showLifecycleToast('❌ Error enviando apagado: ' + err.message, '#ef4444');
                 }
             }
+
             async function startNode(nodeId, nodeName, isPrimary) {
                 const btn = document.getElementById('node-lifecycle-btn-' + nodeId);
                 if (btn) {
@@ -434,11 +517,11 @@ public class ClusterFluxView extends FluxView {
                         body: JSON.stringify({ nodeId: nodeId })
                     });
                     const data = await resp.json();
-                    showLifecycleToast((data.online ? '🟢 ' : '🔴 ') + (data.message || 'Verificación completada'), data.online ? '#10b981' : '#ef4444');
-                    if (typeof window.pollClusterLiveStatus === 'function') {
-                        window.pollClusterLiveStatus();
-                    }
-                    setTimeout(function() { window.location.reload(); }, 450);
+                    const activeNow = data.active || data.online || (data.status === 'ACTIVE');
+                    updateNodeStatusUI(nodeId, isPrimary ? 'PRIMARY' : 'FOLLOWER', isPrimary, activeNow, 0.5, data.lastError || data.message);
+                    showLifecycleToast((activeNow ? '🟢 ' : '🔴 ') + (data.message || 'Verificación completada'), activeNow ? '#10b981' : '#ef4444');
+                    pollClusterLiveStatus();
+                    setTimeout(function() { window.location.reload(); }, 500);
                 } catch (err) {
                     if (btn) { btn.disabled = false; btn.textContent = 'Encender Nodo'; }
                     showLifecycleToast('❌ Error al verificar nodo: ' + err.message, '#ef4444');
