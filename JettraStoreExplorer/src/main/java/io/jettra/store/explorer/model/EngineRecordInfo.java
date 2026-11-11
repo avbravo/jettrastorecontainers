@@ -1,7 +1,16 @@
 package io.jettra.store.explorer.model;
 
 import java.io.Serializable;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 
+/**
+ * Información de un registro o documento en un Bucket/Motor de JettraStore,
+ * incluyendo control de versiones histórico y capacidad de restauración.
+ */
 public class EngineRecordInfo implements Serializable {
     private String id;
     private String engineType;
@@ -10,6 +19,7 @@ public class EngineRecordInfo implements Serializable {
     private String details;
     private String timestamp;
     private long version;
+    private final List<EngineRecordVersion> versionHistory = new ArrayList<>();
 
     public EngineRecordInfo() {}
 
@@ -21,6 +31,8 @@ public class EngineRecordInfo implements Serializable {
         this.details = details;
         this.timestamp = timestamp;
         this.version = version;
+        // Registrar versión inicial
+        this.versionHistory.add(new EngineRecordVersion(version, timestamp, summary, details, "admin", "Creación inicial del registro"));
     }
 
     public String getId() { return id; }
@@ -37,4 +49,33 @@ public class EngineRecordInfo implements Serializable {
     public void setTimestamp(String timestamp) { this.timestamp = timestamp; }
     public long getVersion() { return version; }
     public void setVersion(long version) { this.version = version; }
+
+    public synchronized List<EngineRecordVersion> getVersionHistory() {
+        if (versionHistory.isEmpty()) {
+            versionHistory.add(new EngineRecordVersion(version, timestamp != null ? timestamp : "2026-10-01 00:00:00", summary, details, "admin", "Versión inicial v" + version));
+        }
+        return Collections.unmodifiableList(new ArrayList<>(versionHistory));
+    }
+
+    public synchronized void recordNewVersion(String newSummary, String newDetails, String author, String note) {
+        this.summary = newSummary;
+        this.details = newDetails;
+        this.version++;
+        this.timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
+        this.versionHistory.add(0, new EngineRecordVersion(this.version, this.timestamp, this.summary, this.details, author, note));
+    }
+
+    public synchronized boolean restoreVersion(long targetVersionNumber) {
+        for (EngineRecordVersion v : versionHistory) {
+            if (v.getVersion() == targetVersionNumber) {
+                this.summary = v.getSummary();
+                this.details = v.getDetails();
+                this.version++;
+                this.timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
+                this.versionHistory.add(0, new EngineRecordVersion(this.version, this.timestamp, this.summary, this.details, "admin", "Restaurado a partir de v" + targetVersionNumber));
+                return true;
+            }
+        }
+        return false;
+    }
 }

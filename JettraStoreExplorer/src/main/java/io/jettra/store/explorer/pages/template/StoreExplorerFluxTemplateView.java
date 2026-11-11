@@ -15,7 +15,10 @@ import io.jettra.flux.widgets.Text;
 import io.jettra.server.core.JettraServer;
 import io.jettra.server.core.storage.StorageMetrics;
 import io.jettra.store.explorer.model.ConnectionProfile;
+import io.jettra.store.explorer.model.ServerNodeInfo;
 import io.jettra.store.explorer.plugin.JettraStorePlugin;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * Plantilla Web JettraFlux para JettraStore Explorer.
@@ -67,6 +70,8 @@ public class StoreExplorerFluxTemplateView extends FluxView {
     @Override
     public Widget build() {
         JettraStorePlugin plugin = JettraStorePlugin.getInstance();
+        // Sincronizar en tiempo real el estado TCP de los nodos antes de construir la barra superior y el contenido
+        plugin.refreshAllNodeStatuses(true);
 
         // Estilos CSS y scripts reactivos encapsulados en un widget RawHtml
         Widget stylesAndScripts = RawHtml.of(getTemplateStylesAndScripts());
@@ -122,6 +127,44 @@ public class StoreExplorerFluxTemplateView extends FluxView {
         Row leftGroup = Row.of(hamburgerBtn, brandBadge, brandTitle);
         leftGroup.modifier(new Modifier().style("display: flex; align-items: center; gap: 0.75rem;"));
 
+        // Estado del nodo PRIMARY y réplicas en vivo
+        ServerNodeInfo primaryNode = plugin.getServerNodes().stream()
+                .filter(n -> "PRIMARY".equalsIgnoreCase(n.getRole()) || "LEADER".equalsIgnoreCase(n.getRole()) || "node-01".equalsIgnoreCase(n.getId()))
+                .findFirst()
+                .orElse(null);
+        boolean primaryOnline = primaryNode != null && primaryNode.isOnline();
+        long offlineSecondaries = plugin.getServerNodes().stream()
+                .filter(n -> n != primaryNode && !n.isOnline())
+                .count();
+
+        String primaryTooltip = primaryOnline
+                ? "Nodo maestro PRIMARY en línea y receptivo (" + (primaryNode != null ? primaryNode.getHost() + ":" + primaryNode.getPort() : "") + ")"
+                : "¡ALERTA! Nodo maestro PRIMARY desconectado (OFFLINE)" + (primaryNode != null && primaryNode.getLastError() != null ? " - " + primaryNode.getLastError() : "");
+
+        Link primaryStatusBadge = Link.of(
+                "/cluster",
+                primaryOnline ? "● PRIMARY: ONLINE" : "○ PRIMARY: OFFLINE"
+        );
+        primaryStatusBadge.id("topbar-primary-status");
+        primaryStatusBadge.modifier(new Modifier()
+                .attribute("data-online", String.valueOf(primaryOnline))
+                .attribute("title", primaryTooltip)
+                .style(primaryOnline
+                        ? "text-decoration:none; font-size:0.75rem; font-weight:700; padding:0.32rem 0.65rem; border-radius:9999px; display:inline-flex; align-items:center; gap:0.3rem; background:rgba(16,185,129,0.18); border:1px solid #10b981; color:#34d399;"
+                        : "text-decoration:none; font-size:0.75rem; font-weight:800; padding:0.32rem 0.65rem; border-radius:9999px; display:inline-flex; align-items:center; gap:0.3rem; background:rgba(239,68,68,0.25); border:1px solid #ef4444; color:#ef4444;"));
+
+        List<Widget> rightItems = new ArrayList<>();
+        rightItems.add(primaryStatusBadge);
+
+        if (offlineSecondaries > 0) {
+            Link secBadge = Link.of("/cluster", "⚠️ " + offlineSecondaries + " RÉPLICAS OFFLINE");
+            secBadge.modifier(new Modifier()
+                    .cssClass("hide-mobile")
+                    .attribute("title", offlineSecondaries + " nodos réplica se encuentran en estado OFFLINE")
+                    .style("text-decoration:none; font-size:0.72rem; font-weight:700; padding:0.28rem 0.55rem; border-radius:9999px; display:inline-flex; align-items:center; background:rgba(245,158,11,0.2); border:1px solid #f59e0b; color:#fbbf24;"));
+            rightItems.add(secBadge);
+        }
+
         // Conmutador de Multinodo (Raft Quorum vs Mononodo Standalone)
         String multiClass = plugin.isMultinodeActive() ? "badge-multinode-on" : "badge-multinode-off";
         String multiIcon = plugin.isMultinodeActive() ? "🌐" : "💻";
@@ -172,7 +215,14 @@ public class StoreExplorerFluxTemplateView extends FluxView {
                 .cssClass("app-btn-danger")
                 .style("text-decoration: none; font-size: 0.8rem; padding: 0.35rem 0.75rem; color: #ffffff; border-radius: 6px; font-weight: 600; display: inline-flex; align-items: center;"));
 
-        Row rightGroup = Row.of(multinodeToggle, storageBadge, connBadge, themeBtn, userInfo, logoutLink);
+        rightItems.add(multinodeToggle);
+        rightItems.add(storageBadge);
+        rightItems.add(connBadge);
+        rightItems.add(themeBtn);
+        rightItems.add(userInfo);
+        rightItems.add(logoutLink);
+
+        Row rightGroup = Row.of(rightItems.toArray(new Widget[0]));
         rightGroup.modifier(new Modifier().cssClass("top-right-group"));
 
         Div topbar = Div.of(leftGroup, rightGroup);
@@ -816,6 +866,60 @@ public class StoreExplorerFluxTemplateView extends FluxView {
             document.addEventListener('DOMContentLoaded', function() {
               const saved = localStorage.getItem('jettra-theme') || 'dark';
               updateThemeButtonUI(saved);
+
+              let lastClusterSig = null;
+              async function pollClusterHealth() {
+                try {
+                  const res = await fetch('/api/cluster/status', { cache: 'no-store' });
+                  if (res.status === 401) {
+                    window.location.href = '/login?error=session_expired';
+                    return;
+                  }
+                  if (!res.ok) return;
+                  const data = await res.json();
+                  const badge = document.getElementById('topbar-primary-status');
+                  if (badge) {
+                    const prev = badge.getAttribute('data-online');
+                    const curr = String(Boolean(data.primaryOnline));
+                    if (prev !== curr) {
+                      badge.setAttribute('data-online', curr);
+                      if (data.primaryOnline) {
+                        badge.textContent = '● PRIMARY: ONLINE';
+                        badge.style.background = 'rgba(16,185,129,0.18)';
+                        badge.style.borderColor = '#10b981';
+                        badge.style.color = '#34d399';
+                      } else {
+                        badge.textContent = '○ PRIMARY: OFFLINE';
+                        badge.style.background = 'rgba(239,68,68,0.25)';
+                        badge.style.borderColor = '#ef4444';
+                        badge.style.color = '#ef4444';
+                      }
+                    }
+                  }
+                  const sig = (data.nodes || []).map(n => n.id + ':' + n.online).join('|');
+                  if (lastClusterSig === null) {
+                    lastClusterSig = sig;
+                  } else if (lastClusterSig !== sig) {
+                    lastClusterSig = sig;
+                    const path = window.location.pathname || '';
+                    const active = document.activeElement;
+                    const isTyping = active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.tagName === 'SELECT');
+                    if ((path === '/cluster' || path === '/dashboard') && !isTyping) {
+                      window.location.reload();
+                    }
+                  }
+                } catch (e) {
+                  const badge = document.getElementById('topbar-primary-status');
+                  if (badge) {
+                    badge.textContent = '○ PRIMARY: OFFLINE';
+                    badge.style.background = 'rgba(239,68,68,0.25)';
+                    badge.style.borderColor = '#ef4444';
+                    badge.style.color = '#ef4444';
+                  }
+                }
+              }
+              pollClusterHealth();
+              setInterval(pollClusterHealth, 5000);
             });
           </script>
         """;

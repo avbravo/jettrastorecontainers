@@ -17,7 +17,9 @@ public class ServerNodeInfo implements Serializable {
     private long qps;
     private float latencyMs;
     private long raftTerm;
-    private boolean online;
+    private volatile boolean online;
+    private volatile String lastError;
+    private volatile long lastCheckedEpochMs;
 
     public ServerNodeInfo() {}
 
@@ -44,8 +46,11 @@ public class ServerNodeInfo implements Serializable {
     public String getId() { return id; }
     public String getName() { return name; }
     public String getRole() { return role; }
+    public void setRole(String role) { this.role = role; }
     public String getHost() { return host; }
+    public void setHost(String host) { this.host = host; }
     public int getPort() { return port; }
+    public void setPort(int port) { this.port = port; }
     public float getCpuPercent() { return cpuPercent; }
     public long getHeapUsedMb() { return heapUsedMb; }
     public long getHeapMaxMb() { return heapMaxMb; }
@@ -54,7 +59,12 @@ public class ServerNodeInfo implements Serializable {
     public int getVirtualThreads() { return virtualThreads; }
     public long getQps() { return qps; }
     public float getLatencyMs() { return latencyMs; }
+    public void setLatencyMs(float latencyMs) { this.latencyMs = latencyMs; }
     public long getRaftTerm() { return raftTerm; }
     public boolean isOnline() { return online; }
     public void setOnline(boolean online) { this.online = online; }
+    public String getLastError() { return lastError; }
+    public void setLastError(String lastError) { this.lastError = lastError; }
+    public long getLastCheckedEpochMs() { return lastCheckedEpochMs; }
+    public void setLastCheckedEpochMs(long lastCheckedEpochMs) { this.lastCheckedEpochMs = lastCheckedEpochMs; }
 }

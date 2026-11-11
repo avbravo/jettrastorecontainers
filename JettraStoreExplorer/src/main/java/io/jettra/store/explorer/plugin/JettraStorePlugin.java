@@ -7,6 +7,11 @@ import io.jettra.store.explorer.model.*;
 
 import java.io.File;
 import java.io.IOException;
+import java.net.ConnectException;
+import java.net.InetSocketAddress;
+import java.net.Socket;
+import java.net.SocketTimeoutException;
+import java.net.UnknownHostException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -15,6 +20,9 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -46,13 +54,24 @@ public class JettraStorePlugin {
     private boolean connected = true;
 
     private final List<JettraUser> users = new ArrayList<>();
-    private final List<ServerNodeInfo> serverNodes = new ArrayList<>();
+    private final List<ServerNodeInfo> serverNodes = new CopyOnWriteArrayList<>();
+    private final NodeLifecycleManager lifecycleManager = new NodeLifecycleManager();
     private final Map<String, List<EngineBucketInfo>> databasesCatalog = new ConcurrentHashMap<>();
     private final List<PoliceSentinelInfo> policeSentinels = new ArrayList<>();
-    private final List<PoliceIncident> policeIncidents = new ArrayList<>();
+    private final List<PoliceIncident> policeIncidents = new CopyOnWriteArrayList<>();
     private final List<BackupSnapshotInfo> backupSnapshots = new ArrayList<>();
 
+    private final Object refreshLock = new Object();
+    private final Object policeLock = new Object();
+    private final Properties loadedConfigProps = new Properties();
     private boolean multinodeActive = true;
+    private String serverHost = "127.0.0.1";
+    private int serverPort = 8085;
+    private String serverContextPath = "/";
+    private volatile int healthCheckTimeoutMs = 1000;
+    private volatile String explorerBindHost = "127.0.0.1";
+    private volatile int explorerBindPort = 8085;
+    private volatile long lastRefreshEpochMs = 0L;
     private long totalEvaluations = 142_850L;
     private long totalProcessedObjects = 2_840_500L;
     private String lastPoliceStatus = "Quorum Raft Óptimo | 4 Nodos Sincronizados";
@@ -60,7 +79,7 @@ public class JettraStorePlugin {
     private JettraStorePlugin() {
         this.mapper = new ObjectMapper();
         this.mapper.enable(SerializationFeature.INDENT_OUTPUT);
-        loadMultinodeConfig();
+        loadMicroprofileConfig();
         loadConnections();
         loadUsers();
         initServerNodes();
@@ -69,35 +88,137 @@ public class JettraStorePlugin {
         initBackupSnapshots();
     }
 
-    // --- Configuración de Multinodo ---
-    private void loadMultinodeConfig() {
-        File f = new File("config/database.properties");
-        if (f.exists()) {
-            try {
-                Properties props = new Properties();
-                props.load(Files.newInputStream(f.toPath()));
-                String val = props.getProperty("cluster.multinode.active", "on");
-                this.multinodeActive = "on".equalsIgnoreCase(val.trim());
-            } catch (Exception ignored) {}
+    // --- Configuración leída desde META-INF/microprofile-config.properties y microprofile-config.properties ---
+    private void loadMicroprofileConfig() {
+        Properties props = new Properties();
+
+        // 1. Cargar desde todos los recursos microprofile-config.properties presentes en el classpath
+        try {
+            java.util.Enumeration<java.net.URL> urls = getClass().getClassLoader().getResources("META-INF/microprofile-config.properties");
+            while (urls.hasMoreElements()) {
+                java.net.URL u = urls.nextElement();
+                try (var is = u.openStream()) {
+                    Properties p = new Properties();
+                    p.load(is);
+                    if ("JettraStore Explorer".equals(p.getProperty("app.title"))) {
+                        props.putAll(p);
+                    } else if (!props.containsKey("app.title")) {
+                        props.putAll(p);
+                    }
+                } catch (Exception ignored) {}
+            }
+        } catch (Exception ignored) {}
+
+        try {
+            java.util.Enumeration<java.net.URL> urls = getClass().getClassLoader().getResources("microprofile-config.properties");
+            while (urls.hasMoreElements()) {
+                java.net.URL u = urls.nextElement();
+                try (var is = u.openStream()) {
+                    Properties p = new Properties();
+                    p.load(is);
+                    if ("JettraStore Explorer".equals(p.getProperty("app.title"))) {
+                        props.putAll(p);
+                    } else if (!props.containsKey("app.title")) {
+                        props.putAll(p);
+                    }
+                } catch (Exception ignored) {}
+            }
+        } catch (Exception ignored) {}
+
+        // Fallback directo a recurso empaquetado de JettraStoreExplorer
+        try (var is = getClass().getResourceAsStream("/META-INF/microprofile-config.properties")) {
+            if (is != null) {
+                Properties p = new Properties();
+                p.load(is);
+                if ("JettraStore Explorer".equals(p.getProperty("app.title"))) {
+                    props.putAll(p);
+                }
+            }
+        } catch (Exception ignored) {}
+
+        try (var is = getClass().getResourceAsStream("/microprofile-config.properties")) {
+            if (is != null) {
+                Properties p = new Properties();
+                p.load(is);
+                if ("JettraStore Explorer".equals(p.getProperty("app.title"))) {
+                    props.putAll(p);
+                }
+            }
+        } catch (Exception ignored) {}
+
+        // Sobreescrituras locales en disco si existen (solo si pertenecen a Explorer o especifican propiedades explícitas)
+        for (String localFile : new String[]{"./microprofile-config.properties", "./META-INF/microprofile-config.properties", "./config/microprofile-config.properties"}) {
+            Path fp = Paths.get(localFile);
+            if (Files.exists(fp)) {
+                try (var is = Files.newInputStream(fp)) {
+                    Properties p = new Properties();
+                    p.load(is);
+                    props.putAll(p);
+                } catch (Exception ignored) {}
+            }
         }
+
+        this.loadedConfigProps.clear();
+        this.loadedConfigProps.putAll(props);
+
+        // 1. Host y puerto del servidor web JettraStoreExplorer
+        String h = System.getProperty("server.host", System.getenv("SERVER_HOST"));
+        if (h == null || h.isBlank()) h = props.getProperty("server.host", "127.0.0.1");
+        this.serverHost = h.trim();
+
+        String p = System.getProperty("server.port", System.getenv("PORT"));
+        if (p == null || p.isBlank()) p = props.getProperty("server.port", "8085");
+        try {
+            this.serverPort = Integer.parseInt(p.trim());
+        } catch (Exception ignored) {
+            this.serverPort = 8085;
+        }
+        this.explorerBindHost = "0.0.0.0".equals(this.serverHost) ? "127.0.0.1" : this.serverHost;
+        this.explorerBindPort = this.serverPort;
+
+        // 2. ContextPath del servidor
+        String cp = System.getProperty("server.contextpath", System.getProperty("server.context-path", System.getenv("SERVER_CONTEXT_PATH")));
+        if (cp == null || cp.isBlank()) cp = props.getProperty("server.contextpath", props.getProperty("server.context-path", "/"));
+        if (!cp.startsWith("/")) cp = "/" + cp;
+        this.serverContextPath = cp.trim();
+
+        // 3. Multinodo y timeout de healthcheck
+        String sysProp = System.getProperty("cluster.multinode.active");
+        if (sysProp != null && !sysProp.isBlank()) {
+            this.multinodeActive = "on".equalsIgnoreCase(sysProp.trim()) || "true".equalsIgnoreCase(sysProp.trim());
+        } else {
+            String val = props.getProperty("cluster.multinode.active", "on");
+            this.multinodeActive = "on".equalsIgnoreCase(val.trim()) || "true".equalsIgnoreCase(val.trim());
+        }
+
+        String timeoutStr = System.getProperty("cluster.healthcheck.timeout.ms", props.getProperty("cluster.healthcheck.timeout.ms", "1000"));
+        try {
+            int t = Integer.parseInt(timeoutStr.trim());
+            this.healthCheckTimeoutMs = Math.max(200, Math.min(5000, t));
+        } catch (Exception ignored) {
+            this.healthCheckTimeoutMs = 1000;
+        }
+    }
+
+    public String getServerHost() {
+        return serverHost;
+    }
+
+    public int getServerPort() {
+        return serverPort;
+    }
+
+    public String getServerContextPath() {
+        return serverContextPath;
     }
 
     public synchronized void setMultinodeActive(boolean active) {
         this.multinodeActive = active;
-        try {
-            File f = new File("config/database.properties");
-            Properties props = new Properties();
-            if (f.exists()) {
-                props.load(Files.newInputStream(f.toPath()));
-            }
-            props.setProperty("cluster.multinode.active", active ? "on" : "off");
-            if (f.getParentFile() != null) f.getParentFile().mkdirs();
-            props.store(Files.newOutputStream(f.toPath()), "JettraStore Cluster Configuration");
-        } catch (Exception ignored) {}
+        System.setProperty("cluster.multinode.active", active ? "on" : "off");
 
         logPoliceIncident("Raft Quorum K9", 
             "cluster.multinode.active conmutado a " + (active ? "ON (Consenso Raft Distribuido)" : "OFF (Modo Standalone Mononodo)"),
-            "INFO", "Topología del clúster reconfigurada en caliente");
+            "INFO", "Topología del clúster reconfigurada en caliente según microprofile-config.properties");
     }
 
     public boolean isMultinodeActive() {
@@ -267,13 +388,238 @@ public class JettraStorePlugin {
         return removed;
     }
 
-    // --- Servidores y Nodos ---
+    // --- Servidores y Nodos con Detección Real ONLINE / OFFLINE ---
     private void initServerNodes() {
         serverNodes.clear();
-        serverNodes.add(new ServerNodeInfo("node-01", "node-01-master", "LEADER", "127.0.0.1", 8765, 24.5f, 480, 2048, 1280, 14200, 312, 18450, 0.42f, 8, true));
-        serverNodes.add(new ServerNodeInfo("node-02", "node-02-replica", "FOLLOWER", "192.168.1.102", 8766, 18.2f, 390, 2048, 980, 12800, 245, 14200, 0.85f, 8, true));
-        serverNodes.add(new ServerNodeInfo("node-03", "node-03-replica", "FOLLOWER", "192.168.1.103", 8767, 21.0f, 420, 2048, 1100, 13400, 280, 15600, 0.78f, 8, true));
-        serverNodes.add(new ServerNodeInfo("node-04", "node-04-edge", "FOLLOWER", "10.0.4.15", 8768, 12.8f, 280, 1024, 650, 8900, 180, 8900, 1.25f, 8, true));
+        if (loadedConfigProps.isEmpty()) {
+            loadMicroprofileConfig();
+        }
+
+        // 1. Nodo PRIMARY (Master) de la base de datos JettraStore (desacoplado del puerto Web UI 8085)
+        ServerNodeInfo primaryNode = new ServerNodeInfo(
+            "node-01",
+            "node-01-primary",
+            "PRIMARY",
+            "127.0.0.1",
+            9091,
+            24.5f,
+            480,
+            2048,
+            1280,
+            14200,
+            312,
+            18450,
+            0.0f,
+            8,
+            false // Inicia en false; se valida en tiempo real con checkNodeRealReachability
+        );
+        serverNodes.add(primaryNode);
+
+        // 2. Nodos configurados desde microprofile-config.properties (cluster.nodes) o propiedad de sistema
+        String nodesConfig = System.getProperty("cluster.nodes", loadedConfigProps.getProperty("cluster.nodes"));
+        if (nodesConfig != null && !nodesConfig.isBlank()) {
+            String[] entries = nodesConfig.split(",");
+            for (String entry : entries) {
+                String[] parts = entry.trim().split(":");
+                if (parts.length >= 3) {
+                    String id = parts[0].trim();
+                    String host = parts[1].trim();
+                    int port = 9091;
+                    try { port = Integer.parseInt(parts[2].trim()); } catch (Exception ignored) {}
+
+                    if ("node-01".equalsIgnoreCase(id)) {
+                        if (host != null && !host.isBlank()) {
+                            primaryNode.setHost(host);
+                        }
+                        if (port > 0) {
+                            primaryNode.setPort(port);
+                        }
+                    } else {
+                        String role = id.toLowerCase().contains("edge") ? "EDGE" : "FOLLOWER";
+                        serverNodes.add(new ServerNodeInfo(id, id + "-replica", role, host, port, 18.0f, 380, 2048, 980, 12000, 240, 14000, 0.0f, 8, false));
+                    }
+                }
+            }
+        } else {
+            serverNodes.add(new ServerNodeInfo("node-02", "node-02-replica", "FOLLOWER", "192.168.1.102", 8766, 18.2f, 390, 2048, 980, 12800, 245, 14200, 0.0f, 8, false));
+            serverNodes.add(new ServerNodeInfo("node-03", "node-03-replica", "FOLLOWER", "192.168.1.103", 8767, 21.0f, 420, 2048, 1100, 13400, 280, 15600, 0.0f, 8, false));
+            serverNodes.add(new ServerNodeInfo("node-04", "node-04-edge", "EDGE", "10.0.4.15", 8768, 12.8f, 280, 1024, 650, 8900, 180, 8900, 0.0f, 8, false));
+        }
+
+        // Realizar comprobación TCP real de todos los nodos
+        refreshAllNodeStatuses(true);
+    }
+
+    /**
+     * Registra el host y puerto real del servidor Web UI JettraStoreExplorer para evitar falsos positivos
+     * por auto-sondeo (self-loop), sin alterar el host/puerto de destino del nodo primario de base de datos.
+     */
+    public synchronized void setExplorerServerEndpoint(String host, int port) {
+        if (host != null && !host.isBlank()) {
+            this.explorerBindHost = "0.0.0.0".equals(host.trim()) ? "127.0.0.1" : host.trim();
+        }
+        if (port > 0) {
+            this.explorerBindPort = port;
+        }
+    }
+
+    public synchronized void setNodeMasterHostAndPort(String host, int port) {
+        ServerNodeInfo n = getNodeById("node-01");
+        if (n != null) {
+            if (host != null && !host.isBlank() && !"0.0.0.0".equals(host)) {
+                n.setHost(host.trim());
+            }
+            if (port > 0) n.setPort(port);
+            checkNodeRealReachability(n, this.healthCheckTimeoutMs);
+        }
+    }
+
+    public synchronized void setNodeMasterPort(int port) {
+        ServerNodeInfo n = getNodeById("node-01");
+        if (n != null && port > 0) {
+            n.setPort(port);
+            checkNodeRealReachability(n, this.healthCheckTimeoutMs);
+        }
+    }
+
+    public int getHealthCheckTimeoutMs() {
+        return healthCheckTimeoutMs;
+    }
+
+    private boolean isLocalAddress(String host) {
+        if (host == null) return false;
+        String h = host.trim().toLowerCase();
+        return "127.0.0.1".equals(h) || "localhost".equals(h) || "0.0.0.0".equals(h) || "::1".equals(h)
+                || h.equalsIgnoreCase(this.explorerBindHost);
+    }
+
+    public boolean checkNodeRealReachability(ServerNodeInfo node, int timeoutMs) {
+        if (node == null) return false;
+        int effectiveTimeout = timeoutMs > 0 ? timeoutMs : this.healthCheckTimeoutMs;
+        boolean wasOnline = node.isOnline();
+        boolean isPrimary = "PRIMARY".equalsIgnoreCase(node.getRole())
+                || "LEADER".equalsIgnoreCase(node.getRole())
+                || "node-01".equalsIgnoreCase(node.getId());
+
+        String host = node.getHost() != null ? node.getHost().trim() : "";
+        int port = node.getPort();
+        long now = System.currentTimeMillis();
+
+        if (host.isEmpty() || port <= 0 || port > 65535) {
+            node.setOnline(false);
+            node.setLatencyMs(0.0f);
+            node.setLastError("Configuración de host/puerto inválida (" + host + ":" + port + ")");
+            node.setLastCheckedEpochMs(now);
+            return false;
+        }
+
+        // Protección anti auto-sondeo: el servidor Web UI de JettraStoreExplorer no es un nodo JettraStore
+        if (this.explorerBindPort > 0 && port == this.explorerBindPort && isLocalAddress(host)) {
+            node.setOnline(false);
+            node.setLatencyMs(0.0f);
+            node.setLastError("Puerto " + port + " pertenece a JettraStoreExplorer Web UI, no a un nodo JettraStore");
+            node.setLastCheckedEpochMs(now);
+            return false;
+        }
+
+        if (lifecycleManager.isStopped(node.getId())) {
+            node.setOnline(false);
+            node.setLatencyMs(0.0f);
+            node.setLastError("Nodo detenido mediante LifecycleManager (OFFLINE)");
+            node.setLastCheckedEpochMs(now);
+            return false;
+        }
+
+        long start = System.nanoTime();
+        try {
+            InetSocketAddress address = new InetSocketAddress(host, port);
+            if (address.isUnresolved()) {
+                node.setOnline(false);
+                node.setLatencyMs(0.0f);
+                node.setLastError("No se pudo resolver el host: " + host);
+                node.setLastCheckedEpochMs(now);
+                return false;
+            }
+            try (Socket s = new Socket()) {
+                s.setSoTimeout(effectiveTimeout);
+                s.connect(address, effectiveTimeout);
+                float ping = (System.nanoTime() - start) / 1_000_000.0f;
+                node.setOnline(true);
+                node.setLastError(null);
+                node.setLatencyMs(Math.max(0.08f, ping));
+                node.setLastCheckedEpochMs(now);
+                if (!wasOnline && isPrimary) {
+                    logPoliceIncident("Raft Quorum K9",
+                        "Nodo PRIMARY conectado: " + node.getName() + " (" + host + ":" + port + ")",
+                        "OK", "Latido TCP restablecido (" + String.format("%.2f ms", node.getLatencyMs()) + ")");
+                }
+                return true;
+            }
+        } catch (SocketTimeoutException ste) {
+            node.setOnline(false);
+            node.setLatencyMs(0.0f);
+            node.setLastError("Timeout (" + effectiveTimeout + " ms) sin respuesta desde " + host + ":" + port);
+            node.setLastCheckedEpochMs(now);
+        } catch (ConnectException ce) {
+            node.setOnline(false);
+            node.setLatencyMs(0.0f);
+            node.setLastError("Conexión rechazada: servicio inaccesible en " + host + ":" + port);
+            node.setLastCheckedEpochMs(now);
+        } catch (UnknownHostException uhe) {
+            node.setOnline(false);
+            node.setLatencyMs(0.0f);
+            node.setLastError("Host desconocido: " + host);
+            node.setLastCheckedEpochMs(now);
+        } catch (Exception e) {
+            node.setOnline(false);
+            node.setLatencyMs(0.0f);
+            node.setLastError("Error de red (" + e.getClass().getSimpleName() + "): " + e.getMessage());
+            node.setLastCheckedEpochMs(now);
+        }
+
+        if (wasOnline && isPrimary) {
+            logPoliceIncident("Raft Quorum K9",
+                "¡ALERTA! Nodo PRIMARY desconectado: " + node.getName() + " (" + host + ":" + port + ")",
+                "ERROR", node.getLastError());
+        }
+        return false;
+    }
+
+    public void refreshAllNodeStatuses() {
+        refreshAllNodeStatuses(true);
+    }
+
+    public void refreshAllNodeStatusesIfStale(long maxAgeMs) {
+        if ((System.currentTimeMillis() - this.lastRefreshEpochMs) >= maxAgeMs) {
+            refreshAllNodeStatuses(true);
+        }
+    }
+
+    public void refreshAllNodeStatuses(boolean force) {
+        synchronized (refreshLock) {
+            long now = System.currentTimeMillis();
+            if (!force && (now - this.lastRefreshEpochMs) < 300L) {
+                return;
+            }
+            List<ServerNodeInfo> snapshot = new ArrayList<>(serverNodes);
+            if (snapshot.isEmpty()) {
+                this.lastRefreshEpochMs = System.currentTimeMillis();
+                return;
+            }
+            int timeout = this.healthCheckTimeoutMs;
+            try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+                List<Future<Boolean>> futures = new ArrayList<>(snapshot.size());
+                for (ServerNodeInfo n : snapshot) {
+                    futures.add(executor.submit(() -> checkNodeRealReachability(n, timeout)));
+                }
+                for (Future<Boolean> f : futures) {
+                    try {
+                        f.get();
+                    } catch (Exception ignored) {}
+                }
+            }
+            this.lastRefreshEpochMs = System.currentTimeMillis();
+        }
     }
 
     public List<ServerNodeInfo> getServerNodes() {
@@ -297,20 +643,60 @@ public class JettraStorePlugin {
         return true;
     }
 
+    public NodeLifecycleManager getLifecycleManager() {
+        return lifecycleManager;
+    }
+
     public synchronized boolean removeNode(String id) {
         if ("node-01".equalsIgnoreCase(id)) return false; // Proteger nodo master principal
+        ServerNodeInfo existing = getNodeById(id);
+        if (existing != null) {
+            lifecycleManager.shutdownNode(existing);
+        }
         boolean removed = serverNodes.removeIf(n -> n.getId().equalsIgnoreCase(id));
         if (removed) {
+            lifecycleManager.clearStopped(id);
             logPoliceIncident("Raft Quorum K9", "Nodo expulsado del clúster: " + id, "WARN", "Rebalanceo de réplicas Raft");
         }
         return removed;
     }
 
+    public synchronized NodeLifecycleManager.ShutdownOutcome shutdownNode(String id) {
+        ServerNodeInfo n = getNodeById(id);
+        if (n == null) {
+            return new NodeLifecycleManager.ShutdownOutcome(false, false, "NONE", "Nodo no encontrado: " + id, 0);
+        }
+        NodeLifecycleManager.ShutdownOutcome outcome = lifecycleManager.shutdownNode(n);
+        this.lastRefreshEpochMs = System.currentTimeMillis();
+        logPoliceIncident("Raft Quorum K9",
+            "Apagado de nodo ejecutado [" + id + "]: " + outcome.mechanism(),
+            outcome.offlineVerified() ? "WARN" : "INFO",
+            outcome.message());
+        return outcome;
+    }
+
+    public synchronized NodeLifecycleManager.StartOutcome startNode(String id) {
+        ServerNodeInfo n = getNodeById(id);
+        if (n == null) {
+            return new NodeLifecycleManager.StartOutcome(false, false, "NONE", "Nodo no encontrado: " + id);
+        }
+        NodeLifecycleManager.StartOutcome outcome = lifecycleManager.startNode(n, this);
+        this.lastRefreshEpochMs = System.currentTimeMillis();
+        logPoliceIncident("Raft Quorum K9",
+            "Reinicio / verificación de nodo [" + id + "]: " + (outcome.onlineVerified() ? "ONLINE" : "OFFLINE"),
+            outcome.onlineVerified() ? "OK" : "WARN",
+            outcome.message());
+        return outcome;
+    }
+
     public synchronized void toggleNode(String id) {
         ServerNodeInfo n = getNodeById(id);
         if (n != null) {
-            n.setOnline(!n.isOnline());
-            logPoliceIncident("Raft Quorum K9", "Nodo " + id + " conmutado a estado: " + (n.isOnline() ? "ONLINE" : "OFFLINE"), n.isOnline() ? "OK" : "WARN", "Detección de latido");
+            if (n.isOnline()) {
+                shutdownNode(id);
+            } else {
+                startNode(id);
+            }
         }
     }
 
@@ -344,6 +730,20 @@ public class JettraStorePlugin {
         facturaBuckets.add(facturas);
         facturaBuckets.add(clientes);
         facturaBuckets.add(ledger);
+
+        // Buckets para motores JAVA_RECORD y OBJECT
+        EngineBucketInfo javaRecords = new EngineBucketInfo("example_factura_db", "CustomerRecords", "JAVA_RECORD", 15_200L, 5_400_000L, "Java 25 Canonical Records inmutables");
+        javaRecords.getIndexes().add(new EngineIndexInfo("idx_rec_id", "recordId", "BTREE", true, "READY"));
+        javaRecords.getSampleRecords().add(new EngineRecordInfo("REC-ORD-501", "JAVA_RECORD", "CustomerRecords", "OrderSummary[id=501, client=Distribuidora]",
+            "{\n  \"recordClass\": \"io.jettra.store.domain.OrderSummary\",\n  \"components\": {\n    \"orderId\": 501,\n    \"clientName\": \"Distribuidora Norte\",\n    \"total\": 12450.00,\n    \"currency\": \"USD\",\n    \"status\": \"APPROVED\"\n  }\n}", "2026-10-03 16:00:00", 1));
+
+        EngineBucketInfo objectsBucket = new EngineBucketInfo("example_factura_db", "DomainEntities", "OBJECT", 8_500L, 3_800_000L, "Entidades POJO / Objetos Java nativos");
+        objectsBucket.getIndexes().add(new EngineIndexInfo("idx_obj_uuid", "uuid", "HASH", false, "READY"));
+        objectsBucket.getSampleRecords().add(new EngineRecordInfo("OBJ-ENT-101", "OBJECT", "DomainEntities", "FiscalEntity[uuid=98a1-41fb, category=GENERAL]",
+            "{\n  \"className\": \"io.jettra.model.FiscalEntity\",\n  \"serialVersion\": 1,\n  \"properties\": {\n    \"entityId\": \"ENT-101\",\n    \"taxCategory\": \"GENERAL_CORPORATE\",\n    \"auditState\": \"SYNCHRONIZED\",\n    \"lastCheckEpoch\": 1762194000\n  }\n}", "2026-10-03 16:30:00", 1));
+
+        facturaBuckets.add(javaRecords);
+        facturaBuckets.add(objectsBucket);
         databasesCatalog.put("example_factura_db", facturaBuckets);
 
         // 2. samples_hostipal_db
@@ -589,15 +989,29 @@ public class JettraStorePlugin {
         if (bucket != null) {
             for (EngineRecordInfo r : bucket.getSampleRecords()) {
                 if (r.getId().equalsIgnoreCase(id)) {
-                    r.setSummary(summary);
-                    r.setDetails(details);
-                    r.setVersion(r.getVersion() + 1);
-                    r.setTimestamp(LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")));
+                    r.recordNewVersion(summary, details, "admin", "Modificación manual vía explorador");
                     logPoliceIncident("MemTable Purge Dog", "Registro '" + id + "' actualizado a versión v" + r.getVersion(), "OK", "Mutación aplicada en Direct Memory");
                     break;
                 }
             }
         }
+    }
+
+    public synchronized boolean restoreRecordVersion(String dbName, String bucketName, String id, long targetVersion) {
+        EngineBucketInfo bucket = getBucket(dbName, bucketName);
+        if (bucket != null) {
+            for (EngineRecordInfo r : bucket.getSampleRecords()) {
+                if (r.getId().equalsIgnoreCase(id)) {
+                    boolean ok = r.restoreVersion(targetVersion);
+                    if (ok) {
+                        logPoliceIncident("MemTable Purge Dog", "Registro '" + id + "' restaurado a versión previa v" + targetVersion + " (nueva versión v" + r.getVersion() + ")", "OK", "Restauración de versión completada");
+                        return true;
+                    }
+                    break;
+                }
+            }
+        }
+        return false;
     }
 
     public synchronized void deleteRecord(String dbName, String bucketName, String id) {
@@ -631,14 +1045,16 @@ public class JettraStorePlugin {
         return Collections.unmodifiableList(policeIncidents);
     }
 
-    public synchronized void logPoliceIncident(String sentinel, String description, String severity, String action) {
-        String now = LocalDateTime.now().format(DateTimeFormatter.ofPattern("HH:mm:ss"));
-        policeIncidents.add(0, new PoliceIncident(now, sentinel, description, severity, action));
-        if (policeIncidents.size() > 50) {
-            policeIncidents.remove(policeIncidents.size() - 1);
+    public void logPoliceIncident(String sentinel, String description, String severity, String action) {
+        synchronized (policeLock) {
+            String now = LocalDateTime.now().format(DateTimeFormatter.ofPattern("HH:mm:ss"));
+            policeIncidents.add(0, new PoliceIncident(now, sentinel, description, severity, action));
+            if (policeIncidents.size() > 50) {
+                policeIncidents.remove(policeIncidents.size() - 1);
+            }
+            this.totalEvaluations++;
+            this.lastPoliceStatus = sentinel + ": " + description;
         }
-        this.totalEvaluations++;
-        this.lastPoliceStatus = sentinel + ": " + description;
     }
 
     // --- Backups y Snapshots ---

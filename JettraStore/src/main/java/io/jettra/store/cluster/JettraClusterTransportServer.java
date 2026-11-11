@@ -451,6 +451,19 @@ public final class JettraClusterTransportServer implements AutoCloseable {
                 String msg = frame.getPayloadAsString();
                 System.out.printf("[JettraClusterTransport] ⚠️ Nodo '%s' notifica parada controlada (%s)%n", sender, msg);
                 if (server != null) {
+                    if (msg != null && msg.startsWith("LIFECYCLE_SHUTDOWN:")) {
+                        String targetId = msg.substring("LIFECYCLE_SHUTDOWN:".length()).trim();
+                        if (targetId.isEmpty() || targetId.equalsIgnoreCase(server.getConfig().getNodeId())) {
+                            String selfId = server.getConfig().getNodeId();
+                            Thread.startVirtualThread(() -> {
+                                try {
+                                    Thread.sleep(80);
+                                    server.stop();
+                                } catch (Exception ignored) {}
+                            });
+                            return JettraRaftFrame.ack(frame.term(), frame.logIndex(), selfId, "Lifecycle shutdown initiated");
+                        }
+                    }
                     server.handleNodeStopping(sender, msg);
                 }
                 return JettraRaftFrame.ack(frame.term(), frame.logIndex(), 

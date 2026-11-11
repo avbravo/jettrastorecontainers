@@ -129,6 +129,9 @@ public class DatabasesFluxView extends FluxView {
                   <option value="VECTOR">VECTOR (HNSW Embeddings)</option>
                   <option value="TIMESERIES">TIMESERIES (IoT & Métricas)</option>
                   <option value="COLUMNAR">COLUMNAR (Analítica OLAP)</option>
+                  <option value="GEOSPATIAL">GEOSPATIAL (GeoJSON & R-Tree Spatial)</option>
+                  <option value="JAVA_RECORD">JAVA_RECORD (Java 17+ Records / DTOs)</option>
+                  <option value="OBJECT">OBJECT (Java Serialized / POJO Entity)</option>
                 </select>
               </div>
               <div style="flex: 2; min-width: 200px;">
@@ -212,6 +215,9 @@ public class DatabasesFluxView extends FluxView {
                     <option value="VECTOR">VECTOR (HNSW Embeddings)</option>
                     <option value="TIMESERIES">TIMESERIES (Serie Temporal)</option>
                     <option value="COLUMNAR">COLUMNAR (Columnar)</option>
+                    <option value="GEOSPATIAL">GEOSPATIAL (GeoJSON & R-Tree)</option>
+                    <option value="JAVA_RECORD">JAVA_RECORD (Java Record Inmutable)</option>
+                    <option value="OBJECT">OBJECT (Objeto / Entidad POJO)</option>
                   </select>
                 </div>
                 <div style="flex: 2; min-width: 200px;">
@@ -239,6 +245,9 @@ public class DatabasesFluxView extends FluxView {
                 case "TIMESERIES" -> "#22c55e";
                 case "KEY_VALUE" -> "#f97316";
                 case "COLUMNAR" -> "#38bdf8";
+                case "GEOSPATIAL" -> "#06b6d4";
+                case "JAVA_RECORD" -> "#3b82f6";
+                case "OBJECT" -> "#eab308";
                 default -> "#94a3b8";
             };
 

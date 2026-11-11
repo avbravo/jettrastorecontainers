@@ -1,0 +1,13 @@
+[ {
+  "id" : "u_admin",
+  "username" : "admin",
+  "password" : "admin123",
+  "description" : "Superadministrador del Clúster JettraStore",
+  "globalRole" : "ADMIN",
+  "databaseRoles" : {
+    "samples_hostipal_db" : "ADMIN",
+    "system_metadata_db" : "ADMIN",
+    "samples_ambiental_db" : "ADMIN",
+    "example_factura_db" : "ADMIN"
+  }
+} ]

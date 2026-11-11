@@ -31,6 +31,8 @@ public class LoginFluxView extends FluxView {
             errorMsg = "Credenciales incorrectas. Verifique su usuario y contraseña.";
         } else if ("empty_fields".equals(error)) {
             errorMsg = "Por favor ingrese tanto el usuario como la contraseña.";
+        } else if ("session_expired".equals(error)) {
+            errorMsg = "La sesión fue cerrada o el servidor se reinició. Por favor inicie sesión nuevamente.";
         } else if (error != null) {
             errorMsg = error;
         }

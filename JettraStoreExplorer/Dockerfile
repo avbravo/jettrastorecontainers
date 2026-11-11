@@ -1,6 +1,6 @@
 # Dockerfile para JettraStore Explorer
-FROM eclipse-temurin:25-jdk
-
+#FROM eclipse-temurin:25-jdk
+FROM bellsoft/liberica-runtime-container:jre-25-stream-musl
 WORKDIR /app
 
 COPY target/JettraStoreExplorer-1.0.0-SNAPSHOT.jar /app/app.jar

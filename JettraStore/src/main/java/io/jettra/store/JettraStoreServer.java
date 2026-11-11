@@ -128,6 +128,7 @@ public final class JettraStoreServer {
         httpServer.createContext("/api/v1/auth/token", new AuthHandler());
         httpServer.createContext("/api/v1/health", new HealthHandler());
         httpServer.createContext("/api/v1/cluster/status", new StatusHandler());
+        httpServer.createContext("/api/v1/cluster/shutdown", new ShutdownHandler());
         httpServer.createContext("/api/v1/cluster/databases", new DatabasesHandler());
         httpServer.createContext("/api/v1/cluster/replicate", new ReplicateHandler());
         httpServer.createContext("/api/v1/cluster/events", new ClusterEventsHandler());
@@ -313,6 +314,30 @@ public final class JettraStoreServer {
                 peersJson.toString()
             );
             sendResponse(exchange, 200, response);
+        }
+    }
+
+    private class ShutdownHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
+            if (!"POST".equalsIgnoreCase(exchange.getRequestMethod())) {
+                sendResponse(exchange, 405, "{\"error\":\"Method not allowed. Use POST.\"}");
+                return;
+            }
+            try {
+                validateAuthToken(exchange);
+            } catch (SecurityException ex) {
+                sendResponse(exchange, 401, String.format("{\"error\":\"Unauthorized. JettraJWT token required: %s\"}", ex.getMessage()));
+                return;
+            }
+            String resp = String.format("{\"status\":\"STOPPED\",\"node_id\":\"%s\",\"message\":\"Shutdown signal accepted\"}", config.getNodeId());
+            sendResponse(exchange, 200, resp);
+            Thread.startVirtualThread(() -> {
+                try {
+                    Thread.sleep(80);
+                    stop();
+                } catch (Exception ignored) {}
+            });
         }
     }
 
