@@ -298,7 +298,7 @@ void testJettraPoliceDiskCompactionTrigger() {
 
 ### 8.1 Activación con `jmh.metrics.active = true`
 
-En el entorno de pruebas de rendimiento, configure en `database.properties` o mediante propiedades del sistema:
+En el entorno de pruebas de rendimiento, configure en `microprofile-config.properties` o mediante propiedades del sistema:
 ```properties
 jmh.metrics.active = true
 ```

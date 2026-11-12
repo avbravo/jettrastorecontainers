@@ -108,7 +108,7 @@
 
 ## Slide 8: `JettraPolice` — El Centinela Autónomo
 * **Daemon de Monitoreo Preventivo:**
-  * Configurable vía `jettrapolice.active = true/false` en `database.properties`.
+  * Configurable vía `jettrapolice.active = true/false` en `microprofile-config.properties`.
   * Hilo ultra-ligero ($< 0.5\%$ CPU).
 * **Acciones en Tiempo Real:**
   * Compacta archivos `.jettra` si el disco supera el $90\%$.

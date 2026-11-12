@@ -789,11 +789,15 @@ public class JettraStorePlugin {
             try {
                 List<Map<String, Object>> list = mapper.readValue(f, new TypeReference<List<Map<String, Object>>>() {});
                 if (list != null) {
+                    boolean hasPrimaryAlready = serverNodes.stream().anyMatch(n -> isPrimaryRole(n.getRole()));
                     for (Map<String, Object> map : list) {
                         String id = (String) map.get("id");
                         if (id != null && getNodeById(id) == null) {
                             String name = (String) map.getOrDefault("name", id);
-                            String role = (String) map.getOrDefault("role", "FOLLOWER");
+                            String role = (String) map.getOrDefault("role", "SECONDARY");
+                            if (hasPrimaryAlready && isPrimaryRole(role)) {
+                                role = "SECONDARY";
+                            }
                             String host = (String) map.getOrDefault("host", "127.0.0.1");
                             int port = ((Number) map.getOrDefault("port", 8770)).intValue();
                             long ram = ((Number) map.getOrDefault("heapMaxMb", 2048L)).longValue();
@@ -973,18 +977,25 @@ public class JettraStorePlugin {
 
         boolean changed = false;
         if (activeNodes.isEmpty()) {
-            // Todos los nodos están INACTIVE: mantener designación de PRIMARY para reflejar estado OFFLINE real
+            // Todos los nodos están INACTIVE: restaurar designación de PRIMARY en node-01 para reflejar estado OFFLINE real
+            ServerNodeInfo defaultPrimary = getNodeById("node-01");
+            if (defaultPrimary == null && !serverNodes.isEmpty()) {
+                defaultPrimary = serverNodes.get(0);
+            }
             for (ServerNodeInfo n : serverNodes) {
                 if (!"DISCONNECTED".equalsIgnoreCase(n.getRaftState())) {
                     n.setRaftState("DISCONNECTED");
                     changed = true;
                 }
-            }
-            if (serverNodes.stream().noneMatch(n -> isPrimaryRole(n.getRole()))) {
-                ServerNodeInfo fallback = getNodeById("node-01");
-                if (fallback == null) fallback = serverNodes.get(0);
-                fallback.setRole("PRIMARY");
-                changed = true;
+                if (n == defaultPrimary) {
+                    if (!isPrimaryRole(n.getRole())) {
+                        n.setRole("PRIMARY");
+                        changed = true;
+                    }
+                } else if (!"EDGE".equalsIgnoreCase(n.getRole()) && isPrimaryRole(n.getRole())) {
+                    n.setRole("SECONDARY");
+                    changed = true;
+                }
             }
             return changed;
         }
@@ -1100,6 +1111,7 @@ public class JettraStorePlugin {
         boolean removed = serverNodes.removeIf(n -> n.getId().equalsIgnoreCase(id));
         if (removed) {
             lifecycleManager.clearStopped(id);
+            reconcilePrimaryLeadership();
             saveClusterNodes();
             logPoliceIncident("Raft Quorum K9", "Nodo expulsado del clúster: " + id, "WARN", "Rebalanceo de réplicas Raft");
             try {

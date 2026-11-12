@@ -156,10 +156,50 @@ public final class JettraStoreConfig {
         String defaultStorage = effectiveServerProps.getProperty("data.dir",
             (currentNode != null && currentNode.storagePath() != null && !currentNode.storagePath().isBlank())
             ? currentNode.storagePath() : "/jettra/data");
-        String configuredPath = getPropOrEnv(props, 
-            new String[]{"jettra.storage.path", "storage.path", "data.dir"}, 
-            new String[]{"JETTRA_STORAGE_PATH", "JETTRA_DATA_DIR"}, 
-            defaultStorage);
+
+        // 1. Prioridad: System property explícito
+        String configuredPath = null;
+        for (String sp : new String[]{"storage.path", "jettra.storage.path", "data.dir"}) {
+            String val = System.getProperty(sp);
+            if (val != null && !val.isBlank()) {
+                configuredPath = val.trim();
+                break;
+            }
+        }
+        // 2. Variables de entorno
+        if (configuredPath == null) {
+            for (String ev : new String[]{"STORAGE_PATH", "JETTRA_STORAGE_PATH", "JETTRA_DATA_DIR", "DATA_DIR"}) {
+                String val = System.getenv(ev);
+                if (val != null && !val.isBlank()) {
+                    configuredPath = val.trim();
+                    break;
+                }
+            }
+        }
+        // 3. Archivo microprofile-config.properties
+        if (configuredPath == null && props != null) {
+            String spVal = props.getProperty("storage.path");
+            String jspVal = props.getProperty("jettra.storage.path");
+            String ddVal = props.getProperty("data.dir");
+
+            boolean spCustom = spVal != null && !spVal.isBlank() && !spVal.equals("~/jettra/data") && !spVal.equals("/jettra/data");
+            boolean jspCustom = jspVal != null && !jspVal.isBlank() && !jspVal.equals("~/jettra/data") && !jspVal.equals("/jettra/data");
+
+            if (spCustom && !jspCustom) {
+                configuredPath = spVal.trim();
+            } else if (jspCustom && !spCustom) {
+                configuredPath = jspVal.trim();
+            } else if (spVal != null && !spVal.isBlank()) {
+                configuredPath = spVal.trim();
+            } else if (jspVal != null && !jspVal.isBlank()) {
+                configuredPath = jspVal.trim();
+            } else if (ddVal != null && !ddVal.isBlank()) {
+                configuredPath = ddVal.trim();
+            }
+        }
+        if (configuredPath == null) {
+            configuredPath = defaultStorage;
+        }
         this.rawConfiguredPath = configuredPath;
         
         String resolvedPath = configuredPath;
@@ -239,9 +279,46 @@ public final class JettraStoreConfig {
         this.indexMaxInMemoryKeys = Integer.parseInt(props.getProperty("jettra.index.max.inmemory.keys", "100000"));
         this.indexCompactStorage = Boolean.parseBoolean(props.getProperty("jettra.index.compact.storage", "true"));
         
-        String configuredIndexPath = props.getProperty("jettra.index.storage.path", resolvedPath + "/indexes");
+        String configuredIndexPath = null;
+        for (String sp : new String[]{"index.storage.path", "jettra.index.storage.path"}) {
+            String val = System.getProperty(sp);
+            if (val != null && !val.isBlank()) {
+                configuredIndexPath = val.trim();
+                break;
+            }
+        }
+        if (configuredIndexPath == null) {
+            for (String ev : new String[]{"INDEX_STORAGE_PATH", "JETTRA_INDEX_STORAGE_PATH"}) {
+                String val = System.getenv(ev);
+                if (val != null && !val.isBlank()) {
+                    configuredIndexPath = val.trim();
+                    break;
+                }
+            }
+        }
+        if (configuredIndexPath == null && props != null) {
+            String isp = props.getProperty("index.storage.path");
+            String jisp = props.getProperty("jettra.index.storage.path");
+            boolean ispCustom = isp != null && !isp.isBlank() && !isp.equals("~/jettra/data/indexes") && !isp.equals("/jettra/data/indexes");
+            boolean jispCustom = jisp != null && !jisp.isBlank() && !jisp.equals("~/jettra/data/indexes") && !jisp.equals("/jettra/data/indexes");
+
+            if (ispCustom && !jispCustom) {
+                configuredIndexPath = isp.trim();
+            } else if (jispCustom && !ispCustom) {
+                configuredIndexPath = jisp.trim();
+            } else if (isp != null && !isp.isBlank()) {
+                configuredIndexPath = isp.trim();
+            } else if (jisp != null && !jisp.isBlank()) {
+                configuredIndexPath = jisp.trim();
+            }
+        }
+        if (configuredIndexPath == null) {
+            configuredIndexPath = resolvedPath + "/indexes";
+        }
         if (configuredIndexPath.startsWith("~" + java.io.File.separator) || configuredIndexPath.startsWith("~/")) {
             configuredIndexPath = System.getProperty("user.home") + configuredIndexPath.substring(1);
+        } else if (configuredIndexPath.equals("~")) {
+            configuredIndexPath = System.getProperty("user.home");
         }
         this.indexStoragePath = configuredIndexPath;
         this.autoFlushBatchSize = Integer.parseInt(props.getProperty("jettra.storage.autoflush.batch.size", "50000"));
@@ -294,7 +371,7 @@ public final class JettraStoreConfig {
         Path clusterPath = JettraConfigValidator.locateClusterConfigFile();
 
         Properties configProps = JettraConfigValidator.loadProperties(configPath, 
-            "/META-INF/microprofile-config.properties", "/microprofile-config.properties", "/database.properties", "/jettraserver.config");
+            "/META-INF/microprofile-config.properties", "/microprofile-config.properties", "/jettraserver.config");
         Properties clusterProps = JettraConfigValidator.loadProperties(clusterPath, 
             "/cluster.config", "/jettra.config");
 

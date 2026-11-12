@@ -11,7 +11,7 @@ import java.util.concurrent.ConcurrentHashMap;
 /**
  * Gestor de índices secundarios de JettraStore optimizado con JettraCollections.
  * Aplica almacenamiento compacto (Singleton / Zero-Set), pre-dimensionado configurado
- * en database.properties (jettra.index.initial.capacity) y streaming perezoso sin toArray()
+ * en microprofile-config.properties (jettra.index.initial.capacity) y streaming perezoso sin toArray()
  * para eliminar de raíz el error OutOfMemoryError en rehash() y colecciones masivas.
  */
 public final class JettraIndexManager {

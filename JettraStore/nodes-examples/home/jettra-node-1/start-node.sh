@@ -1,7 +1,7 @@
 #!/bin/bash
 # Script de inicio para nodo JettraStore
 # Lee los parámetros principales (jettra.storage.path, jettra.network.grpc.port, jettra.network.rest.port)
-# directamente desde database.properties y sincroniza con jettra.config.
+# directamente desde microprofile-config.properties y sincroniza con jettra.config.
 #
 # Uso:
 #   ./runnode.sh [NODE_ID] [NODE_ROLE]
@@ -21,6 +21,6 @@ java --enable-preview \
      -Xms2g -Xmx6g \
      -Djettra.node.id="${NODE_ID}" \
      -Djettra.node.role="${NODE_ROLE}" \
-     -Djettra.config.path=jettra.config \
-     -Ddatabase.properties.path=database.properties \
+     -Dcluster.config.path=cluster.config \
+     -Dmicroprofile.config.file=microprofile-config.properties \
      -jar JettraStore-1.0-SNAPSHOT-uber.jar

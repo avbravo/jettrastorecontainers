@@ -132,7 +132,7 @@ public class JettraStoreEngineTest extends JettraStoreBaseTest {
     }
 
     @Test
-    @DisplayName("Debe crear el directorio configurado en database.properties y almacenar datos")
+    @DisplayName("Debe crear el directorio configurado en microprofile-config.properties y almacenar datos")
     public void testConfiguredStoragePathCreationAndStore() throws IOException {
         JettraStoreConfig cfg = JettraStoreConfig.load();
         assertTrue(cfg.getStoragePath().contains("jettra") && Files.isDirectory(Path.of(cfg.getStoragePath())));

@@ -23,7 +23,6 @@ RUN mkdir -p /jettra/data /jettra/config /jettra/checkpoint && \
 COPY target/JettraStore-*.jar /app/
 COPY src/main/resources/microprofile-config.properties /app/config/microprofile-config.properties
 COPY src/main/resources/cluster.config /app/config/cluster.config
-COPY src/main/resources/database.properties /app/config/database.properties
 
 # Garantizar compatibilidad y el archivo /app/JettraStore.jar sin duplicar capas pesadas en la imagen
 RUN cp /app/config/cluster.config /app/config/jettra.config && \

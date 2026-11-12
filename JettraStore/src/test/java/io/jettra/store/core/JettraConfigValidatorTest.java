@@ -42,14 +42,20 @@ public class JettraConfigValidatorTest extends JettraStoreBaseTest {
         return props;
     }
 
-    private Properties createValidDatabaseProperties() {
+    private Properties createValidMicroProfileProperties() {
         Properties props = new Properties();
         props.setProperty("jettra.cluster.node.id", "node-01");
+        props.setProperty("storage.path", "~/jettra/data");
         props.setProperty("jettra.storage.path", "~/jettra/data");
         props.setProperty("jettra.network.grpc.port", "9091");
         props.setProperty("jettra.network.rest.port", "8080");
+        props.setProperty("index.storage.path", "~/jettra/data/indexes");
         props.setProperty("jettra.index.storage.path", "~/jettra/data/indexes");
         return props;
+    }
+
+    private Properties createValidDatabaseProperties() {
+        return createValidMicroProfileProperties();
     }
 
     @Test
@@ -159,17 +165,17 @@ public class JettraConfigValidatorTest extends JettraStoreBaseTest {
     }
 
     @Test
-    @DisplayName("Debe generar automáticamente database.properties y jettra.config si no existen")
+    @DisplayName("Debe generar automáticamente microprofile-config.properties y cluster.config si no existen")
     public void testAutoGenerationOfMissingConfigFiles() throws IOException {
         Path tempDir = Files.createTempDirectory("jettra_auto_gen_test");
-        Path targetDb = tempDir.resolve("database.properties");
-        Path targetCluster = tempDir.resolve("jettra.config");
+        Path targetDb = tempDir.resolve("microprofile-config.properties");
+        Path targetCluster = tempDir.resolve("cluster.config");
 
         assertFalse(Files.exists(targetDb));
         assertFalse(Files.exists(targetCluster));
 
-        JettraConfigValidator.generateDefaultDatabaseProperties(targetDb);
-        JettraConfigValidator.generateDefaultJettraConfig(targetCluster);
+        JettraConfigValidator.generateDefaultMicroProfileConfig(targetDb);
+        JettraConfigValidator.generateDefaultClusterConfig(targetCluster);
 
         assertTrue(Files.exists(targetDb));
         assertTrue(Files.exists(targetCluster));
@@ -223,7 +229,7 @@ public class JettraConfigValidatorTest extends JettraStoreBaseTest {
     }
 
     @Test
-    @DisplayName("Debe cargar IP, puertos y peers desde jettra.config y database.properties en JettraStoreConfig")
+    @DisplayName("Debe cargar IP, puertos y peers desde cluster.config y microprofile-config.properties en JettraStoreConfig")
     public void testJettraStoreConfigLoadsClusterTopology() {
         Properties clusterProps = new Properties();
         clusterProps.setProperty("cluster.multinode.active", "on");
@@ -263,26 +269,26 @@ public class JettraConfigValidatorTest extends JettraStoreBaseTest {
     }
 
     @Test
-    @DisplayName("Debe ubicar database.properties en la misma carpeta que jettra.config mediante sibling resolution")
-    public void testLocateDatabasePropertiesSibling() throws IOException {
+    @DisplayName("Debe ubicar microprofile-config.properties en la misma carpeta que cluster.config mediante sibling resolution")
+    public void testLocateMicroProfilePropertiesSibling() throws IOException {
         Path tempDir = Files.createTempDirectory("jettra_sibling_test");
-        Path cfgFile = tempDir.resolve("jettra.config");
-        Path dbFile = tempDir.resolve("database.properties");
+        Path cfgFile = tempDir.resolve("cluster.config");
+        Path dbFile = tempDir.resolve("microprofile-config.properties");
 
         Files.writeString(cfgFile, "cluster.node.1.id=node-01\n");
         Files.writeString(dbFile, "jettra.cluster.node.id=node-01\n");
 
-        String prev = System.getProperty("jettra.config.path");
+        String prev = System.getProperty("cluster.config.path");
         try {
-            System.setProperty("jettra.config.path", cfgFile.toString());
-            Path locatedDb = JettraConfigValidator.locateDatabasePropertiesFile();
+            System.setProperty("cluster.config.path", cfgFile.toString());
+            Path locatedDb = JettraConfigValidator.locateMicroProfileConfigFile();
             assertNotNull(locatedDb);
             assertEquals(dbFile.toAbsolutePath().normalize(), locatedDb.toAbsolutePath().normalize());
         } finally {
             if (prev != null) {
-                System.setProperty("jettra.config.path", prev);
+                System.setProperty("cluster.config.path", prev);
             } else {
-                System.clearProperty("jettra.config.path");
+                System.clearProperty("cluster.config.path");
             }
             Files.deleteIfExists(cfgFile);
             Files.deleteIfExists(dbFile);
@@ -320,15 +326,17 @@ public class JettraConfigValidatorTest extends JettraStoreBaseTest {
     }
 
     @Test
-    @DisplayName("Debe leer nodeId, role, puertos y storage.path directamente de database.properties")
-    public void testNodeConfigurationDirectlyFromDatabaseProperties() {
+    @DisplayName("Debe leer nodeId, role, puertos y storage.path / jettra.storage.path directamente de microprofile-config.properties")
+    public void testNodeConfigurationDirectlyFromMicroProfileProperties() {
         Properties clusterProps = createValidClusterProperties();
         Properties dbProps = new Properties();
         dbProps.setProperty("jettra.node.id", "node-03");
         dbProps.setProperty("jettra.node.role", "SECONDARY");
+        dbProps.setProperty("storage.path", "~/jettra/data");
         dbProps.setProperty("jettra.storage.path", "~/jettra/data");
         dbProps.setProperty("jettra.network.grpc.port", "9093");
         dbProps.setProperty("jettra.network.rest.port", "8083");
+        dbProps.setProperty("index.storage.path", "~/jettra/data/indexes");
         dbProps.setProperty("jettra.index.storage.path", "~/jettra/data/indexes");
 
         JettraStoreConfig config = new JettraStoreConfig(dbProps, clusterProps);
@@ -341,6 +349,75 @@ public class JettraConfigValidatorTest extends JettraStoreBaseTest {
         // Validar que pase la validación cruzada
         JettraConfigValidator.ValidationResult result = JettraConfigValidator.validate(dbProps, clusterProps);
         assertTrue(result.isValid());
+    }
+
+    @Test
+    @DisplayName("Debe garantizar soporte tanto para 'storage.path' como para 'jettra.storage.path'")
+    public void testStoragePathAndJettraStoragePathBothSupported() throws IOException {
+        Path tempDir1 = Files.createTempDirectory("jettra_storage_path_test_1");
+        Path tempDir2 = Files.createTempDirectory("jettra_storage_path_test_2");
+        try {
+            // Caso 1: Solo storage.path configurado
+            Properties props1 = new Properties();
+            props1.setProperty("storage.path", tempDir1.toAbsolutePath().toString());
+            JettraStoreConfig config1 = new JettraStoreConfig(props1);
+            assertEquals(tempDir1.toAbsolutePath().toString(), config1.getStoragePath());
+
+            // Caso 2: Solo jettra.storage.path configurado
+            Properties props2 = new Properties();
+            props2.setProperty("jettra.storage.path", tempDir2.toAbsolutePath().toString());
+            JettraStoreConfig config2 = new JettraStoreConfig(props2);
+            assertEquals(tempDir2.toAbsolutePath().toString(), config2.getStoragePath());
+
+            // Caso 3: Ambos configurados con storage.path personalizado
+            Properties props3 = new Properties();
+            props3.setProperty("storage.path", tempDir1.toAbsolutePath().toString());
+            props3.setProperty("jettra.storage.path", "~/jettra/data");
+            JettraStoreConfig config3 = new JettraStoreConfig(props3);
+            assertEquals(tempDir1.toAbsolutePath().toString(), config3.getStoragePath());
+
+            // Caso 4: Ambos configurados con jettra.storage.path personalizado
+            Properties props4 = new Properties();
+            props4.setProperty("storage.path", "~/jettra/data");
+            props4.setProperty("jettra.storage.path", tempDir2.toAbsolutePath().toString());
+            JettraStoreConfig config4 = new JettraStoreConfig(props4);
+            assertEquals(tempDir2.toAbsolutePath().toString(), config4.getStoragePath());
+        } finally {
+            Files.deleteIfExists(tempDir1);
+            Files.deleteIfExists(tempDir2);
+        }
+    }
+
+    @Test
+    @DisplayName("Debe garantizar la persistencia de bases de datos y objetos en el path storage.path")
+    public void testDatabaseObjectsPersistenceInStoragePath() throws IOException {
+        Path tempDir = Files.createTempDirectory("jettra_db_persistence_test");
+        try {
+            Properties props = new Properties();
+            props.setProperty("storage.path", tempDir.toAbsolutePath().toString());
+            props.setProperty("jettra.storage.mode", "JVM_RAM");
+            JettraStoreConfig config = new JettraStoreConfig(props);
+
+            try (JettraDatabase db = new JettraDatabase("custom_persist_db", config)) {
+                db.getDocumentEngine("items").insert("item1", java.util.Map.of("name", "Laptop", "price", 1200));
+                db.flushMemTable();
+                db.saveToDisk();
+
+                // Verificar existencia de metadata y sstable en el path configurado
+                Path metaFile = Path.of(config.getStoragePath(), "custom_persist_db_meta.json");
+                Path sstableFile = Path.of(config.getStoragePath(), "custom_persist_db_sstable" + config.getFileExtension());
+
+                assertTrue(Files.exists(metaFile), "El archivo metadata _meta.json debe existir en storage.path");
+                assertTrue(Files.exists(sstableFile), "El archivo _sstable debe existir en storage.path");
+                assertTrue(Files.size(metaFile) > 0);
+            }
+        } finally {
+            try (var stream = Files.walk(tempDir)) {
+                stream.sorted(java.util.Comparator.reverseOrder()).forEach(p -> {
+                    try { Files.deleteIfExists(p); } catch (Exception ignored) {}
+                });
+            } catch (Exception ignored) {}
+        }
     }
 
     @Test
