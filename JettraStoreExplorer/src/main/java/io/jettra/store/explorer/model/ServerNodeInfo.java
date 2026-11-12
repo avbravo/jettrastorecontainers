@@ -17,6 +17,8 @@ public class ServerNodeInfo implements Serializable {
     private long qps;
     private float latencyMs;
     private long raftTerm;
+    private volatile String raftState = "DISCONNECTED";
+    private volatile int restPort = 0;
     private volatile boolean online;
     private volatile String lastError;
     private volatile long lastCheckedEpochMs;
@@ -61,6 +63,11 @@ public class ServerNodeInfo implements Serializable {
     public float getLatencyMs() { return latencyMs; }
     public void setLatencyMs(float latencyMs) { this.latencyMs = latencyMs; }
     public long getRaftTerm() { return raftTerm; }
+    public void setRaftTerm(long raftTerm) { this.raftTerm = raftTerm; }
+    public String getRaftState() { return raftState != null ? raftState : (online ? ("PRIMARY".equalsIgnoreCase(role) || "LEADER".equalsIgnoreCase(role) ? "LEADER" : "FOLLOWER") : "DISCONNECTED"); }
+    public void setRaftState(String raftState) { this.raftState = raftState; }
+    public int getRestPort() { return restPort; }
+    public void setRestPort(int restPort) { this.restPort = restPort; }
     public boolean isOnline() { return online; }
     public void setOnline(boolean online) { this.online = online; }
     public boolean isActive() { return online; }

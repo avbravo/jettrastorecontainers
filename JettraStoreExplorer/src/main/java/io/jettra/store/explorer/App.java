@@ -232,8 +232,9 @@ public class App {
         server.get("/backups", (req, resp) -> handleBackupsGet(req, resp, server));
         server.post("/backups", (req, resp) -> handleBackupsPost(req, resp));
 
-        // 11. Endpoints JSON de Sondeo y Ciclo de Vida de Nodos del Clúster
+        // 11. Endpoints JSON/SSE de Sondeo y Ciclo de Vida de Nodos del Clúster
         server.get("/api/cluster/status", (req, resp) -> handleClusterStatusJson(req, resp));
+        server.get("/api/cluster/events", (req, resp) -> handleClusterEventsSse(req, resp));
         server.post("/api/cluster/nodes/shutdown", (req, resp) -> handleNodeShutdownApi(req, resp));
         server.post("/api/cluster/nodes/start", (req, resp) -> handleNodeStartApi(req, resp));
 
@@ -724,15 +725,36 @@ public class App {
         }
         JettraStorePlugin plugin = JettraStorePlugin.getInstance();
         plugin.refreshAllNodeStatuses(true);
-        List<ServerNodeInfo> nodes = plugin.getServerNodes();
+        resp.contentType("application/json; charset=UTF-8")
+            .header("Cache-Control", "no-store, no-cache, must-revalidate")
+            .body(buildClusterStatusJson(plugin));
+    }
 
-        ServerNodeInfo primary = nodes.stream()
-                .filter(n -> "PRIMARY".equalsIgnoreCase(n.getRole()) || "LEADER".equalsIgnoreCase(n.getRole()) || "node-01".equalsIgnoreCase(n.getId()))
-                .findFirst()
-                .orElse(null);
+    private static void handleClusterEventsSse(HttpRequest req, HttpResponse resp) {
+        if (getLoggedUser(req) == null) {
+            resp.status(HttpStatus.UNAUTHORIZED)
+                .contentType("application/json; charset=UTF-8")
+                .body("{\"error\":\"unauthorized\"}");
+            return;
+        }
+        JettraStorePlugin plugin = JettraStorePlugin.getInstance();
+        plugin.refreshAllNodeStatusesIfStale(600L);
+        String payload = "retry: 1500\nevent: cluster_status\ndata: " + buildClusterStatusJson(plugin) + "\n\n";
+        resp.contentType("text/event-stream; charset=UTF-8")
+            .header("Cache-Control", "no-store, no-cache, must-revalidate")
+            .header("Connection", "keep-alive")
+            .body(payload);
+    }
+
+    private static String buildClusterStatusJson(JettraStorePlugin plugin) {
+        List<ServerNodeInfo> nodes = plugin.getServerNodes();
+        ServerNodeInfo primary = plugin.getPrimaryNode();
 
         boolean primaryOnline = primary != null && primary.isOnline();
         boolean primaryActive = primary != null && primary.isActive();
+        String primaryNodeId = primary != null ? primary.getId() : "";
+        String primaryNodeName = primary != null ? primary.getName() : "";
+        String primaryRole = primary != null ? primary.getRole() : "PRIMARY";
         long activeCount = nodes.stream().filter(ServerNodeInfo::isActive).count();
         long onlineCount = activeCount;
         long inactiveCount = nodes.size() - activeCount;
@@ -741,6 +763,10 @@ public class App {
 
         StringBuilder json = new StringBuilder();
         json.append("{");
+        json.append("\"executionEnvironment\":\"").append(escapeJson(plugin.getLifecycleManager().detectExecutionEnvironment())).append("\",");
+        json.append("\"primaryNodeId\":\"").append(escapeJson(primaryNodeId)).append("\",");
+        json.append("\"primaryNodeName\":\"").append(escapeJson(primaryNodeName)).append("\",");
+        json.append("\"primaryRole\":\"").append(escapeJson(primaryRole)).append("\",");
         json.append("\"primaryActive\":").append(primaryActive).append(",");
         json.append("\"primaryOnline\":").append(primaryOnline).append(",");
         json.append("\"activeCount\":").append(activeCount).append(",");
@@ -757,6 +783,8 @@ public class App {
             json.append("\"id\":\"").append(escapeJson(n.getId())).append("\",");
             json.append("\"name\":\"").append(escapeJson(n.getName())).append("\",");
             json.append("\"role\":\"").append(escapeJson(n.getRole())).append("\",");
+            json.append("\"raftState\":\"").append(escapeJson(n.getRaftState())).append("\",");
+            json.append("\"raftTerm\":").append(n.getRaftTerm()).append(",");
             json.append("\"host\":\"").append(escapeJson(n.getHost())).append("\",");
             json.append("\"port\":").append(n.getPort()).append(",");
             json.append("\"status\":\"").append(n.getStatus()).append("\",");
@@ -768,10 +796,7 @@ public class App {
             json.append("}");
         }
         json.append("]}");
-
-        resp.contentType("application/json; charset=UTF-8")
-            .header("Cache-Control", "no-store, no-cache, must-revalidate")
-            .body(json.toString());
+        return json.toString();
     }
 
     private static void handleNodeShutdownApi(HttpRequest req, HttpResponse resp) {
@@ -791,14 +816,22 @@ public class App {
             return;
         }
         NodeLifecycleManager.ShutdownOutcome outcome = plugin.shutdownNode(node.getId());
+        ServerNodeInfo newPrimary = plugin.getPrimaryNode();
         String json = "{"
             + "\"success\":" + outcome.success() + ","
             + "\"offlineVerified\":" + outcome.offlineVerified() + ","
+            + "\"stopped\":" + (!node.isOnline()) + ","
             + "\"nodeId\":\"" + escapeJson(node.getId()) + "\","
+            + "\"role\":\"" + escapeJson(node.getRole()) + "\","
+            + "\"raftState\":\"" + escapeJson(node.getRaftState()) + "\","
             + "\"active\":" + node.isActive() + ","
             + "\"online\":" + node.isOnline() + ","
             + "\"status\":\"" + node.getStatus() + "\","
             + "\"state\":\"" + (node.isOnline() ? "ONLINE" : "OFFLINE") + "\","
+            + "\"executionEnvironment\":\"" + escapeJson(outcome.executionEnvironment()) + "\","
+            + "\"dockerContainer\":\"" + escapeJson(outcome.dockerContainer()) + "\","
+            + "\"primaryNodeId\":\"" + escapeJson(newPrimary != null ? newPrimary.getId() : "") + "\","
+            + "\"primaryActive\":" + (newPrimary != null && newPrimary.isActive()) + ","
             + "\"mechanism\":\"" + escapeJson(outcome.mechanism()) + "\","
             + "\"elapsedMs\":" + outcome.elapsedMs() + ","
             + "\"lastError\":" + (node.getLastError() != null ? "\"" + escapeJson(node.getLastError()) + "\"" : "null") + ","

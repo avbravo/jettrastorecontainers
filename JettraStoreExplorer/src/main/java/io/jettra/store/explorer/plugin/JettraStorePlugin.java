@@ -11,11 +11,16 @@ import java.net.ConnectException;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.net.SocketTimeoutException;
+import java.net.URI;
 import java.net.UnknownHostException;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.security.MessageDigest;
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
@@ -57,6 +62,10 @@ public class JettraStorePlugin {
     private final List<JettraUser> users = new ArrayList<>();
     private final List<ServerNodeInfo> serverNodes = new CopyOnWriteArrayList<>();
     private final NodeLifecycleManager lifecycleManager = new NodeLifecycleManager();
+    private final CopyOnWriteArrayList<Runnable> clusterListeners = new CopyOnWriteArrayList<>();
+    private final HttpClient healthHttpClient = HttpClient.newBuilder()
+            .connectTimeout(Duration.ofMillis(300))
+            .build();
     private final Map<String, List<EngineBucketInfo>> databasesCatalog = new ConcurrentHashMap<>();
     private final List<PoliceSentinelInfo> policeSentinels = new ArrayList<>();
     private final List<PoliceIncident> policeIncidents = new CopyOnWriteArrayList<>();
@@ -520,9 +529,7 @@ public class JettraStorePlugin {
         if (node == null) return false;
         int effectiveTimeout = timeoutMs > 0 ? timeoutMs : this.healthCheckTimeoutMs;
         boolean wasOnline = node.isOnline();
-        boolean isPrimary = "PRIMARY".equalsIgnoreCase(node.getRole())
-                || "LEADER".equalsIgnoreCase(node.getRole())
-                || "node-01".equalsIgnoreCase(node.getId());
+        boolean isPrimary = isPrimaryRole(node.getRole());
 
         String host = node.getHost() != null ? node.getHost().trim() : "";
         int port = node.getPort();
@@ -548,6 +555,7 @@ public class JettraStorePlugin {
         if (lifecycleManager.isStopped(node.getId())) {
             node.setOnline(false);
             node.setLatencyMs(0.0f);
+            node.setRaftState("DISCONNECTED");
             node.setLastError("Nodo detenido mediante LifecycleManager (OFFLINE)");
             node.setLastCheckedEpochMs(now);
             return false;
@@ -559,6 +567,7 @@ public class JettraStorePlugin {
             if (address.isUnresolved()) {
                 node.setOnline(false);
                 node.setLatencyMs(0.0f);
+                node.setRaftState("DISCONNECTED");
                 node.setLastError("No se pudo resolver el host: " + host);
                 node.setLastCheckedEpochMs(now);
                 return false;
@@ -571,8 +580,12 @@ public class JettraStorePlugin {
                 node.setLastError(null);
                 node.setLatencyMs(Math.max(0.08f, ping));
                 node.setLastCheckedEpochMs(now);
+                boolean syncedViaRest = probeRestHealthRole(node, host, port, effectiveTimeout);
+                if (!syncedViaRest) {
+                    node.setRaftState(isPrimaryRole(node.getRole()) ? "LEADER" : "FOLLOWER");
+                }
                 if (!wasOnline) {
-                    String roleLabel = isPrimary ? "PRIMARY" : node.getRole();
+                    String roleLabel = isPrimaryRole(node.getRole()) ? "PRIMARY" : node.getRole();
                     logPoliceIncident("Raft Quorum K9",
                         "Nodo " + roleLabel + " detectado y conectado (ACTIVE): " + node.getName() + " (" + host + ":" + port + ")",
                         "OK", "Latido TCP restablecido (" + String.format(Locale.US, "%.2f ms", node.getLatencyMs()) + ")");
@@ -581,27 +594,32 @@ public class JettraStorePlugin {
                             io.jettra.store.cluster.ClusterLiveEvent.TYPE_NODE_ONLINE,
                             node.getId(), "cluster", "Nodo en estado ACTIVE", host + ":" + port);
                     } catch (Throwable ignored) {}
+                    notifyClusterChanged();
                 }
                 return true;
             }
         } catch (SocketTimeoutException ste) {
             node.setOnline(false);
             node.setLatencyMs(0.0f);
+            node.setRaftState("DISCONNECTED");
             node.setLastError("Timeout (" + effectiveTimeout + " ms) sin respuesta desde " + host + ":" + port);
             node.setLastCheckedEpochMs(now);
         } catch (ConnectException ce) {
             node.setOnline(false);
             node.setLatencyMs(0.0f);
+            node.setRaftState("DISCONNECTED");
             node.setLastError("Conexión rechazada: servicio inaccesible en " + host + ":" + port);
             node.setLastCheckedEpochMs(now);
         } catch (UnknownHostException uhe) {
             node.setOnline(false);
             node.setLatencyMs(0.0f);
+            node.setRaftState("DISCONNECTED");
             node.setLastError("Host desconocido: " + host);
             node.setLastCheckedEpochMs(now);
         } catch (Exception e) {
             node.setOnline(false);
             node.setLatencyMs(0.0f);
+            node.setRaftState("DISCONNECTED");
             node.setLastError("Error de red (" + e.getClass().getSimpleName() + "): " + e.getMessage());
             node.setLastCheckedEpochMs(now);
         }
@@ -617,8 +635,69 @@ public class JettraStorePlugin {
                     io.jettra.store.cluster.ClusterLiveEvent.TYPE_NODE_OFFLINE,
                     node.getId(), "cluster", "Nodo en estado INACTIVE: " + node.getLastError(), host + ":" + port);
             } catch (Throwable ignored) {}
+            notifyClusterChanged();
         }
         return false;
+    }
+
+    /**
+     * Consulta /api/v1/health del nodo JettraStore (misma fuente de consenso que JettraStoreShell show nodes)
+     * para sincronizar el rol Raft real (PRIMARY/LEADER vs SECONDARY/FOLLOWER).
+     */
+    private boolean probeRestHealthRole(ServerNodeInfo node, String host, int gRpcPort, int timeoutMs) {
+        List<Integer> candidates = new ArrayList<>();
+        if (node.getRestPort() > 0) {
+            candidates.add(node.getRestPort());
+        }
+        if (gRpcPort >= 9091 && gRpcPort <= 9099) {
+            int mapped = gRpcPort - 1010; // 9091->8081, 9092->8082, 9093->8083
+            if (!candidates.contains(mapped)) candidates.add(mapped);
+            if (gRpcPort == 9091 && !candidates.contains(8080)) candidates.add(8080);
+        } else if (host != null && host.toLowerCase(Locale.ROOT).startsWith("jettra-") && !candidates.contains(8080)) {
+            candidates.add(8080);
+        }
+
+        if (candidates.isEmpty()) {
+            return false;
+        }
+
+        int httpTimeoutMs = Math.max(150, Math.min(timeoutMs, 400));
+        for (int restPort : candidates) {
+            if (this.explorerBindPort > 0 && restPort == this.explorerBindPort && isLocalAddress(host)) {
+                continue;
+            }
+            try {
+                HttpRequest req = HttpRequest.newBuilder()
+                        .uri(URI.create("http://" + host + ":" + restPort + "/api/v1/health"))
+                        .timeout(Duration.ofMillis(httpTimeoutMs))
+                        .GET()
+                        .build();
+                HttpResponse<String> resp = healthHttpClient.send(req, HttpResponse.BodyHandlers.ofString());
+                if (resp.statusCode() == 200 && resp.body() != null && !resp.body().isBlank()) {
+                    var json = mapper.readTree(resp.body());
+                    String role = json.hasNonNull("role") ? json.get("role").asText().trim().toUpperCase(Locale.ROOT) : "";
+                    if (!role.isEmpty()) {
+                        boolean primary = isPrimaryRole(role);
+                        node.setRole(primary ? "PRIMARY" : "SECONDARY");
+                        node.setRaftState(primary ? "LEADER" : "FOLLOWER");
+                        node.setRestPort(restPort);
+                        if (json.hasNonNull("raft_term")) {
+                            node.setRaftTerm(json.get("raft_term").asLong());
+                        } else if (json.hasNonNull("raftTerm")) {
+                            node.setRaftTerm(json.get("raftTerm").asLong());
+                        }
+                        return true;
+                    }
+                }
+            } catch (Exception ignored) {
+                // Intentar siguiente puerto candidato o mantener fallback TCP
+            }
+        }
+        return false;
+    }
+
+    private static boolean isPrimaryRole(String role) {
+        return "PRIMARY".equalsIgnoreCase(role) || "LEADER".equalsIgnoreCase(role);
     }
 
     public void startClusterHeartbeatMonitor() {
@@ -728,6 +807,22 @@ public class JettraStorePlugin {
         }
     }
 
+    public void addClusterListener(Runnable listener) {
+        if (listener != null) clusterListeners.addIfAbsent(listener);
+    }
+
+    public void removeClusterListener(Runnable listener) {
+        if (listener != null) clusterListeners.remove(listener);
+    }
+
+    public void notifyClusterChanged() {
+        for (Runnable r : clusterListeners) {
+            try {
+                r.run();
+            } catch (Throwable ignored) {}
+        }
+    }
+
     public void handleClusterLiveEvent(io.jettra.store.cluster.ClusterLiveEvent event) {
         if (event == null) return;
         String type = event.type();
@@ -742,7 +837,10 @@ public class JettraStorePlugin {
                 if (!node.isActive()) {
                     node.setOnline(true);
                     node.setLastError(null);
+                    node.setRaftState(isPrimaryRole(node.getRole()) ? "LEADER" : "FOLLOWER");
                     this.lastRefreshEpochMs = System.currentTimeMillis();
+                    reconcilePrimaryLeadership();
+                    notifyClusterChanged();
                 }
             } else {
                 String details = event.details();
@@ -754,14 +852,42 @@ public class JettraStorePlugin {
                     try { port = Integer.parseInt(parts[1].trim()); } catch (Exception ignored) {}
                 }
                 addNode(srcNodeId, srcNodeId, "FOLLOWER", host, port, 2048);
+                notifyClusterChanged();
             }
         } else if (io.jettra.store.cluster.ClusterLiveEvent.TYPE_NODE_OFFLINE.equals(type)
                 || io.jettra.store.cluster.ClusterLiveEvent.TYPE_NODE_STOPPED.equals(type)) {
             ServerNodeInfo node = getNodeById(srcNodeId);
-            if (node != null && node.isActive()) {
+            if (node != null) {
+                boolean changed = node.isActive() || !"DISCONNECTED".equalsIgnoreCase(node.getRaftState());
                 node.setOnline(false);
+                node.setRaftState("DISCONNECTED");
                 node.setLastError(event.message() != null ? event.message() : "Desconexión notificada por el clúster");
                 this.lastRefreshEpochMs = System.currentTimeMillis();
+                if (reconcilePrimaryLeadership() || changed) {
+                    notifyClusterChanged();
+                }
+            }
+        } else if (io.jettra.store.cluster.ClusterLiveEvent.TYPE_LEADER_PROMOTED.equals(type)) {
+            ServerNodeInfo elected = getNodeById(srcNodeId);
+            if (elected != null) {
+                for (ServerNodeInfo n : serverNodes) {
+                    if (n == elected) {
+                        n.setOnline(true);
+                        n.setRole("PRIMARY");
+                        n.setRaftState("LEADER");
+                        n.setLastError(null);
+                    } else {
+                        if (isPrimaryRole(n.getRole())) {
+                            n.setRole("SECONDARY");
+                        }
+                        n.setRaftState(n.isActive() ? "FOLLOWER" : "DISCONNECTED");
+                    }
+                }
+                this.lastRefreshEpochMs = System.currentTimeMillis();
+                logPoliceIncident("Raft Quorum K9",
+                    "Nuevo nodo PRIMARY elegido por consenso Raft: " + elected.getId() + " (" + elected.getHost() + ":" + elected.getPort() + ")",
+                    "OK", event.message() != null ? event.message() : "Liderazgo transferido dinámicamente");
+                notifyClusterChanged();
             }
         }
     }
@@ -820,8 +946,107 @@ public class JettraStorePlugin {
                     } catch (Exception ignored) {}
                 }
             }
+            if (reconcilePrimaryLeadership()) {
+                notifyClusterChanged();
+            }
             this.lastRefreshEpochMs = System.currentTimeMillis();
         }
+    }
+
+    /**
+     * Reconcilia el rol PRIMARY/LEADER entre los nodos activos del quórum Raft,
+     * alineando exactamente la vista web con la lógica de JettraStoreShell show nodes.
+     */
+    public synchronized boolean reconcilePrimaryLeadership() {
+        if (serverNodes.isEmpty()) return false;
+
+        List<ServerNodeInfo> activeNodes = new ArrayList<>();
+        ServerNodeInfo activePrimary = null;
+        for (ServerNodeInfo n : serverNodes) {
+            if (n.isActive()) {
+                activeNodes.add(n);
+                if (activePrimary == null && isPrimaryRole(n.getRole())) {
+                    activePrimary = n;
+                }
+            }
+        }
+
+        boolean changed = false;
+        if (activeNodes.isEmpty()) {
+            // Todos los nodos están INACTIVE: mantener designación de PRIMARY para reflejar estado OFFLINE real
+            for (ServerNodeInfo n : serverNodes) {
+                if (!"DISCONNECTED".equalsIgnoreCase(n.getRaftState())) {
+                    n.setRaftState("DISCONNECTED");
+                    changed = true;
+                }
+            }
+            if (serverNodes.stream().noneMatch(n -> isPrimaryRole(n.getRole()))) {
+                ServerNodeInfo fallback = getNodeById("node-01");
+                if (fallback == null) fallback = serverNodes.get(0);
+                fallback.setRole("PRIMARY");
+                changed = true;
+            }
+            return changed;
+        }
+
+        if (activePrimary == null) {
+            for (ServerNodeInfo n : activeNodes) {
+                if (!"EDGE".equalsIgnoreCase(n.getRole())) {
+                    activePrimary = n;
+                    break;
+                }
+            }
+            if (activePrimary == null) {
+                activePrimary = activeNodes.get(0);
+            }
+        }
+
+        for (ServerNodeInfo n : serverNodes) {
+            if (n == activePrimary) {
+                if (!isPrimaryRole(n.getRole())) {
+                    n.setRole("PRIMARY");
+                    changed = true;
+                    logPoliceIncident("Raft Quorum K9",
+                        "Liderazgo Raft promovido a " + n.getId() + " (" + n.getHost() + ":" + n.getPort() + ")",
+                        "OK", "Reconciliación dinámica del quórum");
+                }
+                if (!"LEADER".equalsIgnoreCase(n.getRaftState())) {
+                    n.setRaftState("LEADER");
+                    changed = true;
+                }
+            } else {
+                String expectedRole = "EDGE".equalsIgnoreCase(n.getRole()) ? "EDGE" : "SECONDARY";
+                String expectedRaft = n.isActive() ? "FOLLOWER" : "DISCONNECTED";
+                if (isPrimaryRole(n.getRole())) {
+                    n.setRole(expectedRole);
+                    changed = true;
+                }
+                if (!expectedRaft.equalsIgnoreCase(n.getRaftState())) {
+                    n.setRaftState(expectedRaft);
+                    changed = true;
+                }
+            }
+        }
+        return changed;
+    }
+
+    /**
+     * Devuelve el nodo PRIMARY vigente (priorizando el nodo activo con liderazgo Raft).
+     */
+    public ServerNodeInfo getPrimaryNode() {
+        for (ServerNodeInfo n : serverNodes) {
+            if (n.isActive() && isPrimaryRole(n.getRole())) {
+                return n;
+            }
+        }
+        for (ServerNodeInfo n : serverNodes) {
+            if (isPrimaryRole(n.getRole())) {
+                return n;
+            }
+        }
+        ServerNodeInfo node01 = getNodeById("node-01");
+        if (node01 != null) return node01;
+        return serverNodes.isEmpty() ? null : serverNodes.get(0);
     }
 
     public List<ServerNodeInfo> getServerNodes() {
@@ -892,6 +1117,11 @@ public class JettraStorePlugin {
             return new NodeLifecycleManager.ShutdownOutcome(false, false, "NONE", "Nodo no encontrado: " + id, 0);
         }
         NodeLifecycleManager.ShutdownOutcome outcome = lifecycleManager.shutdownNode(n);
+        if (outcome.offlineVerified() || !n.isOnline()) {
+            n.setRaftState("DISCONNECTED");
+            reconcilePrimaryLeadership();
+            notifyClusterChanged();
+        }
         this.lastRefreshEpochMs = System.currentTimeMillis();
         logPoliceIncident("Raft Quorum K9",
             "Apagado de nodo ejecutado [" + id + "]: " + outcome.mechanism(),
@@ -906,6 +1136,8 @@ public class JettraStorePlugin {
             return new NodeLifecycleManager.StartOutcome(false, false, "NONE", "Nodo no encontrado: " + id);
         }
         NodeLifecycleManager.StartOutcome outcome = lifecycleManager.startNode(n, this);
+        reconcilePrimaryLeadership();
+        notifyClusterChanged();
         this.lastRefreshEpochMs = System.currentTimeMillis();
         logPoliceIncident("Raft Quorum K9",
             "Reinicio / verificación de nodo [" + id + "]: " + (outcome.onlineVerified() ? "ONLINE" : "OFFLINE"),

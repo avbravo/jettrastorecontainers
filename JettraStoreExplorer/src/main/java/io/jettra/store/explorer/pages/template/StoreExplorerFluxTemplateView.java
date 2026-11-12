@@ -127,19 +127,17 @@ public class StoreExplorerFluxTemplateView extends FluxView {
         Row leftGroup = Row.of(hamburgerBtn, brandBadge, brandTitle);
         leftGroup.modifier(new Modifier().style("display: flex; align-items: center; gap: 0.75rem;"));
 
-        // Estado del nodo PRIMARY y réplicas en vivo
-        ServerNodeInfo primaryNode = plugin.getServerNodes().stream()
-                .filter(n -> "PRIMARY".equalsIgnoreCase(n.getRole()) || "LEADER".equalsIgnoreCase(n.getRole()) || "node-01".equalsIgnoreCase(n.getId()))
-                .findFirst()
-                .orElse(null);
+        // Estado del nodo PRIMARY y réplicas en vivo (alineado con consenso Raft)
+        ServerNodeInfo primaryNode = plugin.getPrimaryNode();
         boolean primaryOnline = primaryNode != null && primaryNode.isOnline();
         long offlineSecondaries = plugin.getServerNodes().stream()
                 .filter(n -> n != primaryNode && !n.isOnline())
                 .count();
 
+        String primaryNodeIdLabel = primaryNode != null ? primaryNode.getId() : "N/A";
         String primaryTooltip = primaryOnline
-                ? "Nodo maestro PRIMARY en línea y receptivo (" + (primaryNode != null ? primaryNode.getHost() + ":" + primaryNode.getPort() : "") + ")"
-                : "¡ALERTA! Nodo maestro PRIMARY desconectado (OFFLINE)" + (primaryNode != null && primaryNode.getLastError() != null ? " - " + primaryNode.getLastError() : "");
+                ? "Nodo maestro PRIMARY (" + primaryNodeIdLabel + ") en línea y receptivo (" + (primaryNode != null ? primaryNode.getHost() + ":" + primaryNode.getPort() : "") + ")"
+                : "¡ALERTA! Nodo maestro PRIMARY (" + primaryNodeIdLabel + ") desconectado (OFFLINE)" + (primaryNode != null && primaryNode.getLastError() != null ? " - " + primaryNode.getLastError() : "");
 
         Link primaryStatusBadge = Link.of(
                 "/cluster",
@@ -148,13 +146,22 @@ public class StoreExplorerFluxTemplateView extends FluxView {
         primaryStatusBadge.id("topbar-primary-status");
         primaryStatusBadge.modifier(new Modifier()
                 .attribute("data-online", String.valueOf(primaryOnline))
+                .attribute("data-primary-id", primaryNodeIdLabel)
                 .attribute("title", primaryTooltip)
                 .style(primaryOnline
                         ? "text-decoration:none; font-size:0.75rem; font-weight:700; padding:0.32rem 0.65rem; border-radius:9999px; display:inline-flex; align-items:center; gap:0.3rem; background:rgba(16,185,129,0.18); border:1px solid #10b981; color:#34d399;"
                         : "text-decoration:none; font-size:0.75rem; font-weight:800; padding:0.32rem 0.65rem; border-radius:9999px; display:inline-flex; align-items:center; gap:0.3rem; background:rgba(239,68,68,0.25); border:1px solid #ef4444; color:#ef4444;"));
 
+        Link primaryNodeChip = Link.of("/cluster", "[" + primaryNodeIdLabel + "]");
+        primaryNodeChip.id("topbar-primary-node");
+        primaryNodeChip.modifier(new Modifier()
+                .cssClass("hide-mobile")
+                .attribute("title", "Nodo líder PRIMARY vigente por consenso Raft")
+                .style("text-decoration:none; font-size:0.72rem; font-weight:700; padding:0.28rem 0.55rem; border-radius:9999px; display:inline-flex; align-items:center; background:rgba(255,215,0,0.14); border:1px solid #ffd700; color:#ffd700;"));
+
         List<Widget> rightItems = new ArrayList<>();
         rightItems.add(primaryStatusBadge);
+        rightItems.add(primaryNodeChip);
 
         if (offlineSecondaries > 0) {
             Link secBadge = Link.of("/cluster", "⚠️ " + offlineSecondaries + " RÉPLICAS OFFLINE");
@@ -868,6 +875,43 @@ public class StoreExplorerFluxTemplateView extends FluxView {
               updateThemeButtonUI(saved);
 
               let lastClusterSig = null;
+              function applyTopbarClusterData(data) {
+                if (!data) return;
+                const badge = document.getElementById('topbar-primary-status');
+                if (badge) {
+                  const curr = String(Boolean(data.primaryOnline));
+                  badge.setAttribute('data-online', curr);
+                  if (data.primaryNodeId) {
+                    badge.setAttribute('data-primary-id', data.primaryNodeId);
+                    badge.setAttribute('title', data.primaryOnline
+                      ? ('Nodo maestro PRIMARY (' + data.primaryNodeId + ') ONLINE')
+                      : ('¡ALERTA! Nodo maestro PRIMARY (' + data.primaryNodeId + ') OFFLINE'));
+                  }
+                  if (data.primaryOnline) {
+                    badge.textContent = '● PRIMARY: ONLINE';
+                    badge.style.background = 'rgba(16,185,129,0.18)';
+                    badge.style.borderColor = '#10b981';
+                    badge.style.color = '#34d399';
+                  } else {
+                    badge.textContent = '○ PRIMARY: OFFLINE';
+                    badge.style.background = 'rgba(239,68,68,0.25)';
+                    badge.style.borderColor = '#ef4444';
+                    badge.style.color = '#ef4444';
+                  }
+                }
+                const nodeChip = document.getElementById('topbar-primary-node');
+                if (nodeChip && data.primaryNodeId) {
+                  nodeChip.textContent = '[' + data.primaryNodeId + ']';
+                }
+                const sig = (data.primaryNodeId || '') + ':' + (data.nodes || []).map(n => n.id + ':' + n.role + ':' + n.online).join('|');
+                if (lastClusterSig !== sig) {
+                  lastClusterSig = sig;
+                  if (typeof window.applyClusterLiveData === 'function') {
+                    window.applyClusterLiveData(data);
+                  }
+                }
+              }
+
               async function pollClusterHealth() {
                 try {
                   const res = await fetch('/api/cluster/status', { cache: 'no-store' });
@@ -877,37 +921,7 @@ public class StoreExplorerFluxTemplateView extends FluxView {
                   }
                   if (!res.ok) return;
                   const data = await res.json();
-                  const badge = document.getElementById('topbar-primary-status');
-                  if (badge) {
-                    const prev = badge.getAttribute('data-online');
-                    const curr = String(Boolean(data.primaryOnline));
-                    if (prev !== curr) {
-                      badge.setAttribute('data-online', curr);
-                      if (data.primaryOnline) {
-                        badge.textContent = '● PRIMARY: ONLINE';
-                        badge.style.background = 'rgba(16,185,129,0.18)';
-                        badge.style.borderColor = '#10b981';
-                        badge.style.color = '#34d399';
-                      } else {
-                        badge.textContent = '○ PRIMARY: OFFLINE';
-                        badge.style.background = 'rgba(239,68,68,0.25)';
-                        badge.style.borderColor = '#ef4444';
-                        badge.style.color = '#ef4444';
-                      }
-                    }
-                  }
-                  const sig = (data.nodes || []).map(n => n.id + ':' + n.online).join('|');
-                  if (lastClusterSig === null) {
-                    lastClusterSig = sig;
-                  } else if (lastClusterSig !== sig) {
-                    lastClusterSig = sig;
-                    const path = window.location.pathname || '';
-                    const active = document.activeElement;
-                    const isTyping = active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.tagName === 'SELECT');
-                    if ((path === '/cluster' || path === '/dashboard') && !isTyping) {
-                      window.location.reload();
-                    }
-                  }
+                  applyTopbarClusterData(data);
                 } catch (e) {
                   const badge = document.getElementById('topbar-primary-status');
                   if (badge) {
@@ -918,8 +932,19 @@ public class StoreExplorerFluxTemplateView extends FluxView {
                   }
                 }
               }
+
+              if (typeof EventSource !== 'undefined') {
+                try {
+                  const sse = new EventSource('/api/cluster/events');
+                  sse.addEventListener('cluster_status', function(evt) {
+                    try {
+                      applyTopbarClusterData(JSON.parse(evt.data));
+                    } catch (ignored) {}
+                  });
+                } catch (ignored) {}
+              }
               pollClusterHealth();
-              setInterval(pollClusterHealth, 5000);
+              setInterval(pollClusterHealth, 3000);
             });
           </script>
         """;

@@ -370,9 +370,10 @@ public class RecordExplorerFluxView extends FluxView {
 
         for (EngineRecordVersion v : rec.getVersionHistory()) {
             boolean isCurrent = (v.getVersion() == rec.getVersion());
-            String borderColor = isCurrent ? "#10b981" : "var(--border-subtle)";
-            String badgeBg = isCurrent ? "rgba(16, 185, 129, 0.2)" : "rgba(255, 255, 255, 0.08)";
-            String badgeColor = isCurrent ? "#10b981" : "#94a3b8";
+            boolean isRootV1 = (v.getVersion() == 1L);
+            String borderColor = isCurrent ? "#10b981" : (isRootV1 ? "#38bdf8" : "var(--border-subtle)");
+            String badgeBg = isCurrent ? "rgba(16, 185, 129, 0.2)" : (isRootV1 ? "rgba(56, 189, 248, 0.16)" : "rgba(255, 255, 255, 0.08)");
+            String badgeColor = isCurrent ? "#10b981" : (isRootV1 ? "#38bdf8" : "#94a3b8");
 
             sb.append("<div style='border: 1px solid ").append(borderColor).append("; background: var(--bg-card); border-radius: 8px; padding: 1rem; position: relative;'>");
             sb.append("<div style='display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;'>");
@@ -380,6 +381,9 @@ public class RecordExplorerFluxView extends FluxView {
             sb.append("    <span style='background: ").append(badgeBg).append("; color: ").append(badgeColor).append("; font-weight: 800; font-size: 0.85rem; padding: 2px 8px; border-radius: 6px; border: 1px solid ").append(badgeColor).append(";'>v").append(v.getVersion()).append("</span>");
             if (isCurrent) {
                 sb.append("    <span style='color: #10b981; font-size: 0.75rem; font-weight: 700;'>[VERSIÓN ACTIVA EN MEMORIA]</span>");
+            }
+            if (isRootV1) {
+                sb.append("    <span style='color: #38bdf8; font-size: 0.72rem; font-weight: 700;'>[VERSIÓN INICIAL v1]</span>");
             }
             sb.append("    <strong style='color: var(--text-main); font-size: 0.92rem;'>").append(escapeHtml(v.getSummary())).append("</strong>");
             sb.append("  </div>");

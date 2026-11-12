@@ -54,36 +54,33 @@ public class ClusterFluxView extends FluxView {
             rootChildren.add(flash);
         }
 
-        // Verificación y Detección de Estado INACTIVE para nodo PRIMARY y Réplicas Secundarias
-        ServerNodeInfo primaryNode = nodes.stream()
-                .filter(n -> "PRIMARY".equalsIgnoreCase(n.getRole()) || "LEADER".equalsIgnoreCase(n.getRole()) || "node-01".equalsIgnoreCase(n.getId()))
-                .findFirst()
-                .orElse(null);
+        // Verificación y Detección de Estado INACTIVE para nodo PRIMARY y Réplicas Secundarias (dinámico según consenso Raft)
+        ServerNodeInfo primaryNode = plugin.getPrimaryNode();
 
         boolean primaryActive = primaryNode != null && primaryNode.isActive();
         List<ServerNodeInfo> inactiveOthers = nodes.stream()
                 .filter(n -> n != primaryNode && !n.isActive())
                 .toList();
 
-        // Banner de Alerta Crítica si el nodo PRIMARY está INACTIVE
+        // Banner de Alerta Crítica si el nodo PRIMARY está INACTIVE (con placeholder reactivo si está oculto)
         if (!primaryActive) {
-            String primaryDesc = primaryNode != null 
+            String primaryDesc = primaryNode != null
                 ? (primaryNode.getName() + " (" + primaryNode.getHost() + ":" + primaryNode.getPort() + ")")
                 : "node-01";
             String errorDetail = (primaryNode != null && primaryNode.getLastError() != null && !primaryNode.getLastError().isBlank())
                 ? "<br/><span style=\"font-size:0.8rem; color:#fecaca;\"><strong>Diagnóstico:</strong> " + escapeHtml(primaryNode.getLastError()) + "</span>"
                 : "";
             Div primaryInactiveAlert = Div.of(
-                RawHtml.of("<div id=\"banner-primary-inactive\" style=\"display:flex; align-items:flex-start; gap:0.85rem;\">" +
+                RawHtml.of("<div id=\"banner-primary-inactive\" style=\"display:flex; align-items:flex-start; gap:0.85rem; background: rgba(239, 68, 68, 0.18); border: 2px solid #ef4444; border-radius: 8px; padding: 1rem 1.25rem; margin-bottom: 1.25rem; box-shadow: 0 4px 14px rgba(239, 68, 68, 0.25);\">" +
                            "<span style=\"font-size:1.75rem; line-height:1;\">🚨</span>" +
                            "<div>" +
                            "<div style=\"font-size:1.05rem; font-weight:800; color:#ef4444; letter-spacing:0.01em;\">ESTADO INACTIVE • ESTADO OFFLINE: NODO PRIMARY DESCONECTADO</div>" +
                            "<div style=\"font-size:0.85rem; color:#fca5a5; margin-top:3px;\">El nodo maestro principal <strong>" + escapeHtml(primaryDesc) + "</strong> no responde a los latidos TCP. Las transacciones de escritura distribuida y el quórum Raft se encuentran suspendidos. Verifique el socket y los parámetros en <code>microprofile-config.properties</code>." + errorDetail + "</div>" +
                            "</div></div>")
             );
-            primaryInactiveAlert.modifier(new Modifier()
-                    .style("background: rgba(239, 68, 68, 0.18); border: 2px solid #ef4444; border-radius: 8px; padding: 1rem 1.25rem; margin-bottom: 1.25rem; box-shadow: 0 4px 14px rgba(239, 68, 68, 0.25);"));
             rootChildren.add(primaryInactiveAlert);
+        } else {
+            rootChildren.add(Div.of(RawHtml.of("<div id=\"banner-primary-inactive\" style=\"display:none; align-items:flex-start; gap:0.85rem; background: rgba(239, 68, 68, 0.18); border: 2px solid #ef4444; border-radius: 8px; padding: 1rem 1.25rem; margin-bottom: 1.25rem; box-shadow: 0 4px 14px rgba(239, 68, 68, 0.25);\"></div>")));
         }
 
         // Banner de Advertencia si hay Nodos Secundarios INACTIVE
@@ -95,29 +92,29 @@ public class ClusterFluxView extends FluxView {
                 inactiveNames.append("<strong>").append(off.getName()).append("</strong> (").append(off.getHost()).append(":").append(off.getPort()).append(")");
             }
             Div othersInactiveAlert = Div.of(
-                RawHtml.of("<div id=\"banner-secondaries-inactive\" style=\"display:flex; align-items:flex-start; gap:0.85rem;\">" +
+                RawHtml.of("<div id=\"banner-secondaries-inactive\" style=\"display:flex; align-items:flex-start; gap:0.85rem; background: rgba(245, 158, 11, 0.15); border: 1px solid #f59e0b; border-radius: 8px; padding: 0.85rem 1.15rem; margin-bottom: 1.25rem;\">" +
                            "<span style=\"font-size:1.6rem; line-height:1;\">⚠️</span>" +
                            "<div>" +
                            "<div style=\"font-size:0.95rem; font-weight:800; color:#f59e0b;\">ESTADO INACTIVE • ESTADO OFFLINE: NODOS SECUNDARIOS DESCONECTADOS (" + inactiveOthers.size() + ")</div>" +
                            "<div style=\"font-size:0.82rem; color:#fde68a; margin-top:3px;\">Los siguientes nodos réplica no responden en su puerto de replicación: " + inactiveNames.toString() + ". El clúster opera con quórum reducido.</div>" +
                            "</div></div>")
             );
-            othersInactiveAlert.modifier(new Modifier()
-                    .style("background: rgba(245, 158, 11, 0.15); border: 1px solid #f59e0b; border-radius: 8px; padding: 0.85rem 1.15rem; margin-bottom: 1.25rem;"));
             rootChildren.add(othersInactiveAlert);
+        } else {
+            rootChildren.add(Div.of(RawHtml.of("<div id=\"banner-secondaries-inactive\" style=\"display:none; align-items:flex-start; gap:0.85rem; background: rgba(245, 158, 11, 0.15); border: 1px solid #f59e0b; border-radius: 8px; padding: 0.85rem 1.15rem; margin-bottom: 1.25rem;\"></div>")));
         }
 
         // Banner Informativo si todos los nodos están ACTIVE
         if (primaryActive && inactiveOthers.isEmpty()) {
             Div allActiveBanner = Div.of(
-                RawHtml.of("<div id=\"banner-all-active\" style=\"display:flex; align-items:center; gap:0.6rem;\">" +
+                RawHtml.of("<div id=\"banner-all-active\" style=\"display:flex; align-items:center; gap:0.6rem; background: rgba(16, 185, 129, 0.12); border: 1px solid rgba(16, 185, 129, 0.4); border-radius: 8px; padding: 0.75rem 1rem; margin-bottom: 1.25rem;\">" +
                            "<span style=\"font-size:1.2rem;\">✅</span>" +
                            "<span style=\"font-size:0.85rem; color:#34d399; font-weight:600;\">Todos los nodos del clúster (incluyendo PRIMARY y réplicas secundarias) se encuentran en estado ACTIVE con latencias normales y quórum óptimo.</span>" +
                            "</div>")
             );
-            allActiveBanner.modifier(new Modifier()
-                    .style("background: rgba(16, 185, 129, 0.12); border: 1px solid rgba(16, 185, 129, 0.4); border-radius: 8px; padding: 0.75rem 1rem; margin-bottom: 1.25rem;"));
             rootChildren.add(allActiveBanner);
+        } else {
+            rootChildren.add(Div.of(RawHtml.of("<div id=\"banner-all-active\" style=\"display:none; align-items:center; gap:0.6rem; background: rgba(16, 185, 129, 0.12); border: 1px solid rgba(16, 185, 129, 0.4); border-radius: 8px; padding: 0.75rem 1rem; margin-bottom: 1.25rem;\"><span style=\"font-size:1.2rem;\">✅</span><span style=\"font-size:0.85rem; color:#34d399; font-weight:600;\">Todos los nodos del clúster (incluyendo PRIMARY y réplicas secundarias) se encuentran en estado ACTIVE con latencias normales y quórum óptimo.</span></div>")));
         }
 
         // 2. Tarjetas KPI Superiores
@@ -219,7 +216,7 @@ public class ClusterFluxView extends FluxView {
     }
 
     private Div buildNodeCard(ServerNodeInfo node) {
-        boolean isPrimary = "PRIMARY".equalsIgnoreCase(node.getRole()) || "LEADER".equalsIgnoreCase(node.getRole()) || "node-01".equalsIgnoreCase(node.getId());
+        boolean isPrimary = "PRIMARY".equalsIgnoreCase(node.getRole()) || "LEADER".equalsIgnoreCase(node.getRole());
         String roleDisplay = isPrimary ? "PRIMARY" : node.getRole();
         String roleColor = isPrimary ? "#ffd700" : "#38bdf8";
         boolean isActive = node.isActive();
@@ -231,7 +228,9 @@ public class ClusterFluxView extends FluxView {
         nodeTitle.modifier(new Modifier().style("margin: 0; font-size: 1.1rem; color: #ffffff;"));
 
         Badge roleBadge = Badge.of(roleDisplay);
-        roleBadge.modifier(new Modifier().style("background: rgba(0, 212, 255, 0.15); border: 1px solid " + roleColor + "; color: " + roleColor + "; font-size: 0.72rem; padding: 0.15rem 0.5rem; border-radius: 9999px; font-weight: 700;"));
+        roleBadge.modifier(new Modifier()
+            .attribute("id", "node-role-badge-" + node.getId())
+            .style("background: rgba(0, 212, 255, 0.15); border: 1px solid " + roleColor + "; color: " + roleColor + "; font-size: 0.72rem; padding: 0.15rem 0.5rem; border-radius: 9999px; font-weight: 700;"));
 
         Badge statusBadge = Badge.of(statusLabel);
         statusBadge.modifier(new Modifier()
@@ -284,6 +283,7 @@ public class ClusterFluxView extends FluxView {
             : JettraButton.of("Encender Nodo").severity(JettraButton.Severity.PRIMARY);
         lifecycleBtn.modifier(new Modifier()
             .attribute("id", "node-lifecycle-btn-" + node.getId())
+            .attribute("data-node-name", node.getName())
             .cssClass(isActive ? "app-btn-warning" : "app-btn-primary")
             .attribute("onclick", isActive
                 ? "shutdownNode('" + jsSafeId + "', '" + jsSafeName + "', " + isPrimary + ")"
@@ -323,7 +323,7 @@ public class ClusterFluxView extends FluxView {
         table.append("<tbody>");
 
         for (ServerNodeInfo n : nodes) {
-            boolean isPrimary = "PRIMARY".equalsIgnoreCase(n.getRole()) || "LEADER".equalsIgnoreCase(n.getRole()) || "node-01".equalsIgnoreCase(n.getId());
+            boolean isPrimary = "PRIMARY".equalsIgnoreCase(n.getRole()) || "LEADER".equalsIgnoreCase(n.getRole());
             boolean active = n.isActive();
             String roleBadge = isPrimary 
                 ? "<span style='color:#ffd700; font-weight:700;'>PRIMARY (Leader)</span>"
@@ -344,10 +344,10 @@ public class ClusterFluxView extends FluxView {
             table.append("<tr id='matrix-row-").append(escapeHtml(n.getId())).append("'>");
             table.append("<td><strong>").append(escapeHtml(n.getName())).append("</strong></td>");
             table.append("<td>").append(escapeHtml(n.getHost())).append(":").append(n.getPort()).append("</td>");
-            table.append("<td>").append(roleBadge).append("</td>");
+            table.append("<td id='matrix-role-").append(escapeHtml(n.getId())).append("'>").append(roleBadge).append("</td>");
             table.append("<td id='matrix-status-").append(escapeHtml(n.getId())).append("'>").append(statusBadge).append("</td>");
             table.append("<td id='matrix-latency-").append(escapeHtml(n.getId())).append("'>").append(latencyCol).append("</td>");
-            table.append("<td>").append(walCol).append("</td>");
+            table.append("<td id='matrix-wal-").append(escapeHtml(n.getId())).append("'>").append(walCol).append("</td>");
             table.append("</tr>");
         }
 
@@ -372,7 +372,14 @@ public class ClusterFluxView extends FluxView {
                 t._timer = setTimeout(function() { t.style.display = 'none'; }, 4500);
             }
 
-            function updateNodeStatusUI(nodeId, role, isPrimary, isActive, latencyMs, errorReason) {
+            function updateNodeStatusUI(nodeId, role, isPrimary, isActive, latencyMs, raftTerm, errorReason) {
+                const roleBadge = document.getElementById('node-role-badge-' + nodeId);
+                if (roleBadge) {
+                    const roleColor = isPrimary ? '#ffd700' : '#38bdf8';
+                    roleBadge.textContent = isPrimary ? 'PRIMARY' : (role || 'SECONDARY');
+                    roleBadge.style.borderColor = roleColor;
+                    roleBadge.style.color = roleColor;
+                }
                 const badge = document.getElementById('node-badge-' + nodeId);
                 if (badge) {
                     badge.textContent = isActive ? ('● ACTIVE (' + (latencyMs > 0 ? latencyMs.toFixed(1) : '0.5') + ' ms)') : '○ INACTIVE';
@@ -384,9 +391,9 @@ public class ClusterFluxView extends FluxView {
                 if (box) {
                     if (isActive) {
                         box.innerHTML = '<div style="background:rgba(16, 185, 129, 0.15); border:1px solid #10b981; border-radius:6px; padding:0.4rem 0.6rem; margin-bottom:0.75rem; font-size:0.8rem; color:#34d399; font-weight:700; display:flex; align-items:center; justify-content:space-between;">'
-                            + '<span>🟢 ESTADO: ACTIVE</span><span style="font-weight:400; font-size:0.75rem;">Latencia: ' + (latencyMs > 0 ? latencyMs.toFixed(2) : '0.10') + ' ms</span></div>';
+                            + '<span>🟢 ESTADO: ACTIVE • 🟢 ESTADO: ONLINE</span><span style="font-weight:400; font-size:0.75rem;">Latencia: ' + (latencyMs > 0 ? latencyMs.toFixed(2) : '0.10') + ' ms</span></div>';
                     } else {
-                        const roleMsg = isPrimary ? '🔴 NODO PRIMARY INACTIVE (Inaccesible)' : '🔴 ESTADO: INACTIVE (Inaccesible)';
+                        const roleMsg = isPrimary ? '🔴 NODO PRIMARY INACTIVE • 🔴 NODO PRIMARY OFFLINE (Inaccesible)' : '🔴 ESTADO: INACTIVE • 🔴 ESTADO: OFFLINE (Inaccesible)';
                         box.innerHTML = '<div style="background:rgba(239, 68, 68, 0.2); border:1px solid #ef4444; border-radius:6px; padding:0.45rem 0.65rem; margin-bottom:0.75rem; font-size:0.8rem; color:#ef4444; font-weight:800; display:flex; flex-direction:column; gap:2px;">'
                             + '<div style="display:flex; align-items:center; justify-content:space-between;"><span>' + roleMsg + '</span></div>'
                             + '<span style="font-weight:500; font-size:0.72rem; color:#fca5a5;">' + (errorReason || 'Sin respuesta a latidos') + '</span></div>';
@@ -401,82 +408,132 @@ public class ClusterFluxView extends FluxView {
                     btn.textContent = isActive ? 'Apagar Nodo' : 'Encender Nodo';
                     btn.className = isActive ? 'app-btn-warning' : 'app-btn-primary';
                     btn.disabled = false;
+                    const safeName = btn.getAttribute('data-node-name') || nodeId;
+                    btn.onclick = function() {
+                        if (isActive) {
+                            shutdownNode(nodeId, safeName, isPrimary);
+                        } else {
+                            startNode(nodeId, safeName, isPrimary);
+                        }
+                    };
+                }
+                const matrixRoleCell = document.getElementById('matrix-role-' + nodeId);
+                if (matrixRoleCell) {
+                    matrixRoleCell.innerHTML = isPrimary
+                        ? "<span style='color:#ffd700; font-weight:700;'>PRIMARY (Leader)</span>"
+                        : "<span style='color:#38bdf8;'>FOLLOWER (Sync)</span>";
                 }
                 const matrixCell = document.getElementById('matrix-status-' + nodeId);
                 if (matrixCell) {
                     matrixCell.innerHTML = isActive
                         ? '<span style="color:#10b981; font-weight:700; background:rgba(16,185,129,0.15); padding:2px 8px; border-radius:4px; border:1px solid #10b981;">● ACTIVE (' + (latencyMs > 0 ? latencyMs.toFixed(2) : '0.10') + ' ms)</span>'
-                        : '<span style="color:#ef4444; font-weight:800; background:rgba(239,68,68,0.22); padding:2px 8px; border-radius:4px; border:1px solid #ef4444;">○ INACTIVE (' + (isPrimary ? 'NODO PRIMARY CAÍDO' : 'Inaccesible') + ')</span>';
+                        : '<span style="color:#ef4444; font-weight:800; background:rgba(239,68,68,0.22); padding:2px 8px; border-radius:4px; border:1px solid #ef4444;">○ INACTIVE • ○ OFFLINE (' + (isPrimary ? 'NODO PRIMARY CAÍDO' : 'Inaccesible') + ')</span>';
                 }
                 const latCell = document.getElementById('matrix-latency-' + nodeId);
                 if (latCell) {
                     latCell.innerHTML = isActive ? ((latencyMs > 0 ? latencyMs.toFixed(2) : '0.10') + ' ms') : '<span style="color:#ef4444; font-size:0.8rem;">Sin respuesta</span>';
                 }
+                const walCell = document.getElementById('matrix-wal-' + nodeId);
+                if (walCell) {
+                    const termVal = (typeof raftTerm !== 'undefined' && raftTerm !== null) ? raftTerm : 0;
+                    walCell.innerHTML = isActive
+                        ? "<span style='color:#10b981;'>COMMITTED (Raft Term #" + termVal + ")</span>"
+                        : "<span style='color:#ef4444; font-weight:700;'>DISCONNECTED (Sin latido)</span>";
+                }
             }
 
-            // Sondeo reactivo en vivo de salud y descubrimiento del clúster (cada 2.5s)
             let lastClusterNodeCount = null;
+            let lastPrimaryNodeId = null;
+            function applyClusterLiveData(data) {
+                if (!data || !Array.isArray(data.nodes)) return;
+
+                if (lastClusterNodeCount !== null && lastClusterNodeCount !== data.nodes.length) {
+                    lastClusterNodeCount = data.nodes.length;
+                    showLifecycleToast('🔄 Cambio en la topología del clúster detectado. Actualizando...', '#00d4ff');
+                    setTimeout(function() { window.location.reload(); }, 400);
+                    return;
+                }
+                lastClusterNodeCount = data.nodes.length;
+
+                if (lastPrimaryNodeId && data.primaryNodeId && lastPrimaryNodeId !== data.primaryNodeId && data.primaryActive) {
+                    showLifecycleToast('👑 Consenso Raft: Nuevo nodo PRIMARY elegido → <strong>' + data.primaryNodeId + '</strong>', '#ffd700');
+                }
+                if (data.primaryNodeId) {
+                    lastPrimaryNodeId = data.primaryNodeId;
+                }
+
+                let anyPrimaryInactive = false;
+                let anySecondaryInactive = false;
+                let inactivePrimaryNode = null;
+                let inactiveSecondaries = [];
+
+                data.nodes.forEach(function(node) {
+                    const isPrimary = (node.role === 'PRIMARY' || node.role === 'LEADER');
+                    const isActive = (node.status === 'ACTIVE' || node.active === true || node.online === true);
+                    if (!isActive) {
+                        if (isPrimary) {
+                            anyPrimaryInactive = true;
+                            inactivePrimaryNode = node;
+                        } else {
+                            anySecondaryInactive = true;
+                            inactiveSecondaries.push(node);
+                        }
+                    }
+                    updateNodeStatusUI(node.id, node.role, isPrimary, isActive, node.latencyMs || 0, node.raftTerm || 0, node.lastError);
+                });
+
+                const kpiEl = document.getElementById('kpi-active-nodes-val');
+                if (kpiEl && typeof data.activeCount !== 'undefined') {
+                    kpiEl.textContent = data.activeCount + ' / ' + data.totalCount;
+                }
+
+                const primaryBanner = document.getElementById('banner-primary-inactive');
+                if (primaryBanner) {
+                    if (anyPrimaryInactive) {
+                        const desc = inactivePrimaryNode ? (inactivePrimaryNode.name + ' (' + inactivePrimaryNode.host + ':' + inactivePrimaryNode.port + ')') : 'PRIMARY';
+                        const errHtml = (inactivePrimaryNode && inactivePrimaryNode.lastError) ? '<br/><span style="font-size:0.8rem; color:#fecaca;"><strong>Diagnóstico:</strong> ' + inactivePrimaryNode.lastError + '</span>' : '';
+                        primaryBanner.innerHTML = '<span style="font-size:1.75rem; line-height:1;">🚨</span><div><div style="font-size:1.05rem; font-weight:800; color:#ef4444; letter-spacing:0.01em;">ESTADO INACTIVE • ESTADO OFFLINE: NODO PRIMARY DESCONECTADO</div><div style="font-size:0.85rem; color:#fca5a5; margin-top:3px;">El nodo maestro principal <strong>' + desc + '</strong> no responde a los latidos TCP. Las transacciones de escritura distribuida y el quórum Raft se encuentran suspendidos.' + errHtml + '</div></div>';
+                        primaryBanner.style.display = 'flex';
+                    } else {
+                        primaryBanner.style.display = 'none';
+                    }
+                }
+                const secondaryBanner = document.getElementById('banner-secondaries-inactive');
+                if (secondaryBanner) {
+                    if (anySecondaryInactive) {
+                        const names = inactiveSecondaries.map(function(n) { return '<strong>' + n.name + '</strong> (' + n.host + ':' + n.port + ')'; }).join(', ');
+                        secondaryBanner.innerHTML = '<span style="font-size:1.6rem; line-height:1;">⚠️</span><div><div style="font-size:0.95rem; font-weight:800; color:#f59e0b;">ESTADO INACTIVE • ESTADO OFFLINE: NODOS SECUNDARIOS DESCONECTADOS (' + inactiveSecondaries.length + ')</div><div style="font-size:0.82rem; color:#fde68a; margin-top:3px;">Los siguientes nodos réplica no responden en su puerto de replicación: ' + names + '. El clúster opera con quórum reducido.</div></div>';
+                        secondaryBanner.style.display = 'flex';
+                    } else {
+                        secondaryBanner.style.display = 'none';
+                    }
+                }
+                const allActiveBanner = document.getElementById('banner-all-active');
+                if (allActiveBanner) {
+                    allActiveBanner.style.display = (!anyPrimaryInactive && !anySecondaryInactive) ? 'flex' : 'none';
+                }
+            }
+            window.applyClusterLiveData = applyClusterLiveData;
+
             async function pollClusterLiveStatus() {
                 try {
                     const resp = await fetch('/api/cluster/status', { cache: 'no-store' });
                     if (!resp.ok) return;
                     const data = await resp.json();
-                    if (!data || !Array.isArray(data.nodes)) return;
-
-                    // Si se descubrió un nuevo nodo o se expulsó alguno, recargar suavemente para renderizarlo
-                    if (lastClusterNodeCount !== null && lastClusterNodeCount !== data.nodes.length) {
-                        lastClusterNodeCount = data.nodes.length;
-                        showLifecycleToast('🔄 Cambio en la topología del clúster detectado. Actualizando...', '#00d4ff');
-                        setTimeout(function() { window.location.reload(); }, 400);
-                        return;
-                    }
-                    lastClusterNodeCount = data.nodes.length;
-
-                    // Actualizar cada nodo en tiempo real
-                    let anyPrimaryInactive = false;
-                    let anySecondaryInactive = false;
-
-                    data.nodes.forEach(function(node) {
-                        const isPrimary = (node.role === 'PRIMARY' || node.role === 'LEADER' || node.id === 'node-01');
-                        const isActive = (node.status === 'ACTIVE' || node.active === true || node.online === true);
-                        if (!isActive) {
-                            if (isPrimary) anyPrimaryInactive = true;
-                            else anySecondaryInactive = true;
-                        }
-                        updateNodeStatusUI(node.id, node.role, isPrimary, isActive, node.latencyMs || 0, node.lastError);
-                    });
-
-                    // Actualizar KPI
-                    const kpiEl = document.getElementById('kpi-active-nodes-val');
-                    if (kpiEl && typeof data.activeCount !== 'undefined') {
-                        kpiEl.textContent = data.activeCount + ' / ' + data.totalCount;
-                    }
-
-                    // Actualizar visibilidad de banners
-                    const primaryBanner = document.getElementById('banner-primary-inactive');
-                    if (primaryBanner) {
-                        primaryBanner.style.display = anyPrimaryInactive ? 'flex' : 'none';
-                    }
-                    const secondaryBanner = document.getElementById('banner-secondaries-inactive');
-                    if (secondaryBanner) {
-                        secondaryBanner.style.display = anySecondaryInactive ? 'flex' : 'none';
-                    }
-                    const allActiveBanner = document.getElementById('banner-all-active');
-                    if (allActiveBanner) {
-                        allActiveBanner.style.display = (!anyPrimaryInactive && !anySecondaryInactive) ? 'flex' : 'none';
-                    }
+                    applyClusterLiveData(data);
                 } catch (e) {
                     // Ignorar errores transitorios de polling
                 }
             }
 
-            // Iniciar sondeo continuo en segundo plano
-            setInterval(pollClusterLiveStatus, 2500);
+            // Sondeo continuo en segundo plano + sincronización SSE inmediata sin recargar la página
+            setInterval(pollClusterLiveStatus, 2000);
             window.pollClusterLiveStatus = pollClusterLiveStatus;
 
             async function shutdownNode(nodeId, nodeName, isPrimary) {
                 const btn = document.getElementById('node-lifecycle-btn-' + nodeId);
                 if (btn) {
+                    btn.setAttribute('data-node-name', nodeName);
                     btn.disabled = true;
                     btn.textContent = 'Apagando...';
                 }
@@ -488,11 +545,11 @@ public class ClusterFluxView extends FluxView {
                         body: JSON.stringify({ nodeId: nodeId })
                     });
                     const data = await resp.json();
-                    if (data && (data.status === 'INACTIVE' || data.status === 'OFFLINE' || data.offlineVerified)) {
-                        updateNodeStatusUI(nodeId, isPrimary ? 'PRIMARY' : 'FOLLOWER', isPrimary, false, 0, data.lastError || data.message);
-                        showLifecycleToast('🔴 <strong>' + nodeName + '</strong> pasó a estado <strong>INACTIVE</strong> (' + (data.mechanism || 'LifecycleManager') + ').', '#ef4444');
-                        pollClusterLiveStatus();
-                        setTimeout(function() { window.location.reload(); }, 600);
+                    if (data && (data.status === 'INACTIVE' || data.state === 'OFFLINE' || data.stopped || data.offlineVerified)) {
+                        updateNodeStatusUI(nodeId, data.role || (isPrimary ? 'PRIMARY' : 'SECONDARY'), isPrimary, false, 0, 0, data.lastError || data.message);
+                        const envHint = data.dockerContainer ? ('Docker [' + data.dockerContainer + ']') : (data.mechanism || 'LifecycleManager');
+                        showLifecycleToast('🔴 <strong>' + nodeName + '</strong> pasó a estado <strong>INACTIVE / OFFLINE</strong> (' + envHint + ').', '#ef4444');
+                        await pollClusterLiveStatus();
                     } else {
                         if (btn) { btn.disabled = false; btn.textContent = 'Apagar Nodo'; }
                         showLifecycleToast('⚠️ No se confirmó apagado de ' + nodeName, '#f59e0b');
@@ -506,6 +563,7 @@ public class ClusterFluxView extends FluxView {
             async function startNode(nodeId, nodeName, isPrimary) {
                 const btn = document.getElementById('node-lifecycle-btn-' + nodeId);
                 if (btn) {
+                    btn.setAttribute('data-node-name', nodeName);
                     btn.disabled = true;
                     btn.textContent = 'Verificando...';
                 }
@@ -518,10 +576,9 @@ public class ClusterFluxView extends FluxView {
                     });
                     const data = await resp.json();
                     const activeNow = data.active || data.online || (data.status === 'ACTIVE');
-                    updateNodeStatusUI(nodeId, isPrimary ? 'PRIMARY' : 'FOLLOWER', isPrimary, activeNow, 0.5, data.lastError || data.message);
+                    updateNodeStatusUI(nodeId, isPrimary ? 'PRIMARY' : 'SECONDARY', isPrimary, activeNow, 0.5, 0, data.lastError || data.message);
                     showLifecycleToast((activeNow ? '🟢 ' : '🔴 ') + (data.message || 'Verificación completada'), activeNow ? '#10b981' : '#ef4444');
-                    pollClusterLiveStatus();
-                    setTimeout(function() { window.location.reload(); }, 500);
+                    await pollClusterLiveStatus();
                 } catch (err) {
                     if (btn) { btn.disabled = false; btn.textContent = 'Encender Nodo'; }
                     showLifecycleToast('❌ Error al verificar nodo: ' + err.message, '#ef4444');

@@ -7,6 +7,7 @@ import io.jettra.store.explorer.model.EngineBucketInfo;
 import io.jettra.store.explorer.model.EngineRecordInfo;
 import io.jettra.store.explorer.model.ServerNodeInfo;
 import io.jettra.store.explorer.plugin.JettraStorePlugin;
+import io.jettra.store.explorer.plugin.NodeLifecycleManager;
 import io.jettra.test.annotation.AfterAll;
 import io.jettra.test.annotation.BeforeAll;
 import io.jettra.test.annotation.DisplayName;
@@ -470,7 +471,14 @@ public class JettraStoreExplorerTest {
     public void testMicroprofileConfigHostPortAndPrimaryNode() throws Exception {
         JettraStorePlugin plugin = JettraStorePlugin.getInstance();
         ServerNodeInfo primaryNode = plugin.getNodeById("node-01");
+        ServerNodeInfo replicaNode2 = plugin.getNodeById("node-02");
+        ServerNodeInfo replicaNode3 = plugin.getNodeById("node-03");
         int originalPrimaryPort = primaryNode.getPort();
+        String originalPrimaryRole = primaryNode.getRole();
+        int originalReplicaPort2 = replicaNode2 != null ? replicaNode2.getPort() : 9092;
+        String originalReplicaRole2 = replicaNode2 != null ? replicaNode2.getRole() : "SECONDARY";
+        int originalReplicaPort3 = replicaNode3 != null ? replicaNode3.getPort() : 9093;
+        String originalReplicaRole3 = replicaNode3 != null ? replicaNode3.getRole() : "SECONDARY";
         try {
             // 1. Host, puerto Web UI y contextpath cargados desde microprofile-config.properties
             JettraAssert.assertNotNull(plugin.getServerHost(), "El host debe estar cargado");
@@ -483,12 +491,20 @@ public class JettraStoreExplorerTest {
             JettraAssert.assertEquals("PRIMARY", primaryNode.getRole(), "El rol de node-01 debe ser PRIMARY");
             JettraAssert.assertEquals(9091, originalPrimaryPort, "El puerto de node-01 debe provenir de cluster.nodes (9091), no de server.port");
 
-            // 3. Si el puerto de PRIMARY está cerrado, debe figurar OFFLINE
+            // 3. Aislar nodos secundarios y cerrar puerto de PRIMARY: todo el clúster OFFLINE
             int closedPrimaryPort;
-            try (java.net.ServerSocket tmpSocket = new java.net.ServerSocket(0)) {
-                closedPrimaryPort = tmpSocket.getLocalPort();
+            int closedPort2;
+            int closedPort3;
+            try (java.net.ServerSocket s1 = new java.net.ServerSocket(0);
+                 java.net.ServerSocket s2 = new java.net.ServerSocket(0);
+                 java.net.ServerSocket s3 = new java.net.ServerSocket(0)) {
+                closedPrimaryPort = s1.getLocalPort();
+                closedPort2 = s2.getLocalPort();
+                closedPort3 = s3.getLocalPort();
             }
             primaryNode.setPort(closedPrimaryPort);
+            if (replicaNode2 != null) replicaNode2.setPort(closedPort2);
+            if (replicaNode3 != null) replicaNode3.setPort(closedPort3);
             plugin.refreshAllNodeStatuses(true);
 
             HttpResponse<String> resDown = get("/cluster");
@@ -505,18 +521,11 @@ public class JettraStoreExplorerTest {
             JettraAssert.assertFalse(primaryNode.isOnline(), "El auto-sondeo al puerto de JettraStoreExplorer Web UI no debe marcar PRIMARY como ONLINE");
 
             // 5. Nodos secundarios desconectados deben figurar como OFFLINE
-            ServerNodeInfo replicaNode = plugin.getNodeById("node-02");
-            JettraAssert.assertNotNull(replicaNode, "El nodo node-02 debe existir");
-            int originalReplicaPort = replicaNode.getPort();
-            int closedReplicaPort;
-            try (java.net.ServerSocket tmpSocket = new java.net.ServerSocket(0)) {
-                closedReplicaPort = tmpSocket.getLocalPort();
-            }
-            replicaNode.setPort(closedReplicaPort);
-            plugin.checkNodeRealReachability(replicaNode, 50);
-            JettraAssert.assertFalse(replicaNode.isOnline(), "Un nodo cuya IP/puerto no está escuchando debe marcarse OFFLINE");
+            JettraAssert.assertNotNull(replicaNode2, "El nodo node-02 debe existir");
+            plugin.checkNodeRealReachability(replicaNode2, 50);
+            JettraAssert.assertFalse(replicaNode2.isOnline(), "Un nodo cuya IP/puerto no está escuchando debe marcarse OFFLINE");
 
-            // 6. Simulación de nodo PRIMARY conectado vía ServerSocket
+            // 6. Simulación de nodo PRIMARY conectado vía ServerSocket (secundarios continúan desconectados)
             try (java.net.ServerSocket mockPrimarySocket = new java.net.ServerSocket(0)) {
                 primaryNode.setPort(mockPrimarySocket.getLocalPort());
 
@@ -532,16 +541,23 @@ public class JettraStoreExplorerTest {
                 HttpResponse<String> apiResUp = get("/api/cluster/status");
                 JettraAssert.assertEquals(200, apiResUp.statusCode(), "API /api/cluster/status debe responder HTTP 200");
                 JettraAssert.assertTrue(apiResUp.body().contains("\"primaryOnline\":true"), "JSON debe indicar primaryOnline:true");
-            } finally {
-                replicaNode.setPort(originalReplicaPort);
             }
 
-            // 7. Tras cerrar el socket
+            // 7. Tras cerrar el socket de PRIMARY (todos los nodos desconectados)
             HttpResponse<String> apiResDown = get("/api/cluster/status");
             JettraAssert.assertEquals(200, apiResDown.statusCode(), "API /api/cluster/status debe responder HTTP 200");
             JettraAssert.assertTrue(apiResDown.body().contains("\"primaryOnline\":false"), "JSON debe indicar primaryOnline:false cuando el nodo cae");
         } finally {
             primaryNode.setPort(originalPrimaryPort);
+            primaryNode.setRole(originalPrimaryRole);
+            if (replicaNode2 != null) {
+                replicaNode2.setPort(originalReplicaPort2);
+                replicaNode2.setRole(originalReplicaRole2);
+            }
+            if (replicaNode3 != null) {
+                replicaNode3.setPort(originalReplicaPort3);
+                replicaNode3.setRole(originalReplicaRole3);
+            }
             plugin.refreshAllNodeStatuses(true);
         }
     }
@@ -751,6 +767,214 @@ public class JettraStoreExplorerTest {
                 try { dummySocket.close(); } catch (Exception ignored) {}
             }
             plugin.removeNode("node-heartbeat-live");
+        }
+    }
+
+    @Test
+    @DisplayName("22. Sincronización Dinámica del Nuevo PRIMARY Raft en /cluster y SSE (/api/cluster/events)")
+    public void testDynamicPrimaryFailoverAndSseSync() throws Exception {
+        JettraStorePlugin plugin = JettraStorePlugin.getInstance();
+        ServerNodeInfo node01 = plugin.getNodeById("node-01");
+        ServerNodeInfo node02 = plugin.getNodeById("node-02");
+        ServerNodeInfo node03 = plugin.getNodeById("node-03");
+        JettraAssert.assertNotNull(node01, "node-01 debe existir");
+        JettraAssert.assertNotNull(node02, "node-02 debe existir");
+        JettraAssert.assertNotNull(node03, "node-03 debe existir");
+
+        int origPort1 = node01.getPort();
+        int origPort2 = node02.getPort();
+        int origPort3 = node03.getPort();
+        String origRole1 = node01.getRole();
+        String origRole2 = node02.getRole();
+        int origRest2 = node02.getRestPort();
+
+        int closedPort1;
+        int closedPort3;
+        try (java.net.ServerSocket tmp1 = new java.net.ServerSocket(0);
+             java.net.ServerSocket tmp3 = new java.net.ServerSocket(0)) {
+            closedPort1 = tmp1.getLocalPort();
+            closedPort3 = tmp3.getLocalPort();
+        }
+
+        com.sun.net.httpserver.HttpServer mockHealthServer = null;
+        try (java.net.ServerSocket mockNode2Tcp = new java.net.ServerSocket(0)) {
+            mockHealthServer = com.sun.net.httpserver.HttpServer.create(new java.net.InetSocketAddress("127.0.0.1", 0), 0);
+            mockHealthServer.createContext("/api/v1/health", exchange -> {
+                byte[] body = "{\"status\":\"UP\",\"role\":\"PRIMARY\",\"raft_term\":7,\"node_id\":\"node-02\"}".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                exchange.getResponseHeaders().add("Content-Type", "application/json");
+                exchange.sendResponseHeaders(200, body.length);
+                exchange.getResponseBody().write(body);
+                exchange.close();
+            });
+            mockHealthServer.start();
+            int mockRestPort2 = mockHealthServer.getAddress().getPort();
+
+            node01.setPort(closedPort1);
+            node03.setPort(closedPort3);
+            node02.setPort(mockNode2Tcp.getLocalPort());
+            node02.setRestPort(mockRestPort2);
+
+            plugin.refreshAllNodeStatuses(true);
+
+            JettraAssert.assertFalse(node01.isActive(), "node-01 debe estar INACTIVE");
+            JettraAssert.assertTrue(node02.isActive(), "node-02 debe estar ACTIVE");
+            JettraAssert.assertEquals("PRIMARY", node02.getRole(), "node-02 promovido por /api/v1/health debe reflejar rol PRIMARY");
+            JettraAssert.assertEquals("LEADER", node02.getRaftState(), "node-02 debe reflejar raftState LEADER");
+            JettraAssert.assertEquals("SECONDARY", node01.getRole(), "El ex-PRIMARY caído debe degradarse a SECONDARY cuando hay un nuevo líder");
+            JettraAssert.assertEquals("DISCONNECTED", node01.getRaftState(), "node-01 desconectado debe mostrar DISCONNECTED");
+            JettraAssert.assertEquals("node-02", plugin.getPrimaryNode().getId(), "getPrimaryNode() debe retornar node-02");
+
+            HttpResponse<String> statusRes = get("/api/cluster/status");
+            JettraAssert.assertEquals(200, statusRes.statusCode(), "/api/cluster/status debe responder HTTP 200");
+            JettraAssert.assertTrue(statusRes.body().contains("\"primaryNodeId\":\"node-02\""), "JSON debe identificar primaryNodeId=node-02");
+            JettraAssert.assertTrue(statusRes.body().contains("\"primaryActive\":true"), "JSON debe indicar primaryActive=true con el nuevo líder");
+
+            HttpResponse<String> sseRes = get("/api/cluster/events");
+            JettraAssert.assertEquals(200, sseRes.statusCode(), "SSE /api/cluster/events debe responder HTTP 200");
+            JettraAssert.assertTrue(sseRes.body().contains("event: cluster_status"), "SSE debe emitir evento cluster_status");
+            JettraAssert.assertTrue(sseRes.body().contains("\"primaryNodeId\":\"node-02\""), "SSE debe transmitir el nuevo PRIMARY node-02");
+
+            HttpResponse<String> clusterHtml = get("/cluster");
+            JettraAssert.assertEquals(200, clusterHtml.statusCode(), "/cluster debe responder HTTP 200");
+            JettraAssert.assertTrue(clusterHtml.body().contains("[node-02]"), "TopBar debe mostrar el chip del nuevo PRIMARY [node-02]");
+            JettraAssert.assertTrue(clusterHtml.body().contains("applyClusterLiveData"), "/cluster debe incluir actualización reactiva DOM sin recarga");
+            JettraAssert.assertTrue(clusterHtml.body().contains("/api/cluster/events"), "La plantilla debe suscribirse al canal SSE /api/cluster/events");
+        } finally {
+            if (mockHealthServer != null) mockHealthServer.stop(0);
+            node01.setPort(origPort1);
+            node02.setPort(origPort2);
+            node03.setPort(origPort3);
+            node01.setRole(origRole1);
+            node02.setRole(origRole2);
+            node02.setRestPort(origRest2);
+            plugin.refreshAllNodeStatuses(true);
+        }
+    }
+
+    @Test
+    @DisplayName("23. Detección de Entorno Docker Compose y Estrategia Dual en APAGAR NODO")
+    public void testDockerComposeDetectionAndDualStopStrategy() throws Exception {
+        JettraStorePlugin plugin = JettraStorePlugin.getInstance();
+        NodeLifecycleManager lifecycle = plugin.getLifecycleManager();
+        NodeLifecycleManager.DockerContainerControl originalDockerControl = lifecycle.getDockerController();
+
+        java.net.ServerSocket fakeDockerNodeSocket = new java.net.ServerSocket(0);
+        int fakePort = fakeDockerNodeSocket.getLocalPort();
+        java.util.concurrent.atomic.AtomicBoolean stoppedInvoked = new java.util.concurrent.atomic.AtomicBoolean(false);
+        java.util.concurrent.atomic.AtomicBoolean startedInvoked = new java.util.concurrent.atomic.AtomicBoolean(false);
+
+        try {
+            lifecycle.setDockerController(new NodeLifecycleManager.DockerContainerControl() {
+                @Override
+                public boolean isDockerEnvironment() { return true; }
+
+                @Override
+                public java.util.Optional<String> findContainer(ServerNodeInfo node) {
+                    return "node-test-dk".equalsIgnoreCase(node.getId())
+                            ? java.util.Optional.of("jettra-node-test-dk")
+                            : java.util.Optional.empty();
+                }
+
+                @Override
+                public boolean stopContainer(String containerNameOrId, int timeoutSeconds) {
+                    if ("jettra-node-test-dk".equals(containerNameOrId)) {
+                        stoppedInvoked.set(true);
+                        try { fakeDockerNodeSocket.close(); } catch (Exception ignored) {}
+                        return true;
+                    }
+                    return false;
+                }
+
+                @Override
+                public boolean startContainer(String containerNameOrId) {
+                    if ("jettra-node-test-dk".equals(containerNameOrId)) {
+                        startedInvoked.set(true);
+                        return true;
+                    }
+                    return false;
+                }
+            });
+
+            plugin.addNode("node-test-dk", "Docker Node Test", "SECONDARY", "127.0.0.1", fakePort, 2048);
+            ServerNodeInfo dkNode = plugin.getNodeById("node-test-dk");
+            plugin.checkNodeRealReachability(dkNode, 300);
+            JettraAssert.assertTrue(dkNode.isOnline(), "El nodo Docker simulado debe iniciar ONLINE");
+
+            HttpResponse<String> shutRes = postJson("/api/cluster/nodes/shutdown", "{\"nodeId\":\"node-test-dk\"}");
+            JettraAssert.assertEquals(200, shutRes.statusCode(), "API shutdown bajo Docker debe responder HTTP 200");
+            JettraAssert.assertTrue(stoppedInvoked.get(), "Debe invocar parada limpia del contenedor Docker");
+            JettraAssert.assertTrue(shutRes.body().contains("\"executionEnvironment\":\"DOCKER\""), "Respuesta debe indicar entorno DOCKER");
+            JettraAssert.assertTrue(shutRes.body().contains("\"dockerContainer\":\"jettra-node-test-dk\""), "Respuesta debe identificar contenedor detenido");
+            JettraAssert.assertTrue(shutRes.body().contains("DOCKER_STOP[jettra-node-test-dk]"), "Mecanismo debe reportar DOCKER_STOP");
+            JettraAssert.assertTrue(shutRes.body().contains("\"status\":\"INACTIVE\"") && shutRes.body().contains("\"state\":\"OFFLINE\""),
+                    "Estado devuelto al frontend debe ser INACTIVE/OFFLINE inmediatamente");
+            JettraAssert.assertFalse(dkNode.isOnline(), "El nodo Docker detenido debe quedar OFFLINE");
+
+            lifecycle.startNode(dkNode, plugin);
+            JettraAssert.assertTrue(startedInvoked.get(), "startNode debe invocar startContainer bajo Docker");
+        } finally {
+            if (!fakeDockerNodeSocket.isClosed()) {
+                try { fakeDockerNodeSocket.close(); } catch (Exception ignored) {}
+            }
+            lifecycle.setDockerController(originalDockerControl);
+            plugin.removeNode("node-test-dk");
+        }
+    }
+
+    @Test
+    @DisplayName("24. Inclusión y Restauración de la Versión 1 en Historial de Versiones (/explorer)")
+    public void testVersion1AlwaysPresentAndRestorableInExplorer() throws Exception {
+        JettraStorePlugin plugin = JettraStorePlugin.getInstance();
+
+        // 1. Verificar registros iniciales con versión > 1 (FAC-2026-003 v2 y HC-98210 v3)
+        EngineRecordInfo factura = plugin.getRecord("example_factura_db", "Facturas", "FAC-2026-003");
+        JettraAssert.assertNotNull(factura, "FAC-2026-003 debe existir en el catálogo");
+        JettraAssert.assertTrue(factura.getVersionHistory().stream().anyMatch(v -> v.getVersion() == 1L),
+                "El historial de FAC-2026-003 (v2) debe incluir la versión raíz v1");
+
+        EngineRecordInfo historia = plugin.getRecord("samples_hostipal_db", "Pacientes", "HC-98210");
+        JettraAssert.assertNotNull(historia, "HC-98210 debe existir en el catálogo");
+        JettraAssert.assertTrue(historia.getVersionHistory().stream().anyMatch(v -> v.getVersion() == 1L),
+                "El historial de HC-98210 (v3) debe incluir la versión raíz v1");
+
+        // 2. Verificar diálogo HTML /explorer para FAC-2026-003 muestra v1 y botón de restauración de v1
+        HttpResponse<String> histHtml = get("/explorer?db=example_factura_db&bucket=Facturas&history_id=FAC-2026-003");
+        JettraAssert.assertEquals(200, histHtml.statusCode(), "Historial /explorer debe responder HTTP 200");
+        JettraAssert.assertTrue(histHtml.body().contains("[VERSIÓN INICIAL v1]"), "El diálogo debe renderizar el badge de v1");
+        JettraAssert.assertTrue(histHtml.body().contains("Restaurar esta Versión (v1)"), "El diálogo debe permitir restaurar la versión 1");
+
+        // 3. Verificar registro construido por deserialización sin historial previo conserva v1 al editar y restaura v1
+        EngineRecordInfo deserializedRec = new EngineRecordInfo();
+        deserializedRec.setId("DOC-V1-TEST");
+        deserializedRec.setEngineType("DOCUMENT");
+        deserializedRec.setBucketName("Facturas");
+        deserializedRec.setSummary("Resumen Original V1");
+        deserializedRec.setDetails("{\"estado\":\"INICIAL_V1\"}");
+        deserializedRec.recordNewVersion("Resumen Modificado V2", "{\"estado\":\"EDITADO_V2\"}", "admin", "Segunda versión");
+
+        JettraAssert.assertEquals(2L, deserializedRec.getVersion(), "Debe avanzar a v2");
+        JettraAssert.assertEquals(2, deserializedRec.getVersionHistory().size(), "Debe conservar v2 y v1 en el historial");
+        JettraAssert.assertTrue(deserializedRec.getVersionHistory().stream().anyMatch(v -> v.getVersion() == 1L && "Resumen Original V1".equals(v.getSummary())),
+                "v1 debe conservar el summary original previo a la edición");
+
+        boolean restoredDeser = deserializedRec.restoreVersion(1L);
+        JettraAssert.assertTrue(restoredDeser, "Debe permitir restaurar v1 desde el modelo deserializado");
+        JettraAssert.assertEquals(3L, deserializedRec.getVersion(), "Al restaurar v1 desde v2 debe crear v3");
+        JettraAssert.assertEquals("Resumen Original V1", deserializedRec.getSummary(), "Summary debe volver al contenido original de v1");
+        JettraAssert.assertEquals("{\"estado\":\"INICIAL_V1\"}", deserializedRec.getDetails(), "Details debe volver al payload original de v1");
+
+        // 4. Ejecutar restauración de v1 vía HTTP POST sobre registro en catálogo temporal
+        String tempId = "DOC-HTTP-V1-TEST";
+        plugin.addRecord("example_factura_db", "Facturas", tempId, "Resumen HTTP V1", "{\"estado\":\"HTTP_V1\"}");
+        try {
+            plugin.updateRecord("example_factura_db", "Facturas", tempId, "Resumen HTTP V2", "{\"estado\":\"HTTP_V2\"}");
+            HttpResponse<String> restoreV1Res = postFormWithRedirect("/explorer", "action=restore_version&db=example_factura_db&bucket=Facturas&recordId=" + tempId + "&version=1");
+            JettraAssert.assertEquals(200, restoreV1Res.statusCode(), "La restauración de v1 vía POST debe responder HTTP 200");
+            EngineRecordInfo httpRec = plugin.getRecord("example_factura_db", "Facturas", tempId);
+            JettraAssert.assertEquals(3L, httpRec.getVersion(), "Debe crear v3 al restaurar v1 vía HTTP");
+            JettraAssert.assertEquals("Resumen HTTP V1", httpRec.getSummary(), "El resumen HTTP debe restaurarse exactamente a v1");
+        } finally {
+            plugin.deleteRecord("example_factura_db", "Facturas", tempId);
         }
     }
 }
