@@ -193,9 +193,11 @@ public class App {
         server.get("/login", (req, resp) -> handleLoginGet(req, resp));
         server.post("/login", (req, resp) -> handleLoginPost(req, resp));
 
-        // 2. Administración y Monitor de Nodos del Clúster (/cluster y /dashboard)
+        // 2. Administración y Monitor de Nodos del Clúster (/cluster, /clusters y /dashboard)
         server.get("/cluster", (req, resp) -> handleClusterGet(req, resp, server));
         server.post("/cluster", (req, resp) -> handleClusterPost(req, resp));
+        server.get("/clusters", (req, resp) -> handleClusterGet(req, resp, server));
+        server.post("/clusters", (req, resp) -> handleClusterPost(req, resp));
         server.get("/dashboard", (req, resp) -> handleClusterGet(req, resp, server));
 
         // 3. Estatus y Telemetría del Servidor (/status y /telemetry)
@@ -760,6 +762,8 @@ public class App {
         long inactiveCount = nodes.size() - activeCount;
         long inactiveOthers = nodes.stream().filter(n -> n != primary && !n.isActive()).count();
         long offlineOthers = inactiveOthers;
+        long totalQps = nodes.stream().filter(ServerNodeInfo::isActive).mapToLong(ServerNodeInfo::getQps).sum();
+        long totalPanama = nodes.stream().filter(ServerNodeInfo::isActive).mapToLong(ServerNodeInfo::getPanamaDirectMb).sum();
 
         StringBuilder json = new StringBuilder();
         json.append("{");
@@ -775,6 +779,8 @@ public class App {
         json.append("\"totalCount\":").append(nodes.size()).append(",");
         json.append("\"inactiveOthers\":").append(inactiveOthers).append(",");
         json.append("\"offlineOthers\":").append(offlineOthers).append(",");
+        json.append("\"totalQps\":").append(totalQps).append(",");
+        json.append("\"totalPanama\":").append(totalPanama).append(",");
         json.append("\"nodes\":[");
         for (int i = 0; i < nodes.size(); i++) {
             ServerNodeInfo n = nodes.get(i);
@@ -792,6 +798,13 @@ public class App {
             json.append("\"active\":").append(n.isActive()).append(",");
             json.append("\"online\":").append(n.isOnline()).append(",");
             json.append("\"latencyMs\":").append(String.format(Locale.US, "%.2f", n.getLatencyMs())).append(",");
+            json.append("\"cpuPercent\":").append(String.format(Locale.US, "%.1f", n.getCpuPercent())).append(",");
+            json.append("\"heapUsedMb\":").append(n.getHeapUsedMb()).append(",");
+            json.append("\"heapMaxMb\":").append(n.getHeapMaxMb()).append(",");
+            json.append("\"panamaDirectMb\":").append(n.getPanamaDirectMb()).append(",");
+            json.append("\"diskUsedMb\":").append(n.getDiskUsedMb()).append(",");
+            json.append("\"virtualThreads\":").append(n.getVirtualThreads()).append(",");
+            json.append("\"qps\":").append(n.getQps()).append(",");
             json.append("\"lastError\":").append(n.getLastError() != null ? "\"" + escapeJson(n.getLastError()) + "\"" : "null");
             json.append("}");
         }

@@ -187,6 +187,21 @@ public class JettraStoreExplorerTest {
         JettraAssert.assertTrue(res.body().contains("node-02"), "Debe listar réplicas Raft");
         JettraAssert.assertTrue(res.body().contains("Registrar Nuevo Nodo"), "Debe incluir formulario de registro de nodos");
         JettraAssert.assertTrue(res.body().contains("Matriz de Replicación"), "Debe incluir matriz de replicación");
+
+        // Verificación de sincronización reactiva en tiempo real para paneles y tarjetas de nodos
+        HttpResponse<String> resClusters = get("/clusters");
+        JettraAssert.assertEquals(200, resClusters.statusCode(), "La ruta /clusters debe responder HTTP 200 idéntica a /cluster");
+        JettraAssert.assertTrue(res.body().contains("data-node-card=\"node-01\""), "Debe incluir selector data-node-card para node-01");
+        JettraAssert.assertTrue(res.body().contains("data-node-badge=\"node-01\""), "Debe incluir selector data-node-badge para node-01");
+        JettraAssert.assertTrue(res.body().contains("data-node-status-box=\"node-01\""), "Debe incluir selector data-node-status-box para node-01");
+        JettraAssert.assertTrue(res.body().contains("data-node-cpu=\"node-01\""), "Debe incluir selector data-node-cpu para node-01");
+
+        // Verificación de telemetría completa en API /api/cluster/status
+        HttpResponse<String> statusJsonRes = get("/api/cluster/status");
+        JettraAssert.assertEquals(200, statusJsonRes.statusCode(), "La API /api/cluster/status debe responder HTTP 200");
+        JettraAssert.assertTrue(statusJsonRes.body().contains("\"totalQps\""), "Debe incluir totalQps");
+        JettraAssert.assertTrue(statusJsonRes.body().contains("\"totalPanama\""), "Debe incluir totalPanama");
+        JettraAssert.assertTrue(statusJsonRes.body().contains("\"cpuPercent\""), "Debe incluir cpuPercent en nodos");
     }
 
     @Test

@@ -228,13 +228,17 @@ public class ClusterFluxView extends FluxView {
         nodeTitle.modifier(new Modifier().style("margin: 0; font-size: 1.1rem; color: #ffffff;"));
 
         Badge roleBadge = Badge.of(roleDisplay);
+        roleBadge.id("node-role-badge-" + node.getId());
         roleBadge.modifier(new Modifier()
             .attribute("id", "node-role-badge-" + node.getId())
+            .attribute("data-node-role-badge", node.getId())
             .style("background: rgba(0, 212, 255, 0.15); border: 1px solid " + roleColor + "; color: " + roleColor + "; font-size: 0.72rem; padding: 0.15rem 0.5rem; border-radius: 9999px; font-weight: 700;"));
 
         Badge statusBadge = Badge.of(statusLabel);
+        statusBadge.id("node-badge-" + node.getId());
         statusBadge.modifier(new Modifier()
             .attribute("id", "node-badge-" + node.getId())
+            .attribute("data-node-badge", node.getId())
             .style("background: " + statusBg + "; border: 1px solid " + statusColor + "; color: " + statusColor + "; font-size: 0.72rem; padding: 0.15rem 0.5rem; border-radius: 9999px; font-weight: 700;"));
 
         Row headerRight = Row.of(roleBadge, statusBadge);
@@ -244,7 +248,11 @@ public class ClusterFluxView extends FluxView {
         cardHeader.modifier(new Modifier().style("display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;"));
 
         Paragraph addressInfo = Paragraph.of("🌐 " + node.getHost() + ":" + node.getPort() + " | Raft Term: #" + node.getRaftTerm());
-        addressInfo.modifier(new Modifier().style("font-size: 0.8rem; color: var(--text-muted); margin: 0 0 0.75rem 0;"));
+        addressInfo.id("node-addr-" + node.getId());
+        addressInfo.modifier(new Modifier()
+            .attribute("id", "node-addr-" + node.getId())
+            .attribute("data-node-addr", node.getId())
+            .style("font-size: 0.8rem; color: var(--text-muted); margin: 0 0 0.75rem 0;"));
 
         // Indicador de Estado Prominente dentro de la tarjeta
         Div nodeStatusBox;
@@ -258,7 +266,10 @@ public class ClusterFluxView extends FluxView {
                     "<div style=\"display:flex; align-items:center; justify-content:space-between;\"><span>" + roleOfflineMsg + "</span></div>" +
                     "<span style=\"font-weight:500; font-size:0.72rem; color:#fca5a5;\">" + reason + "</span></div>"));
         }
-        nodeStatusBox.modifier(new Modifier().attribute("id", "node-status-box-" + node.getId()));
+        nodeStatusBox.id("node-status-box-" + node.getId());
+        nodeStatusBox.modifier(new Modifier()
+            .attribute("id", "node-status-box-" + node.getId())
+            .attribute("data-node-status-box", node.getId()));
 
         double displayCpu = isActive ? node.getCpuPercent() : 0.0;
         long displayQps = isActive ? node.getQps() : 0L;
@@ -266,14 +277,19 @@ public class ClusterFluxView extends FluxView {
 
         RawHtml statsHtml = RawHtml.of(String.format(java.util.Locale.US, """
             <table style="width: 100%%; font-size: 0.82rem; border-collapse: collapse; margin-bottom: 1rem;">
-              <tr><td style="padding: 4px 0; color: var(--text-muted);">CPU:</td><td style="text-align: right; font-weight: 700; color: #ffd700;">%.1f%%</td></tr>
-              <tr><td style="padding: 4px 0; color: var(--text-muted);">Heap JVM:</td><td style="text-align: right; font-weight: 700; color: #10b981;">%d MB / %d MB</td></tr>
-              <tr><td style="padding: 4px 0; color: var(--text-muted);">Panama Direct:</td><td style="text-align: right; font-weight: 700; color: #00d4ff;">%d MB</td></tr>
-              <tr><td style="padding: 4px 0; color: var(--text-muted);">Almacén SSTable:</td><td style="text-align: right; font-weight: 700; color: var(--text-main);">%,d MB</td></tr>
-              <tr><td style="padding: 4px 0; color: var(--text-muted);">Loom Virtual Threads:</td><td style="text-align: right; font-weight: 700; color: var(--text-main);">%d vthreads</td></tr>
-              <tr><td style="padding: 4px 0; color: var(--text-muted);">Rendimiento QPS:</td><td style="text-align: right; font-weight: 700; color: #38bdf8;">%,d ops/s (%s)</td></tr>
+              <tr><td style="padding: 4px 0; color: var(--text-muted);">CPU:</td><td id="node-cpu-%s" data-node-cpu="%s" style="text-align: right; font-weight: 700; color: #ffd700;">%.1f%%</td></tr>
+              <tr><td style="padding: 4px 0; color: var(--text-muted);">Heap JVM:</td><td id="node-heap-%s" data-node-heap="%s" style="text-align: right; font-weight: 700; color: #10b981;">%d MB / %d MB</td></tr>
+              <tr><td style="padding: 4px 0; color: var(--text-muted);">Panama Direct:</td><td id="node-panama-%s" data-node-panama="%s" style="text-align: right; font-weight: 700; color: #00d4ff;">%d MB</td></tr>
+              <tr><td style="padding: 4px 0; color: var(--text-muted);">Almacén SSTable:</td><td id="node-disk-%s" data-node-disk="%s" style="text-align: right; font-weight: 700; color: var(--text-main);">%,d MB</td></tr>
+              <tr><td style="padding: 4px 0; color: var(--text-muted);">Loom Virtual Threads:</td><td id="node-vthreads-%s" data-node-vthreads="%s" style="text-align: right; font-weight: 700; color: var(--text-main);">%d vthreads</td></tr>
+              <tr><td style="padding: 4px 0; color: var(--text-muted);">Rendimiento QPS:</td><td id="node-qps-%s" data-node-qps="%s" style="text-align: right; font-weight: 700; color: #38bdf8;">%,d ops/s (%s)</td></tr>
             </table>
-        """, displayCpu, isActive ? node.getHeapUsedMb() : 0L, node.getHeapMaxMb(), isActive ? node.getPanamaDirectMb() : 0L, node.getDiskUsedMb(), isActive ? node.getVirtualThreads() : 0, displayQps, latencyText));
+        """, node.getId(), node.getId(), displayCpu,
+             node.getId(), node.getId(), isActive ? node.getHeapUsedMb() : 0L, node.getHeapMaxMb(),
+             node.getId(), node.getId(), isActive ? node.getPanamaDirectMb() : 0L,
+             node.getId(), node.getId(), node.getDiskUsedMb(),
+             node.getId(), node.getId(), isActive ? node.getVirtualThreads() : 0,
+             node.getId(), node.getId(), displayQps, latencyText));
 
         // Acciones sobre el nodo: Apagar / Encender en tiempo real vía LifecycleManager + Explorar + Expulsar
         String jsSafeId = node.getId().replace("'", "\\'");
@@ -281,8 +297,10 @@ public class ClusterFluxView extends FluxView {
         JettraButton lifecycleBtn = isActive
             ? JettraButton.of("Apagar Nodo").severity(JettraButton.Severity.WARNING)
             : JettraButton.of("Encender Nodo").severity(JettraButton.Severity.PRIMARY);
+        lifecycleBtn.id("node-lifecycle-btn-" + node.getId());
         lifecycleBtn.modifier(new Modifier()
             .attribute("id", "node-lifecycle-btn-" + node.getId())
+            .attribute("data-node-lifecycle-btn", node.getId())
             .attribute("data-node-name", node.getName())
             .cssClass(isActive ? "app-btn-warning" : "app-btn-primary")
             .attribute("onclick", isActive
@@ -306,8 +324,10 @@ public class ClusterFluxView extends FluxView {
         actionsRow.modifier(new Modifier().style("display: flex; gap: 0.5rem; align-items: center; justify-content: flex-end;"));
 
         Div card = Div.of(cardHeader, addressInfo, nodeStatusBox, statsHtml, actionsRow);
+        card.id("node-card-" + node.getId());
         card.modifier(new Modifier()
             .attribute("id", "node-card-" + node.getId())
+            .attribute("data-node-card", node.getId())
             .cssClass("ui-card")
             .style("border-top: 4px solid " + (isActive ? (isPrimary ? "#ffd700" : "#10b981") : "#ef4444") + ";"));
         return card;
@@ -372,22 +392,31 @@ public class ClusterFluxView extends FluxView {
                 t._timer = setTimeout(function() { t.style.display = 'none'; }, 4500);
             }
 
-            function updateNodeStatusUI(nodeId, role, isPrimary, isActive, latencyMs, raftTerm, errorReason) {
-                const roleBadge = document.getElementById('node-role-badge-' + nodeId);
+            function getNodeElement(type, nodeId) {
+                return document.getElementById(type + '-' + nodeId) || document.querySelector('[data-' + type + '="' + nodeId + '"]');
+            }
+
+            function updateNodeStatusUI(nodeId, role, isPrimary, isActive, latencyMs, raftTerm, errorReason, nodeStats) {
+                // 1. Tarjeta: Badge de Rol Raft
+                const roleBadge = getNodeElement('node-role-badge', nodeId);
                 if (roleBadge) {
                     const roleColor = isPrimary ? '#ffd700' : '#38bdf8';
                     roleBadge.textContent = isPrimary ? 'PRIMARY' : (role || 'SECONDARY');
                     roleBadge.style.borderColor = roleColor;
                     roleBadge.style.color = roleColor;
                 }
-                const badge = document.getElementById('node-badge-' + nodeId);
+
+                // 2. Tarjeta: Badge de Estado (ACTIVE / INACTIVE)
+                const badge = getNodeElement('node-badge', nodeId);
                 if (badge) {
                     badge.textContent = isActive ? ('● ACTIVE (' + (latencyMs > 0 ? latencyMs.toFixed(1) : '0.5') + ' ms)') : '○ INACTIVE';
                     badge.style.background = isActive ? 'rgba(16, 185, 129, 0.2)' : 'rgba(239, 68, 68, 0.25)';
                     badge.style.borderColor = isActive ? '#10b981' : '#ef4444';
                     badge.style.color = isActive ? '#10b981' : '#ef4444';
                 }
-                const box = document.getElementById('node-status-box-' + nodeId);
+
+                // 3. Tarjeta: Cuadro Prominente de Estado
+                const box = getNodeElement('node-status-box', nodeId);
                 if (box) {
                     if (isActive) {
                         box.innerHTML = '<div style="background:rgba(16, 185, 129, 0.15); border:1px solid #10b981; border-radius:6px; padding:0.4rem 0.6rem; margin-bottom:0.75rem; font-size:0.8rem; color:#34d399; font-weight:700; display:flex; align-items:center; justify-content:space-between;">'
@@ -399,11 +428,15 @@ public class ClusterFluxView extends FluxView {
                             + '<span style="font-weight:500; font-size:0.72rem; color:#fca5a5;">' + (errorReason || 'Sin respuesta a latidos') + '</span></div>';
                     }
                 }
-                const card = document.getElementById('node-card-' + nodeId);
+
+                // 4. Tarjeta: Borde superior y fondo reactivo
+                const card = getNodeElement('node-card', nodeId);
                 if (card) {
                     card.style.borderTop = '4px solid ' + (isActive ? (isPrimary ? '#ffd700' : '#10b981') : '#ef4444');
                 }
-                const btn = document.getElementById('node-lifecycle-btn-' + nodeId);
+
+                // 5. Tarjeta: Botón de Ciclo de Vida (Apagar / Encender)
+                const btn = getNodeElement('node-lifecycle-btn', nodeId);
                 if (btn) {
                     btn.textContent = isActive ? 'Apagar Nodo' : 'Encender Nodo';
                     btn.className = isActive ? 'app-btn-warning' : 'app-btn-primary';
@@ -417,23 +450,61 @@ public class ClusterFluxView extends FluxView {
                         }
                     };
                 }
-                const matrixRoleCell = document.getElementById('matrix-role-' + nodeId);
+
+                // 6. Tarjeta: Dirección y Raft Term
+                const addrEl = getNodeElement('node-addr', nodeId);
+                if (addrEl && typeof raftTerm !== 'undefined') {
+                    const hostPort = nodeStats ? (nodeStats.host + ':' + nodeStats.port) : '';
+                    addrEl.textContent = '🌐 ' + (hostPort || '127.0.0.1') + ' | Raft Term: #' + raftTerm;
+                }
+
+                // 7. Tarjeta: Métricas dinámicas en tiempo real
+                if (nodeStats) {
+                    const cpuEl = getNodeElement('node-cpu', nodeId);
+                    if (cpuEl) {
+                        cpuEl.textContent = isActive ? ((Number(nodeStats.cpuPercent) || 0.0).toFixed(1) + '%') : '0.0%';
+                    }
+                    const heapEl = getNodeElement('node-heap', nodeId);
+                    if (heapEl && nodeStats.heapMaxMb) {
+                        heapEl.textContent = (isActive ? (nodeStats.heapUsedMb || 0) : 0) + ' MB / ' + nodeStats.heapMaxMb + ' MB';
+                    }
+                    const panamaEl = getNodeElement('node-panama', nodeId);
+                    if (panamaEl) {
+                        panamaEl.textContent = (isActive ? (nodeStats.panamaDirectMb || 0) : 0) + ' MB';
+                    }
+                    const diskEl = getNodeElement('node-disk', nodeId);
+                    if (diskEl && typeof nodeStats.diskUsedMb !== 'undefined') {
+                        diskEl.textContent = Number(nodeStats.diskUsedMb).toLocaleString() + ' MB';
+                    }
+                    const vthreadsEl = getNodeElement('node-vthreads', nodeId);
+                    if (vthreadsEl) {
+                        vthreadsEl.textContent = (isActive ? (nodeStats.virtualThreads || 0) : 0) + ' vthreads';
+                    }
+                    const qpsEl = getNodeElement('node-qps', nodeId);
+                    if (qpsEl) {
+                        const latStr = isActive ? ((latencyMs > 0 ? latencyMs.toFixed(2) : '0.10') + ' ms') : 'N/A (INACTIVE)';
+                        qpsEl.textContent = (isActive ? Number(nodeStats.qps || 0).toLocaleString() : 0) + ' ops/s (' + latStr + ')';
+                    }
+                }
+
+                // 8. Matriz Raft: Sincronización idéntica y simultánea con la tabla
+                const matrixRoleCell = getNodeElement('matrix-role', nodeId);
                 if (matrixRoleCell) {
                     matrixRoleCell.innerHTML = isPrimary
                         ? "<span style='color:#ffd700; font-weight:700;'>PRIMARY (Leader)</span>"
                         : "<span style='color:#38bdf8;'>FOLLOWER (Sync)</span>";
                 }
-                const matrixCell = document.getElementById('matrix-status-' + nodeId);
+                const matrixCell = getNodeElement('matrix-status', nodeId);
                 if (matrixCell) {
                     matrixCell.innerHTML = isActive
                         ? '<span style="color:#10b981; font-weight:700; background:rgba(16,185,129,0.15); padding:2px 8px; border-radius:4px; border:1px solid #10b981;">● ACTIVE (' + (latencyMs > 0 ? latencyMs.toFixed(2) : '0.10') + ' ms)</span>'
                         : '<span style="color:#ef4444; font-weight:800; background:rgba(239,68,68,0.22); padding:2px 8px; border-radius:4px; border:1px solid #ef4444;">○ INACTIVE • ○ OFFLINE (' + (isPrimary ? 'NODO PRIMARY CAÍDO' : 'Inaccesible') + ')</span>';
                 }
-                const latCell = document.getElementById('matrix-latency-' + nodeId);
+                const latCell = getNodeElement('matrix-latency', nodeId);
                 if (latCell) {
                     latCell.innerHTML = isActive ? ((latencyMs > 0 ? latencyMs.toFixed(2) : '0.10') + ' ms') : '<span style="color:#ef4444; font-size:0.8rem;">Sin respuesta</span>';
                 }
-                const walCell = document.getElementById('matrix-wal-' + nodeId);
+                const walCell = getNodeElement('matrix-wal', nodeId);
                 if (walCell) {
                     const termVal = (typeof raftTerm !== 'undefined' && raftTerm !== null) ? raftTerm : 0;
                     walCell.innerHTML = isActive
@@ -479,14 +550,24 @@ public class ClusterFluxView extends FluxView {
                             inactiveSecondaries.push(node);
                         }
                     }
-                    updateNodeStatusUI(node.id, node.role, isPrimary, isActive, node.latencyMs || 0, node.raftTerm || 0, node.lastError);
+                    updateNodeStatusUI(node.id, node.role, isPrimary, isActive, node.latencyMs || 0, node.raftTerm || 0, node.lastError, node);
                 });
 
+                // Actualizar KPIs superiores
                 const kpiEl = document.getElementById('kpi-active-nodes-val');
                 if (kpiEl && typeof data.activeCount !== 'undefined') {
                     kpiEl.textContent = data.activeCount + ' / ' + data.totalCount;
                 }
+                const kpiQps = document.getElementById('kpi-qps-val');
+                if (kpiQps && typeof data.totalQps !== 'undefined') {
+                    kpiQps.textContent = Number(data.totalQps).toLocaleString() + ' ops/s';
+                }
+                const kpiPanama = document.getElementById('kpi-panama-val');
+                if (kpiPanama && typeof data.totalPanama !== 'undefined') {
+                    kpiPanama.textContent = (Number(data.totalPanama) / 1024.0).toFixed(2) + ' GB';
+                }
 
+                // Actualizar Banners de Alerta
                 const primaryBanner = document.getElementById('banner-primary-inactive');
                 if (primaryBanner) {
                     if (anyPrimaryInactive) {
@@ -526,12 +607,31 @@ public class ClusterFluxView extends FluxView {
                 }
             }
 
-            // Sondeo continuo en segundo plano + sincronización SSE inmediata sin recargar la página
-            setInterval(pollClusterLiveStatus, 2000);
+            // 1. Conexión reactiva en tiempo real mediante SSE (Server-Sent Events)
+            if (window.EventSource) {
+                try {
+                    const sse = new EventSource('/api/cluster/events');
+                    sse.addEventListener('cluster_status', function(e) {
+                        try {
+                            const liveData = JSON.parse(e.data);
+                            applyClusterLiveData(liveData);
+                        } catch (err) {}
+                    });
+                    sse.onerror = function() {
+                        // El navegador reintenta automáticamente la conexión SSE
+                    };
+                } catch (e) {}
+            }
+
+            // 2. Sondeo periódico continuo de respaldo (cada 1500 ms) sincronizado con /api/cluster/status
+            setInterval(pollClusterLiveStatus, 1500);
             window.pollClusterLiveStatus = pollClusterLiveStatus;
 
+            // 3. Disparo de sincronización inmediata al renderizar la vista
+            setTimeout(pollClusterLiveStatus, 100);
+
             async function shutdownNode(nodeId, nodeName, isPrimary) {
-                const btn = document.getElementById('node-lifecycle-btn-' + nodeId);
+                const btn = getNodeElement('node-lifecycle-btn', nodeId);
                 if (btn) {
                     btn.setAttribute('data-node-name', nodeName);
                     btn.disabled = true;
@@ -546,7 +646,7 @@ public class ClusterFluxView extends FluxView {
                     });
                     const data = await resp.json();
                     if (data && (data.status === 'INACTIVE' || data.state === 'OFFLINE' || data.stopped || data.offlineVerified)) {
-                        updateNodeStatusUI(nodeId, data.role || (isPrimary ? 'PRIMARY' : 'SECONDARY'), isPrimary, false, 0, 0, data.lastError || data.message);
+                        updateNodeStatusUI(nodeId, data.role || (isPrimary ? 'PRIMARY' : 'SECONDARY'), isPrimary, false, 0, 0, data.lastError || data.message, data);
                         const envHint = data.dockerContainer ? ('Docker [' + data.dockerContainer + ']') : (data.mechanism || 'LifecycleManager');
                         showLifecycleToast('🔴 <strong>' + nodeName + '</strong> pasó a estado <strong>INACTIVE / OFFLINE</strong> (' + envHint + ').', '#ef4444');
                         await pollClusterLiveStatus();
@@ -561,7 +661,7 @@ public class ClusterFluxView extends FluxView {
             }
 
             async function startNode(nodeId, nodeName, isPrimary) {
-                const btn = document.getElementById('node-lifecycle-btn-' + nodeId);
+                const btn = getNodeElement('node-lifecycle-btn', nodeId);
                 if (btn) {
                     btn.setAttribute('data-node-name', nodeName);
                     btn.disabled = true;
@@ -576,7 +676,7 @@ public class ClusterFluxView extends FluxView {
                     });
                     const data = await resp.json();
                     const activeNow = data.active || data.online || (data.status === 'ACTIVE');
-                    updateNodeStatusUI(nodeId, isPrimary ? 'PRIMARY' : 'SECONDARY', isPrimary, activeNow, 0.5, 0, data.lastError || data.message);
+                    updateNodeStatusUI(nodeId, isPrimary ? 'PRIMARY' : 'SECONDARY', isPrimary, activeNow, 0.5, 0, data.lastError || data.message, data);
                     showLifecycleToast((activeNow ? '🟢 ' : '🔴 ') + (data.message || 'Verificación completada'), activeNow ? '#10b981' : '#ef4444');
                     await pollClusterLiveStatus();
                 } catch (err) {
