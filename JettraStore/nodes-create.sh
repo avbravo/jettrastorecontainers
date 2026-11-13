@@ -39,8 +39,9 @@ update_property() {
 setup_node() {
     local node_num="$1"
     local node_role="$2"
-    local node_dir="$HOME/jettra-node-$node_num"
+    local node_dir="$HOME/jettra-$node_num"
     local config_file="$node_dir/config/microprofile-config.properties"
+   # local start-nodesh_file = "$node_dir/start-node.sh"
 
     echo "------------------------------------------------"
     echo "Configurando Nodo $node_num (Rol: $node_role)"
@@ -64,6 +65,12 @@ setup_node() {
     # 5. Invocar la función de actualización de propiedades para este nodo
     update_property "$config_file" "cluster.node.id" "$node_num"
     update_property "$config_file" "cluster.node.role" "$node_role"
+
+  # 6. Invocar la función de actualización de propiedades para este nodo
+  #  update_property "$start-nodesh_file" "NODE_ID" "$node_num"
+  #  update_property "$start-nodesh_file" "NODE_ROLE" "$node_role"
+
+
 }
 
 # -----------------------------------------------------------------------------
