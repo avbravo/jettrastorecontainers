@@ -1169,6 +1169,11 @@ public class JettraStorePlugin {
         }
     }
 
+    public static final List<String> SUPPORTED_ENGINES = List.of(
+        "DOCUMENT", "KEY_VALUE", "COLUMNAR", "TIMESERIES", "GEOSPATIAL",
+        "GRAPH", "VECTOR", "JAVA_RECORD", "OBJECT"
+    );
+
     // --- Catálogo Multimodelo y Buckets ---
     private void initDatabaseCatalog() {
         databasesCatalog.clear();
@@ -1186,15 +1191,50 @@ public class JettraStorePlugin {
             "{\n  \"folio\": \"FAC-2026-002\",\n  \"emisor\": \"TechSolutions SRL\",\n  \"rfc\": \"TSO120404AB1\",\n  \"receptor\": \"Hotel Miramar\",\n  \"subtotal\": 5000.00,\n  \"iva\": 800.00,\n  \"total\": 5800.00,\n  \"metodoPago\": \"TARJETA_EMPRESARIAL\",\n  \"estado\": \"TIMBRADO_VALIDADO\"\n}", "2026-10-03 15:40:02", 1));
         facturas.getSampleRecords().add(new EngineRecordInfo("FAC-2026-003", "DOCUMENT", "Facturas", "Factura Logística Express $320.50 MXN",
             "{\n  \"folio\": \"FAC-2026-003\",\n  \"emisor\": \"Logística Express\",\n  \"rfc\": \"LEX050505MN9\",\n  \"receptor\": \"Consorcio Valle\",\n  \"subtotal\": 276.29,\n  \"iva\": 44.21,\n  \"total\": 320.50,\n  \"metodoPago\": \"TRANSFERENCIA_SPEI\",\n  \"estado\": \"PENDIENTE_PAGO\"\n}", "2026-10-03 17:05:44", 2));
+        for (int i = 4; i <= 25; i++) {
+            String folio = String.format("FAC-2026-%03d", i);
+            double sub = 450.00 + (i * 175.00);
+            double iva = Math.round(sub * 0.16 * 100.0) / 100.0;
+            double tot = Math.round((sub + iva) * 100.0) / 100.0;
+            String emisor = (i % 3 == 0) ? "Corp Global SA" : ((i % 2 == 0) ? "TechSolutions SRL" : "Servicios Industriales del Pacífico");
+            String estado = (i % 4 == 0) ? "PENDIENTE_PAGO" : "TIMBRADO_VALIDADO";
+            facturas.getSampleRecords().add(new EngineRecordInfo(
+                folio, "DOCUMENT", "Facturas",
+                String.format(Locale.US, "Factura %s $%,.2f MXN", emisor, tot),
+                String.format(Locale.US, "{\n  \"folio\": \"%s\",\n  \"emisor\": \"%s\",\n  \"rfc\": \"EMP9901%02dXYZ\",\n  \"receptor\": \"Cliente Corporativo #%d\",\n  \"subtotal\": %.2f,\n  \"iva\": %.2f,\n  \"total\": %.2f,\n  \"metodoPago\": \"TRANSFERENCIA_SPEI\",\n  \"estado\": \"%s\"\n}",
+                    folio, emisor, i, i, sub, iva, tot, estado),
+                String.format("2026-10-03 18:%02d:15", i), 1
+            ));
+        }
 
         EngineBucketInfo clientes = new EngineBucketInfo("example_factura_db", "Clientes", "RELATIONAL", 48_500L, 18_000_000L, "Catálogo maestro de contribuyentes y clientes");
         clientes.getIndexes().add(new EngineIndexInfo("idx_cliente_pk", "cliente_id", "BTREE", true, "READY"));
         clientes.getSampleRecords().add(new EngineRecordInfo("CLI-1001", "RELATIONAL", "Clientes", "Distribuidora Norte SA de CV",
             "{\n  \"cliente_id\": 1001,\n  \"razon_social\": \"Distribuidora Norte SA de CV\",\n  \"rfc\": \"DNO101010AA2\",\n  \"ciudad\": \"Monterrey\",\n  \"limite_credito\": 500000.00\n}", "2026-10-02 09:15:00", 1));
+        for (int i = 2; i <= 15; i++) {
+            int cid = 1000 + i;
+            clientes.getSampleRecords().add(new EngineRecordInfo(
+                "CLI-" + cid, "RELATIONAL", "Clientes",
+                "Grupo Empresarial Comercial #" + i + " SA de CV",
+                String.format(Locale.US, "{\n  \"cliente_id\": %d,\n  \"razon_social\": \"Grupo Empresarial Comercial #%d SA de CV\",\n  \"rfc\": \"GEC1502%02dBB%d\",\n  \"ciudad\": \"%s\",\n  \"limite_credito\": %.2f\n}",
+                    cid, i, i, (i % 9) + 1, (i % 2 == 0 ? "Guadalajara" : "Ciudad de México"), 150000.00 + (i * 25000.00)),
+                String.format("2026-10-02 10:%02d:00", i), 1
+            ));
+        }
 
         EngineBucketInfo ledger = new EngineBucketInfo("example_factura_db", "BalanceCache", "KEY_VALUE", 125_000L, 8_500_000L, "Saldos y balances contables en memoria rápida");
         ledger.getSampleRecords().add(new EngineRecordInfo("BAL_ACC_4001", "KEY_VALUE", "BalanceCache", "Balance Actual Cuenta #4001",
             "{\n  \"account\": \"4001\",\n  \"currency\": \"MXN\",\n  \"cleared_balance\": 482910.45,\n  \"last_recon\": \"2026-10-03T21:00:00Z\"\n}", "2026-10-03 21:00:00", 1));
+        for (int i = 2; i <= 15; i++) {
+            int acc = 4000 + i;
+            ledger.getSampleRecords().add(new EngineRecordInfo(
+                "BAL_ACC_" + acc, "KEY_VALUE", "BalanceCache",
+                "Balance Actual Cuenta #" + acc,
+                String.format(Locale.US, "{\n  \"account\": \"%d\",\n  \"currency\": \"%s\",\n  \"cleared_balance\": %.2f,\n  \"last_recon\": \"2026-10-03T21:%02d:00Z\"\n}",
+                    acc, (i % 3 == 0 ? "USD" : "MXN"), 85000.00 + (i * 14320.50), i),
+                String.format("2026-10-03 21:%02d:00", i), 1
+            ));
+        }
 
         facturaBuckets.add(facturas);
         facturaBuckets.add(clientes);
@@ -1205,11 +1245,31 @@ public class JettraStorePlugin {
         javaRecords.getIndexes().add(new EngineIndexInfo("idx_rec_id", "recordId", "BTREE", true, "READY"));
         javaRecords.getSampleRecords().add(new EngineRecordInfo("REC-ORD-501", "JAVA_RECORD", "CustomerRecords", "OrderSummary[id=501, client=Distribuidora]",
             "{\n  \"recordClass\": \"io.jettra.store.domain.OrderSummary\",\n  \"components\": {\n    \"orderId\": 501,\n    \"clientName\": \"Distribuidora Norte\",\n    \"total\": 12450.00,\n    \"currency\": \"USD\",\n    \"status\": \"APPROVED\"\n  }\n}", "2026-10-03 16:00:00", 1));
+        for (int i = 2; i <= 15; i++) {
+            int ordId = 500 + i;
+            javaRecords.getSampleRecords().add(new EngineRecordInfo(
+                "REC-ORD-" + ordId, "JAVA_RECORD", "CustomerRecords",
+                "OrderSummary[id=" + ordId + ", client=Corporativo_" + i + "]",
+                String.format(Locale.US, "{\n  \"recordClass\": \"io.jettra.store.domain.OrderSummary\",\n  \"components\": {\n    \"orderId\": %d,\n    \"clientName\": \"Corporativo_%d\",\n    \"total\": %.2f,\n    \"currency\": \"USD\",\n    \"status\": \"APPROVED\"\n  }\n}",
+                    ordId, i, 2400.00 + (i * 850.00)),
+                String.format("2026-10-03 16:%02d:00", i), 1
+            ));
+        }
 
         EngineBucketInfo objectsBucket = new EngineBucketInfo("example_factura_db", "DomainEntities", "OBJECT", 8_500L, 3_800_000L, "Entidades POJO / Objetos Java nativos");
         objectsBucket.getIndexes().add(new EngineIndexInfo("idx_obj_uuid", "uuid", "HASH", false, "READY"));
         objectsBucket.getSampleRecords().add(new EngineRecordInfo("OBJ-ENT-101", "OBJECT", "DomainEntities", "FiscalEntity[uuid=98a1-41fb, category=GENERAL]",
             "{\n  \"className\": \"io.jettra.model.FiscalEntity\",\n  \"serialVersion\": 1,\n  \"properties\": {\n    \"entityId\": \"ENT-101\",\n    \"taxCategory\": \"GENERAL_CORPORATE\",\n    \"auditState\": \"SYNCHRONIZED\",\n    \"lastCheckEpoch\": 1762194000\n  }\n}", "2026-10-03 16:30:00", 1));
+        for (int i = 2; i <= 15; i++) {
+            int entId = 100 + i;
+            objectsBucket.getSampleRecords().add(new EngineRecordInfo(
+                "OBJ-ENT-" + entId, "OBJECT", "DomainEntities",
+                "FiscalEntity[uuid=98a1-" + (4100 + i) + ", category=GENERAL]",
+                String.format(Locale.US, "{\n  \"className\": \"io.jettra.model.FiscalEntity\",\n  \"serialVersion\": 1,\n  \"properties\": {\n    \"entityId\": \"ENT-%d\",\n    \"taxCategory\": \"GENERAL_CORPORATE\",\n    \"auditState\": \"SYNCHRONIZED\",\n    \"lastCheckEpoch\": %d\n  }\n}",
+                    entId, 1762194000 + (i * 60)),
+                String.format("2026-10-03 16:%02d:00", 30 + i), 1
+            ));
+        }
 
         facturaBuckets.add(javaRecords);
         facturaBuckets.add(objectsBucket);
@@ -1221,16 +1281,46 @@ public class JettraStorePlugin {
         pacientes.getIndexes().add(new EngineIndexInfo("idx_paciente_hc", "numero_historia", "HASH", true, "READY"));
         pacientes.getSampleRecords().add(new EngineRecordInfo("HC-98210", "DOCUMENT", "Pacientes", "Paciente Juan Pérez - Traumatología",
             "{\n  \"hc\": \"HC-98210\",\n  \"nombre\": \"Juan Pérez\",\n  \"edad\": 42,\n  \"tipo_sangre\": \"O+\",\n  \"alergias\": [\"Penicilina\"],\n  \"servicio\": \"UCI_TRAUMA\",\n  \"estado\": \"ESTABLE\"\n}", "2026-10-03 11:10:00", 3));
+        for (int i = 1; i <= 14; i++) {
+            int hcNum = 98210 + i;
+            pacientes.getSampleRecords().add(new EngineRecordInfo(
+                "HC-" + hcNum, "DOCUMENT", "Pacientes",
+                "Paciente Clínico #" + i + " - Cardiología / Medicina Interna",
+                String.format(Locale.US, "{\n  \"hc\": \"HC-%d\",\n  \"nombre\": \"Paciente Clínico %d\",\n  \"edad\": %d,\n  \"tipo_sangre\": \"%s\",\n  \"servicio\": \"CARDIOLOGIA\",\n  \"estado\": \"ESTABLE\"\n}",
+                    hcNum, i, 25 + (i * 2), (i % 2 == 0 ? "A+" : "O+")),
+                String.format("2026-10-03 11:%02d:00", 10 + i), 1
+            ));
+        }
 
         EngineBucketInfo contagios = new EngineBucketInfo("samples_hostipal_db", "RedEpidemiologica", "GRAPH", 85_000L, 45_000_000L, "Grafo de transmisión, contactos y cerco sanitario");
         contagios.getIndexes().add(new EngineIndexInfo("idx_graph_adj", "source_node, target_node", "GRAPH_ADJACENCY", false, "READY"));
         contagios.getSampleRecords().add(new EngineRecordInfo("EDGE-4401", "GRAPH", "RedEpidemiologica", "Nodo A01 ──[CONTACTO_DIRECTO]──> Nodo B14",
             "{\n  \"edge_id\": \"EDGE-4401\",\n  \"source\": \"P-98210\",\n  \"target\": \"P-99104\",\n  \"rel\": \"CONTACTO_DIRECTO_UCI\",\n  \"fecha_contacto\": \"2026-10-01\",\n  \"probabilidad_infeccion\": 0.87\n}", "2026-10-02 18:30:00", 1));
+        for (int i = 2; i <= 15; i++) {
+            int edgeNum = 4400 + i;
+            contagios.getSampleRecords().add(new EngineRecordInfo(
+                "EDGE-" + edgeNum, "GRAPH", "RedEpidemiologica",
+                String.format("Nodo A%02d ──[CONTACTO_DIRECTO]──> Nodo B%02d", i, i + 14),
+                String.format(Locale.US, "{\n  \"edge_id\": \"EDGE-%d\",\n  \"source\": \"P-%d\",\n  \"target\": \"P-%d\",\n  \"rel\": \"CONTACTO_DIRECTO_UCI\",\n  \"fecha_contacto\": \"2026-10-02\",\n  \"probabilidad_infeccion\": %.2f\n}",
+                    edgeNum, 98210 + i, 99104 + i, 0.35 + (i * 0.03)),
+                String.format("2026-10-02 18:%02d:00", 30 + i), 1
+            ));
+        }
 
         EngineBucketInfo embeddings = new EngineBucketInfo("samples_hostipal_db", "DiagnosticoEmbeddings", "VECTOR", 40_000L, 95_000_000L, "Embeddings densos 1536d para búsqueda semántica diagnóstica");
         embeddings.getIndexes().add(new EngineIndexInfo("idx_vector_hnsw", "vector_embedding", "VECTOR_HNSW", false, "READY"));
         embeddings.getSampleRecords().add(new EngineRecordInfo("VEC-MED-01", "VECTOR", "DiagnosticoEmbeddings", "Vector Diagnóstico TAC Pulmonar",
             "{\n  \"id\": \"VEC-MED-01\",\n  \"dims\": 1536,\n  \"model\": \"biomed-clip-v3\",\n  \"embedding_preview\": [0.0421, -0.1982, 0.4421, 0.0891, -0.0024],\n  \"etiqueta\": \"Neumonia_Bilateral_Grave\"\n}", "2026-10-03 08:00:00", 1));
+        for (int i = 2; i <= 15; i++) {
+            String vecId = String.format("VEC-MED-%02d", i);
+            embeddings.getSampleRecords().add(new EngineRecordInfo(
+                vecId, "VECTOR", "DiagnosticoEmbeddings",
+                "Vector Diagnóstico Biomédico #" + i,
+                String.format(Locale.US, "{\n  \"id\": \"%s\",\n  \"dims\": 1536,\n  \"model\": \"biomed-clip-v3\",\n  \"embedding_preview\": [%.4f, -0.1520, 0.3810, 0.0912, -0.0110],\n  \"etiqueta\": \"Estudio_Imagenologia_%d\"\n}",
+                    vecId, 0.0200 + (i * 0.0115), i),
+                String.format("2026-10-03 08:%02d:00", i), 1
+            ));
+        }
 
         hospBuckets.add(pacientes);
         hospBuckets.add(contagios);
@@ -1243,11 +1333,32 @@ public class JettraStorePlugin {
         sensores.getIndexes().add(new EngineIndexInfo("idx_ts_brin", "timestamp, sensor_id", "TIMESERIES_BRIN", false, "READY"));
         sensores.getSampleRecords().add(new EngineRecordInfo("TS-CO2-991", "TIMESERIES", "SensorMetrics", "Sensor Norte CO2: 412 ppm",
             "{\n  \"sensor_id\": \"SN-01-NORTE\",\n  \"metric\": \"CO2_PPM\",\n  \"value\": 412.8,\n  \"temp_c\": 24.6,\n  \"hum_pct\": 58.2,\n  \"calidad_aire\": \"BUENA\"\n}", "2026-10-03 21:55:00", 1));
+        for (int i = 2; i <= 15; i++) {
+            int tsNum = 990 + i;
+            double ppm = 410.0 + (i * 1.8);
+            sensores.getSampleRecords().add(new EngineRecordInfo(
+                "TS-CO2-" + tsNum, "TIMESERIES", "SensorMetrics",
+                String.format(Locale.US, "Sensor Ambiental #%d CO2: %.1f ppm", i, ppm),
+                String.format(Locale.US, "{\n  \"sensor_id\": \"SN-%02d-ZONA\",\n  \"metric\": \"CO2_PPM\",\n  \"value\": %.1f,\n  \"temp_c\": %.1f,\n  \"hum_pct\": 55.0,\n  \"calidad_aire\": \"BUENA\"\n}",
+                    i, ppm, 22.0 + (i * 0.4)),
+                String.format("2026-10-03 21:%02d:00", 40 + i), 1
+            ));
+        }
 
         EngineBucketInfo estaciones = new EngineBucketInfo("samples_ambiental_db", "EstacionesGeo", "GEOSPATIAL", 1_200L, 1_500_000L, "Estaciones meteorológicas y polígonos de alerta");
         estaciones.getIndexes().add(new EngineIndexInfo("idx_geo_rtree", "coordinates", "SPATIAL_R_TREE", false, "READY"));
         estaciones.getSampleRecords().add(new EngineRecordInfo("GEO-EST-01", "GEOSPATIAL", "EstacionesGeo", "Estación Central Valle de México",
             "{\n  \"station_id\": \"EST-CENTRAL-01\",\n  \"lat\": 19.4326,\n  \"lng\": -99.1332,\n  \"altitud_m\": 2240,\n  \"zona\": \"Metropolitana Central\"\n}", "2026-10-01 00:00:00", 1));
+        for (int i = 2; i <= 15; i++) {
+            String geoId = String.format("GEO-EST-%02d", i);
+            estaciones.getSampleRecords().add(new EngineRecordInfo(
+                geoId, "GEOSPATIAL", "EstacionesGeo",
+                "Estación Monitoreo Geoespacial #" + i,
+                String.format(Locale.US, "{\n  \"station_id\": \"EST-MET-%02d\",\n  \"lat\": %.4f,\n  \"lng\": %.4f,\n  \"altitud_m\": %d,\n  \"zona\": \"Sector Ambiental %d\"\n}",
+                    i, 19.4000 + (i * 0.015), -99.1000 - (i * 0.012), 2200 + (i * 5), i),
+                String.format("2026-10-01 00:%02d:00", i), 1
+            ));
+        }
 
         ambBuckets.add(sensores);
         ambBuckets.add(estaciones);
@@ -1258,6 +1369,16 @@ public class JettraStorePlugin {
         EngineBucketInfo raft = new EngineBucketInfo("system_metadata_db", "RaftLogEntries", "COLUMNAR", 650_000L, 85_000_000L, "Entradas de consenso Raft y transacciones WAL");
         raft.getSampleRecords().add(new EngineRecordInfo("WAL-TERM8-1004", "COLUMNAR", "RaftLogEntries", "Compromiso de Bloque Raft Term 8",
             "{\n  \"term\": 8,\n  \"index\": 1004,\n  \"leader\": \"node-01\",\n  \"quorum_nodes\": [\"node-01\", \"node-02\", \"node-03\"],\n  \"status\": \"COMMITTED\"\n}", "2026-10-03 21:58:12", 1));
+        for (int i = 2; i <= 15; i++) {
+            int walIdx = 1003 + i;
+            raft.getSampleRecords().add(new EngineRecordInfo(
+                "WAL-TERM8-" + walIdx, "COLUMNAR", "RaftLogEntries",
+                "Compromiso de Bloque Raft Term 8 #" + walIdx,
+                String.format(Locale.US, "{\n  \"term\": 8,\n  \"index\": %d,\n  \"leader\": \"node-01\",\n  \"quorum_nodes\": [\"node-01\", \"node-02\", \"node-03\"],\n  \"status\": \"COMMITTED\"\n}",
+                    walIdx),
+                String.format("2026-10-03 21:58:%02d", 10 + i), 1
+            ));
+        }
 
         metaBuckets.add(raft);
         databasesCatalog.put("system_metadata_db", metaBuckets);
@@ -1283,19 +1404,59 @@ public class JettraStorePlugin {
         return list.isEmpty() ? null : list.get(0);
     }
 
+    public synchronized boolean createDatabase(String dbName, String description) {
+        return createDatabase(dbName, null, null, description);
+    }
+
     public synchronized boolean createDatabase(String dbName, String defaultBucket, String engineType, String description) {
         if (dbName == null || dbName.isBlank()) return false;
         String cleanName = dbName.trim().toLowerCase().replaceAll("[^a-z0-9_]", "_");
         if (databasesCatalog.containsKey(cleanName)) return false;
+
+        String baseDesc = (description != null && !description.isBlank())
+            ? description.trim()
+            : "Base de datos multimodelo " + cleanName;
+
         List<EngineBucketInfo> buckets = new ArrayList<>();
-        String bName = (defaultBucket != null && !defaultBucket.isBlank()) ? defaultBucket.trim() : "DefaultBucket";
-        String eType = (engineType != null && !engineType.isBlank()) ? engineType.trim().toUpperCase() : "DOCUMENT";
-        String desc = (description != null && !description.isBlank()) ? description.trim() : "Almacén inicial de base de datos " + cleanName;
-        EngineBucketInfo b = new EngineBucketInfo(cleanName, bName, eType, 0L, 0L, desc);
-        b.getIndexes().add(new EngineIndexInfo("idx_" + bName.toLowerCase() + "_id", "id", "BTREE", true, "READY"));
-        buckets.add(b);
+
+        // Si se especificó un bucket explícito adicional, registrarlo primero
+        if (defaultBucket != null && !defaultBucket.isBlank() && !"DefaultBucket".equalsIgnoreCase(defaultBucket.trim())) {
+            String customBucket = defaultBucket.trim();
+            String customEngine = (engineType != null && !engineType.isBlank()) ? engineType.trim().toUpperCase() : "DOCUMENT";
+            EngineBucketInfo custom = new EngineBucketInfo(cleanName, customBucket, customEngine, 0L, 0L, baseDesc);
+            custom.getIndexes().add(new EngineIndexInfo("idx_" + customBucket.toLowerCase().replaceAll("[^a-z0-9]", "_") + "_id", "id", "BTREE", true, "READY"));
+            buckets.add(custom);
+        }
+
+        // Habilitar de forma nativa los 9 motores (engines) de JettraStore para la base de datos
+        String[][] nineEngines = {
+            {"DOCUMENT",    "Documents",   "BTREE",           "id",          "Motor Documental (JSON / BSON) — " + baseDesc},
+            {"KEY_VALUE",   "KeyValue",    "HASH",            "key",         "Motor Clave-Valor Off-Heap — " + baseDesc},
+            {"COLUMNAR",    "Columnar",    "BTREE",           "chunk_id",    "Motor Analítico Columnar OLAP — " + baseDesc},
+            {"TIMESERIES",  "TimeSeries",  "TIMESERIES_BRIN", "timestamp",   "Motor de Series Temporales e IoT — " + baseDesc},
+            {"GEOSPATIAL",  "Geospatial",  "SPATIAL_R_TREE",  "coordinates", "Motor Geoespacial GeoJSON & R-Tree — " + baseDesc},
+            {"GRAPH",       "Graph",       "GRAPH_ADJACENCY", "source_node", "Motor de Grafos (Nodos y Aristas) — " + baseDesc},
+            {"VECTOR",      "Vector",      "VECTOR_HNSW",     "embedding",   "Motor Vectorial HNSW Embeddings — " + baseDesc},
+            {"JAVA_RECORD", "JavaRecords", "BTREE",           "recordId",    "Motor Java 25 Canonical Records — " + baseDesc},
+            {"OBJECT",      "Objects",     "HASH",            "uuid",        "Motor de Objetos y Entidades POJO — " + baseDesc}
+        };
+
+        for (String[] eng : nineEngines) {
+            String eType = eng[0];
+            String bName = eng[1];
+            String idxType = eng[2];
+            String idxField = eng[3];
+            String eDesc = eng[4];
+            boolean exists = buckets.stream().anyMatch(b -> b.getBucketName().equalsIgnoreCase(bName));
+            if (!exists) {
+                EngineBucketInfo b = new EngineBucketInfo(cleanName, bName, eType, 0L, 0L, eDesc);
+                b.getIndexes().add(new EngineIndexInfo("idx_" + bName.toLowerCase() + "_" + idxField, idxField, idxType, true, "READY"));
+                buckets.add(b);
+            }
+        }
+
         databasesCatalog.put(cleanName, buckets);
-        logPoliceIncident("Catalog Patrol", "Base de datos '" + cleanName + "' creada con motor " + eType, "OK", "Metadatos registrados en catálogo");
+        logPoliceIncident("Catalog Patrol", "Base de datos '" + cleanName + "' creada con soporte nativo para los 9 motores de JettraStore", "OK", "9 engines multimodelo registrados en catálogo");
         return true;
     }
 

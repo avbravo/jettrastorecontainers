@@ -24,6 +24,8 @@ import java.util.List;
  */
 public class RecordExplorerFluxView extends FluxView {
 
+    public static final int DEFAULT_PAGE_SIZE = 10;
+
     private final String activeDb;
     private final String activeBucket;
     private final String searchQuery;
@@ -32,10 +34,12 @@ public class RecordExplorerFluxView extends FluxView {
     private final String historyRecordId;
     private final boolean showCreateForm;
     private final String message;
+    private final int requestedPage;
+    private final int pageSize;
 
     public RecordExplorerFluxView(String activeDb, String activeBucket, String searchQuery,
                                   String editRecordId, String viewRecordId, String historyRecordId,
-                                  boolean showCreateForm, String message) {
+                                  boolean showCreateForm, String message, int page, int pageSize) {
         this.activeDb = activeDb;
         this.activeBucket = activeBucket;
         this.searchQuery = searchQuery != null ? searchQuery : "";
@@ -44,11 +48,21 @@ public class RecordExplorerFluxView extends FluxView {
         this.historyRecordId = historyRecordId;
         this.showCreateForm = showCreateForm;
         this.message = message;
+        this.requestedPage = Math.max(1, page);
+        this.pageSize = pageSize > 0 ? Math.min(100, pageSize) : DEFAULT_PAGE_SIZE;
+    }
+
+    public RecordExplorerFluxView(String activeDb, String activeBucket, String searchQuery,
+                                  String editRecordId, String viewRecordId, String historyRecordId,
+                                  boolean showCreateForm, String message) {
+        this(activeDb, activeBucket, searchQuery, editRecordId, viewRecordId, historyRecordId,
+             showCreateForm, message, 1, DEFAULT_PAGE_SIZE);
     }
 
     public RecordExplorerFluxView(String activeDb, String activeBucket, String searchQuery,
                                   String editRecordId, String viewRecordId, boolean showCreateForm, String message) {
-        this(activeDb, activeBucket, searchQuery, editRecordId, viewRecordId, null, showCreateForm, message);
+        this(activeDb, activeBucket, searchQuery, editRecordId, viewRecordId, null,
+             showCreateForm, message, 1, DEFAULT_PAGE_SIZE);
     }
 
     @Override
@@ -74,6 +88,10 @@ public class RecordExplorerFluxView extends FluxView {
             records = (bucketInfo != null) ? bucketInfo.getSampleRecords() : List.of();
         }
 
+        int totalRecords = records.size();
+        int totalPages = Math.max(1, (int) Math.ceil((double) totalRecords / pageSize));
+        int currentPage = Math.max(1, Math.min(requestedPage, totalPages));
+
         // 1. Notificación Flash si existe
         Widget flashWidget = null;
         if (message != null && !message.isBlank()) {
@@ -88,7 +106,7 @@ public class RecordExplorerFluxView extends FluxView {
         Widget bucketSelector = buildBucketSelector(buckets, currentDb, currentBucket);
 
         // 3. Barra de Búsqueda y Botón "+ Nuevo Registro"
-        Widget searchAndActions = buildSearchToolbar(currentDb, currentBucket, searchQuery, records.size());
+        Widget searchAndActions = buildSearchToolbar(currentDb, currentBucket, searchQuery, totalRecords, currentPage, totalPages, pageSize);
 
         // 4. Panel Formulario Crear / Editar Registro si está activo
         Widget formPanel = null;
@@ -111,8 +129,8 @@ public class RecordExplorerFluxView extends FluxView {
             }
         }
 
-        // 5. Tabla de Registros CRUD
-        Widget recordsTable = buildRecordsTable(records, currentDb, currentBucket);
+        // 5. Tabla de Registros CRUD con Paginación
+        Widget recordsTable = buildRecordsTable(records, currentDb, currentBucket, searchQuery, currentPage, totalPages, pageSize);
 
         List<Widget> rootChildren = new java.util.ArrayList<>();
         if (flashWidget != null) rootChildren.add(flashWidget);
@@ -174,24 +192,26 @@ public class RecordExplorerFluxView extends FluxView {
         return RawHtml.of(sb.toString());
     }
 
-    private Widget buildSearchToolbar(String currentDb, String currentBucket, String query, int count) {
+    private Widget buildSearchToolbar(String currentDb, String currentBucket, String query,
+                                      int totalRecords, int currentPage, int totalPages, int currentPageSize) {
         RawHtml html = RawHtml.of(String.format("""
             <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.75rem; margin-bottom: 1.25rem;">
-              <form method="GET" action="/explorer" style="display: flex; gap: 0.5rem; flex: 1; max-width: 520px;">
+              <form method="GET" action="/explorer" style="display: flex; gap: 0.5rem; flex: 1; max-width: 560px;">
                 <input type="hidden" name="db" value="%s" />
                 <input type="hidden" name="bucket" value="%s" />
+                <input type="hidden" name="size" value="%d" />
                 <input class="app-input" type="text" name="q" value="%s" placeholder="🔍 Buscar por ID, texto o valor JSON..." />
                 <button type="submit" class="app-btn-secondary">Buscar</button>
                 %s
               </form>
               <div style="display: flex; align-items: center; gap: 0.75rem;">
-                <span style="font-size: 0.85rem; color: var(--text-muted); font-weight: 600;">%d registros encontrados</span>
+                <span style="font-size: 0.85rem; color: var(--text-muted); font-weight: 600;">%d registros encontrados • Página %d de %d</span>
                 <a href="/explorer?db=%s&bucket=%s&action=new" class="app-btn-primary">➕ Nuevo Registro (Create)</a>
               </div>
             </div>
-        """, currentDb, currentBucket, escapeHtml(query),
-             (query != null && !query.isBlank() ? "<a href='/explorer?db=" + currentDb + "&bucket=" + currentBucket + "' class='app-btn-secondary'>Limpiar</a>" : ""),
-             count, currentDb, currentBucket));
+        """, currentDb, currentBucket, currentPageSize, escapeHtml(query),
+             (query != null && !query.isBlank() ? "<a href='/explorer?db=" + currentDb + "&bucket=" + currentBucket + "&size=" + currentPageSize + "' class='app-btn-secondary'>Limpiar</a>" : ""),
+             totalRecords, currentPage, totalPages, currentDb, currentBucket));
 
         return html;
     }
@@ -307,19 +327,28 @@ public class RecordExplorerFluxView extends FluxView {
         return card;
     }
 
-    private Widget buildRecordsTable(List<EngineRecordInfo> records, String currentDb, String currentBucket) {
-        if (records.isEmpty()) {
+    private Widget buildRecordsTable(List<EngineRecordInfo> allRecords, String currentDb, String currentBucket,
+                                     String query, int currentPage, int totalPages, int currentPageSize) {
+        if (allRecords.isEmpty()) {
             return Div.of(
                 Header.of(4, "No hay registros disponibles en este bucket.").modifier(new Modifier().style("color: var(--text-muted); margin: 2rem 0; text-align: center;"))
             );
         }
+
+        int totalRecords = allRecords.size();
+        int fromIndex = Math.max(0, Math.min((currentPage - 1) * currentPageSize, totalRecords));
+        int toIndex = Math.min(fromIndex + currentPageSize, totalRecords);
+        List<EngineRecordInfo> pageRecords = allRecords.subList(fromIndex, toIndex);
+
+        String queryParam = (query != null && !query.isBlank()) ? "&q=" + encodeUrlParam(query) : "";
+        String pageContextParams = "&page=" + currentPage + "&size=" + currentPageSize + queryParam;
 
         StringBuilder table = new StringBuilder();
         table.append("<table class=\"app-table\">");
         table.append("<thead><tr><th>ID</th><th>Motor</th><th>Resumen</th><th>Versión</th><th>Fecha Mutación</th><th>Acciones</th></tr></thead>");
         table.append("<tbody>");
 
-        for (EngineRecordInfo r : records) {
+        for (EngineRecordInfo r : pageRecords) {
             String engineColor = switch (r.getEngineType()) {
                 case "DOCUMENT" -> "#00d4ff";
                 case "RELATIONAL" -> "#ffd700";
@@ -343,19 +372,121 @@ public class RecordExplorerFluxView extends FluxView {
             table.append("<td><span style='color:#ffd700; font-weight:600;'>v").append(r.getVersion()).append("</span></td>");
             table.append("<td style='color:var(--text-muted); font-size:0.8rem;'>").append(r.getTimestamp()).append("</td>");
             table.append("<td>");
-            table.append("<a href='/explorer?db=").append(currentDb).append("&bucket=").append(currentBucket).append("&view_id=").append(r.getId()).append("' class='app-btn-secondary' style='margin-right:5px; padding:0.3rem 0.6rem; font-size:0.78rem;'>👁️ Ver</a>");
-            table.append("<a href='/explorer?db=").append(currentDb).append("&bucket=").append(currentBucket).append("&edit_id=").append(r.getId()).append("' class='app-btn-secondary' style='margin-right:5px; padding:0.3rem 0.6rem; font-size:0.78rem;'>✏️ Editar</a>");
-            table.append("<a href='/explorer?db=").append(currentDb).append("&bucket=").append(currentBucket).append("&history_id=").append(r.getId()).append("' class='app-btn-secondary' style='margin-right:5px; padding:0.3rem 0.6rem; font-size:0.78rem; background:rgba(16,185,129,0.15); border-color:#10b981; color:#10b981;'>🕒 Versiones</a>");
-            table.append("<a href='/explorer?action=delete_record&db=").append(currentDb).append("&bucket=").append(currentBucket).append("&recordId=").append(r.getId()).append("' class='app-btn-danger' style='padding:0.3rem 0.6rem; font-size:0.78rem;' onclick=\"return confirm('¿Seguro de eliminar el registro ").append(r.getId()).append("?');\">🗑️</a>");
+            table.append("<a href='/explorer?db=").append(currentDb).append("&bucket=").append(currentBucket).append("&view_id=").append(r.getId()).append(pageContextParams).append("' class='app-btn-secondary' style='margin-right:5px; padding:0.3rem 0.6rem; font-size:0.78rem;'>👁️ Ver</a>");
+            table.append("<a href='/explorer?db=").append(currentDb).append("&bucket=").append(currentBucket).append("&edit_id=").append(r.getId()).append(pageContextParams).append("' class='app-btn-secondary' style='margin-right:5px; padding:0.3rem 0.6rem; font-size:0.78rem;'>✏️ Editar</a>");
+            table.append("<a href='/explorer?db=").append(currentDb).append("&bucket=").append(currentBucket).append("&history_id=").append(r.getId()).append(pageContextParams).append("' class='app-btn-secondary' style='margin-right:5px; padding:0.3rem 0.6rem; font-size:0.78rem; background:rgba(16,185,129,0.15); border-color:#10b981; color:#10b981;'>🕒 Versiones</a>");
+            table.append("<a href='/explorer?action=delete_record&db=").append(currentDb).append("&bucket=").append(currentBucket).append("&recordId=").append(r.getId()).append(pageContextParams).append("' class='app-btn-danger' style='padding:0.3rem 0.6rem; font-size:0.78rem;' onclick=\"return confirm('¿Seguro de eliminar el registro ").append(r.getId()).append("?');\">🗑️</a>");
             table.append("</td>");
             table.append("</tr>");
         }
 
         table.append("</tbody></table>");
 
+        // Controles de Paginación y Desplazamiento entre Páginas
+        table.append(buildPaginationHtml(currentDb, currentBucket, query, currentPage, totalPages, currentPageSize, fromIndex + 1, toIndex, totalRecords));
+
         Div card = Div.of(RawHtml.of(table.toString()));
         card.modifier(new Modifier().cssClass("ui-card"));
         return card;
+    }
+
+    private String buildPaginationHtml(String currentDb, String currentBucket, String query,
+                                       int currentPage, int totalPages, int currentPageSize,
+                                       int startRecord, int endRecord, int totalRecords) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("<div class='explorer-pagination-bar' data-pagination='explorer-records' style='display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.85rem; margin-top: 1.1rem; padding-top: 0.9rem; border-top: 1px solid var(--border-subtle);'>");
+
+        // Indicador de rango y selector de tamaño de página
+        sb.append("<div style='display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; font-size: 0.84rem; color: var(--text-muted);'>");
+        sb.append("<span>Mostrando <strong style='color: var(--text-main);'>").append(startRecord).append(" - ").append(endRecord)
+          .append("</strong> de <strong style='color: #00d4ff;'>").append(totalRecords)
+          .append("</strong> registros (Página <strong style='color: #ffd700;'>").append(currentPage)
+          .append("</strong> de <strong>").append(totalPages).append("</strong>)</span>");
+
+        sb.append("<form method='GET' action='/explorer' style='display: inline-flex; align-items: center; gap: 0.4rem; margin: 0;'>");
+        sb.append("<input type='hidden' name='db' value='").append(escapeHtml(currentDb)).append("' />");
+        sb.append("<input type='hidden' name='bucket' value='").append(escapeHtml(currentBucket)).append("' />");
+        if (query != null && !query.isBlank()) {
+            sb.append("<input type='hidden' name='q' value='").append(escapeHtml(query)).append("' />");
+        }
+        sb.append("<input type='hidden' name='page' value='1' />");
+        sb.append("<label style='font-size: 0.78rem; color: var(--text-muted);'>Filas por página:</label>");
+        sb.append("<select name='size' class='app-input' style='width: auto; padding: 0.25rem 0.5rem; height: 30px; font-size: 0.8rem;' onchange='this.form.submit()'>");
+        for (int opt : new int[]{5, 10, 20, 50}) {
+            sb.append("<option value='").append(opt).append("'").append(opt == currentPageSize ? " selected" : "").append(">").append(opt).append("</option>");
+        }
+        sb.append("</select>");
+        sb.append("</form>");
+        sb.append("</div>");
+
+        // Botones de desplazamiento entre páginas (Primera, Anterior, Números, Siguiente, Última)
+        sb.append("<div class='pagination-controls' style='display: flex; align-items: center; gap: 0.35rem; flex-wrap: wrap;'>");
+
+        boolean hasPrev = currentPage > 1;
+        boolean hasNext = currentPage < totalPages;
+
+        String btnBaseStyle = "text-decoration: none; padding: 0.35rem 0.7rem; border-radius: 6px; font-size: 0.8rem; font-weight: 600; display: inline-flex; align-items: center; gap: 0.25rem; ";
+        String activeNavStyle = btnBaseStyle + "background: var(--bg-subtle); color: var(--text-main); border: 1px solid var(--border-subtle); cursor: pointer;";
+        String disabledNavStyle = btnBaseStyle + "background: rgba(255,255,255,0.03); color: var(--text-muted); border: 1px solid rgba(255,255,255,0.06); opacity: 0.45; pointer-events: none;";
+
+        // Primera y Anterior
+        if (hasPrev) {
+            sb.append("<a href='").append(buildPageUrl(currentDb, currentBucket, query, 1, currentPageSize))
+              .append("' data-page='1' style='").append(activeNavStyle).append("' title='Primera Página'>⏮ Primera</a>");
+            sb.append("<a href='").append(buildPageUrl(currentDb, currentBucket, query, currentPage - 1, currentPageSize))
+              .append("' data-page='").append(currentPage - 1).append("' style='").append(activeNavStyle).append("' title='Página Anterior'>◀ Anterior</a>");
+        } else {
+            sb.append("<span style='").append(disabledNavStyle).append("'>⏮ Primera</span>");
+            sb.append("<span style='").append(disabledNavStyle).append("'>◀ Anterior</span>");
+        }
+
+        // Números de página (ventana centrada)
+        int startPage = Math.max(1, currentPage - 2);
+        int endPage = Math.min(totalPages, startPage + 4);
+        if (endPage - startPage < 4) {
+            startPage = Math.max(1, endPage - 4);
+        }
+
+        for (int p = startPage; p <= endPage; p++) {
+            if (p == currentPage) {
+                sb.append("<span data-current-page='").append(p).append("' style='").append(btnBaseStyle)
+                  .append("background: #00d4ff; color: #050b14; font-weight: 800; border: 1px solid #00d4ff;'>").append(p).append("</span>");
+            } else {
+                sb.append("<a href='").append(buildPageUrl(currentDb, currentBucket, query, p, currentPageSize))
+                  .append("' data-page='").append(p).append("' style='").append(activeNavStyle).append("'>").append(p).append("</a>");
+            }
+        }
+
+        // Siguiente y Última
+        if (hasNext) {
+            sb.append("<a href='").append(buildPageUrl(currentDb, currentBucket, query, currentPage + 1, currentPageSize))
+              .append("' data-page='").append(currentPage + 1).append("' style='").append(activeNavStyle).append("' title='Página Siguiente'>Siguiente ▶</a>");
+            sb.append("<a href='").append(buildPageUrl(currentDb, currentBucket, query, totalPages, currentPageSize))
+              .append("' data-page='").append(totalPages).append("' style='").append(activeNavStyle).append("' title='Última Página'>Última ⏭</a>");
+        } else {
+            sb.append("<span style='").append(disabledNavStyle).append("'>Siguiente ▶</span>");
+            sb.append("<span style='").append(disabledNavStyle).append("'>Última ⏭</span>");
+        }
+
+        sb.append("</div>");
+        sb.append("</div>");
+        return sb.toString();
+    }
+
+    private String buildPageUrl(String db, String bucket, String query, int page, int size) {
+        StringBuilder url = new StringBuilder("/explorer?db=").append(encodeUrlParam(db))
+                .append("&bucket=").append(encodeUrlParam(bucket))
+                .append("&page=").append(page)
+                .append("&size=").append(size);
+        if (query != null && !query.isBlank()) {
+            url.append("&q=").append(encodeUrlParam(query));
+        }
+        return url.toString();
+    }
+
+    private static String encodeUrlParam(String val) {
+        if (val == null) return "";
+        return java.net.URLEncoder.encode(val, java.nio.charset.StandardCharsets.UTF_8);
     }
 
     private Widget buildVersionHistoryPanel(String currentDb, String currentBucket, EngineRecordInfo rec) {

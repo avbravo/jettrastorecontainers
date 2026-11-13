@@ -165,7 +165,20 @@ public class EngineExplorerPage extends ExplorerTemplatePage {
             idxTable.append("</tbody></table></div>");
             mainContent = Paragraph.of(idxTable.toString());
         } else {
-            // Tabla de Registros
+            // Tabla de Registros con Paginación
+            int page = 1;
+            int pageSize = 10;
+            try { page = Math.max(1, Integer.parseInt(params.getOrDefault("page", "1").trim())); } catch (Exception ignored) {}
+            try { pageSize = Math.max(1, Math.min(100, Integer.parseInt(params.getOrDefault("size", "10").trim()))); } catch (Exception ignored) {}
+
+            List<EngineRecordInfo> allRecords = qResult.records();
+            int totalRecords = allRecords.size();
+            int totalPages = Math.max(1, (int) Math.ceil((double) totalRecords / pageSize));
+            int currentPage = Math.max(1, Math.min(page, totalPages));
+            int fromIdx = Math.max(0, Math.min((currentPage - 1) * pageSize, totalRecords));
+            int toIdx = Math.min(fromIdx + pageSize, totalRecords);
+            List<EngineRecordInfo> pageRecords = totalRecords == 0 ? List.of() : allRecords.subList(fromIdx, toIdx);
+
             StringBuilder recTable = new StringBuilder();
             recTable.append("<div style='overflow-x:auto; background:rgba(10, 18, 28, 0.85); border:1px solid rgba(0, 212, 255, 0.25); border-radius:8px; padding:15px;'>")
                     .append("<table style='width:100%; border-collapse:collapse; font-size:0.85rem; color:#cbd5e1;'>")
@@ -173,8 +186,8 @@ public class EngineExplorerPage extends ExplorerTemplatePage {
                     .append("<th style='padding:8px;'>ID Registro</th><th style='padding:8px;'>Motor</th><th style='padding:8px;'>Resumen</th><th style='padding:8px;'>Versión</th><th style='padding:8px;'>Fecha Actualización</th><th style='padding:8px; text-align:right;'>Acciones</th>")
                     .append("</tr></thead><tbody>");
 
-            if (!qResult.records().isEmpty()) {
-                for (EngineRecordInfo r : qResult.records()) {
+            if (!pageRecords.isEmpty()) {
+                for (EngineRecordInfo r : pageRecords) {
                     recTable.append("<tr style='border-bottom:1px solid rgba(255,255,255,0.05);'>")
                             .append("<td style='padding:8px; font-weight:700; color:#ffd700; font-family:monospace;'>").append(r.getId()).append("</td>")
                             .append("<td style='padding:8px;'><span class='police-badge-blue'>").append(r.getEngineType()).append("</span></td>")
@@ -182,7 +195,7 @@ public class EngineExplorerPage extends ExplorerTemplatePage {
                             .append("<td style='padding:8px;'><span class='police-badge-gold'>v").append(r.getVersion()).append("</span></td>")
                             .append("<td style='padding:8px; color:#64748b;'>").append(r.getTimestamp()).append("</td>")
                             .append("<td style='padding:8px; text-align:right;'>")
-                            .append("<a href='").append(JettraServer.resolvePath("/explorer?db=" + activeDb + "&bucket=" + activeBucket + "&view=" + r.getId()))
+                            .append("<a href='").append(JettraServer.resolvePath("/explorer?db=" + activeDb + "&bucket=" + activeBucket + "&view=" + r.getId() + "&page=" + currentPage + "&size=" + pageSize))
                             .append("' style='text-decoration:none; padding:4px 8px; background:rgba(0,212,255,0.15); color:#00d4ff; border:1px solid #00d4ff; border-radius:4px; margin-right:6px;'>👁️ Ver</a>")
                             .append("<form method='POST' action='").append(JettraServer.resolvePath("/explorer"))
                             .append("' style='display:inline;' onsubmit='return confirm(\"¿Eliminar registro ").append(r.getId()).append("?\");'>")
@@ -197,7 +210,23 @@ public class EngineExplorerPage extends ExplorerTemplatePage {
             } else {
                 recTable.append("<tr><td colspan='6' style='padding:15px; text-align:center; color:#64748b;'>No se encontraron registros que coincidan con el filtro.</td></tr>");
             }
-            recTable.append("</tbody></table></div>");
+            recTable.append("</tbody></table>");
+            if (totalRecords > 0) {
+                String qSuffix = (query != null && !query.isBlank()) ? "&q=" + query : "";
+                recTable.append("<div style='display:flex; justify-content:space-between; align-items:center; margin-top:12px; padding-top:10px; border-top:1px solid rgba(0,212,255,0.2); font-size:0.82rem; color:#94a3b8;'>")
+                        .append("<span>Mostrando ").append(fromIdx + 1).append(" - ").append(toIdx).append(" de ").append(totalRecords).append(" registros (Página ").append(currentPage).append(" de ").append(totalPages).append(")</span>")
+                        .append("<div style='display:flex; gap:6px;'>");
+                if (currentPage > 1) {
+                    recTable.append("<a href='").append(JettraServer.resolvePath("/explorer?db=" + activeDb + "&bucket=" + activeBucket + "&page=1&size=" + pageSize + qSuffix)).append("' style='color:#00d4ff; text-decoration:none; padding:4px 8px; border:1px solid #00d4ff; border-radius:4px;'>⏮ Primera</a>");
+                    recTable.append("<a href='").append(JettraServer.resolvePath("/explorer?db=" + activeDb + "&bucket=" + activeBucket + "&page=" + (currentPage - 1) + "&size=" + pageSize + qSuffix)).append("' style='color:#00d4ff; text-decoration:none; padding:4px 8px; border:1px solid #00d4ff; border-radius:4px;'>◀ Anterior</a>");
+                }
+                if (currentPage < totalPages) {
+                    recTable.append("<a href='").append(JettraServer.resolvePath("/explorer?db=" + activeDb + "&bucket=" + activeBucket + "&page=" + (currentPage + 1) + "&size=" + pageSize + qSuffix)).append("' style='color:#00d4ff; text-decoration:none; padding:4px 8px; border:1px solid #00d4ff; border-radius:4px;'>Siguiente ▶</a>");
+                    recTable.append("<a href='").append(JettraServer.resolvePath("/explorer?db=" + activeDb + "&bucket=" + activeBucket + "&page=" + totalPages + "&size=" + pageSize + qSuffix)).append("' style='color:#00d4ff; text-decoration:none; padding:4px 8px; border:1px solid #00d4ff; border-radius:4px;'>Última ⏭</a>");
+                }
+                recTable.append("</div></div>");
+            }
+            recTable.append("</div>");
             mainContent = Paragraph.of(recTable.toString());
         }
 

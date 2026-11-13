@@ -992,4 +992,67 @@ public class JettraStoreExplorerTest {
             plugin.deleteRecord("example_factura_db", "Facturas", tempId);
         }
     }
+
+    @Test
+    @DisplayName("25. Paginación y Desplazamiento entre Páginas en Tabla de Resultados (/explorer)")
+    public void testExplorerPaginationAndPageNavigation() throws Exception {
+        // 1. Página 1 por defecto (10 registros por página de 25 totales en Facturas -> 3 páginas)
+        HttpResponse<String> page1Res = get("/explorer?db=example_factura_db&bucket=Facturas&page=1&size=10");
+        JettraAssert.assertEquals(200, page1Res.statusCode(), "Página 1 de /explorer debe responder HTTP 200");
+        JettraAssert.assertTrue(page1Res.body().contains("data-pagination='explorer-records'"), "Debe renderizar barra de paginación");
+        JettraAssert.assertTrue(page1Res.body().contains("FAC-2026-001"), "Página 1 debe mostrar FAC-2026-001");
+        JettraAssert.assertTrue(page1Res.body().contains("FAC-2026-010"), "Página 1 debe mostrar FAC-2026-010");
+        JettraAssert.assertFalse(page1Res.body().contains("FAC-2026-011"), "Página 1 no debe mostrar FAC-2026-011");
+        JettraAssert.assertTrue(page1Res.body().contains("Siguiente ▶"), "Debe incluir control de desplazamiento Siguiente ▶");
+        JettraAssert.assertTrue(page1Res.body().contains("Última ⏭"), "Debe incluir control de desplazamiento Última ⏭");
+
+        // 2. Desplazamiento a Página 2
+        HttpResponse<String> page2Res = get("/explorer?db=example_factura_db&bucket=Facturas&page=2&size=10");
+        JettraAssert.assertEquals(200, page2Res.statusCode(), "Página 2 de /explorer debe responder HTTP 200");
+        JettraAssert.assertFalse(page2Res.body().contains("FAC-2026-001"), "Página 2 no debe mostrar FAC-2026-001");
+        JettraAssert.assertTrue(page2Res.body().contains("FAC-2026-011"), "Página 2 debe mostrar FAC-2026-011");
+        JettraAssert.assertTrue(page2Res.body().contains("FAC-2026-020"), "Página 2 debe mostrar FAC-2026-020");
+        JettraAssert.assertFalse(page2Res.body().contains("FAC-2026-021"), "Página 2 no debe mostrar FAC-2026-021");
+        JettraAssert.assertTrue(page2Res.body().contains("⏮ Primera"), "Debe incluir enlace activo a Primera página");
+        JettraAssert.assertTrue(page2Res.body().contains("◀ Anterior"), "Debe incluir enlace activo a página Anterior");
+
+        // 3. Desplazamiento a Página 3 (Última página con registros 21 al 25)
+        HttpResponse<String> page3Res = get("/explorer?db=example_factura_db&bucket=Facturas&page=3&size=10");
+        JettraAssert.assertEquals(200, page3Res.statusCode(), "Página 3 de /explorer debe responder HTTP 200");
+        JettraAssert.assertTrue(page3Res.body().contains("FAC-2026-021"), "Página 3 debe mostrar FAC-2026-021");
+        JettraAssert.assertTrue(page3Res.body().contains("FAC-2026-025"), "Página 3 debe mostrar FAC-2026-025");
+        JettraAssert.assertFalse(page3Res.body().contains("FAC-2026-020"), "Página 3 no debe mostrar FAC-2026-020");
+    }
+
+    @Test
+    @DisplayName("26. Crear Nueva Base de Datos (/databases) sin solicitar Bucket ni Motor y con los 9 Engines de JettraStore")
+    public void testCreateNewDatabaseWithoutBucketOrEngineSupportsAll9Engines() throws Exception {
+        // 1. Verificar que el formulario "Crear Nueva Base de Datos" en /databases no solicita defaultBucket
+        HttpResponse<String> dbPageRes = get("/databases");
+        JettraAssert.assertEquals(200, dbPageRes.statusCode(), "/databases debe responder HTTP 200");
+        JettraAssert.assertTrue(dbPageRes.body().contains("Crear Nueva Base de Datos"), "Debe mostrar sección Crear Nueva Base de Datos");
+        JettraAssert.assertFalse(dbPageRes.body().contains("name=\"defaultBucket\""), "El formulario de nueva BD no debe solicitar defaultBucket");
+        JettraAssert.assertTrue(dbPageRes.body().contains("9 motores (engines) de JettraStore"), "Debe indicar soporte nativo de los 9 engines de JettraStore");
+
+        // 2. Crear nueva BD enviando únicamente dbName y description
+        String newDbName = "test_multimodel_9engines_db";
+        JettraStorePlugin plugin = JettraStorePlugin.getInstance();
+        plugin.deleteDatabase(newDbName);
+
+        try {
+            HttpResponse<String> createRes = postForm("/databases", "action=create_db&dbName=" + newDbName + "&description=Base_Multimodelo_9_Motores");
+            JettraAssert.assertEquals(302, createRes.statusCode(), "POST create_db sin bucket ni motor debe redirigir 302");
+
+            JettraAssert.assertTrue(plugin.getDatabaseNames().contains(newDbName), "La nueva BD debe estar registrada en el catálogo");
+            java.util.List<EngineBucketInfo> buckets = plugin.getBuckets(newDbName);
+            JettraAssert.assertEquals(9, buckets.size(), "La nueva BD debe habilitar automáticamente los 9 engines de JettraStore");
+
+            for (String expectedEngine : JettraStorePlugin.SUPPORTED_ENGINES) {
+                boolean hasEngine = buckets.stream().anyMatch(b -> expectedEngine.equalsIgnoreCase(b.getEngineType()));
+                JettraAssert.assertTrue(hasEngine, "La nueva BD debe incluir soporte para el motor " + expectedEngine);
+            }
+        } finally {
+            plugin.deleteDatabase(newDbName);
+        }
+    }
 }

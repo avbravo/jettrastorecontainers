@@ -429,7 +429,11 @@ public class App {
             String engineType = form.get("engineType");
             String description = form.get("description");
 
-            plugin.createDatabase(dbName, defaultBucket, engineType, description);
+            if (defaultBucket != null && !defaultBucket.isBlank()) {
+                plugin.createDatabase(dbName, defaultBucket, engineType, description);
+            } else {
+                plugin.createDatabase(dbName, description);
+            }
             redirect(resp, "/databases?db=" + dbName + "&msg=db_created");
             return;
         } else if ("add_bucket".equalsIgnoreCase(action)) {
@@ -480,6 +484,20 @@ public class App {
         String viewId = req.getQueryParam("view_id");
         String historyId = req.getQueryParam("history_id");
         String q = req.getQueryParam("q");
+        String pageStr = req.getQueryParam("page");
+        String sizeStr = req.getQueryParam("size");
+        if (sizeStr == null || sizeStr.isBlank()) {
+            sizeStr = req.getQueryParam("pageSize");
+        }
+        int page = 1;
+        int pageSize = RecordExplorerFluxView.DEFAULT_PAGE_SIZE;
+        if (pageStr != null && !pageStr.isBlank()) {
+            try { page = Math.max(1, Integer.parseInt(pageStr.trim())); } catch (Exception ignored) {}
+        }
+        if (sizeStr != null && !sizeStr.isBlank()) {
+            try { pageSize = Math.max(1, Math.min(100, Integer.parseInt(sizeStr.trim()))); } catch (Exception ignored) {}
+        }
+
         String msg = req.getQueryParam("msg");
         String messageText = null;
         if ("record_created".equals(msg)) messageText = "Registro creado exitosamente en el almacén.";
@@ -487,7 +505,7 @@ public class App {
         else if ("record_deleted".equals(msg)) messageText = "Registro eliminado del bucket.";
         else if ("version_restored".equals(msg)) messageText = "Versión previa restaurada exitosamente como nueva versión activa.";
 
-        Widget content = new RecordExplorerFluxView(db, bucket, q, editId, viewId, historyId, isNew, messageText);
+        Widget content = new RecordExplorerFluxView(db, bucket, q, editId, viewId, historyId, isNew, messageText, page, pageSize);
         renderTemplate(resp, server, getLoggedUser(req), "Explorador de Registros CRUD", "explorer", content);
     }
 

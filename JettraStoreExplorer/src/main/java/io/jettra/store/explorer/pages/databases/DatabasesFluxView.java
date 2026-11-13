@@ -106,37 +106,22 @@ public class DatabasesFluxView extends FluxView {
 
     private Widget buildCreateDbCard() {
         Header header = Header.of(3, "➕ Crear Nueva Base de Datos");
-        header.modifier(new Modifier().style("font-size: 1.1rem; color: var(--text-main); margin: 0 0 0.85rem 0;"));
+        header.modifier(new Modifier().style("font-size: 1.1rem; color: var(--text-main); margin: 0 0 0.5rem 0;"));
 
         RawHtml formHtml = RawHtml.of("""
+            <div style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 0.85rem;">
+              ⚡ Toda base de datos creada habilita automáticamente soporte nativo para los <strong style="color: #00d4ff;">9 motores (engines) de JettraStore</strong>:
+              <code>DOCUMENT</code>, <code>KEY_VALUE</code>, <code>COLUMNAR</code>, <code>TIMESERIES</code>, <code>GEOSPATIAL</code>, <code>GRAPH</code>, <code>VECTOR</code>, <code>JAVA_RECORD</code> y <code>OBJECT</code>.
+            </div>
             <form method="POST" action="/databases" style="display: flex; flex-wrap: wrap; gap: 0.85rem; align-items: flex-end;">
               <input type="hidden" name="action" value="create_db" />
-              <div style="flex: 1.5; min-width: 180px;">
+              <div style="flex: 1.5; min-width: 220px;">
                 <label style="font-size: 0.75rem; color: var(--text-muted); display: block; margin-bottom: 0.25rem; font-weight: 600;">Nombre de la Base de Datos</label>
                 <input class="app-input" type="text" name="dbName" placeholder="ecommerce_core_db" required />
               </div>
-              <div style="flex: 1.2; min-width: 140px;">
-                <label style="font-size: 0.75rem; color: var(--text-muted); display: block; margin-bottom: 0.25rem; font-weight: 600;">Bucket / Colección Inicial</label>
-                <input class="app-input" type="text" name="defaultBucket" placeholder="Productos" required />
-              </div>
-              <div style="flex: 1.2; min-width: 150px;">
-                <label style="font-size: 0.75rem; color: var(--text-muted); display: block; margin-bottom: 0.25rem; font-weight: 600;">Motor de Almacenamiento</label>
-                <select class="app-input" name="engineType">
-                  <option value="DOCUMENT">DOCUMENT (JSON / BSON)</option>
-                  <option value="RELATIONAL">RELATIONAL (Tabular / SQL)</option>
-                  <option value="KEY_VALUE">KEY_VALUE (Fast Memory Cache)</option>
-                  <option value="GRAPH">GRAPH (Nodos & Vértices)</option>
-                  <option value="VECTOR">VECTOR (HNSW Embeddings)</option>
-                  <option value="TIMESERIES">TIMESERIES (IoT & Métricas)</option>
-                  <option value="COLUMNAR">COLUMNAR (Analítica OLAP)</option>
-                  <option value="GEOSPATIAL">GEOSPATIAL (GeoJSON & R-Tree Spatial)</option>
-                  <option value="JAVA_RECORD">JAVA_RECORD (Java 17+ Records / DTOs)</option>
-                  <option value="OBJECT">OBJECT (Java Serialized / POJO Entity)</option>
-                </select>
-              </div>
-              <div style="flex: 2; min-width: 200px;">
+              <div style="flex: 2.5; min-width: 260px;">
                 <label style="font-size: 0.75rem; color: var(--text-muted); display: block; margin-bottom: 0.25rem; font-weight: 600;">Descripción</label>
-                <input class="app-input" type="text" name="description" placeholder="Base de datos empresarial para gestión de inventarios" />
+                <input class="app-input" type="text" name="description" placeholder="Base de datos empresarial multimodelo para gestión de inventarios" />
               </div>
               <div>
                 <button type="submit" class="app-btn-primary" style="height: 38px;">➕ Crear Base de Datos</button>
