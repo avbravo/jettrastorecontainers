@@ -45,6 +45,19 @@ public final class EngineRecordRenderer {
     // VISUALIZADOR POR TIPO DE MOTOR (VER)
     // =========================================================================
 
+    public static String renderVersionViewHtml(EngineRecordInfo parentRec, io.jettra.store.explorer.model.EngineRecordVersion version) {
+        EngineRecordInfo snapshot = new EngineRecordInfo(
+                parentRec.getId(),
+                parentRec.getEngineType(),
+                parentRec.getBucketName(),
+                version.getSummary(),
+                version.getDetails(),
+                version.getTimestamp(),
+                version.getVersion()
+        );
+        return renderViewHtml(snapshot);
+    }
+
     public static String renderViewHtml(EngineRecordInfo rec) {
         String engine = normalizeEngine(rec.getEngineType());
         Map<String, Object> data = parseDetailsMap(rec.getDetails());

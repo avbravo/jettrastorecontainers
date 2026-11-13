@@ -718,23 +718,38 @@ public class StoreExplorerFluxTemplateView extends FluxView {
             .app-input:focus {
               border-color: var(--primary);
             }
-            select.app-input,
-            select.app-input option,
-            select option {
-              background-color: var(--bg-card);
-              color: var(--text-main);
+            select,
+            select.app-input {
+              background-color: var(--bg-body) !important;
+              color: var(--text-main) !important;
+              color-scheme: dark;
             }
-            [data-theme="dark"] select.app-input,
-            [data-theme="dark"] select.app-input option,
-            [data-theme="dark"] select option {
-              background-color: #0c1626;
-              color: #f8fafc;
+            select option,
+            select.app-input option {
+              background-color: #0c1626 !important;
+              color: #f8fafc !important;
             }
-            [data-theme="white"] select.app-input,
-            [data-theme="white"] select.app-input option,
-            [data-theme="white"] select option {
-              background-color: #ffffff;
-              color: #0f172a;
+            [data-theme="dark"] select,
+            [data-theme="dark"] select.app-input {
+              background-color: #0c1626 !important;
+              color: #f8fafc !important;
+              color-scheme: dark !important;
+            }
+            [data-theme="dark"] select option,
+            [data-theme="dark"] select.app-input option {
+              background-color: #0c1626 !important;
+              color: #f8fafc !important;
+            }
+            [data-theme="white"] select,
+            [data-theme="white"] select.app-input {
+              background-color: #ffffff !important;
+              color: #0f172a !important;
+              color-scheme: light !important;
+            }
+            [data-theme="white"] select option,
+            [data-theme="white"] select.app-input option {
+              background-color: #ffffff !important;
+              color: #0f172a !important;
             }
             .app-btn-primary {
               background: var(--primary);

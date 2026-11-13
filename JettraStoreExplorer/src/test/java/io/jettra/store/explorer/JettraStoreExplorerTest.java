@@ -1238,6 +1238,11 @@ public class JettraStoreExplorerTest {
             JettraAssert.assertTrue(editRes.body().contains("data-engine-editor=\"" + engine + "\"")
                     || editRes.body().contains("data-engine-editor='" + engine + "'"),
                     "El botón Editar para " + engine + " debe usar su editor específico");
+
+            HttpResponse<String> histRes = get("/explorer?db=" + db + "&bucket=" + bucket + "&history_id=" + id);
+            JettraAssert.assertEquals(200, histRes.statusCode(), "Versiones " + engine + " debe responder HTTP 200");
+            JettraAssert.assertTrue(histRes.body().contains("data-engine-viewer='" + engine + "'"),
+                    "El botón Versiones para " + engine + " debe usar su visualizador específico");
         }
 
         // Verificar guardado desde editor específico GEOSPATIAL

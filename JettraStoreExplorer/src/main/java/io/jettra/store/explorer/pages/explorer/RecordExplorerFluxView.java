@@ -542,8 +542,8 @@ public class RecordExplorerFluxView extends FluxView {
                 sb.append("<div style='font-size: 0.8rem; color: #38bdf8; margin-bottom: 0.6rem;'>📝 <em>").append(escapeHtml(v.getChangeNote())).append("</em></div>");
             }
 
-            sb.append("<div style='background: #020617; border: 1px solid var(--border-subtle); border-radius: 6px; padding: 0.75rem; margin-bottom: 0.75rem; max-height: 160px; overflow-y: auto;'>");
-            sb.append("<pre style='margin: 0; font-family: monospace; font-size: 0.82rem; color: #93c5fd; white-space: pre-wrap;'>").append(escapeHtml(v.getDetails())).append("</pre>");
+            sb.append("<div style='margin-bottom: 0.75rem; max-height: 280px; overflow-y: auto;'>");
+            sb.append(EngineRecordRenderer.renderVersionViewHtml(rec, v));
             sb.append("</div>");
 
             sb.append("<div style='display: flex; justify-content: flex-end;'>");
