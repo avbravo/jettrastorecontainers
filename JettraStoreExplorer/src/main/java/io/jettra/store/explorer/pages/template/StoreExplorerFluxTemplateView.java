@@ -751,6 +751,70 @@ public class StoreExplorerFluxTemplateView extends FluxView {
               background-color: #ffffff !important;
               color: #0f172a !important;
             }
+            .jettra-select-wrap {
+              position: relative;
+              width: 100%;
+              display: block;
+            }
+            .jettra-select-trigger {
+              width: 100%;
+              padding: 0.55rem 0.75rem;
+              border-radius: 6px;
+              border: 1px solid var(--border-subtle);
+              background: var(--bg-body);
+              color: var(--text-main);
+              font-size: 0.875rem;
+              display: flex;
+              align-items: center;
+              justify-content: space-between;
+              gap: 0.5rem;
+              cursor: pointer;
+              text-align: left;
+              outline: none;
+            }
+            .jettra-select-trigger:focus,
+            .jettra-select-wrap.is-open .jettra-select-trigger {
+              border-color: var(--primary);
+            }
+            .jettra-select-menu {
+              display: none;
+              position: absolute;
+              top: calc(100% + 4px);
+              left: 0;
+              right: 0;
+              min-width: 100%;
+              max-height: 260px;
+              overflow-y: auto;
+              background: var(--bg-card);
+              color: var(--text-main);
+              border: 1px solid var(--border-subtle);
+              border-radius: 8px;
+              box-shadow: var(--shadow-sm);
+              z-index: 2000;
+              padding: 0.25rem;
+            }
+            .jettra-select-wrap.is-open .jettra-select-menu {
+              display: block;
+            }
+            .jettra-select-option {
+              padding: 0.45rem 0.65rem;
+              border-radius: 6px;
+              font-size: 0.85rem;
+              color: var(--text-main);
+              cursor: pointer;
+              white-space: nowrap;
+              overflow: hidden;
+              text-overflow: ellipsis;
+            }
+            .jettra-select-option:hover {
+              background: var(--primary-light);
+              color: var(--primary);
+            }
+            .jettra-select-option.is-selected {
+              background: var(--primary-light);
+              color: var(--primary);
+              font-weight: 700;
+            }
             .app-btn-primary {
               background: var(--primary);
               color: #050b14;
@@ -966,6 +1030,102 @@ public class StoreExplorerFluxTemplateView extends FluxView {
                     badge.style.color = '#ef4444';
                   }
                 }
+              }
+
+              function initThemedSelects() {
+                const selects = document.querySelectorAll('select.app-input');
+                selects.forEach(function(sel) {
+                  if (sel.dataset.jettraSelectInit === '1') return;
+                  sel.dataset.jettraSelectInit = '1';
+
+                  const wrap = document.createElement('div');
+                  wrap.className = 'jettra-select-wrap';
+                  if (sel.style.width === 'auto') {
+                    wrap.style.width = 'auto';
+                  }
+
+                  const trigger = document.createElement('button');
+                  trigger.type = 'button';
+                  trigger.className = 'jettra-select-trigger';
+                  if (sel.style.height) trigger.style.height = sel.style.height;
+                  if (sel.style.padding) trigger.style.padding = sel.style.padding;
+                  if (sel.style.fontSize) trigger.style.fontSize = sel.style.fontSize;
+
+                  const labelSpan = document.createElement('span');
+                  labelSpan.style.overflow = 'hidden';
+                  labelSpan.style.textOverflow = 'ellipsis';
+                  labelSpan.style.whiteSpace = 'nowrap';
+
+                  const arrowSpan = document.createElement('span');
+                  arrowSpan.textContent = '▾';
+                  arrowSpan.style.fontSize = '0.75rem';
+                  arrowSpan.style.opacity = '0.8';
+
+                  trigger.appendChild(labelSpan);
+                  trigger.appendChild(arrowSpan);
+
+                  const menu = document.createElement('div');
+                  menu.className = 'jettra-select-menu';
+
+                  function syncOptions() {
+                    menu.innerHTML = '';
+                    const selectedOpt = sel.options[sel.selectedIndex];
+                    labelSpan.textContent = selectedOpt ? selectedOpt.text : '';
+                    Array.from(sel.options).forEach(function(opt, idx) {
+                      const item = document.createElement('div');
+                      item.className = 'jettra-select-option' + (idx === sel.selectedIndex ? ' is-selected' : '');
+                      item.textContent = opt.text;
+                      item.setAttribute('data-value', opt.value);
+                      item.addEventListener('click', function(ev) {
+                        ev.stopPropagation();
+                        sel.selectedIndex = idx;
+                        sel.value = opt.value;
+                        labelSpan.textContent = opt.text;
+                        wrap.classList.remove('is-open');
+                        syncOptions();
+                        sel.dispatchEvent(new Event('change', { bubbles: true }));
+                      });
+                      menu.appendChild(item);
+                    });
+                  }
+
+                  syncOptions();
+
+                  trigger.addEventListener('click', function(ev) {
+                    ev.stopPropagation();
+                    const wasOpen = wrap.classList.contains('is-open');
+                    document.querySelectorAll('.jettra-select-wrap.is-open').forEach(function(w) {
+                      w.classList.remove('is-open');
+                    });
+                    if (!wasOpen) {
+                      wrap.classList.add('is-open');
+                    }
+                  });
+
+                  sel.style.position = 'absolute';
+                  sel.style.opacity = '0';
+                  sel.style.pointerEvents = 'none';
+                  sel.style.width = '1px';
+                  sel.style.height = '1px';
+                  sel.tabIndex = -1;
+
+                  sel.parentNode.insertBefore(wrap, sel);
+                  wrap.appendChild(sel);
+                  wrap.appendChild(trigger);
+                  wrap.appendChild(menu);
+                });
+
+                document.addEventListener('click', function() {
+                  document.querySelectorAll('.jettra-select-wrap.is-open').forEach(function(w) {
+                    w.classList.remove('is-open');
+                  });
+                });
+              }
+
+              if (document.readyState === 'loading') {
+                document.addEventListener('DOMContentLoaded', initThemedSelects);
+              } else {
+                initThemedSelects();
               }
 
               if (typeof EventSource !== 'undefined') {

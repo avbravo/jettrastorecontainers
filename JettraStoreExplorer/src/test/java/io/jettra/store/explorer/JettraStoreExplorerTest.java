@@ -1211,6 +1211,8 @@ public class JettraStoreExplorerTest {
         JettraAssert.assertTrue(dbPage.body().contains("color-scheme: dark;"), "Debe declarar color-scheme: dark para controles nativos");
         JettraAssert.assertTrue(dbPage.body().contains("[data-theme=\"dark\"] select.app-input option"),
                 "Debe definir color de fondo y texto explícito para <option> en tema oscuro");
+        JettraAssert.assertTrue(dbPage.body().contains(".jettra-select-menu") && dbPage.body().contains("initThemedSelects()"),
+                "Debe incluir el selector temático personalizado para evitar menús nativos ilegibles en tema oscuro");
     }
 
     @Test
