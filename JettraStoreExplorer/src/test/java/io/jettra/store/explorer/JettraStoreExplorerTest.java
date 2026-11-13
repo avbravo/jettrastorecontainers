@@ -1202,4 +1202,60 @@ public class JettraStoreExplorerTest {
             plugin.deleteUser(testUser);
         }
     }
+
+    @Test
+    @DisplayName("30. Visibilidad de Opciones Select en Tema Oscuro en /databases")
+    public void testDarkThemeSelectOptionStylesInDatabasesPage() throws Exception {
+        HttpResponse<String> dbPage = get("/databases?db=example_factura_db");
+        JettraAssert.assertEquals(200, dbPage.statusCode(), "/databases debe responder HTTP 200");
+        JettraAssert.assertTrue(dbPage.body().contains("color-scheme: dark;"), "Debe declarar color-scheme: dark para controles nativos");
+        JettraAssert.assertTrue(dbPage.body().contains("[data-theme=\"dark\"] select.app-input option"),
+                "Debe definir color de fondo y texto explícito para <option> en tema oscuro");
+    }
+
+    @Test
+    @DisplayName("31. Visualizadores y Editores Específicos por Tipo de Motor en /explorer (Ver y Editar)")
+    public void testEngineSpecificViewAndEditRenderersInExplorer() throws Exception {
+        String[][] cases = {
+            {"example_factura_db", "Facturas", "FAC-2026-001", "DOCUMENT"},
+            {"example_factura_db", "DomainEntities", "OBJ-ENT-101", "OBJECT"},
+            {"example_factura_db", "CustomerRecords", "REC-ORD-501", "JAVA_RECORD"},
+            {"samples_hostipal_db", "RedEpidemiologica", "EDGE-4401", "GRAPH"},
+            {"example_factura_db", "BalanceCache", "BAL_ACC_4001", "KEY_VALUE"},
+            {"samples_ambiental_db", "EstacionesGeo", "GEO-EST-01", "GEOSPATIAL"},
+            {"samples_hostipal_db", "DiagnosticoEmbeddings", "VEC-MED-01", "VECTOR"}
+        };
+
+        for (String[] tc : cases) {
+            String db = tc[0], bucket = tc[1], id = tc[2], engine = tc[3];
+            HttpResponse<String> viewRes = get("/explorer?db=" + db + "&bucket=" + bucket + "&view_id=" + id);
+            JettraAssert.assertEquals(200, viewRes.statusCode(), "Ver " + engine + " debe responder HTTP 200");
+            JettraAssert.assertTrue(viewRes.body().contains("data-engine-viewer='" + engine + "'"),
+                    "El botón Ver para " + engine + " debe usar su visualizador específico");
+
+            HttpResponse<String> editRes = get("/explorer?db=" + db + "&bucket=" + bucket + "&edit_id=" + id);
+            JettraAssert.assertEquals(200, editRes.statusCode(), "Editar " + engine + " debe responder HTTP 200");
+            JettraAssert.assertTrue(editRes.body().contains("data-engine-editor=\"" + engine + "\"")
+                    || editRes.body().contains("data-engine-editor='" + engine + "'"),
+                    "El botón Editar para " + engine + " debe usar su editor específico");
+        }
+
+        // Verificar guardado desde editor específico GEOSPATIAL
+        JettraStorePlugin plugin = JettraStorePlugin.getInstance();
+        EngineRecordInfo origGeo = plugin.getRecord("samples_ambiental_db", "EstacionesGeo", "GEO-EST-01");
+        String origSummary = origGeo.getSummary();
+        String origDetails = origGeo.getDetails();
+        try {
+            HttpResponse<String> saveGeo = postForm("/explorer",
+                    "action=save_edit&db=samples_ambiental_db&bucket=EstacionesGeo&recordId=GEO-EST-01"
+                    + "&summary=Estacion_Actualizada&engineEditorMode=GEOSPATIAL"
+                    + "&prop_station_id=EST-CENTRAL-01&prop_lat=19.5001&prop_lng=-99.2002&prop_altitud_m=2250&prop_zona=Norte");
+            JettraAssert.assertEquals(302, saveGeo.statusCode(), "POST save_edit GEOSPATIAL debe redirigir 302");
+            EngineRecordInfo updatedGeo = plugin.getRecord("samples_ambiental_db", "EstacionesGeo", "GEO-EST-01");
+            JettraAssert.assertTrue(updatedGeo.getDetails().contains("19.5001"), "Debe persistir la latitud editada en GEOSPATIAL");
+            JettraAssert.assertTrue(updatedGeo.getDetails().contains("-99.2002"), "Debe persistir la longitud editada en GEOSPATIAL");
+        } finally {
+            plugin.updateRecord("samples_ambiental_db", "EstacionesGeo", "GEO-EST-01", origSummary, origDetails);
+        }
+    }
 }

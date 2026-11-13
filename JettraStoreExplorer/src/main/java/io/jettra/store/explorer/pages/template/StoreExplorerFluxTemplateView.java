@@ -402,6 +402,7 @@ public class StoreExplorerFluxTemplateView extends FluxView {
         return """
           <style>
             :root, [data-theme="dark"] {
+              color-scheme: dark;
               --bg-body: #050b14;
               --bg-card: #0c1626;
               --bg-subtle: #132238;
@@ -426,6 +427,7 @@ public class StoreExplorerFluxTemplateView extends FluxView {
             }
 
             [data-theme="white"] {
+              color-scheme: light;
               --bg-body: #f0f6fc;
               --bg-card: #ffffff;
               --bg-subtle: #f1f5f9;
@@ -715,6 +717,24 @@ public class StoreExplorerFluxTemplateView extends FluxView {
             }
             .app-input:focus {
               border-color: var(--primary);
+            }
+            select.app-input,
+            select.app-input option,
+            select option {
+              background-color: var(--bg-card);
+              color: var(--text-main);
+            }
+            [data-theme="dark"] select.app-input,
+            [data-theme="dark"] select.app-input option,
+            [data-theme="dark"] select option {
+              background-color: #0c1626;
+              color: #f8fafc;
+            }
+            [data-theme="white"] select.app-input,
+            [data-theme="white"] select.app-input option,
+            [data-theme="white"] select option {
+              background-color: #ffffff;
+              color: #0f172a;
             }
             .app-btn-primary {
               background: var(--primary);

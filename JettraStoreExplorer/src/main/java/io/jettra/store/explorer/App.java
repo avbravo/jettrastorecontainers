@@ -565,7 +565,9 @@ public class App {
         } else if ("save_edit".equalsIgnoreCase(action)) {
             String recordId = form.get("recordId");
             String summary = form.get("summary");
-            String details = form.get("details");
+            io.jettra.store.explorer.model.EngineRecordInfo existing = plugin.getRecord(db, bucket, recordId);
+            String details = io.jettra.store.explorer.pages.explorer.EngineRecordRenderer.buildDetailsFromForm(
+                    form, existing != null ? existing.getDetails() : "");
 
             plugin.updateRecord(db, bucket, recordId, summary, details);
             redirect(resp, "/explorer?db=" + db + "&bucket=" + bucket + "&msg=record_updated");

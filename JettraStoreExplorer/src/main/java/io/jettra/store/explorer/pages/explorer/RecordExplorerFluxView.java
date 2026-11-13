@@ -266,8 +266,10 @@ public class RecordExplorerFluxView extends FluxView {
     }
 
     private Widget buildEditRecordForm(String currentDb, String currentBucket, EngineRecordInfo rec) {
-        Header header = Header.of(3, "✏️ Modificar Registro [" + rec.getId() + "] (v" + rec.getVersion() + ")");
+        Header header = Header.of(3, "✏️ Modificar Registro [" + rec.getId() + "] (v" + rec.getVersion() + ") • Motor: " + rec.getEngineType());
         header.modifier(new Modifier().style("font-size: 1.15rem; color: #ffd700; margin: 0 0 1rem 0;"));
+
+        String engineEditorFields = EngineRecordRenderer.renderEditFieldsHtml(rec);
 
         RawHtml formHtml = RawHtml.of(String.format("""
             <form method="POST" action="/explorer">
@@ -287,17 +289,14 @@ public class RecordExplorerFluxView extends FluxView {
                 </div>
               </div>
 
-              <div style="margin-bottom: 1rem;">
-                <label style="font-size: 0.78rem; font-weight: 700; color: var(--text-muted); display: block; margin-bottom: 0.35rem;">Contenido del Registro (Payload JSON / BSON)</label>
-                <textarea class="app-input" name="details" rows="8" style="font-family: monospace; font-size: 0.85rem;" required>%s</textarea>
-              </div>
+              %s
 
               <div style="display: flex; gap: 0.75rem; justify-content: flex-end;">
                 <a href="/explorer?db=%s&bucket=%s" class="app-btn-secondary">Cancelar</a>
                 <button type="submit" class="app-btn-primary" style="background:#ffd700; color:#050b14;">💾 Actualizar Registro</button>
               </div>
             </form>
-        """, currentDb, currentBucket, rec.getId(), rec.getId(), escapeHtml(rec.getSummary()), escapeHtml(rec.getDetails()), currentDb, currentBucket));
+        """, currentDb, currentBucket, rec.getId(), rec.getId(), escapeHtml(rec.getSummary()), engineEditorFields, currentDb, currentBucket));
 
         Div card = Div.of(header, formHtml);
         card.modifier(new Modifier().cssClass("ui-card").style("margin-bottom: 1.5rem; border-left: 4px solid #ffd700; background: var(--bg-subtle);"));
@@ -308,18 +307,18 @@ public class RecordExplorerFluxView extends FluxView {
         Header header = Header.of(3, "👁️ Inspección de Registro [" + rec.getId() + "] • " + rec.getEngineType());
         header.modifier(new Modifier().style("font-size: 1.15rem; color: #00d4ff; margin: 0 0 0.85rem 0;"));
 
-        Paragraph meta = Paragraph.of("Versión: v" + rec.getVersion() + " • Última modificación: " + rec.getTimestamp() + " • Bucket: " + rec.getBucketName());
+        Paragraph meta = Paragraph.of("Versión: v" + rec.getVersion() + " • Última modificación: " + rec.getTimestamp() + " • Bucket: " + rec.getBucketName() + " • Almacenamiento: " + rec.getEngineType());
         meta.modifier(new Modifier().style("font-size: 0.82rem; color: var(--text-muted); margin: 0 0 1rem 0;"));
 
+        String engineViewerHtml = EngineRecordRenderer.renderViewHtml(rec);
+
         RawHtml viewHtml = RawHtml.of(String.format("""
-            <div style="background: #020617; border: 1px solid var(--border-subtle); border-radius: 8px; padding: 1.25rem; margin-bottom: 1rem; overflow-x: auto;">
-              <pre style="margin: 0; font-family: 'JetBrains Mono', Consolas, monospace; font-size: 0.88rem; color: #38bdf8; line-height: 1.5;">%s</pre>
-            </div>
+            %s
             <div style="display: flex; justify-content: flex-end; gap: 0.5rem;">
               <a href="/explorer?db=%s&bucket=%s&edit_id=%s" class="app-btn-secondary">✏️ Editar Este Registro</a>
               <a href="/explorer?db=%s&bucket=%s" class="app-btn-primary">Cerrar Visor</a>
             </div>
-        """, escapeHtml(rec.getDetails()), currentDb, currentBucket, rec.getId(), currentDb, currentBucket));
+        """, engineViewerHtml, currentDb, currentBucket, rec.getId(), currentDb, currentBucket));
 
         Div card = Div.of(header, meta, viewHtml);
         card.modifier(new Modifier().cssClass("ui-card").style("margin-bottom: 1.5rem; border: 2px solid #00d4ff; background: var(--bg-card);"));
