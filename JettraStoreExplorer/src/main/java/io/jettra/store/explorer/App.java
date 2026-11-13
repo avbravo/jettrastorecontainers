@@ -406,14 +406,26 @@ public class App {
         }
 
         String db = req.getQueryParam("db");
+        String manageUsersDb = req.getQueryParam("manage_users_db");
+        boolean isAdmin = isLoggedUserAdmin(req);
         String msg = req.getQueryParam("msg");
         String messageText = null;
         if ("db_created".equals(msg)) messageText = "Base de datos creada exitosamente.";
         else if ("db_deleted".equals(msg)) messageText = "Base de datos eliminada.";
         else if ("bucket_added".equals(msg)) messageText = "Nuevo motor/bucket añadido a la base de datos.";
         else if ("bucket_deleted".equals(msg)) messageText = "Bucket eliminado.";
+        else if ("db_user_added".equals(msg)) messageText = "Usuario añadido/actualizado en la base de datos.";
+        else if ("db_user_removed".equals(msg)) messageText = "Usuario removido de la base de datos.";
+        else if ("forbidden".equals(msg)) messageText = "Acceso denegado: se requiere rol ADMIN para administrar usuarios de la base de datos.";
 
-        Widget content = new DatabasesFluxView(db, messageText);
+        if (manageUsersDb != null && !manageUsersDb.isBlank() && !isAdmin) {
+            manageUsersDb = null;
+            if (messageText == null) {
+                messageText = "Acceso denegado: se requiere rol ADMIN para administrar usuarios de la base de datos.";
+            }
+        }
+
+        Widget content = new DatabasesFluxView(db, manageUsersDb, isAdmin, messageText);
         renderTemplate(resp, server, getLoggedUser(req), "Catálogo de Bases de Datos & Motores", "databases", content);
     }
 
@@ -444,6 +456,31 @@ public class App {
 
             plugin.addBucket(db, bucketName, engineType, description);
             redirect(resp, "/databases?db=" + db + "&msg=bucket_added");
+            return;
+        } else if ("add_db_user".equalsIgnoreCase(action)) {
+            String db = form.get("db");
+            if (!isLoggedUserAdmin(req)) {
+                redirect(resp, "/databases?db=" + (db != null ? db : "") + "&msg=forbidden");
+                return;
+            }
+            String username = form.get("username");
+            String roleStr = form.get("role");
+            JettraDatabaseRole role = JettraDatabaseRole.READ_WRITE;
+            if (roleStr != null && !roleStr.isBlank()) {
+                try { role = JettraDatabaseRole.valueOf(roleStr.trim().toUpperCase(java.util.Locale.ROOT)); } catch (Exception ignored) {}
+            }
+            plugin.assignUserToDatabase(db, username, role);
+            redirect(resp, "/databases?db=" + db + "&manage_users_db=" + db + "&msg=db_user_added");
+            return;
+        } else if ("remove_db_user".equalsIgnoreCase(action)) {
+            String db = form.get("db");
+            if (!isLoggedUserAdmin(req)) {
+                redirect(resp, "/databases?db=" + (db != null ? db : "") + "&msg=forbidden");
+                return;
+            }
+            String username = form.get("username");
+            plugin.removeUserFromDatabase(db, username);
+            redirect(resp, "/databases?db=" + db + "&manage_users_db=" + db + "&msg=db_user_removed");
             return;
         }
         redirect(resp, "/databases");
@@ -623,13 +660,29 @@ public class App {
     // --- Usuarios y Seguridad ---
     private static void handleUsersGet(HttpRequest req, HttpResponse resp, JettraServer server) {
         if (!requireAuth(req, resp)) return;
+        JettraStorePlugin plugin = JettraStorePlugin.getInstance();
+        String loggedUsername = getLoggedUser(req);
+        boolean isAdmin = isLoggedUserAdmin(req);
+        String editParam = req.getQueryParam("edit");
         String msg = req.getQueryParam("msg");
+
         String messageText = null;
         if ("user_saved".equals(msg)) messageText = "Usuario y permisos actualizados exitosamente.";
         else if ("user_deleted".equals(msg)) messageText = "Usuario revocado del sistema.";
+        else if ("forbidden".equals(msg)) messageText = "Acceso denegado: no tienes permisos para modificar otros usuarios.";
 
-        Widget content = new UserManagerFluxView(messageText);
-        renderTemplate(resp, server, getLoggedUser(req), "Seguridad y Roles de Usuario", "users", content);
+        JettraUser editTarget = null;
+        if (editParam != null && !editParam.isBlank()) {
+            boolean allowed = isAdmin || (loggedUsername != null && loggedUsername.equalsIgnoreCase(editParam.trim()));
+            if (allowed) {
+                editTarget = plugin.findUser(editParam.trim()).orElse(null);
+            } else if (messageText == null) {
+                messageText = "Acceso denegado: solo un usuario con rol ADMIN puede editar otros usuarios.";
+            }
+        }
+
+        Widget content = new UserManagerFluxView(loggedUsername, isAdmin, editTarget, messageText);
+        renderTemplate(resp, server, loggedUsername, "Seguridad y Roles de Usuario", "users", content);
     }
 
     private static void handleUsersPost(HttpRequest req, HttpResponse resp) {
@@ -637,27 +690,78 @@ public class App {
         Map<String, String> form = parseFormBody(req.getBodyAsString());
         String action = form.get("action");
         JettraStorePlugin plugin = JettraStorePlugin.getInstance();
+        String loggedUsername = getLoggedUser(req);
+        boolean isAdmin = isLoggedUserAdmin(req);
 
-        if ("save_user".equalsIgnoreCase(action)) {
+        if ("save_user".equalsIgnoreCase(action) || "update_user".equalsIgnoreCase(action)) {
             String username = form.get("username");
-            String password = form.get("password");
-            String desc = form.get("description");
-            String globalRoleStr = form.get("globalRole");
-            JettraUser.GlobalRole gRole = "ADMIN".equalsIgnoreCase(globalRoleStr) ? JettraUser.GlobalRole.ADMIN : JettraUser.GlobalRole.DEVELOPER;
+            if (username == null || username.isBlank()) {
+                redirect(resp, "/users");
+                return;
+            }
+            String cleanUsername = username.trim();
+            Optional<JettraUser> existingOpt = plugin.findUser(cleanUsername);
+            boolean isSelf = loggedUsername != null && loggedUsername.equalsIgnoreCase(cleanUsername);
 
-            JettraUser user = new JettraUser(username, password, desc, gRole);
-            for (String db : plugin.getDatabaseNames()) {
-                String roleVal = form.get("db_role_" + db);
-                if (roleVal != null) {
+            if (!isAdmin && (existingOpt.isEmpty() || !isSelf)) {
+                redirect(resp, "/users?msg=forbidden");
+                return;
+            }
+
+            String password = form.get("password");
+            if ((password == null || password.isBlank()) && existingOpt.isPresent()) {
+                password = existingOpt.get().getPassword();
+            }
+            String desc = form.get("description");
+            if (desc == null && existingOpt.isPresent()) {
+                desc = existingOpt.get().getDescription();
+            }
+
+            JettraUser.GlobalRole gRole;
+            if (!isAdmin && existingOpt.isPresent()) {
+                gRole = existingOpt.get().getGlobalRole();
+            } else if ("admin".equalsIgnoreCase(cleanUsername)) {
+                gRole = JettraUser.GlobalRole.ADMIN;
+            } else {
+                String globalRoleStr = form.get("globalRole");
+                gRole = JettraUser.GlobalRole.DEVELOPER;
+                if (globalRoleStr != null && !globalRoleStr.isBlank()) {
                     try {
-                        user.setRoleForDatabase(db, JettraDatabaseRole.valueOf(roleVal));
-                    } catch (Exception ignored) {}
+                        gRole = JettraUser.GlobalRole.valueOf(globalRoleStr.trim().toUpperCase(java.util.Locale.ROOT));
+                    } catch (Exception ignored) {
+                        if ("READ_ONLY".equalsIgnoreCase(globalRoleStr.trim())) {
+                            gRole = JettraUser.GlobalRole.ANALYST;
+                        }
+                    }
+                }
+            }
+
+            JettraUser user = new JettraUser(cleanUsername, password != null ? password : "", desc != null ? desc : "", gRole);
+            if (!isAdmin && existingOpt.isPresent()) {
+                user.setDatabaseRoles(new java.util.HashMap<>(existingOpt.get().getDatabaseRoles()));
+            } else {
+                for (String db : plugin.getDatabaseNames()) {
+                    String roleVal = form.get("db_role_" + db);
+                    if (roleVal != null && !roleVal.isBlank()) {
+                        try {
+                            user.setRoleForDatabase(db, JettraDatabaseRole.valueOf(roleVal.trim().toUpperCase(java.util.Locale.ROOT)));
+                        } catch (Exception ignored) {}
+                    } else if (existingOpt.isPresent()) {
+                        JettraDatabaseRole prev = existingOpt.get().getDatabaseRoles().get(db);
+                        if (prev != null) {
+                            user.setRoleForDatabase(db, prev);
+                        }
+                    }
                 }
             }
             plugin.saveOrUpdateUser(user);
             redirect(resp, "/users?msg=user_saved");
             return;
         } else if ("delete_user".equalsIgnoreCase(action)) {
+            if (!isAdmin) {
+                redirect(resp, "/users?msg=forbidden");
+                return;
+            }
             String username = form.get("username");
             if (username != null) plugin.deleteUser(username);
             redirect(resp, "/users?msg=user_deleted");
@@ -1003,6 +1107,16 @@ public class App {
         }
         String user = ACTIVE_SESSIONS.get(token);
         return (user != null && !user.isBlank()) ? user : null;
+    }
+
+    private static boolean isLoggedUserAdmin(HttpRequest req) {
+        String username = getLoggedUser(req);
+        if (username == null || username.isBlank()) {
+            return false;
+        }
+        return JettraStorePlugin.getInstance().findUser(username)
+                .map(u -> u.getGlobalRole() == JettraUser.GlobalRole.ADMIN)
+                .orElse(false);
     }
 
     private static void setSession(HttpResponse resp, String username) {

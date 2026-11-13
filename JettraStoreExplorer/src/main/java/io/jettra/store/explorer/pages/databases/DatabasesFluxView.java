@@ -13,6 +13,8 @@ import io.jettra.flux.widgets.Row;
 import io.jettra.flux.widgets.Text;
 import io.jettra.store.explorer.model.EngineBucketInfo;
 import io.jettra.store.explorer.model.EngineIndexInfo;
+import io.jettra.store.explorer.model.JettraDatabaseRole;
+import io.jettra.store.explorer.model.JettraUser;
 import io.jettra.store.explorer.plugin.JettraStorePlugin;
 import java.util.List;
 import java.util.Map;
@@ -23,10 +25,18 @@ import java.util.Map;
 public class DatabasesFluxView extends FluxView {
 
     private final String selectedDb;
+    private final String manageUsersDb;
+    private final boolean isAdmin;
     private final String message;
 
     public DatabasesFluxView(String selectedDb, String message) {
+        this(selectedDb, null, true, message);
+    }
+
+    public DatabasesFluxView(String selectedDb, String manageUsersDb, boolean isAdmin, String message) {
         this.selectedDb = selectedDb;
+        this.manageUsersDb = manageUsersDb;
+        this.isAdmin = isAdmin;
         this.message = message;
     }
 
@@ -76,6 +86,12 @@ public class DatabasesFluxView extends FluxView {
         // 4. Tabla de Catálogo de Bases de Datos
         Widget databasesTable = buildDatabasesTable(catalog, currentDb);
 
+        // 4.5 Panel de Administración de Usuarios por Base de Datos (Solo ADMIN)
+        Widget dbUsersSection = null;
+        if (isAdmin && manageUsersDb != null && !manageUsersDb.isBlank() && catalog.containsKey(manageUsersDb)) {
+            dbUsersSection = buildDatabaseUsersSection(plugin, manageUsersDb);
+        }
+
         // 5. Sección Detallada de Motores / Buckets para la BD seleccionada
         Widget enginesSection = buildEnginesSection(plugin, currentDb);
 
@@ -84,6 +100,7 @@ public class DatabasesFluxView extends FluxView {
         rootChildren.add(kpiGrid);
         rootChildren.add(createDbCard);
         rootChildren.add(databasesTable);
+        if (dbUsersSection != null) rootChildren.add(dbUsersSection);
         rootChildren.add(enginesSection);
 
         return Div.of(rootChildren.toArray(new Widget[0]));
@@ -158,6 +175,11 @@ public class DatabasesFluxView extends FluxView {
             table.append("<td>").append(formatBytes(dbBytes)).append("</td>");
             table.append("<td>");
             table.append("<a href='/databases?db=").append(db).append("' class='app-btn-secondary' style='margin-right:6px;'>⚙️ Administrar Motores</a>");
+            if (isAdmin) {
+                table.append("<a href='/databases?db=").append(db).append("&manage_users_db=").append(db).append("' class='app-btn-secondary' style='margin-right:6px;'>👥 Administrar Usuarios</a>");
+            } else {
+                table.append("<span class='app-btn-secondary' style='margin-right:6px; opacity:0.45; cursor:not-allowed;' title='Opción habilitada únicamente para usuarios con rol ADMIN'>🔒 Administrar Usuarios</span>");
+            }
             table.append("<a href='/explorer?db=").append(db).append("' class='app-btn-primary' style='margin-right:6px;'>📦 Ver Registros</a>");
             if (!"system_metadata_db".equalsIgnoreCase(db)) {
                 table.append("<a href='/databases?action=delete_db&db=").append(db).append("' class='app-btn-danger' onclick=\"return confirm('¿Seguro de eliminar la base de datos ").append(db).append("?');\">🗑️</a>");
@@ -171,6 +193,88 @@ public class DatabasesFluxView extends FluxView {
         Div card = Div.of(header, RawHtml.of(table.toString()));
         card.modifier(new Modifier().cssClass("ui-card").style("margin-bottom: 2rem;"));
         return card;
+    }
+
+    private Widget buildDatabaseUsersSection(JettraStorePlugin plugin, String targetDb) {
+        List<JettraUser> allUsers = plugin.getUsers();
+        Header header = Header.of(3, "👥 Administración de Usuarios de la Base de Datos [" + targetDb + "]");
+        header.modifier(new Modifier().style("font-size: 1.1rem; color: #ffd700; margin: 0 0 0.75rem 0;"));
+
+        StringBuilder userOptions = new StringBuilder();
+        int assignableCount = 0;
+        for (JettraUser u : allUsers) {
+            if (u.getGlobalRole() != JettraUser.GlobalRole.ADMIN) {
+                userOptions.append("<option value='").append(escapeHtml(u.getUsername())).append("'>")
+                           .append(escapeHtml(u.getUsername())).append(" (").append(u.getGlobalRole().name()).append(")</option>");
+                assignableCount++;
+            }
+        }
+
+        String addFormHtml = assignableCount > 0
+                ? String.format("""
+                    <form method="POST" action="/databases" style="display: flex; flex-wrap: wrap; gap: 0.85rem; align-items: flex-end; background: var(--bg-subtle); padding: 1rem; border-radius: 8px; margin-bottom: 1.1rem;">
+                      <input type="hidden" name="action" value="add_db_user" />
+                      <input type="hidden" name="db" value="%s" />
+                      <div style="flex: 1.5; min-width: 180px;">
+                        <label style="font-size: 0.75rem; color: var(--text-muted); display: block; margin-bottom: 0.25rem; font-weight: 600;">Usuario</label>
+                        <select class="app-input" name="username">%s</select>
+                      </div>
+                      <div style="flex: 1.2; min-width: 160px;">
+                        <label style="font-size: 0.75rem; color: var(--text-muted); display: block; margin-bottom: 0.25rem; font-weight: 600;">Rol en %s</label>
+                        <select class="app-input" name="role">
+                          <option value="READ_WRITE">READ_WRITE</option>
+                          <option value="READ_ONLY">READ_ONLY</option>
+                          <option value="ADMIN">ADMIN</option>
+                        </select>
+                      </div>
+                      <div style="display:flex; gap:0.5rem;">
+                        <button type="submit" class="app-btn-primary" style="height: 38px;">➕ Añadir Usuario a la BD</button>
+                        <a href="/databases?db=%s" class="app-btn-secondary" style="height: 38px; display:inline-flex; align-items:center;">Cerrar</a>
+                      </div>
+                    </form>
+                """, escapeHtml(targetDb), userOptions.toString(), escapeHtml(targetDb), escapeHtml(targetDb))
+                : String.format("""
+                    <div style="display:flex; justify-content:space-between; align-items:center; background:var(--bg-subtle); padding:0.85rem 1rem; border-radius:8px; margin-bottom:1.1rem;">
+                      <span style="font-size:0.85rem; color:var(--text-muted);">No hay usuarios adicionales no-admin registrados. Crea usuarios en <a href="/users" style="color:#00d4ff;">/users</a> para asignarlos a esta base de datos.</span>
+                      <a href="/databases?db=%s" class="app-btn-secondary">Cerrar</a>
+                    </div>
+                """, escapeHtml(targetDb));
+
+        StringBuilder table = new StringBuilder();
+        table.append("<table class=\"app-table\">");
+        table.append("<thead><tr><th>Usuario</th><th>Rol Global</th><th>Rol en ").append(escapeHtml(targetDb)).append("</th><th style='text-align:right;'>Acción</th></tr></thead><tbody>");
+
+        for (JettraUser u : allUsers) {
+            JettraDatabaseRole dbRole = u.getRoleForDatabase(targetDb);
+            if (dbRole == JettraDatabaseRole.NONE && u.getGlobalRole() != JettraUser.GlobalRole.ADMIN) {
+                continue;
+            }
+            table.append("<tr>");
+            table.append("<td><strong style='color:#ffd700;'>👤 ").append(escapeHtml(u.getUsername())).append("</strong></td>");
+            table.append("<td><span style='color:#38bdf8; font-weight:700; font-size:0.78rem;'>").append(u.getGlobalRole().name()).append("</span></td>");
+            table.append("<td><span style='color:#10b981; font-weight:700; font-size:0.8rem;'>").append(dbRole.name()).append("</span></td>");
+            table.append("<td style='text-align:right;'>");
+            if (u.getGlobalRole() == JettraUser.GlobalRole.ADMIN) {
+                table.append("<span style='color:var(--text-muted); font-size:0.75rem;'>Superadmin Global</span>");
+            } else {
+                table.append("<form method='POST' action='/databases' style='display:inline;'>")
+                     .append("<input type='hidden' name='action' value='remove_db_user'/>")
+                     .append("<input type='hidden' name='db' value='").append(escapeHtml(targetDb)).append("'/>")
+                     .append("<input type='hidden' name='username' value='").append(escapeHtml(u.getUsername())).append("'/>")
+                     .append("<button type='submit' class='app-btn-danger'>➖ Remover</button></form>");
+            }
+            table.append("</td></tr>");
+        }
+        table.append("</tbody></table>");
+
+        Div card = Div.of(header, RawHtml.of(addFormHtml), RawHtml.of(table.toString()));
+        card.modifier(new Modifier().cssClass("ui-card").style("margin-bottom: 2rem; border-left: 4px solid #ffd700;"));
+        return card;
+    }
+
+    private static String escapeHtml(String s) {
+        if (s == null) return "";
+        return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;").replace("'", "&#39;");
     }
 
     private Widget buildEnginesSection(JettraStorePlugin plugin, String currentDb) {

@@ -165,19 +165,19 @@ public class EngineExplorerPage extends ExplorerTemplatePage {
             idxTable.append("</tbody></table></div>");
             mainContent = Paragraph.of(idxTable.toString());
         } else {
-            // Tabla de Registros con Paginación
+            // Tabla de Registros con Paginación Streaming
             int page = 1;
             int pageSize = 10;
             try { page = Math.max(1, Integer.parseInt(params.getOrDefault("page", "1").trim())); } catch (Exception ignored) {}
             try { pageSize = Math.max(1, Math.min(100, Integer.parseInt(params.getOrDefault("size", "10").trim()))); } catch (Exception ignored) {}
 
-            List<EngineRecordInfo> allRecords = qResult.records();
-            int totalRecords = allRecords.size();
-            int totalPages = Math.max(1, (int) Math.ceil((double) totalRecords / pageSize));
-            int currentPage = Math.max(1, Math.min(page, totalPages));
-            int fromIdx = Math.max(0, Math.min((currentPage - 1) * pageSize, totalRecords));
-            int toIdx = Math.min(fromIdx + pageSize, totalRecords);
-            List<EngineRecordInfo> pageRecords = totalRecords == 0 ? List.of() : allRecords.subList(fromIdx, toIdx);
+            JettraStorePlugin.PagedRecordsResult paged = plugin.streamRecordsPage(activeDb, activeBucket, query, page, pageSize);
+            long totalRecords = paged.totalRecords();
+            int totalPages = paged.totalPages();
+            int currentPage = paged.page();
+            long fromIdx = ((long) (currentPage - 1) * pageSize);
+            long toIdx = Math.min(fromIdx + paged.records().size(), totalRecords);
+            List<EngineRecordInfo> pageRecords = paged.records();
 
             StringBuilder recTable = new StringBuilder();
             recTable.append("<div style='overflow-x:auto; background:rgba(10, 18, 28, 0.85); border:1px solid rgba(0, 212, 255, 0.25); border-radius:8px; padding:15px;'>")

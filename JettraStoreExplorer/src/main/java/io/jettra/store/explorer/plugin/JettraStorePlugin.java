@@ -412,6 +412,41 @@ public class JettraStorePlugin {
         return removed;
     }
 
+    public synchronized Optional<JettraUser> findUser(String username) {
+        if (username == null || username.isBlank()) return Optional.empty();
+        return users.stream().filter(u -> u.getUsername().equalsIgnoreCase(username.trim())).findFirst();
+    }
+
+    public synchronized boolean assignUserToDatabase(String dbName, String username, JettraDatabaseRole role) {
+        if (dbName == null || dbName.isBlank() || username == null || username.isBlank() || role == null) {
+            return false;
+        }
+        Optional<JettraUser> opt = findUser(username);
+        if (opt.isEmpty()) return false;
+        JettraUser u = opt.get();
+        if (role == JettraDatabaseRole.NONE) {
+            u.getDatabaseRoles().remove(dbName);
+        } else {
+            u.setRoleForDatabase(dbName, role);
+        }
+        saveUsers();
+        logPoliceIncident("Security Patrol", "Usuario '" + u.getUsername() + "' asignado a base de datos '" + dbName + "' con rol " + role.name(), "OK", "ACL de base de datos actualizado");
+        return true;
+    }
+
+    public synchronized boolean removeUserFromDatabase(String dbName, String username) {
+        if (dbName == null || dbName.isBlank() || username == null || username.isBlank()) {
+            return false;
+        }
+        Optional<JettraUser> opt = findUser(username);
+        if (opt.isEmpty()) return false;
+        JettraUser u = opt.get();
+        u.getDatabaseRoles().remove(dbName);
+        saveUsers();
+        logPoliceIncident("Security Patrol", "Usuario '" + u.getUsername() + "' removido de la base de datos '" + dbName + "'", "WARN", "Permiso de acceso revocado en BD");
+        return true;
+    }
+
     // --- Servidores y Nodos con Detección Real ONLINE / OFFLINE ---
     private void initServerNodes() {
         serverNodes.clear();
@@ -1497,9 +1532,167 @@ public class JettraStorePlugin {
 
     public synchronized EngineRecordInfo getRecord(String dbName, String bucketName, String id) {
         EngineBucketInfo b = getBucket(dbName, bucketName);
-        if (b == null) return null;
+        if (b == null || id == null || id.isBlank()) return null;
+        String key = id.trim().toUpperCase(Locale.ROOT);
+        if (b.getDeletedRecordIds().contains(key)) {
+            return null;
+        }
+        EngineRecordInfo overridden = b.getRecordOverrides().get(key);
+        if (overridden != null) {
+            return overridden;
+        }
         for (EngineRecordInfo r : b.getSampleRecords()) {
             if (r.getId().equalsIgnoreCase(id)) return r;
+        }
+        return resolveStreamedRecordById(b, id.trim());
+    }
+
+    // --- Paginación Optimizada por Streaming de Página ---
+    public record PagedRecordsResult(List<EngineRecordInfo> records, long totalRecords, int page, int pageSize, int totalPages, boolean streamed) {}
+
+    public synchronized PagedRecordsResult streamRecordsPage(String dbName, String bucketName, String query, int requestedPage, int pageSize) {
+        EngineBucketInfo bucket = getBucket(dbName, bucketName);
+        int safeSize = Math.max(1, Math.min(100, pageSize));
+        if (bucket == null) {
+            return new PagedRecordsResult(Collections.emptyList(), 0L, 1, safeSize, 1, false);
+        }
+
+        if (query != null && !query.isBlank()) {
+            QueryResult qr = executeQuery(dbName, bucketName, query, false);
+            List<EngineRecordInfo> matched = qr.records();
+            long total = matched.size();
+            int totalPages = (int) Math.max(1L, (total + safeSize - 1L) / safeSize);
+            int currentPage = Math.max(1, Math.min(requestedPage, totalPages));
+            int fromIndex = Math.max(0, Math.min((currentPage - 1) * safeSize, matched.size()));
+            int toIndex = Math.min(fromIndex + safeSize, matched.size());
+            return new PagedRecordsResult(new ArrayList<>(matched.subList(fromIndex, toIndex)), total, currentPage, safeSize, totalPages, false);
+        }
+
+        long totalRecords = Math.max(bucket.getTotalObjects(), bucket.getSampleRecords().size());
+        int totalPages = (int) Math.max(1L, (totalRecords + safeSize - 1L) / safeSize);
+        int currentPage = Math.max(1, Math.min(requestedPage, totalPages));
+        long offset = (long) (currentPage - 1) * safeSize;
+        int limit = (int) Math.min(safeSize, Math.max(0L, totalRecords - offset));
+
+        List<EngineRecordInfo> pageSlice = new ArrayList<>(limit);
+        int sampleCount = bucket.getSampleRecords().size();
+        long candidateIndex = offset;
+        long maxSearchIndex = totalRecords + bucket.getDeletedRecordIds().size() + 100L;
+
+        while (pageSlice.size() < limit && candidateIndex < maxSearchIndex) {
+            EngineRecordInfo rec;
+            if (candidateIndex < sampleCount) {
+                rec = bucket.getSampleRecords().get((int) candidateIndex);
+            } else {
+                rec = buildStreamedRecordAt(bucket, candidateIndex);
+            }
+            candidateIndex++;
+            if (rec == null) continue;
+            String key = rec.getId().toUpperCase(Locale.ROOT);
+            if (bucket.getDeletedRecordIds().contains(key)) {
+                continue;
+            }
+            EngineRecordInfo overridden = bucket.getRecordOverrides().get(key);
+            pageSlice.add(overridden != null ? overridden : rec);
+        }
+
+        boolean isStreamed = totalRecords > sampleCount;
+        return new PagedRecordsResult(pageSlice, totalRecords, currentPage, safeSize, totalPages, isStreamed);
+    }
+
+    private EngineRecordInfo buildStreamedRecordAt(EngineBucketInfo bucket, long zeroBasedIndex) {
+        long seq = zeroBasedIndex + 1L;
+        String bucketName = bucket.getBucketName();
+        String engine = bucket.getEngineType();
+
+        if ("Facturas".equalsIgnoreCase(bucketName)) {
+            String folio = String.format("FAC-2026-%03d", seq);
+            double sub = 450.00 + ((seq % 500) * 175.00);
+            double iva = Math.round(sub * 0.16 * 100.0) / 100.0;
+            double tot = Math.round((sub + iva) * 100.0) / 100.0;
+            String emisor = (seq % 3 == 0) ? "Corp Global SA" : ((seq % 2 == 0) ? "TechSolutions SRL" : "Servicios Industriales del Pacífico");
+            String estado = (seq % 4 == 0) ? "PENDIENTE_PAGO" : "TIMBRADO_VALIDADO";
+            int hour = (int) (seq % 24);
+            int minute = (int) (seq % 60);
+            int second = (int) ((seq * 7) % 60);
+            return new EngineRecordInfo(
+                folio, engine, bucketName,
+                String.format(Locale.US, "Factura %s $%,.2f MXN", emisor, tot),
+                String.format(Locale.US, "{\n  \"folio\": \"%s\",\n  \"emisor\": \"%s\",\n  \"rfc\": \"EMP9901%02dXYZ\",\n  \"receptor\": \"Cliente Corporativo #%d\",\n  \"subtotal\": %.2f,\n  \"iva\": %.2f,\n  \"total\": %.2f,\n  \"metodoPago\": \"TRANSFERENCIA_SPEI\",\n  \"estado\": \"%s\"\n}",
+                    folio, emisor, (int) (seq % 99), seq, sub, iva, tot, estado),
+                String.format("2026-10-03 %02d:%02d:%02d", hour, minute, second), 1
+            );
+        }
+
+        String prefix = switch (bucketName) {
+            case "Clientes" -> "CLI-";
+            case "BalanceCache" -> "BAL_ACC_";
+            case "CustomerRecords" -> "REC-ORD-";
+            case "DomainEntities" -> "OBJ-ENT-";
+            case "Pacientes" -> "HC-";
+            case "RedEpidemiologica" -> "EDGE-";
+            case "DiagnosticoEmbeddings" -> "VEC-MED-";
+            case "SensorMetrics" -> "TS-CO2-";
+            case "EstacionesGeo" -> "GEO-EST-";
+            case "RaftLogEntries" -> "WAL-TERM8-";
+            default -> bucketName.toUpperCase(Locale.ROOT).replaceAll("[^A-Z0-9]", "") + "-";
+        };
+        long displayNum = ("Clientes".equalsIgnoreCase(bucketName) ? 1000L + seq
+                : ("BalanceCache".equalsIgnoreCase(bucketName) ? 4000L + seq
+                : ("CustomerRecords".equalsIgnoreCase(bucketName) ? 500L + seq
+                : ("DomainEntities".equalsIgnoreCase(bucketName) ? 100L + seq
+                : ("Pacientes".equalsIgnoreCase(bucketName) ? 98209L + seq
+                : ("RedEpidemiologica".equalsIgnoreCase(bucketName) ? 4400L + seq
+                : ("SensorMetrics".equalsIgnoreCase(bucketName) ? 990L + seq
+                : ("RaftLogEntries".equalsIgnoreCase(bucketName) ? 1003L + seq : seq))))))));
+
+        String id = prefix + displayNum;
+        String summary = String.format("%s [%s] #%d", bucketName, engine, seq);
+        String details = String.format(Locale.US, "{\n  \"id\": \"%s\",\n  \"bucket\": \"%s\",\n  \"engine\": \"%s\",\n  \"sequence\": %d,\n  \"streamedPageItem\": true\n}",
+                id, bucketName, engine, seq);
+        return new EngineRecordInfo(id, engine, bucketName, summary, details, "2026-10-03 18:00:00", 1);
+    }
+
+    private EngineRecordInfo resolveStreamedRecordById(EngineBucketInfo bucket, String id) {
+        if (id == null || bucket.getTotalObjects() <= bucket.getSampleRecords().size()) {
+            return null;
+        }
+        String upper = id.toUpperCase(Locale.ROOT);
+        long maxSeq = bucket.getTotalObjects();
+
+        if ("Facturas".equalsIgnoreCase(bucket.getBucketName()) && upper.startsWith("FAC-2026-")) {
+            try {
+                long seq = Long.parseLong(upper.substring("FAC-2026-".length()));
+                if (seq >= 1 && seq <= maxSeq) {
+                    return buildStreamedRecordAt(bucket, seq - 1L);
+                }
+            } catch (NumberFormatException ignored) {}
+        }
+
+        int dashIdx = upper.lastIndexOf('-');
+        int underIdx = upper.lastIndexOf('_');
+        int sepIdx = Math.max(dashIdx, underIdx);
+        if (sepIdx >= 0 && sepIdx < upper.length() - 1) {
+            try {
+                long num = Long.parseLong(upper.substring(sepIdx + 1));
+                long seq = switch (bucket.getBucketName()) {
+                    case "Clientes" -> num - 1000L;
+                    case "BalanceCache" -> num - 4000L;
+                    case "CustomerRecords" -> num - 500L;
+                    case "DomainEntities" -> num - 100L;
+                    case "Pacientes" -> num - 98209L;
+                    case "RedEpidemiologica" -> num - 4400L;
+                    case "SensorMetrics" -> num - 990L;
+                    case "RaftLogEntries" -> num - 1003L;
+                    default -> num;
+                };
+                if (seq >= 1 && seq <= maxSeq) {
+                    EngineRecordInfo candidate = buildStreamedRecordAt(bucket, seq - 1L);
+                    if (candidate != null && candidate.getId().equalsIgnoreCase(id)) {
+                        return candidate;
+                    }
+                }
+            } catch (NumberFormatException ignored) {}
         }
         return null;
     }
@@ -1536,8 +1729,28 @@ public class JettraStorePlugin {
                 matched.addAll(all);
             } else {
                 for (EngineRecordInfo r : all) {
-                    if (evaluateCondition(r, cond)) {
-                        matched.add(r);
+                    String key = r.getId().toUpperCase(Locale.ROOT);
+                    if (bucket.getDeletedRecordIds().contains(key)) continue;
+                    EngineRecordInfo eff = bucket.getRecordOverrides().getOrDefault(key, r);
+                    if (evaluateCondition(eff, cond)) {
+                        matched.add(eff);
+                    }
+                }
+                for (EngineRecordInfo ov : bucket.getRecordOverrides().values()) {
+                    if (!bucket.getDeletedRecordIds().contains(ov.getId().toUpperCase(Locale.ROOT))
+                            && matched.stream().noneMatch(m -> m.getId().equalsIgnoreCase(ov.getId()))
+                            && evaluateCondition(ov, cond)) {
+                        matched.add(ov);
+                    }
+                }
+                if (matched.isEmpty()) {
+                    String candidateId = cond.replace(";", "").replaceAll("^['\"]|['\"]$", "").trim();
+                    if (candidateId.contains("=")) {
+                        candidateId = candidateId.substring(candidateId.indexOf('=') + 1).replaceAll("^['\"]|['\"]$", "").trim();
+                    }
+                    EngineRecordInfo streamedMatch = resolveStreamedRecordById(bucket, candidateId);
+                    if (streamedMatch != null && !bucket.getDeletedRecordIds().contains(streamedMatch.getId().toUpperCase(Locale.ROOT))) {
+                        matched.add(bucket.getRecordOverrides().getOrDefault(streamedMatch.getId().toUpperCase(Locale.ROOT), streamedMatch));
                     }
                 }
             }
@@ -1616,28 +1829,30 @@ public class JettraStorePlugin {
 
     public synchronized void updateRecord(String dbName, String bucketName, String id, String summary, String details) {
         EngineBucketInfo bucket = getBucket(dbName, bucketName);
-        if (bucket != null) {
-            for (EngineRecordInfo r : bucket.getSampleRecords()) {
-                if (r.getId().equalsIgnoreCase(id)) {
-                    r.recordNewVersion(summary, details, "admin", "Modificación manual vía explorador");
-                    logPoliceIncident("MemTable Purge Dog", "Registro '" + id + "' actualizado a versión v" + r.getVersion(), "OK", "Mutación aplicada en Direct Memory");
-                    break;
+        if (bucket != null && id != null) {
+            EngineRecordInfo target = getRecord(dbName, bucketName, id);
+            if (target != null) {
+                target.recordNewVersion(summary, details, "admin", "Modificación manual vía explorador");
+                if (bucket.getSampleRecords().stream().noneMatch(r -> r.getId().equalsIgnoreCase(id))) {
+                    bucket.getRecordOverrides().put(target.getId().toUpperCase(Locale.ROOT), target);
                 }
+                logPoliceIncident("MemTable Purge Dog", "Registro '" + id + "' actualizado a versión v" + target.getVersion(), "OK", "Mutación aplicada en Direct Memory");
             }
         }
     }
 
     public synchronized boolean restoreRecordVersion(String dbName, String bucketName, String id, long targetVersion) {
         EngineBucketInfo bucket = getBucket(dbName, bucketName);
-        if (bucket != null) {
-            for (EngineRecordInfo r : bucket.getSampleRecords()) {
-                if (r.getId().equalsIgnoreCase(id)) {
-                    boolean ok = r.restoreVersion(targetVersion);
-                    if (ok) {
-                        logPoliceIncident("MemTable Purge Dog", "Registro '" + id + "' restaurado a versión previa v" + targetVersion + " (nueva versión v" + r.getVersion() + ")", "OK", "Restauración de versión completada");
-                        return true;
+        if (bucket != null && id != null) {
+            EngineRecordInfo target = getRecord(dbName, bucketName, id);
+            if (target != null) {
+                boolean ok = target.restoreVersion(targetVersion);
+                if (ok) {
+                    if (bucket.getSampleRecords().stream().noneMatch(r -> r.getId().equalsIgnoreCase(id))) {
+                        bucket.getRecordOverrides().put(target.getId().toUpperCase(Locale.ROOT), target);
                     }
-                    break;
+                    logPoliceIncident("MemTable Purge Dog", "Registro '" + id + "' restaurado a versión previa v" + targetVersion + " (nueva versión v" + target.getVersion() + ")", "OK", "Restauración de versión completada");
+                    return true;
                 }
             }
         }
@@ -1646,9 +1861,15 @@ public class JettraStorePlugin {
 
     public synchronized void deleteRecord(String dbName, String bucketName, String id) {
         EngineBucketInfo bucket = getBucket(dbName, bucketName);
-        if (bucket != null) {
-            bucket.getSampleRecords().removeIf(r -> r.getId().equalsIgnoreCase(id));
-            bucket.setTotalObjects(Math.max(0, bucket.getTotalObjects() - 1));
+        if (bucket != null && id != null) {
+            String key = id.trim().toUpperCase(Locale.ROOT);
+            boolean removedSample = bucket.getSampleRecords().removeIf(r -> r.getId().equalsIgnoreCase(id));
+            boolean removedOverride = bucket.getRecordOverrides().remove(key) != null;
+            boolean wasStreamed = !removedSample && !removedOverride && resolveStreamedRecordById(bucket, id) != null;
+            if (removedSample || removedOverride || wasStreamed) {
+                bucket.getDeletedRecordIds().add(key);
+                bucket.setTotalObjects(Math.max(0, bucket.getTotalObjects() - 1));
+            }
             logPoliceIncident("MemTable Purge Dog", "Tombstone generado para registro '" + id + "' en " + bucketName, "WARN", "Marcado para compactación SSTable");
         }
     }

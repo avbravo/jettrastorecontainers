@@ -3,6 +3,9 @@ package io.jettra.store.explorer.model;
 import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 public class EngineBucketInfo implements Serializable {
     private String databaseName;
@@ -13,6 +16,8 @@ public class EngineBucketInfo implements Serializable {
     private String description;
     private List<EngineRecordInfo> sampleRecords = new ArrayList<>();
     private List<EngineIndexInfo> indexes = new ArrayList<>();
+    private final Map<String, EngineRecordInfo> recordOverrides = new ConcurrentHashMap<>();
+    private final Set<String> deletedRecordIds = ConcurrentHashMap.newKeySet();
 
     public EngineBucketInfo() {}
 
@@ -34,6 +39,8 @@ public class EngineBucketInfo implements Serializable {
     public String getDescription() { return description; }
     public List<EngineRecordInfo> getSampleRecords() { return sampleRecords; }
     public List<EngineIndexInfo> getIndexes() { return indexes; }
+    public Map<String, EngineRecordInfo> getRecordOverrides() { return recordOverrides; }
+    public Set<String> getDeletedRecordIds() { return deletedRecordIds; }
 
     public String getFormattedSize() {
         if (totalBytes < 1024) return totalBytes + " B";

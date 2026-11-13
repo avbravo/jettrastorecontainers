@@ -80,17 +80,12 @@ public class RecordExplorerFluxView extends FluxView {
                 : (buckets.isEmpty() ? "Facturas" : buckets.get(0).getBucketName());
 
         EngineBucketInfo bucketInfo = plugin.getBucket(currentDb, currentBucket);
-        List<EngineRecordInfo> records;
-        if (searchQuery != null && !searchQuery.isBlank()) {
-            JettraStorePlugin.QueryResult qr = plugin.executeQuery(currentDb, currentBucket, searchQuery, false);
-            records = qr.records();
-        } else {
-            records = (bucketInfo != null) ? bucketInfo.getSampleRecords() : List.of();
-        }
-
-        int totalRecords = records.size();
-        int totalPages = Math.max(1, (int) Math.ceil((double) totalRecords / pageSize));
-        int currentPage = Math.max(1, Math.min(requestedPage, totalPages));
+        JettraStorePlugin.PagedRecordsResult pageResult = plugin.streamRecordsPage(currentDb, currentBucket, searchQuery, requestedPage, pageSize);
+        List<EngineRecordInfo> pageRecords = pageResult.records();
+        long totalRecords = pageResult.totalRecords();
+        int totalPages = pageResult.totalPages();
+        int currentPage = pageResult.page();
+        boolean isStreamed = pageResult.streamed();
 
         // 1. Notificación Flash si existe
         Widget flashWidget = null;
@@ -106,7 +101,7 @@ public class RecordExplorerFluxView extends FluxView {
         Widget bucketSelector = buildBucketSelector(buckets, currentDb, currentBucket);
 
         // 3. Barra de Búsqueda y Botón "+ Nuevo Registro"
-        Widget searchAndActions = buildSearchToolbar(currentDb, currentBucket, searchQuery, totalRecords, currentPage, totalPages, pageSize);
+        Widget searchAndActions = buildSearchToolbar(currentDb, currentBucket, searchQuery, totalRecords, currentPage, totalPages, pageSize, isStreamed);
 
         // 4. Panel Formulario Crear / Editar Registro si está activo
         Widget formPanel = null;
@@ -129,8 +124,8 @@ public class RecordExplorerFluxView extends FluxView {
             }
         }
 
-        // 5. Tabla de Registros CRUD con Paginación
-        Widget recordsTable = buildRecordsTable(records, currentDb, currentBucket, searchQuery, currentPage, totalPages, pageSize);
+        // 5. Tabla de Registros CRUD con Paginación Streaming
+        Widget recordsTable = buildRecordsTable(pageRecords, totalRecords, currentDb, currentBucket, searchQuery, currentPage, totalPages, pageSize, isStreamed);
 
         List<Widget> rootChildren = new java.util.ArrayList<>();
         if (flashWidget != null) rootChildren.add(flashWidget);
@@ -193,7 +188,10 @@ public class RecordExplorerFluxView extends FluxView {
     }
 
     private Widget buildSearchToolbar(String currentDb, String currentBucket, String query,
-                                      int totalRecords, int currentPage, int totalPages, int currentPageSize) {
+                                      long totalRecords, int currentPage, int totalPages, int currentPageSize, boolean isStreamed) {
+        String streamBadge = isStreamed
+                ? "<span data-streaming='page' style='background:rgba(16,185,129,0.15); border:1px solid #10b981; color:#10b981; padding:2px 8px; border-radius:9999px; font-size:0.75rem; font-weight:700;'>⚡ Streaming por página</span>"
+                : "";
         RawHtml html = RawHtml.of(String.format("""
             <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.75rem; margin-bottom: 1.25rem;">
               <form method="GET" action="/explorer" style="display: flex; gap: 0.5rem; flex: 1; max-width: 560px;">
@@ -204,14 +202,15 @@ public class RecordExplorerFluxView extends FluxView {
                 <button type="submit" class="app-btn-secondary">Buscar</button>
                 %s
               </form>
-              <div style="display: flex; align-items: center; gap: 0.75rem;">
-                <span style="font-size: 0.85rem; color: var(--text-muted); font-weight: 600;">%d registros encontrados • Página %d de %d</span>
+              <div style="display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;">
+                %s
+                <span style="font-size: 0.85rem; color: var(--text-muted); font-weight: 600;">%,d registros encontrados • Página %,d de %,d</span>
                 <a href="/explorer?db=%s&bucket=%s&action=new" class="app-btn-primary">➕ Nuevo Registro (Create)</a>
               </div>
             </div>
         """, currentDb, currentBucket, currentPageSize, escapeHtml(query),
              (query != null && !query.isBlank() ? "<a href='/explorer?db=" + currentDb + "&bucket=" + currentBucket + "&size=" + currentPageSize + "' class='app-btn-secondary'>Limpiar</a>" : ""),
-             totalRecords, currentPage, totalPages, currentDb, currentBucket));
+             streamBadge, totalRecords, currentPage, totalPages, currentDb, currentBucket));
 
         return html;
     }
@@ -327,18 +326,16 @@ public class RecordExplorerFluxView extends FluxView {
         return card;
     }
 
-    private Widget buildRecordsTable(List<EngineRecordInfo> allRecords, String currentDb, String currentBucket,
-                                     String query, int currentPage, int totalPages, int currentPageSize) {
-        if (allRecords.isEmpty()) {
+    private Widget buildRecordsTable(List<EngineRecordInfo> pageRecords, long totalRecords, String currentDb, String currentBucket,
+                                     String query, int currentPage, int totalPages, int currentPageSize, boolean isStreamed) {
+        if (pageRecords.isEmpty() || totalRecords <= 0) {
             return Div.of(
                 Header.of(4, "No hay registros disponibles en este bucket.").modifier(new Modifier().style("color: var(--text-muted); margin: 2rem 0; text-align: center;"))
             );
         }
 
-        int totalRecords = allRecords.size();
-        int fromIndex = Math.max(0, Math.min((currentPage - 1) * currentPageSize, totalRecords));
-        int toIndex = Math.min(fromIndex + currentPageSize, totalRecords);
-        List<EngineRecordInfo> pageRecords = allRecords.subList(fromIndex, toIndex);
+        long startRecord = ((long) (currentPage - 1) * currentPageSize) + 1L;
+        long endRecord = Math.min(startRecord + pageRecords.size() - 1L, totalRecords);
 
         String queryParam = (query != null && !query.isBlank()) ? "&q=" + encodeUrlParam(query) : "";
         String pageContextParams = "&page=" + currentPage + "&size=" + currentPageSize + queryParam;
@@ -382,8 +379,8 @@ public class RecordExplorerFluxView extends FluxView {
 
         table.append("</tbody></table>");
 
-        // Controles de Paginación y Desplazamiento entre Páginas
-        table.append(buildPaginationHtml(currentDb, currentBucket, query, currentPage, totalPages, currentPageSize, fromIndex + 1, toIndex, totalRecords));
+        // Controles de Paginación y Desplazamiento entre Páginas (Streaming)
+        table.append(buildPaginationHtml(currentDb, currentBucket, query, currentPage, totalPages, currentPageSize, startRecord, endRecord, totalRecords, isStreamed));
 
         Div card = Div.of(RawHtml.of(table.toString()));
         card.modifier(new Modifier().cssClass("ui-card"));
@@ -392,16 +389,20 @@ public class RecordExplorerFluxView extends FluxView {
 
     private String buildPaginationHtml(String currentDb, String currentBucket, String query,
                                        int currentPage, int totalPages, int currentPageSize,
-                                       int startRecord, int endRecord, int totalRecords) {
+                                       long startRecord, long endRecord, long totalRecords, boolean isStreamed) {
         StringBuilder sb = new StringBuilder();
-        sb.append("<div class='explorer-pagination-bar' data-pagination='explorer-records' style='display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.85rem; margin-top: 1.1rem; padding-top: 0.9rem; border-top: 1px solid var(--border-subtle);'>");
+        sb.append("<div class='explorer-pagination-bar' data-pagination='explorer-records' data-total-records='").append(totalRecords)
+          .append("' data-total-pages='").append(totalPages).append("' style='display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.85rem; margin-top: 1.1rem; padding-top: 0.9rem; border-top: 1px solid var(--border-subtle);'>");
 
         // Indicador de rango y selector de tamaño de página
         sb.append("<div style='display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; font-size: 0.84rem; color: var(--text-muted);'>");
-        sb.append("<span>Mostrando <strong style='color: var(--text-main);'>").append(startRecord).append(" - ").append(endRecord)
-          .append("</strong> de <strong style='color: #00d4ff;'>").append(totalRecords)
-          .append("</strong> registros (Página <strong style='color: #ffd700;'>").append(currentPage)
-          .append("</strong> de <strong>").append(totalPages).append("</strong>)</span>");
+        sb.append("<span>Mostrando <strong style='color: var(--text-main);'>").append(String.format("%,d - %,d", startRecord, endRecord))
+          .append("</strong> de <strong style='color: #00d4ff;'>").append(String.format("%,d", totalRecords))
+          .append("</strong> registros (Página <strong style='color: #ffd700;'>").append(String.format("%,d", currentPage))
+          .append("</strong> de <strong>").append(String.format("%,d", totalPages)).append("</strong>)</span>");
+        if (isStreamed) {
+            sb.append("<span style='font-size: 0.75rem; color: #10b981;'>[Streaming activo: solo página en memoria]</span>");
+        }
 
         sb.append("<form method='GET' action='/explorer' style='display: inline-flex; align-items: center; gap: 0.4rem; margin: 0;'>");
         sb.append("<input type='hidden' name='db' value='").append(escapeHtml(currentDb)).append("' />");
@@ -417,6 +418,21 @@ public class RecordExplorerFluxView extends FluxView {
         }
         sb.append("</select>");
         sb.append("</form>");
+
+        // Salto directo a página específica
+        sb.append("<form method='GET' action='/explorer' style='display: inline-flex; align-items: center; gap: 0.35rem; margin: 0;'>");
+        sb.append("<input type='hidden' name='db' value='").append(escapeHtml(currentDb)).append("' />");
+        sb.append("<input type='hidden' name='bucket' value='").append(escapeHtml(currentBucket)).append("' />");
+        sb.append("<input type='hidden' name='size' value='").append(currentPageSize).append("' />");
+        if (query != null && !query.isBlank()) {
+            sb.append("<input type='hidden' name='q' value='").append(escapeHtml(query)).append("' />");
+        }
+        sb.append("<label style='font-size: 0.78rem; color: var(--text-muted);'>Ir a pág.:</label>");
+        sb.append("<input type='number' name='page' min='1' max='").append(totalPages).append("' value='").append(currentPage)
+          .append("' class='app-input' style='width: 90px; padding: 0.2rem 0.45rem; height: 30px; font-size: 0.8rem;' />");
+        sb.append("<button type='submit' class='app-btn-secondary' style='padding: 0.25rem 0.55rem; height: 30px; font-size: 0.78rem;'>Ir</button>");
+        sb.append("</form>");
+
         sb.append("</div>");
 
         // Botones de desplazamiento entre páginas (Primera, Anterior, Números, Siguiente, Última)

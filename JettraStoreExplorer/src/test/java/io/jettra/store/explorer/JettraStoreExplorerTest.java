@@ -5,6 +5,8 @@ import io.jettra.server.core.config.ServerConfig;
 import io.jettra.server.core.storage.StorageMode;
 import io.jettra.store.explorer.model.EngineBucketInfo;
 import io.jettra.store.explorer.model.EngineRecordInfo;
+import io.jettra.store.explorer.model.JettraDatabaseRole;
+import io.jettra.store.explorer.model.JettraUser;
 import io.jettra.store.explorer.model.ServerNodeInfo;
 import io.jettra.store.explorer.plugin.JettraStorePlugin;
 import io.jettra.store.explorer.plugin.NodeLifecycleManager;
@@ -85,10 +87,14 @@ public class JettraStoreExplorerTest {
     }
 
     private static String loginAndGetSessionCookie(int port) throws Exception {
+        return loginAndGetSessionCookie(port, "admin", "admin123");
+    }
+
+    private static String loginAndGetSessionCookie(int port, String username, String password) throws Exception {
         HttpRequest loginReq = HttpRequest.newBuilder()
                 .uri(URI.create("http://127.0.0.1:" + port + "/login"))
                 .header("Content-Type", "application/x-www-form-urlencoded")
-                .POST(HttpRequest.BodyPublishers.ofString("username=admin&password=admin123"))
+                .POST(HttpRequest.BodyPublishers.ofString("username=" + username + "&password=" + password))
                 .build();
         HttpResponse<String> res = CLIENT.send(loginReq, HttpResponse.BodyHandlers.ofString());
         JettraAssert.assertEquals(302, res.statusCode(), "El login de prueba debe emitir redirección 302");
@@ -1053,6 +1059,147 @@ public class JettraStoreExplorerTest {
             }
         } finally {
             plugin.deleteDatabase(newDbName);
+        }
+    }
+
+    @Test
+    @DisplayName("27. Paginación Streaming Optimizada hasta 1,000,025 Documentos en Facturas (/explorer)")
+    public void testExplorerStreamingPaginationUpTo1000025Documents() throws Exception {
+        JettraStorePlugin plugin = JettraStorePlugin.getInstance();
+        EngineBucketInfo facturas = plugin.getBucket("example_factura_db", "Facturas");
+        JettraAssert.assertNotNull(facturas, "Bucket Facturas debe existir");
+        JettraAssert.assertEquals(1_000_025L, facturas.getTotalObjects(), "Facturas debe reportar 1,000,025 documentos");
+
+        // 1. Página 1 muestra streaming activo y total real de 100,003 páginas (con size=10)
+        HttpResponse<String> p1Res = get("/explorer?db=example_factura_db&bucket=Facturas&page=1&size=10");
+        JettraAssert.assertEquals(200, p1Res.statusCode(), "Página 1 debe responder HTTP 200");
+        JettraAssert.assertTrue(p1Res.body().contains("data-total-records='1000025'"), "Debe reportar 1,000,025 registros totales");
+        JettraAssert.assertTrue(p1Res.body().contains("data-total-pages='100003'"), "Debe calcular 100,003 páginas con size=10");
+        JettraAssert.assertTrue(p1Res.body().contains("Streaming por página"), "Debe indicar paginación por streaming");
+
+        // 2. Desplazamiento a página intermedia (página 50,000 -> registros 499,991 al 500,000)
+        HttpResponse<String> p50kRes = get("/explorer?db=example_factura_db&bucket=Facturas&page=50000&size=10");
+        JettraAssert.assertEquals(200, p50kRes.statusCode(), "Página 50000 debe responder HTTP 200");
+        JettraAssert.assertTrue(p50kRes.body().contains("FAC-2026-499991"), "Página 50000 debe mostrar FAC-2026-499991");
+        JettraAssert.assertTrue(p50kRes.body().contains("FAC-2026-500000"), "Página 50000 debe mostrar FAC-2026-500000");
+        JettraAssert.assertFalse(p50kRes.body().contains("FAC-2026-001"), "Página 50000 no debe cargar los registros de la página 1");
+        JettraAssert.assertEquals(25, facturas.getSampleRecords().size(), "El streaming por página no debe materializar 1,000,025 objetos en memoria");
+
+        // 3. Desplazamiento a la última página (página 100,003 -> registros 1,000,021 al 1,000,025)
+        HttpResponse<String> lastRes = get("/explorer?db=example_factura_db&bucket=Facturas&page=100003&size=10");
+        JettraAssert.assertEquals(200, lastRes.statusCode(), "Última página 100003 debe responder HTTP 200");
+        JettraAssert.assertTrue(lastRes.body().contains("FAC-2026-1000021"), "Última página debe mostrar FAC-2026-1000021");
+        JettraAssert.assertTrue(lastRes.body().contains("FAC-2026-1000025"), "Última página debe mostrar FAC-2026-1000025");
+    }
+
+    @Test
+    @DisplayName("28. Edición de Usuarios en /users (Propio Perfil y Administración por Rol ADMIN)")
+    public void testUserEditSelfAndAdminInUsersPage() throws Exception {
+        JettraStorePlugin plugin = JettraStorePlugin.getInstance();
+        String testUser = "dev_edit_test";
+        plugin.deleteUser(testUser);
+
+        try {
+            // 1. Admin crea usuario dev_edit_test
+            JettraUser u = new JettraUser(testUser, "pass123", "Desarrollador Inicial", JettraUser.GlobalRole.DEVELOPER);
+            u.setRoleForDatabase("example_factura_db", JettraDatabaseRole.READ_ONLY);
+            plugin.saveOrUpdateUser(u);
+
+            // 2. Admin abre formulario de edición de dev_edit_test y actualiza descripción y rol
+            HttpResponse<String> adminEditPage = get("/users?edit=" + testUser);
+            JettraAssert.assertEquals(200, adminEditPage.statusCode(), "Admin debe poder abrir edición de cualquier usuario");
+            JettraAssert.assertTrue(adminEditPage.body().contains("Editar Usuario: " + testUser), "Debe mostrar formulario de edición para " + testUser);
+
+            HttpResponse<String> adminSave = postForm("/users",
+                    "action=save_user&username=" + testUser + "&password=&globalRole=OPERATOR&description=Editado_Por_Admin&db_role_example_factura_db=READ_WRITE");
+            JettraAssert.assertEquals(302, adminSave.statusCode(), "POST save_user como admin debe redirigir 302");
+
+            JettraUser updatedByAdmin = plugin.findUser(testUser).orElse(null);
+            JettraAssert.assertNotNull(updatedByAdmin, "El usuario debe existir tras edición");
+            JettraAssert.assertEquals("pass123", updatedByAdmin.getPassword(), "Si password va vacío en edición debe conservar el password previo");
+            JettraAssert.assertEquals("Editado_Por_Admin", updatedByAdmin.getDescription(), "Admin debe actualizar descripción");
+            JettraAssert.assertEquals(JettraUser.GlobalRole.OPERATOR, updatedByAdmin.getGlobalRole(), "Admin debe poder cambiar el rol global");
+
+            // 3. Usuario no-admin inicia sesión: puede editar sus propios datos, pero NO los de admin ni escalar su rol
+            String devCookie = loginAndGetSessionCookie(sharedPort, testUser, "pass123");
+
+            HttpResponse<String> selfEditPage = get("/users?edit=" + testUser, devCookie);
+            JettraAssert.assertEquals(200, selfEditPage.statusCode(), "Usuario estándar debe poder abrir su propio perfil");
+            JettraAssert.assertTrue(selfEditPage.body().contains("Editar Usuario: " + testUser), "Debe mostrar formulario de edición propio");
+
+            HttpResponse<String> selfSave = postForm("/users",
+                    "action=save_user&username=" + testUser + "&password=newpass456&globalRole=ADMIN&description=AutoEditado", devCookie);
+            JettraAssert.assertEquals(302, selfSave.statusCode(), "Autoedición debe redirigir 302");
+
+            JettraUser selfUpdated = plugin.findUser(testUser).orElse(null);
+            JettraAssert.assertNotNull(selfUpdated, "Usuario debe existir tras autoedición");
+            JettraAssert.assertEquals("newpass456", selfUpdated.getPassword(), "Debe actualizar su propia contraseña");
+            JettraAssert.assertEquals("AutoEditado", selfUpdated.getDescription(), "Debe actualizar su propia descripción");
+            JettraAssert.assertEquals(JettraUser.GlobalRole.OPERATOR, selfUpdated.getGlobalRole(), "Usuario no-admin no debe poder auto-escalar su rol a ADMIN");
+
+            // 4. Usuario no-admin intenta editar a 'admin' -> rechazado
+            HttpResponse<String> forbiddenEditPage = get("/users?edit=admin", devCookie);
+            JettraAssert.assertTrue(forbiddenEditPage.body().contains("Acceso denegado"), "No-admin no debe poder abrir edición de otro usuario");
+
+            HttpResponse<String> forbiddenPost = postForm("/users",
+                    "action=save_user&username=admin&password=hacked&description=Hacked", devCookie);
+            JettraAssert.assertTrue(forbiddenPost.headers().firstValue("Location").orElse("").contains("msg=forbidden"),
+                    "POST de no-admin intentando editar otro usuario debe responder forbidden");
+            JettraAssert.assertEquals("admin123", plugin.findUser("admin").orElseThrow().getPassword(), "La contraseña de admin no debe haber sido alterada");
+        } finally {
+            plugin.deleteUser(testUser);
+        }
+    }
+
+    @Test
+    @DisplayName("29. Administrar Usuarios por Base de Datos en /databases (Solo Rol ADMIN)")
+    public void testDatabaseUserManagementAdminOnly() throws Exception {
+        JettraStorePlugin plugin = JettraStorePlugin.getInstance();
+        String testUser = "dev_db_test";
+        plugin.deleteUser(testUser);
+
+        try {
+            JettraUser u = new JettraUser(testUser, "dbpass123", "Usuario de prueba BD", JettraUser.GlobalRole.DEVELOPER);
+            plugin.saveOrUpdateUser(u);
+
+            // 1. Admin ve botón "Administrar Usuarios" en /databases y puede añadir/remover usuario en example_factura_db
+            HttpResponse<String> adminDbRes = get("/databases?db=example_factura_db&manage_users_db=example_factura_db");
+            JettraAssert.assertEquals(200, adminDbRes.statusCode(), "Admin debe acceder a /databases con manage_users_db");
+            JettraAssert.assertTrue(adminDbRes.body().contains("Administrar Usuarios"), "Debe mostrar botón Administrar Usuarios");
+            JettraAssert.assertTrue(adminDbRes.body().contains("Administración de Usuarios de la Base de Datos [example_factura_db]"),
+                    "Debe abrir el panel de administración de usuarios de la BD");
+
+            HttpResponse<String> addRes = postForm("/databases",
+                    "action=add_db_user&db=example_factura_db&username=" + testUser + "&role=READ_WRITE");
+            JettraAssert.assertEquals(302, addRes.statusCode(), "Añadir usuario a BD como admin debe redirigir 302");
+            JettraAssert.assertEquals(JettraDatabaseRole.READ_WRITE,
+                    plugin.findUser(testUser).orElseThrow().getRoleForDatabase("example_factura_db"),
+                    "El usuario debe quedar asignado con rol READ_WRITE en example_factura_db");
+
+            HttpResponse<String> removeRes = postForm("/databases",
+                    "action=remove_db_user&db=example_factura_db&username=" + testUser);
+            JettraAssert.assertEquals(302, removeRes.statusCode(), "Remover usuario de BD como admin debe redirigir 302");
+            JettraAssert.assertEquals(JettraDatabaseRole.NONE,
+                    plugin.findUser(testUser).orElseThrow().getRoleForDatabase("example_factura_db"),
+                    "El usuario debe quedar removido (NONE) de example_factura_db");
+
+            // 2. Usuario no-admin NO tiene activada la opción y sus peticiones POST son denegadas
+            String devCookie = loginAndGetSessionCookie(sharedPort, testUser, "dbpass123");
+            HttpResponse<String> nonAdminDbPage = get("/databases?db=example_factura_db&manage_users_db=example_factura_db", devCookie);
+            JettraAssert.assertEquals(200, nonAdminDbPage.statusCode(), "/databases debe responder HTTP 200");
+            JettraAssert.assertTrue(nonAdminDbPage.body().contains("🔒 Administrar Usuarios"), "No-admin debe ver el botón bloqueado");
+            JettraAssert.assertFalse(nonAdminDbPage.body().contains("Administración de Usuarios de la Base de Datos [example_factura_db]"),
+                    "No-admin no debe poder abrir el panel de administración de usuarios de BD");
+
+            HttpResponse<String> forbiddenAdd = postForm("/databases",
+                    "action=add_db_user&db=example_factura_db&username=" + testUser + "&role=ADMIN", devCookie);
+            JettraAssert.assertTrue(forbiddenAdd.headers().firstValue("Location").orElse("").contains("msg=forbidden"),
+                    "POST add_db_user por no-admin debe ser rechazado con forbidden");
+            JettraAssert.assertEquals(JettraDatabaseRole.NONE,
+                    plugin.findUser(testUser).orElseThrow().getRoleForDatabase("example_factura_db"),
+                    "Los permisos del usuario en la BD no deben cambiar tras intento no autorizado");
+        } finally {
+            plugin.deleteUser(testUser);
         }
     }
 }
