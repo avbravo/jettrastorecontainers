@@ -75,6 +75,7 @@ public final class JettraStoreServer {
     }
 
     public void start() throws IOException {
+        config.ensureStorageDirectoriesExist();
         Path storageDir = Path.of(config.getStoragePath());
         if (!Files.exists(storageDir)) {
             Files.createDirectories(storageDir);
@@ -1119,7 +1120,7 @@ public final class JettraStoreServer {
                 stream.forEach(entry -> {
                     String fn = entry.getFileName().toString();
                     if (Files.isDirectory(entry)) {
-                        if (!fn.startsWith(".")) set.add(fn);
+                        if (!fn.startsWith(".") && !"indexes".equalsIgnoreCase(fn)) set.add(fn);
                     } else if (fn.endsWith("_meta.json")) {
                         set.add(fn.substring(0, fn.length() - "_meta.json".length()));
                     }

@@ -88,43 +88,55 @@ public final class JettraStoreConfig {
         List<JettraConfigValidator.ClusterNodeInfo> clusterNodes = JettraConfigValidator.parseClusterNodes(effectiveClusterProps);
         this.allClusterNodes = Collections.unmodifiableList(clusterNodes);
 
-        this.nodeId = getPropOrEnv(props, 
-            new String[]{"jettra.node.id", "jettra.cluster.node.id", "node.id"}, 
-            new String[]{"JETTRA_NODE_ID", "JETTRA_CLUSTER_NODE_ID"}, 
+        String rawNodeId = getPropOrEnv(props, 
+            new String[]{"cluster.node.id", "jettra.node.id", "jettra.cluster.node.id", "node.id"}, 
+            new String[]{"CLUSTER_NODE_ID", "JETTRA_NODE_ID", "JETTRA_CLUSTER_NODE_ID"}, 
             "node-01");
 
-        // Sincronizar con el nodo correspondiente en jettra.config si existe
-        JettraConfigValidator.ClusterNodeInfo currentNode = null;
-        String nodeNum = JettraConfigValidator.extractNodeNumber(this.nodeId);
-        for (JettraConfigValidator.ClusterNodeInfo n : clusterNodes) {
-            if (n.id().equalsIgnoreCase(this.nodeId) || (nodeNum != null && nodeNum.equals(n.nodeNumber()))) {
-                currentNode = n;
-                break;
-            }
-        }
+        // Sincronizar con el nodo correspondiente en cluster.config buscando por id o número de nodo (ej. node-01 o 01)
+        JettraConfigValidator.ClusterNodeInfo currentNode = JettraConfigValidator.findNodeInCluster(clusterNodes, rawNodeId);
+        this.nodeId = (currentNode != null && currentNode.id() != null && !currentNode.id().isBlank())
+            ? currentNode.id()
+            : rawNodeId;
+        String nodeNum = (currentNode != null && currentNode.nodeNumber() != null)
+            ? currentNode.nodeNumber()
+            : JettraConfigValidator.extractNodeNumberOrNull(this.nodeId);
 
-        String defaultRole = (currentNode != null && currentNode.role() != null) ? currentNode.role() : "PRIMARY";
-        String roleStr = getPropOrEnv(props, 
-            new String[]{"jettra.node.role", "jettra.cluster.node.role", "node.role"}, 
-            new String[]{"JETTRA_NODE_ROLE", "JETTRA_CLUSTER_NODE_ROLE"}, 
-            defaultRole);
+        String defaultRole = (currentNode != null && currentNode.role() != null && !currentNode.role().isBlank())
+            ? currentNode.role()
+            : "PRIMARY";
+        String sysOrEnvRole = getPropOrEnv(null,
+            new String[]{"cluster.node.role", "jettra.node.role", "jettra.cluster.node.role", "node.role"},
+            new String[]{"CLUSTER_NODE_ROLE", "JETTRA_NODE_ROLE", "JETTRA_CLUSTER_NODE_ROLE"},
+            null);
+        String roleStr;
+        if (sysOrEnvRole != null && !sysOrEnvRole.isBlank()) {
+            roleStr = sysOrEnvRole;
+        } else if (currentNode != null && !effectiveClusterProps.isEmpty()) {
+            roleStr = defaultRole;
+        } else {
+            roleStr = getPropOrEnv(props,
+                new String[]{"cluster.node.role", "jettra.node.role", "jettra.cluster.node.role", "node.role"},
+                new String[]{"CLUSTER_NODE_ROLE", "JETTRA_NODE_ROLE", "JETTRA_CLUSTER_NODE_ROLE"},
+                defaultRole);
+        }
         this.nodeRole = "PRIMARY".equalsIgnoreCase(roleStr) ? ClusterNode.Role.PRIMARY : ClusterNode.Role.SECONDARY;
 
-        String defaultIp = effectiveServerProps.getProperty("server.host",
-            (currentNode != null && currentNode.ip() != null && !currentNode.ip().isBlank())
-            ? currentNode.ip() : "127.0.0.1");
+        String defaultIp = (currentNode != null && currentNode.ip() != null && !currentNode.ip().isBlank())
+            ? currentNode.ip()
+            : effectiveServerProps.getProperty("server.host", "127.0.0.1");
         this.nodeIp = getPropOrEnv(props, 
             new String[]{"jettra.node.ip", "jettra.network.ip", "jettra.cluster.node.ip", "node.ip", "server.host"}, 
             new String[]{"JETTRA_NODE_IP", "JETTRA_IP", "JETTRA_NETWORK_IP", "JETTRA_SERVER_HOST"}, 
             defaultIp);
 
-        int defaultGrpc = (currentNode != null) ? currentNode.grpcPort() : 9091;
+        int defaultGrpc = (currentNode != null && currentNode.grpcPort() > 0) ? currentNode.grpcPort() : 9091;
         this.grpcPort = Integer.parseInt(getPropOrEnv(props, 
             new String[]{"jettra.network.grpc.port", "jettra.grpc.port", "grpc.port"}, 
             new String[]{"JETTRA_GRPC_PORT", "JETTRA_NETWORK_GRPC_PORT"}, 
             String.valueOf(defaultGrpc)));
 
-        int defaultRest = (currentNode != null) ? currentNode.restPort() : 8080;
+        int defaultRest = (currentNode != null && currentNode.restPort() > 0) ? currentNode.restPort() : 8082;
         if (effectiveServerProps.containsKey("server.port")) {
             try {
                 defaultRest = Integer.parseInt(effectiveServerProps.getProperty("server.port").trim());
@@ -134,7 +146,7 @@ public final class JettraStoreConfig {
                 defaultRest = Integer.parseInt(effectiveServerProps.getProperty("jettra.network.rest.port").trim());
             } catch (Exception ignored) {}
         }
-        String configuredRest = getPropOrEnv(effectiveServerProps,
+        String configuredRest = getPropOrEnv(props,
             new String[]{"jettra.network.rest.port", "jettra.rest.port", "server.port", "jettra.server.port", "rest.port"},
             new String[]{"JETTRA_REST_PORT", "JETTRA_SERVER_PORT", "SERVER_PORT", "JETTRA_NETWORK_REST_PORT"},
             String.valueOf(defaultRest));
@@ -313,7 +325,7 @@ public final class JettraStoreConfig {
             }
         }
         if (configuredIndexPath == null) {
-            configuredIndexPath = resolvedPath + "/indexes";
+            configuredIndexPath = effectivePath + "/indexes";
         }
         if (configuredIndexPath.startsWith("~" + java.io.File.separator) || configuredIndexPath.startsWith("~/")) {
             configuredIndexPath = System.getProperty("user.home") + configuredIndexPath.substring(1);
@@ -321,6 +333,7 @@ public final class JettraStoreConfig {
             configuredIndexPath = System.getProperty("user.home");
         }
         this.indexStoragePath = configuredIndexPath;
+        ensureStorageDirectoriesExist();
         this.autoFlushBatchSize = Integer.parseInt(props.getProperty("jettra.storage.autoflush.batch.size", "50000"));
         this.queryDefaultLimit = Integer.parseInt(props.getProperty("jettra.query.default.limit", "50"));
         this.queryMaxLimit = Integer.parseInt(props.getProperty("jettra.query.max.limit", "5000"));
@@ -380,6 +393,26 @@ public final class JettraStoreConfig {
 
     public String getConfiguredStoragePath() { return rawConfiguredPath; }
     public String getStoragePath() { return storagePath; }
+
+    /**
+     * Verifica si existe el directorio de almacenamiento del nodo (storage.path)
+     * obtenido desde cluster.config y lo crea si no existe para almacenar bases de datos y objetos.
+     */
+    public final void ensureStorageDirectoriesExist() {
+        try {
+            if (this.storagePath != null && !this.storagePath.isBlank()) {
+                Path dir = Path.of(this.storagePath);
+                if (!Files.exists(dir)) {
+                    Files.createDirectories(dir);
+                    System.out.printf("[JettraStoreConfig] Directorio de almacenamiento creado: %s%n",
+                        dir.toAbsolutePath().normalize());
+                }
+            }
+        } catch (Exception ex) {
+            System.err.printf("[JettraStoreConfig] Advertencia al verificar/crear directorio de almacenamiento ('%s'): %s%n",
+                this.storagePath, ex.getMessage());
+        }
+    }
     public int getMemTableSizeMb() { return memTableSizeMb; }
     public int getRamGlobalLimitMb() { return ramGlobalLimitMb; }
     public boolean isOffHeapDirect() { return offHeapDirect; }

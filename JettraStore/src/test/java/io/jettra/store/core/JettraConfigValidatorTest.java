@@ -44,13 +44,9 @@ public class JettraConfigValidatorTest extends JettraStoreBaseTest {
 
     private Properties createValidMicroProfileProperties() {
         Properties props = new Properties();
-        props.setProperty("jettra.cluster.node.id", "node-01");
-        props.setProperty("storage.path", "~/jettra/data");
-        props.setProperty("jettra.storage.path", "~/jettra/data");
-        props.setProperty("jettra.network.grpc.port", "9091");
-        props.setProperty("jettra.network.rest.port", "8080");
-        props.setProperty("index.storage.path", "~/jettra/data/indexes");
-        props.setProperty("jettra.index.storage.path", "~/jettra/data/indexes");
+        props.setProperty("cluster.node.id", "node-01");
+        props.setProperty("cluster.node.role", "PRIMARY");
+        props.setProperty("cluster.multinode.active", "on");
         return props;
     }
 
@@ -74,7 +70,7 @@ public class JettraConfigValidatorTest extends JettraStoreBaseTest {
     public void testStoragePathMatchesNode1Passes() {
         Properties clusterProps = createValidClusterProperties();
         Properties dbProps = createValidDatabaseProperties();
-        dbProps.setProperty("jettra.node.id", "node-01");
+        dbProps.setProperty("cluster.node.id", "node-01");
         dbProps.setProperty("jettra.storage.path", "~/jettra/data");
         clusterProps.setProperty("cluster.node.1.storage.path", "~/jettra/data");
 
@@ -89,11 +85,11 @@ public class JettraConfigValidatorTest extends JettraStoreBaseTest {
     public void testStoragePathMatchesNode2Passes() {
         Properties clusterProps = createValidClusterProperties();
         Properties dbProps = createValidDatabaseProperties();
-        dbProps.setProperty("jettra.node.id", "node-02");
-        dbProps.setProperty("jettra.storage.path", "~/jettra-2/data");
+        dbProps.setProperty("cluster.node.id", "node-02");
+        dbProps.setProperty("jettra.storage.path", "~/jettra/data");
         dbProps.setProperty("jettra.network.grpc.port", "9092");
         dbProps.setProperty("jettra.network.rest.port", "8082");
-        clusterProps.setProperty("cluster.node.2.storage.path", "~/jettra-2/data");
+        clusterProps.setProperty("cluster.node.2.storage.path", "~/jettra/data");
 
         JettraConfigValidator.ValidationResult result = JettraConfigValidator.validate(dbProps, clusterProps);
         assertTrue(result.isValid());
@@ -102,22 +98,31 @@ public class JettraConfigValidatorTest extends JettraStoreBaseTest {
 
     @Test
     @DisplayName("Debe emitir advertencia si jettra.storage.path del nodo 2 no coincide con cluster.node.2.storage.path")
-    public void testStoragePathMismatchWithNode2EmitsWarning() {
-        Properties clusterProps = createValidClusterProperties();
-        Properties dbProps = createValidDatabaseProperties();
-        dbProps.setProperty("jettra.node.id", "node-02");
-        dbProps.setProperty("jettra.storage.path", "~/jettra-2/data");
-        dbProps.setProperty("jettra.network.grpc.port", "9092");
-        dbProps.setProperty("jettra.network.rest.port", "8082");
-        // En jettra.config el nodo 2 tiene una ruta diferente
-        clusterProps.setProperty("cluster.node.2.storage.path", "~/jettra-3/data");
+    public void testStoragePathMismatchWithNode2EmitsWarning() throws IOException {
+        Path tempDir2 = Files.createTempDirectory("jettra_mismatch_2");
+        Path tempDir3 = Files.createTempDirectory("jettra_mismatch_3");
+        try {
+            Properties clusterProps = createValidClusterProperties();
+            Properties dbProps = createValidDatabaseProperties();
+            dbProps.setProperty("cluster.node.id", "node-02");
+            dbProps.setProperty("jettra.storage.path", tempDir2.toAbsolutePath().toString());
+            dbProps.setProperty("jettra.network.grpc.port", "9092");
+            dbProps.setProperty("jettra.network.rest.port", "8082");
+            // En jettra.config el nodo 2 tiene una ruta diferente
+            clusterProps.setProperty("cluster.node.2.storage.path", tempDir3.toAbsolutePath().toString());
 
-        JettraConfigValidator.ValidationResult result = JettraConfigValidator.validate(dbProps, clusterProps);
-        assertTrue(result.isValid()); // No detiene bruscamente, es una advertencia
-        assertTrue(result.hasWarnings());
-        boolean hasWarning = result.getWarnings().stream()
-            .anyMatch(w -> w.contains("cluster.node.2.storage.path") && w.contains("~/jettra-2/data") && w.contains("~/jettra-3/data"));
-        assertTrue(hasWarning);
+            JettraConfigValidator.ValidationResult result = JettraConfigValidator.validate(dbProps, clusterProps);
+            assertTrue(result.isValid()); // No detiene bruscamente, es una advertencia
+            assertTrue(result.hasWarnings());
+            boolean hasWarning = result.getWarnings().stream()
+                .anyMatch(w -> w.contains("cluster.node.2.storage.path")
+                            && w.contains(tempDir2.toAbsolutePath().toString())
+                            && w.contains(tempDir3.toAbsolutePath().toString()));
+            assertTrue(hasWarning);
+        } finally {
+            Files.deleteIfExists(tempDir2);
+            Files.deleteIfExists(tempDir3);
+        }
     }
 
     @Test
@@ -421,16 +426,184 @@ public class JettraConfigValidatorTest extends JettraStoreBaseTest {
     }
 
     @Test
-    @DisplayName("Debe rechazar la configuración si el nodeId configurado no existe en jettra.config")
+    @DisplayName("Debe rechazar la configuración y emitir advertencia si cluster.node.id no existe en cluster.config")
     public void testValidationRejectsUnrecognizedNodeId() {
         Properties clusterProps = createValidClusterProperties();
         Properties dbProps = createValidDatabaseProperties();
-        dbProps.setProperty("jettra.node.id", "node-99");
+        dbProps.setProperty("cluster.node.id", "node-99");
 
         JettraConfigValidator.ValidationResult result = JettraConfigValidator.validate(dbProps, clusterProps);
         assertFalse(result.isValid());
+        assertTrue(result.hasWarnings());
+        boolean hasNodeWarning = result.getWarnings().stream()
+            .anyMatch(w -> w.contains("node-99"));
+        assertTrue(hasNodeWarning);
         boolean hasNodeError = result.getErrors().stream()
             .anyMatch(err -> err.contains("node-99"));
         assertTrue(hasNodeError);
+    }
+
+    @Test
+    @DisplayName("Debe obtener rol, ip, puertos gRPC/REST, storage.path e indexes de cluster.config usando cluster.node.id=node-01 o 01")
+    public void testResolveNodeConfigFromClusterConfigWithoutDuplicateProperties() {
+        Properties clusterProps = new Properties();
+        clusterProps.setProperty("cluster.node.1.id", "node-01");
+        clusterProps.setProperty("cluster.node.1.role", "PRIMARY");
+        clusterProps.setProperty("cluster.node.1.ip", "192.168.60.243");
+        clusterProps.setProperty("cluster.node.1.grpc.port", "9091");
+        clusterProps.setProperty("cluster.node.1.rest.port", "8081");
+        clusterProps.setProperty("cluster.node.1.storage.path", "~/jettra/data");
+
+        clusterProps.setProperty("cluster.node.2.id", "node-02");
+        clusterProps.setProperty("cluster.node.2.role", "SECONDARY");
+        clusterProps.setProperty("cluster.node.2.ip", "192.168.60.243");
+        clusterProps.setProperty("cluster.node.2.grpc.port", "9092");
+        clusterProps.setProperty("cluster.node.2.rest.port", "8082");
+        clusterProps.setProperty("cluster.node.2.storage.path", "~/jettra/data");
+
+        // Caso A: cluster.node.id=node-01 (sin propiedades duplicadas en microprofile-config.properties)
+        Properties mpProps1 = new Properties();
+        mpProps1.setProperty("cluster.node.id", "node-01");
+        mpProps1.setProperty("cluster.node.role", "PRIMARY");
+        mpProps1.setProperty("cluster.multinode.active", "on");
+
+        JettraConfigValidator.ValidationResult val1 = JettraConfigValidator.validate(mpProps1, clusterProps);
+        assertTrue(val1.isValid());
+
+        JettraStoreConfig cfg1 = new JettraStoreConfig(mpProps1, clusterProps);
+        assertEquals("node-01", cfg1.getNodeId());
+        assertEquals(io.jettra.store.cluster.ClusterNode.Role.PRIMARY, cfg1.getNodeRole());
+        assertEquals("192.168.60.243", cfg1.getNodeIp());
+        assertEquals(9091, cfg1.getGrpcPort());
+        assertEquals(8081, cfg1.getRestPort());
+        assertEquals("~/jettra/data", cfg1.getConfiguredStoragePath());
+        assertTrue(cfg1.getIndexStoragePath().endsWith("/jettra/data/indexes"));
+
+        // Caso B: cluster.node.id=01 (coincidencia numérica con cluster.node.1.*)
+        Properties mpPropsShort = new Properties();
+        mpPropsShort.setProperty("cluster.node.id", "01");
+        mpPropsShort.setProperty("cluster.node.role", "PRIMARY");
+
+        JettraConfigValidator.ValidationResult valShort = JettraConfigValidator.validate(mpPropsShort, clusterProps);
+        assertTrue(valShort.isValid());
+
+        JettraStoreConfig cfgShort = new JettraStoreConfig(mpPropsShort, clusterProps);
+        assertEquals("node-01", cfgShort.getNodeId());
+        assertEquals("192.168.60.243", cfgShort.getNodeIp());
+        assertEquals(9091, cfgShort.getGrpcPort());
+        assertEquals(8081, cfgShort.getRestPort());
+
+        // Caso C: cluster.node.id=node-02
+        Properties mpProps2 = new Properties();
+        mpProps2.setProperty("cluster.node.id", "node-02");
+        mpProps2.setProperty("cluster.node.role", "SECONDARY");
+
+        JettraStoreConfig cfg2 = new JettraStoreConfig(mpProps2, clusterProps);
+        assertEquals("node-02", cfg2.getNodeId());
+        assertEquals(io.jettra.store.cluster.ClusterNode.Role.SECONDARY, cfg2.getNodeRole());
+        assertEquals("192.168.60.243", cfg2.getNodeIp());
+        assertEquals(9092, cfg2.getGrpcPort());
+        assertEquals(8082, cfg2.getRestPort());
+    }
+
+    @Test
+    @DisplayName("Debe permitir agregar nodos dinámicamente a cluster.config y validarlos correctamente")
+    public void testDynamicNodeRegistrationInClusterConfig() throws IOException {
+        Path tempDir = Files.createTempDirectory("jettra_dynamic_node_test");
+        Path clusterFile = tempDir.resolve("cluster.config");
+        Path node4Storage = tempDir.resolve("data-node4");
+        try {
+            JettraConfigValidator.generateDefaultClusterConfig(clusterFile);
+
+            // Agregar dinámicamente el nodo 4 (node-04)
+            JettraConfigValidator.ClusterNodeInfo added = JettraConfigValidator.registerDynamicNodeInClusterConfig(
+                clusterFile,
+                "node-04",
+                "SECONDARY",
+                "192.168.60.244",
+                9094,
+                8084,
+                node4Storage.toAbsolutePath().toString()
+            );
+
+            assertEquals("node-04", added.id());
+            assertEquals("4", added.nodeNumber());
+            assertEquals("192.168.60.244", added.ip());
+            assertEquals(9094, added.grpcPort());
+            assertEquals(8084, added.restPort());
+
+            Properties loadedCluster = new Properties();
+            try (var in = Files.newInputStream(clusterFile)) {
+                loadedCluster.load(in);
+            }
+
+            Properties mpProps = new Properties();
+            mpProps.setProperty("cluster.node.id", "node-04");
+            mpProps.setProperty("cluster.node.role", "SECONDARY");
+            mpProps.setProperty("cluster.multinode.active", "on");
+
+            JettraConfigValidator.ValidationResult val = JettraConfigValidator.validate(mpProps, loadedCluster);
+            assertTrue(val.isValid());
+
+            JettraStoreConfig cfg = new JettraStoreConfig(mpProps, loadedCluster);
+            assertEquals("node-04", cfg.getNodeId());
+            assertEquals(io.jettra.store.cluster.ClusterNode.Role.SECONDARY, cfg.getNodeRole());
+            assertEquals("192.168.60.244", cfg.getNodeIp());
+            assertEquals(9094, cfg.getGrpcPort());
+            assertEquals(8084, cfg.getRestPort());
+            assertEquals(node4Storage.toAbsolutePath().toString(), cfg.getConfiguredStoragePath());
+        } finally {
+            try (var stream = Files.walk(tempDir)) {
+                stream.sorted(java.util.Comparator.reverseOrder()).forEach(p -> {
+                    try { Files.deleteIfExists(p); } catch (Exception ignored) {}
+                });
+            } catch (Exception ignored) {}
+        }
+    }
+
+    @Test
+    @DisplayName("Debe verificar y crear automáticamente el directorio cluster.node.<N>.storage.path al arrancar para almacenar la base de datos y objetos")
+    public void testStartupCreatesNodeStorageDirectoryIfMissing() throws IOException {
+        Path tempRoot = Files.createTempDirectory("jettra_auto_mkdir_test");
+        Path node1MissingDir = tempRoot.resolve("node-01-storage").resolve("jettra").resolve("data");
+        try {
+            assertFalse(Files.exists(node1MissingDir), "El directorio no debe existir antes del arranque");
+
+            Properties clusterProps = createValidClusterProperties();
+            clusterProps.setProperty("cluster.node.1.storage.path", node1MissingDir.toAbsolutePath().toString());
+
+            Properties mpProps = new Properties();
+            mpProps.setProperty("cluster.node.id", "node-01");
+            mpProps.setProperty("cluster.node.role", "PRIMARY");
+            mpProps.setProperty("cluster.multinode.active", "on");
+            mpProps.setProperty("jettra.storage.mode", "JVM_RAM");
+
+            // 1. Al validar durante el arranque se verifica y crea el directorio si no existe
+            JettraConfigValidator.ValidationResult val = JettraConfigValidator.validate(mpProps, clusterProps);
+            assertTrue(val.isValid());
+            assertTrue(Files.exists(node1MissingDir), "El directorio cluster.node.1.storage.path debe haberse creado al validar el arranque");
+            assertTrue(Files.isDirectory(node1MissingDir), "La ruta creada debe ser un directorio");
+
+            // 2. Al cargar JettraStoreConfig y persistir una base de datos y objetos
+            JettraStoreConfig config = new JettraStoreConfig(mpProps, clusterProps);
+            assertEquals(node1MissingDir.toAbsolutePath().toString(), config.getStoragePath());
+
+            try (JettraDatabase db = new JettraDatabase("startup_dir_db", config)) {
+                db.getDocumentEngine("clientes").insert("c1", java.util.Map.of("nombre", "Ana", "activo", true));
+                db.flushMemTable();
+                db.saveToDisk();
+
+                Path metaFile = node1MissingDir.resolve("startup_dir_db_meta.json");
+                Path sstableFile = node1MissingDir.resolve("startup_dir_db_sstable" + config.getFileExtension());
+                assertTrue(Files.exists(metaFile), "El archivo de metadatos debe guardarse en el directorio creado");
+                assertTrue(Files.exists(sstableFile), "El archivo de objetos SSTable debe guardarse en el directorio creado");
+            }
+        } finally {
+            try (var stream = Files.walk(tempRoot)) {
+                stream.sorted(java.util.Comparator.reverseOrder()).forEach(p -> {
+                    try { Files.deleteIfExists(p); } catch (Exception ignored) {}
+                });
+            } catch (Exception ignored) {}
+        }
     }
 }

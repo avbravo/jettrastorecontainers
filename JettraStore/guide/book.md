@@ -1204,34 +1204,45 @@ Cuando se desactiva (`false`), el compilador JIT elimina los puntos de control d
 
 ## 13. Configuración del Sistema (`microprofile-config.properties` y `cluster.config`)
 
-JettraStore implementa una arquitectura de configuración moderna y estandarizada alineada con **Eclipse MicroProfile Config 3.1** y **Jakarta EE**, desacoplando los parámetros del motor local, servidor y persistencia (`microprofile-config.properties`) de la topología distribuida de consenso y replicación (`cluster.config`).
+JettraStore implementa una arquitectura de configuración limpia, moderna y libre de duplicidad alineada con **Eclipse MicroProfile Config 3.1** y **Jakarta EE**, separando con precisión:
+1. **`microprofile-config.properties`:** Identifica el nodo local mediante `cluster.node.id` y `cluster.node.role` y define los parámetros internos del motor (memoria Off-Heap, modos de almacenamiento, `JettraPolice`, consultas y seguridad `JettraJWT`).
+2. **`cluster.config`:** Centraliza toda la topología de red y almacenamiento físico de cada nodo del clúster (`id`, `role`, `ip`, `grpc.port`, `rest.port` y `storage.path`), incluyendo los nodos agregados dinámicamente en tiempo de ejecución.
 
-Ambos archivos operan en estrecha sincronía. Al iniciar JettraStore en modo autónomo mediante `java -jar`, el componente de inicialización `JettraConfigValidator` ejecuta comprobaciones cruzadas estrictas para garantizar la consistencia física y de red de todos los nodos del clúster.
+Al iniciar JettraStore, el componente `JettraConfigValidator` enlaza el nodo definido en `cluster.node.id` con su bloque correspondiente `cluster.node.<N>.*` en `cluster.config`. Si el `cluster.node.id` indicado no existe en `cluster.config`, emite un mensaje de advertencia y error crítico e impide la ejecución de `JettraStore`.
 
 ---
 
-### 13.1 Archivo `microprofile-config.properties` (Parámetros del Motor, Persistencia Local y MicroProfile)
+### 13.1 Archivo `microprofile-config.properties` (Identidad del Nodo y Parámetros del Motor)
 
-El archivo estándar `microprofile-config.properties` reside en `META-INF/microprofile-config.properties` en el classpath, en la carpeta `config/` de cada nodo (`config/microprofile-config.properties`) o en el directorio de trabajo donde se ejecute el JAR.
+El archivo estándar `microprofile-config.properties` reside en `META-INF/microprofile-config.properties` (o en la raíz del classpath), en la carpeta `config/` de cada nodo (`config/microprofile-config.properties`) o en el directorio de trabajo donde se ejecute el JAR.
 
-#### 13.1.1 Prioridad de Resolución
+#### 13.1.1 Eliminación de Duplicidad y Enlace con `cluster.config`
+Para evitar duplicidad de propiedades con funciones similares entre archivos:
+* **Identidad y Rol del Nodo Local (Paso 1):**  
+  En `microprofile-config.properties` se definen únicamente:
+  ```properties
+  cluster.node.id=node-01
+  cluster.node.role=PRIMARY
+  ```
+  *(Se prescinde de las propiedades redundantes `jettra.node.id` y `jettra.node.role`).*  
+  El valor de `cluster.node.id` admite tanto el identificador completo (`node-01`, `node-02`, `node-03`) como el formato numérico abreviado (`01` o `1`), permitiendo localizar de inmediato la sección `cluster.node.<N>.*` dentro de `cluster.config`.
+
+* **Resolución Centralizada de Red, Almacenamiento e Índices desde `cluster.config` (Paso 2):**  
+  Se eliminan de `microprofile-config.properties` los parámetros duplicados de rutas y puertos (`jettra.storage.path`, `storage.path`, `data.dir`, `index.storage.path`, `jettra.index.storage.path`, `jettra.network.grpc.port` y `jettra.network.rest.port`). Toda esta información se obtiene automáticamente del nodo correspondiente en `cluster.config`:
+  - **`cluster.node.<N>.role`:** Rol del nodo en el clúster (`PRIMARY` o `SECONDARY`).
+  - **`cluster.node.<N>.ip`:** Dirección IP de escucha y transporte del nodo.
+  - **`cluster.node.<N>.grpc.port`:** Puerto de transporte binario/gRPC (reemplaza a `jettra.network.grpc.port`).
+  - **`cluster.node.<N>.rest.port`:** Puerto HTTP REST del nodo (reemplaza a `jettra.network.rest.port`).
+  - **`cluster.node.<N>.storage.path`:** Directorio base de persistencia física; reemplaza a `jettra.storage.path`, `storage.path` y `data.dir`, y actúa como base para el subdirectorio de índices `<storage.path>/indexes` (reemplazando a `jettra.index.storage.path`).
+
+#### 13.1.2 Prioridad de Resolución
 El orden de resolución de parámetros en tiempo de ejecución cumple la especificación MicroProfile Config:
-1. **Propiedades del sistema JVM** pasadas como argumentos `-D` (ej. `-Djettra.node.id=node-01`, `-Djettra.node.role=PRIMARY`, `-Djettra.storage.path=...`, `-Djettra.network.grpc.port=...`, `-Dserver.port=8082`). Tienen la **máxima prioridad** y sobreescriben cualquier otra fuente.
-2. **Variables de entorno del sistema** (ej. `JETTRA_NODE_ID`, `JETTRA_NODE_ROLE`, `JETTRA_STORAGE_PATH`, `JETTRA_GRPC_PORT`, `SERVER_PORT`), ideales para despliegues en contenedores Docker y Kubernetes.
+1. **Propiedades del sistema JVM** pasadas como argumentos `-D` (ej. `-Dcluster.node.id=node-01`, `-Dcluster.node.role=PRIMARY`). Tienen la **máxima prioridad** y sobreescriben cualquier otra fuente.
+2. **Variables de entorno del sistema** (ej. `CLUSTER_NODE_ID`, `CLUSTER_NODE_ROLE`, `JETTRA_NODE_ID`, `JETTRA_STORAGE_PATH`), ideales para despliegues en contenedores Docker y Kubernetes.
 3. **Archivo de configuración externa** especificado mediante `-Dmicroprofile.config.file=...` o variable `MP_CONFIG_FILE`.
 4. **Archivo de configuración del nodo en disco (`microprofile-config.properties`)** localizado en `config/microprofile-config.properties`, `./microprofile-config.properties`, o en el directorio hermano de `cluster.config`.
-5. **Valores mapeados desde la topología del clúster (`cluster.config`)** según el nodo actual (`cluster.node.X.*`).
+5. **Valores de red y almacenamiento resueltos desde `cluster.config`** según el nodo indicado en `cluster.node.id` (`cluster.node.<N>.*`).
 6. **Valores predeterminados embebidos** en el classpath (`META-INF/microprofile-config.properties`).
-
-#### 13.1.2 Sintaxis Recomendada de Rutas de Almacenamiento
-* **Ruta de Almacenamiento Principal (`jettra.storage.path` / `data.dir`):**  
-  Debe seguir la sintaxis jerárquica por nodo:
-  $$\text{Sintaxis:} \quad \langle\text{path}\rangle/\text{jettra}/\text{data}$$
-  *Ejemplo:* `~/jettra/data` o `/opt/jettra/data`
-* **Ruta de Almacenamiento de Índices (`jettra.index.storage.path`):**  
-  Debe implementar la sintaxis estructurada:
-  $$\text{Sintaxis:} \quad \langle\text{path}\rangle/\text{jettra}/\text{data}/\text{indexes}$$
-  *Ejemplo:* `~/jettra/data/indexes` o `/opt/jettra/data/indexes`
 
 #### 13.1.3 Parámetro `cluster.multinode.active` (Activación del Algoritmo de Consenso Distribuido)
 
@@ -1249,7 +1260,7 @@ La propiedad `cluster.multinode.active` define si JettraStore opera en modo dist
   - El motor de anillo dinámico (*Dynamic Ring*) se mantiene en modo local/standalone y no inicia transferencias hacia nodos pares.
   - Ideal para entornos de desarrollo local, despliegues compactos en un único servidor dedicado, microservicios embebidos o pruebas unitarias donde no se requiere infraestructura de clúster ni tráfico de red inter-nodo.
 
-#### 13.1.4 Plantilla Completa de Configuración
+#### 13.1.4 Plantilla Completa de `microprofile-config.properties`
 ```properties
 # ==============================================================================
 # ECLIPSE MICROPROFILE CONFIGURATION (MicroProfile Config 3.1)
@@ -1259,44 +1270,35 @@ La propiedad `cluster.multinode.active` define si JettraStore opera en modo dist
 # Perfil activo de configuración MicroProfile
 mp.config.profile=production
 
-# Identificador y rol de este nodo en el cluster
-jettra.node.id=node-01
-jettra.node.role=PRIMARY
+# Identificador y Rol del Nodo Local en el Clúster (enlaza con cluster.config)
 cluster.node.id=node-01
 cluster.node.role=PRIMARY
 
-# Topología Multinodo y Algoritmo de Consenso Distribuido (on / off)
+# Topología Multinodo y Consenso
 cluster.multinode.active=on
 
-# Ubicación física explícita del directorio de almacenamiento de datos (.jettra)
-jettra.storage.path=~/jettra/data
-data.dir=~/jettra/data
-
-# Modo de Almacenamiento: OFF_HEAP (Panama FFM), DISK_MEMORY (LSM), JVM_RAM (Heap)
-storage.mode=OFF_HEAP
+# Modo de Almacenamiento (OFF_HEAP, DISK_MEMORY, JVM_RAM)
 jettra.storage.mode=OFF_HEAP
+storage.mode=OFF_HEAP
 jettra.storage.file.extension=.jettra
 
-# Red y Puertos de Escucha (HTTP REST y gRPC)
-server.host=0.0.0.0
-server.port=8082
+# Red y Virtual Threads (IP, puertos gRPC/REST y storage.path se obtienen de cluster.config)
 contextpath=/
-jettra.network.grpc.port=9091
-jettra.network.rest.port=8082
+server.contextpath=/
 jettra.network.virtualthreads.enabled=true
 server.virtual-threads=true
 
-# Estructura LSM y Memoria Off-Heap con Project Panama FFM (Java 25+)
+# MemTable y Memoria Off-Heap (Panama FFM)
 jettra.storage.memtable.size.mb=128
 jettra.storage.ram.global.limit.mb=2048
 jettra.storage.offheap.direct=true
 storage.offheap.page-size=65536
 
-# Umbrales para la Transición Dinámica al Anillo de Saturación de Memoria (Dynamic Ring)
+# Umbrales del Motor de Anillo Distribuido
 jettra.ring.saturation.threshold.percent=85
 jettra.ring.release.target.percent=45
 
-# Componente Autónomo de Supervisión Preventiva (JettraPolice)
+# JettraPolice (Supervisión Preventiva Anti-OOM)
 jettrapolice.active=true
 jettrapolice.interval.ms=500
 jettrapolice.ram.warning.threshold=75
@@ -1305,33 +1307,28 @@ jettrapolice.ram.critical.threshold=85
 jettrapolice.auto.pagination.enabled=true
 jettrapolice.max.safe.batch.size=100
 
-# Suite de Métricas de Microbenchmarking con JMH
-jmh.metrics.active=false
+# Índices y Optimización de Consultas
+jettra.index.initial.capacity=65536
+jettra.index.max.inmemory.keys=100000
+jettra.index.compact.storage=true
+jettra.storage.autoflush.batch.size=50000
+jettra.query.default.limit=50
+jettra.query.max.limit=5000
+jettra.query.pagesize=50
 
-# Seguridad y Autenticación Criptográfica con JettraJWT (Ed25519)
+# Seguridad Criptográfica y JWT
 jettra.security.jwt.algorithm=Ed25519
 jettra.security.jwt.expiration.seconds=86400
 jettra.security.jwt.issuer=jettra-store-authority
 jwt.secret=jettra_store_super_secure_jwt_key_2026
 jwt.expiration-millis=86400000
 
-# Superusuario por Defecto (Provisionamiento Obligatorio Inicial)
+# Superusuario por Defecto
 jettra.security.default.admin.username=admin
 jettra.security.default.admin.password=admin-jettra
 
-# Optimización de Almacenamiento de Índices y Ahorro de Memoria Heap (Anti-OOM)
-jettra.index.initial.capacity=65536
-jettra.index.max.inmemory.keys=100000
-jettra.index.compact.storage=true
-jettra.index.storage.path=~/jettra/data/indexes
-jettra.storage.autoflush.batch.size=50000
-
-# Directivas de Consulta y Límites de Seguridad de Memoria (SQL & LQL Anti-OOM)
-jettra.query.default.limit=50
-jettra.query.max.limit=5000
-jettra.query.pagesize=50
-
-# MicroProfile Telemetry & Metrics
+# Métricas y MicroProfile
+jmh.metrics.active=false
 mp.health.default.readiness.empty.response=UP
 mp.metrics.appName=JettraStore
 mp.metrics.tags=platform=JettraStore,runtime=Java25,engine=PanamaFFM
@@ -1340,15 +1337,15 @@ cors.enabled=true
 
 ---
 
-### 13.2 Archivo `cluster.config` (Topología de Clúster Raft y Dynamic Ring)
+### 13.2 Archivo `cluster.config` (Topología de Clúster Raft, Red, Almacenamiento y Nodos Dinámicos)
 
-El archivo `cluster.config` (renombrado oficialmente desde `jettra.config`) establece la topología completa del clúster de consenso Raft y coordinación del anillo dinámico. Permite registrar las identidades, IPs, puertos de comunicación inter-nodo (gRPC), puertos de servicio HTTP (REST) y rutas de persistencia de cada servidor.
+El archivo `cluster.config` establece la topología completa del clúster de consenso Raft y coordinación del anillo dinámico. Define para cada nodo su identidad (`id`), rol (`role`), dirección IP (`ip`), puerto inter-nodo (`grpc.port`), puerto HTTP (`rest.port`) y ruta base de almacenamiento (`storage.path`).
 
-#### 13.2.1 Plantilla de Topología Centralizada
+#### 13.2.1 Plantilla de Topología Centralizada (`cluster.config`)
 ```properties
 ################################################################################
 # JettraStore Cluster Topology Configuration (cluster.config)
-# Topología de Clúster Centralizada de 3 Nodos (Raft Consensus & Dynamic Ring)
+# Topología de Clúster Centralizada (Raft Consensus & Dynamic Ring)
 ################################################################################
 
 cluster.name = jettra-production-cluster
@@ -1362,9 +1359,9 @@ cluster.election.timeout.ms = 300
 # ==============================================================================
 cluster.node.1.id = node-01
 cluster.node.1.role = PRIMARY
-cluster.node.1.ip = 127.0.0.1
+cluster.node.1.ip = 192.168.60.243
 cluster.node.1.grpc.port = 9091
-cluster.node.1.rest.port = 8080
+cluster.node.1.rest.port = 8081
 cluster.node.1.storage.path = ~/jettra/data
 
 # ==============================================================================
@@ -1372,9 +1369,9 @@ cluster.node.1.storage.path = ~/jettra/data
 # ==============================================================================
 cluster.node.2.id = node-02
 cluster.node.2.role = SECONDARY
-cluster.node.2.ip = 127.0.0.1
-cluster.node.2.grpc.port = 9091
-cluster.node.2.rest.port = 8080
+cluster.node.2.ip = 192.168.60.243
+cluster.node.2.grpc.port = 9092
+cluster.node.2.rest.port = 8082
 cluster.node.2.storage.path = ~/jettra/data
 
 # ==============================================================================
@@ -1382,9 +1379,9 @@ cluster.node.2.storage.path = ~/jettra/data
 # ==============================================================================
 cluster.node.3.id = node-03
 cluster.node.3.role = SECONDARY
-cluster.node.3.ip = 127.0.0.1
-cluster.node.3.grpc.port = 9091
-cluster.node.3.rest.port = 8080
+cluster.node.3.ip = 192.168.60.243
+cluster.node.3.grpc.port = 9093
+cluster.node.3.rest.port = 8083
 cluster.node.3.storage.path = ~/jettra/data
 
 # Asignación de Capacidad de Índices y Buffers en Clúster
@@ -1392,25 +1389,40 @@ cluster.index.initial.capacity = 65536
 cluster.index.max.inmemory.keys = 100000
 ```
 
+#### 13.2.2 Registro Dinámico de Nuevos Nodos en `cluster.config`
+El clúster permite incorporar nodos adicionales en tiempo de ejecución más allá de los nodos iniciales. Cuando se agrega dinámicamente un nodo al anillo mediante `DynamicRingEngine.registerDynamicPeer(...)` o `JettraConfigValidator.registerDynamicNodeInClusterConfig(...)`, el motor persiste automáticamente su bloque `cluster.node.<N>.*` en el archivo `cluster.config`:
+
+```java
+// Ejemplo: Agregar dinámicamente un cuarto nodo (node-04) al clúster y persistirlo en cluster.config
+JettraConfigValidator.ClusterNodeInfo nuevoNodo = JettraConfigValidator.registerDynamicNodeInClusterConfig(
+    "node-04",
+    "SECONDARY",
+    "192.168.60.244",
+    9094,
+    8084,
+    "~/jettra/data"
+);
+```
+
 ---
 
 ### 13.3 Validación Cruzada y Reglas de Integridad en el Arranque (`java -jar`)
 
-Al iniciar JettraStore mediante `java -jar JettraStore.jar`, el motor invoca `JettraConfigValidator.validateAndBootstrapOrHalt()` para auditar exhaustivamente la coherencia entre `microprofile-config.properties` y `cluster.config`.
+Al iniciar JettraStore mediante `java -jar JettraStore.jar`, el motor invoca `JettraConfigValidator.validateAndBootstrapOrHalt()` para auditar la correspondencia entre `microprofile-config.properties` y `cluster.config`.
 
-Las reglas principales de validación son:
+Las reglas principales de resolución y validación son:
 
-| Regla | Parámetro en `microprofile-config.properties` | Validación frente a `cluster.config` | Sintaxis / Flexibilidad |
+| Regla | Parámetro en `microprofile-config.properties` | Resolución / Validación frente a `cluster.config` | Comportamiento |
 | :--- | :--- | :--- | :--- |
-| **Regla 1** | `jettra.storage.path` / `data.dir` | Si se especifica `jettra.node.id`, debe coincidir con `cluster.node.<numero-nodo>.storage.path` de `cluster.config` (emite una advertencia si hay discrepancia). | Cualquier ruta libre indicada por el usuario (ej. `~/jettra/data`, `~/jettra-2/data`, `/opt/data`). |
-| **Regla 2** | `jettra.index.storage.path` | Permite especificar libremente la ruta del almacenamiento de índices. | Cualquier ruta libre indicada por el usuario (ej. `~/jettra/data/indexes`, `/opt/indexes`). |
-| **Regla 3** | `jettra.network.grpc.port` | Debe coincidir con al menos un valor de `cluster.node.X.grpc.port` de `cluster.config`. | Puerto entero válido (ej. `9091`). |
-| **Regla 4** | `server.port` / `jettra.network.rest.port` | Debe coincidir con al menos un valor de `cluster.node.X.rest.port` de `cluster.config`. | Puerto entero válido (ej. `8080` o `8082`). |
-| **Regla 5** | `cluster.multinode.active` | Determina si se activa la distribución por consenso (`on`) o servidor único local (`off`). | `on` u `off` |
+| **Regla 1** | `cluster.node.id` | Busca el nodo en `cluster.config` por coincidencia exacta de `id` (ej. `node-01`) o por número de nodo (ej. `01` $\rightarrow$ `cluster.node.1.*`). | **Obligatorio:** Si el `cluster.node.id` no existe en `cluster.config`, emite una **advertencia y error crítico** y **no permite ejecutar `JettraStore`**. |
+| **Regla 2** | `cluster.node.role` | Identifica el rol esperado del nodo y lo sincroniza con `cluster.node.<N>.role` en `cluster.config`. | `PRIMARY` o `SECONDARY`. |
+| **Regla 3** | *(Resuelto de `cluster.config`)* | `cluster.node.<N>.ip`, `cluster.node.<N>.grpc.port` y `cluster.node.<N>.rest.port`. | Asigna automáticamente la IP y los puertos gRPC y REST del nodo sin duplicarlos en `microprofile-config.properties`. |
+| **Regla 4** | *(Resuelto de `cluster.config`)* | `cluster.node.<N>.storage.path` | Asigna la ruta base de datos (`storage.path`), deriva automáticamente `<storage.path>/indexes` y **verifica al arrancar si el directorio existe; si no existe, lo crea automáticamente** para almacenar las bases de datos y sus objetos. |
+| **Regla 5** | `cluster.multinode.active` | Determina si se activa la distribución por consenso (`on`) o servidor único local (`off`). | `on` u `off`. |
 
-#### Acción Preventiva y Gestión de Advertencias
-1. Si se detecta una discrepancia entre `jettra.storage.path` y `cluster.node.<numero-nodo>.storage.path` para el nodo indicado por `jettra.node.id`, el validador emite una advertencia informativa (`ADVERTENCIA`) notificando la diferencia sin bloquear indebidamente la flexibilidad del administrador.
-2. Si se detectan inconsistencias críticas (como identificadores de nodo inexistentes, puertos desalineados o valores de multinodo inválidos), el motor detiene inmediatamente la ejecución de la JVM mediante `System.exit(1)` (o lanza `JettraConfigurationException` en modo de prueba).
+#### Acción Preventiva ante Nodo Inexistente
+1. Si el valor de `cluster.node.id` especificado en `microprofile-config.properties` **no existe** entre los nodos registrados en `cluster.config`, `JettraConfigValidator` envía de inmediato un mensaje de advertencia por consola (`ADVERTENCIA: El identificador de nodo '...' indicado en 'cluster.node.id' no existe en el archivo cluster.config...`) y bloquea la ejecución de `JettraStore` mediante `System.exit(1)` (o lanza `JettraConfigurationException`).
+2. Esto garantiza que ningún nodo pueda iniciar con una identidad huérfana o fuera de la topología conocida del clúster.
 
 ---
 
@@ -1419,9 +1431,9 @@ Las reglas principales de validación son:
 Si al ejecutar JettraStore mediante `java -jar` no existen los archivos `config/microprofile-config.properties` o `config/cluster.config` en el sistema de archivos:
 
 1. **Creación Automática de Directorios:** El sistema crea la carpeta `config/` si no está presente.
-2. **Generación de `microprofile-config.properties`:** Se crea un archivo con la plantilla estándar recomendada para el nodo primario (`node-01`), con `jettra.storage.path = ~/jettra/data`, `jettra.index.storage.path = ~/jettra/data/indexes`, gRPC `9091` y REST `8082`.
-3. **Generación de `cluster.config`:** Se crea la topología clúster completa de 3 nodos (`node-01`, `node-02`, `node-03`) con sus respectivos puertos y rutas de datos.
-4. **Coherencia Inmediata:** Ambos archivos autogenerados satisfacen de inmediato las reglas de validación cruzada, permitiendo al usuario poner en marcha el sistema sin configuración manual previa.
+2. **Generación de `microprofile-config.properties`:** Se crea un archivo limpio con `cluster.node.id=node-01`, `cluster.node.role=PRIMARY` y `cluster.multinode.active=on`, sin duplicar rutas ni puertos.
+3. **Generación de `cluster.config`:** Se crea la topología del clúster (`node-01`, `node-02`, `node-03`) con sus respectivos roles, IPs, puertos `grpc.port` y `rest.port`, y rutas `storage.path`.
+4. **Coherencia Inmediata:** Ambos archivos autogenerados quedan inmediatamente enlazados a través de `cluster.node.id`, permitiendo poner en marcha el sistema sin configuración manual previa.
 
 ---
 
@@ -2122,7 +2134,7 @@ cluster.node.3.storage.path = ~/jettra/data
 # Asignación de Capacidad de Índices y Buffers en Clúster
 cluster.index.initial.capacity = 65536
 cluster.index.max.inmemory.keys = 100000
-
+```
 ---
 
 #### 18.1.3 Configuración de `microprofile-config.properties` en Cada Servidor
@@ -2131,35 +2143,27 @@ cluster.index.max.inmemory.keys = 100000
 # /opt/jettra/config/microprofile-config.properties
 ################################################################################
 # JettraStore Core Engine Configuration (microprofile-config.properties)
-# Low-level JVM tuning, Panama FFM settings, JettraPolice, and Storage Paths
+# Low-level JVM tuning, Panama FFM settings, JettraPolice, and Cluster Node Link
 ################################################################################
 
-# Identificador y rol del nodo local en el clúster
-# (Opcional si se pasa en el arranque vía -Djettra.node.id y -Djettra.node.role)
-jettra.node.id = node-01
-jettra.node.role = PRIMARY
+# Identificador y rol del nodo local en el clúster (enlaza con cluster.config)
+cluster.node.id = node-01
+cluster.node.role = PRIMARY
 
 # Topología Multinodo y Algoritmo de Consenso Distribuido
 #   on:  Activa el sistema de distribución de datos mediante algoritmo de consenso integrado en JettraStore.
 #   off: Desactiva distribución y opera exclusivamente en modo local standalone.
 cluster.multinode.active = on
 
-# Ubicación explícita del path del directorio de la base de datos en disco físico
-jettra.storage.path = ~/jettra/data
-# Almacenamiento físico de índices persistidos en formato .jettra
-jettra.index.storage.path = ~/jettra/data/indexes
-# Red y Puertos de Escucha
-jettra.network.grpc.port = 9091
-jettra.network.rest.port = 8080
+# Red y Virtual Threads (IP, puertos gRPC/REST y storage.path se obtienen de cluster.config)
 jettra.network.virtualthreads.enabled = true
-
 
 # Estructura LSM y Memoria Off-Heap con Project Panama
 jettra.storage.memtable.size.mb = 128
 jettra.storage.ram.global.limit.mb = 2048
 jettra.storage.offheap.direct = true
-# Modo de almacenamiento: JVM_RAM (Memoria RAM Heap/Stack) o DISK_MEMORY (JettraMemory Off-Heap LSM)
-jettra.storage.mode = JVM_RAM
+# Modo de almacenamiento: OFF_HEAP, DISK_MEMORY o JVM_RAM
+jettra.storage.mode = OFF_HEAP
 jettra.storage.file.extension = .jettra
 
 # Umbrales para la TransiciÃ³n DinÃ¡mica a Motor de Anillo Distribuido
@@ -2230,19 +2234,18 @@ jettrapolice.max.safe.batch.size = 100
 #### 18.1.4 Banderas JVM de Java 25 y Comandos de Ejecución por Servidor
 
 JettraStore implementa la lectura unificada y validación cruzada automática de **ambos** archivos de configuración:
-1. **`cluster.config`**: Provee la topología completa del clúster (IPs, puertos gRPC y REST de todos los nodos, y pares de replicación Raft).
-2. **`microprofile-config.properties`**: Provee la identidad del nodo local (`jettra.node.id`, `jettra.node.role`), límites de memoria, parámetros de motor, puertos locales y persistencia física (`jettra.storage.path`, `jettra.network.grpc.port`, `jettra.network.rest.port`).
+1. **`cluster.config`**: Provee la topología completa del clúster y para cada nodo define su `id`, `role`, `ip`, `grpc.port`, `rest.port` y `storage.path` (a partir del cual se deriva también `<storage.path>/indexes`).
+2. **`microprofile-config.properties`**: Provee únicamente la identidad del nodo local (`cluster.node.id`, `cluster.node.role`) para enlazar con su bloque en `cluster.config`, además de los límites de memoria, modo de almacenamiento y ajustes del motor.
 
-##### Lectura Directa desde `microprofile-config.properties` y Parámetros JVM
-Los parámetros de puerto REST (`jettra.network.rest.port`), puerto gRPC (`jettra.network.grpc.port`) y ruta de almacenamiento (`jettra.storage.path`) ya están definidos en `microprofile-config.properties` (o se resuelven automáticamente desde la topología de `cluster.config`). Por tanto, **no es necesario ejecutar comandos `export` en bash para esas variables**.
+##### Enlace Directo mediante `cluster.node.id`
+Gracias a que la IP, el puerto REST (`cluster.node.<N>.rest.port`), el puerto gRPC (`cluster.node.<N>.grpc.port`) y la ruta de almacenamiento (`cluster.node.<N>.storage.path`) se obtienen directamente desde `cluster.config` buscando el nodo que coincida con `cluster.node.id` (por ejemplo `cluster.node.id=node-01` o `cluster.node.id=01`), **no es necesario duplicar rutas ni puertos en `microprofile-config.properties`**. Si el `cluster.node.id` indicado no existe en `cluster.config`, JettraStore emite una advertencia y detiene su ejecución.
 
-Para especificar qué nodo del clúster se está ejecutando en cada servidor físico o VM, se utilizan las propiedades de sistema de la JVM:
-* `-Djettra.node.id=node-01` (o `node-02`, `node-03`)
-* `-Djettra.node.role=PRIMARY` (o `SECONDARY`)
+En cada servidor físico o VM, basta con indicar el nodo correspondiente en su archivo `microprofile-config.properties`:
+* En Servidor 1: `cluster.node.id = node-01` y `cluster.node.role = PRIMARY`
+* En Servidor 2: `cluster.node.id = node-02` y `cluster.node.role = SECONDARY`
+* En Servidor 3: `cluster.node.id = node-03` y `cluster.node.role = SECONDARY`
 
-> **Nota:** Si se omite `-Djettra.node.role`, JettraStore deduce automáticamente el rol (`PRIMARY` o `SECONDARY`) asignado a dicho nodo en `cluster.config`. Asimismo, el archivo `microprofile-config.properties` se ubica automáticamente junto a `cluster.config` o en la carpeta `config/microprofile-config.properties` (y en `META-INF/microprofile-config.properties` dentro del JAR), por lo que `-Dmicroprofile.config.file=microprofile-config.properties` es opcional si ambos archivos residen en el mismo directorio.
-
-Cada servidor arranca de forma limpia con sus banderas JVM:
+O bien sobreescribirlo en la línea de comandos mediante `-Dcluster.node.id` y `-Dcluster.node.role`:
 
 **En Servidor 1 (IP `192.168.1.101` - Nodo Primario):**
 ```bash
@@ -2252,8 +2255,8 @@ java --enable-preview \
      -XX:+UseCompactObjectHeaders \
      -XX:+UseZGC \
      -Xms2g -Xmx6g \
-     -Djettra.node.id=node-01 \
-     -Djettra.node.role=PRIMARY \
+     -Dcluster.node.id=node-01 \
+     -Dcluster.node.role=PRIMARY \
      -Dcluster.config.path=cluster.config \
      -Dmicroprofile.config.file=microprofile-config.properties \
      -jar JettraStore-1.0-SNAPSHOT-uber.jar
@@ -2267,8 +2270,8 @@ java --enable-preview \
      -XX:+UseCompactObjectHeaders \
      -XX:+UseZGC \
      -Xms2g -Xmx6g \
-     -Djettra.node.id=node-02 \
-     -Djettra.node.role=SECONDARY \
+     -Dcluster.node.id=node-02 \
+     -Dcluster.node.role=SECONDARY \
      -Dcluster.config.path=cluster.config \
      -Dmicroprofile.config.file=microprofile-config.properties \
      -jar JettraStore-1.0-SNAPSHOT-uber.jar
@@ -2282,20 +2285,15 @@ java --enable-preview \
      -XX:+UseCompactObjectHeaders \
      -XX:+UseZGC \
      -Xms2g -Xmx6g \
-     -Djettra.node.id=node-03 \
-     -Djettra.node.role=SECONDARY \
+     -Dcluster.node.id=node-03 \
+     -Dcluster.node.role=SECONDARY \
      -Dcluster.config.path=cluster.config \
      -Dmicroprofile.config.file=microprofile-config.properties \
      -jar JettraStore-1.0-SNAPSHOT-uber.jar
 ```
 
-##### Alternativa: Configuración Directa en `microprofile-config.properties` de Cada Servidor
-Si en cada servidor se prefiere no pasar propiedades `-D` de nodo en la línea de comandos, se puede configurar directamente dentro del archivo `microprofile-config.properties` de cada servidor:
-* En Servidor 1: `jettra.node.id = node-01` y `jettra.node.role = PRIMARY`
-* En Servidor 2: `jettra.node.id = node-02` y `jettra.node.role = SECONDARY`
-* En Servidor 3: `jettra.node.id = node-03` y `jettra.node.role = SECONDARY`
-
-Permitiendo ejecutar simplemente:
+##### Ejecución Simplificada cuando `cluster.node.id` ya está configurado en `microprofile-config.properties`
+Cuando cada servidor tiene su `cluster.node.id` y `cluster.node.role` definidos en su propio `microprofile-config.properties`:
 ```bash
 java --enable-preview \
      --enable-native-access=ALL-UNNAMED \

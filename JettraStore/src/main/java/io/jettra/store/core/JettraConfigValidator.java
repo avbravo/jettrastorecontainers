@@ -10,17 +10,18 @@ import java.util.regex.Pattern;
  * Validador y gestor del ciclo de arranque de configuración para JettraStore.
  * 
  * Funcionalidades:
- * 1. Verifica que 'storage.path' / 'jettra.storage.path' en microprofile-config.properties coincida con al menos
- *    uno de cluster.node.X.storage.path en cluster.config y use la sintaxis <path>/jettra/data.
- * 2. Verifica que 'jettra.network.grpc.port' en microprofile-config.properties coincida con al menos
- *    un cluster.node.X.grpc.port en cluster.config.
- * 3. Verifica que 'server.port' / 'jettra.network.rest.port' en microprofile-config.properties coincida con al menos
- *    un cluster.node.X.rest.port en cluster.config.
- * 4. Verifica que 'jettra.index.storage.path' / 'index.storage.path' implemente la sintaxis <path>/jettra/data/indexes.
- * 5. Genera automáticamente microprofile-config.properties con plantilla recomendada si no existe en disco.
- * 6. Genera automáticamente cluster.config con topología recomendada si no existe en disco.
- * 7. Si se ejecuta en entorno Docker / Docker Compose, reconoce la configuración de los contenedores
- *    y omite la detención por discrepancias de rutas locales del host.
+ * 1. Lee 'cluster.node.id' y 'cluster.node.role' desde microprofile-config.properties para identificar
+ *    la sección 'cluster.node.<N>.*' correspondiente dentro de cluster.config.
+ * 2. Obtiene del nodo correspondiente en cluster.config:
+ *    - cluster.node.<N>.role
+ *    - cluster.node.<N>.ip
+ *    - cluster.node.<N>.grpc.port (reemplaza a jettra.network.grpc.port)
+ *    - cluster.node.<N>.rest.port (reemplaza a jettra.network.rest.port)
+ *    - cluster.node.<N>.storage.path (reemplaza a jettra.storage.path, storage.path, data.dir
+ *      y sirve de base '<storage.path>/indexes' para jettra.index.storage.path).
+ * 3. Si 'cluster.node.id' indicado en microprofile-config.properties no existe en cluster.config,
+ *    emite un mensaje de advertencia y error crítico e impide la ejecución de JettraStore.
+ * 4. Permite registrar dinámicamente nuevos nodos en cluster.config.
  */
 public final class JettraConfigValidator {
 
@@ -70,8 +71,13 @@ public final class JettraConfigValidator {
     }
 
     public static String extractNodeNumber(String nodeId) {
-        if (nodeId == null || nodeId.isBlank()) return "1";
-        var m = Pattern.compile("\\d+").matcher(nodeId);
+        String num = extractNodeNumberOrNull(nodeId);
+        return num != null ? num : "1";
+    }
+
+    public static String extractNodeNumberOrNull(String nodeId) {
+        if (nodeId == null || nodeId.isBlank()) return null;
+        var m = Pattern.compile("\\d+").matcher(nodeId.trim());
         if (m.find()) {
             try {
                 return String.valueOf(Integer.parseInt(m.group()));
@@ -79,7 +85,41 @@ public final class JettraConfigValidator {
                 return m.group();
             }
         }
-        return "1";
+        return null;
+    }
+
+    /**
+     * Busca un nodo en la lista de nodos de cluster.config que coincida con el identificador configurado
+     * en microprofile-config.properties (ej. 'node-01', 'node-1', '01' o '1').
+     */
+    public static ClusterNodeInfo findNodeInCluster(List<ClusterNodeInfo> nodes, String configuredNodeId) {
+        if (nodes == null || nodes.isEmpty() || configuredNodeId == null || configuredNodeId.isBlank()) {
+            return null;
+        }
+        String trimmed = configuredNodeId.trim();
+
+        // 1. Coincidencia exacta por ID (ej. "node-01")
+        for (ClusterNodeInfo node : nodes) {
+            if (node.id() != null && node.id().equalsIgnoreCase(trimmed)) {
+                return node;
+            }
+        }
+
+        // 2. Coincidencia por número de nodo cuando se especifica como número ("01", "1") o formato "node-<N>"
+        String extractedNum = extractNodeNumberOrNull(trimmed);
+        if (extractedNum != null && (trimmed.matches("\\d+") || trimmed.toLowerCase(Locale.ROOT).startsWith("node"))) {
+            for (ClusterNodeInfo node : nodes) {
+                if (extractedNum.equals(node.nodeNumber())) {
+                    return node;
+                }
+                String nodeIdNum = extractNodeNumberOrNull(node.id());
+                if (extractedNum.equals(nodeIdNum)) {
+                    return node;
+                }
+            }
+        }
+
+        return null;
     }
 
     private JettraConfigValidator() {}
@@ -200,7 +240,7 @@ public final class JettraConfigValidator {
     }
 
     /**
-     * Localiza el archivo database.properties o microprofile-config.properties (compatibilidad hacia atrás).
+     * Localiza el archivo microprofile-config.properties (compatibilidad hacia atrás).
      */
     public static Path locateDatabasePropertiesFile() {
         return locateMicroProfileConfigFile();
@@ -299,10 +339,6 @@ public final class JettraConfigValidator {
      * Asegura que los archivos de configuración existan en disco. Si no existen, los genera
      * de manera automática en la carpeta 'config/' con los valores y la sintaxis recomendada.
      */
-    /**
-     * Asegura que los archivos de configuración existan en disco. Si no existen, los genera
-     * de manera automática en la carpeta 'config/' con los valores y la sintaxis recomendada.
-     */
     public static void ensureConfigFilesExist() {
         Path dbPath = locateMicroProfileConfigFile();
         if (dbPath == null) {
@@ -318,7 +354,8 @@ public final class JettraConfigValidator {
     }
 
     /**
-     * Genera automáticamente el archivo microprofile-config.properties con la configuración predeterminada y recomendada.
+     * Genera automáticamente el archivo microprofile-config.properties con la configuración predeterminada y recomendada
+     * (sin duplicidad de parámetros con cluster.config).
      */
     public static void generateDefaultMicroProfileConfig(Path target) {
         try {
@@ -334,33 +371,21 @@ public final class JettraConfigValidator {
 # Perfil activo de configuración MicroProfile
 mp.config.profile=production
 
-# Identificador y Rol del Nodo Local en el Clúster
-jettra.node.id=node-01
-jettra.node.role=PRIMARY
+# Identificador y Rol del Nodo Local en el Clúster (enlaza con cluster.config)
 cluster.node.id=node-01
 cluster.node.role=PRIMARY
 
 # Topología Multinodo y Consenso
 cluster.multinode.active=on
 
-# Directorios de Almacenamiento y Persistencia
-jettra.storage.path=~/jettra/data
-storage.path=~/jettra/data
-data.dir=~/jettra/data
-jettra.index.storage.path=~/jettra/data/indexes
-
 # Modo de Almacenamiento (OFF_HEAP, DISK_MEMORY, JVM_RAM)
 jettra.storage.mode=OFF_HEAP
 storage.mode=OFF_HEAP
 jettra.storage.file.extension=.jettra
 
-# Red y Puertos de Escucha
-server.host=0.0.0.0
-server.port=8082
+# Red y Virtual Threads (IP, puertos gRPC/REST y storage.path se obtienen de cluster.config)
 contextpath=/
 server.contextpath=/
-jettra.network.grpc.port=9091
-jettra.network.rest.port=8082
 jettra.network.virtualthreads.enabled=true
 server.virtual-threads=true
 
@@ -440,7 +465,7 @@ cors.enabled=true
     }
 
     /**
-     * Genera automáticamente el archivo jettra.config con la topología de clúster recomendada.
+     * Genera automáticamente el archivo cluster.config / jettra.config con la topología de clúster recomendada.
      */
     public static void generateDefaultJettraConfig(Path target) {
         try {
@@ -449,8 +474,8 @@ cors.enabled=true
             }
             String content = """
 ################################################################################
-# JettraStore Cluster Topology Configuration (jettra.config)
-# Topología de 3 Nodos para Consenso Raft y Dynamic Ring Discovery
+# JettraStore Cluster Topology Configuration (cluster.config)
+# Topología de Nodos para Consenso Raft y Dynamic Ring Discovery
 ################################################################################
 
 cluster.name = jettra-production-cluster
@@ -475,8 +500,8 @@ cluster.node.1.storage.path = ~/jettra/data
 cluster.node.2.id = node-02
 cluster.node.2.role = SECONDARY
 cluster.node.2.ip = 127.0.0.1
-cluster.node.2.grpc.port = 9091
-cluster.node.2.rest.port = 8082
+cluster.node.2.grpc.port = 9092
+cluster.node.2.rest.port = 8083
 cluster.node.2.storage.path = ~/jettra/data
 
 # ==============================================================================
@@ -485,8 +510,8 @@ cluster.node.2.storage.path = ~/jettra/data
 cluster.node.3.id = node-03
 cluster.node.3.role = SECONDARY
 cluster.node.3.ip = 127.0.0.1
-cluster.node.3.grpc.port = 9091
-cluster.node.3.rest.port = 8082
+cluster.node.3.grpc.port = 9093
+cluster.node.3.rest.port = 8084
 cluster.node.3.storage.path = ~/jettra/data
 
 # Asignación de Capacidad de Índices y Buffers en Clúster
@@ -512,7 +537,7 @@ cluster.index.max.inmemory.keys = 100000
         List<String> errors = new ArrayList<>();
         List<String> warnings = new ArrayList<>();
 
-        // Extraer los nodos del clúster definidos en jettra.config
+        // Extraer los nodos del clúster definidos en cluster.config
         List<ClusterNodeInfo> nodes = parseClusterNodes(clusterProps);
         List<Integer> nodeGrpcPorts = new ArrayList<>();
         List<Integer> nodeRestPorts = new ArrayList<>();
@@ -522,50 +547,49 @@ cluster.index.max.inmemory.keys = 100000
             nodeRestPorts.add(node.restPort());
         }
 
-        // 1. Verificar identificador de nodo (si está configurado)
+        // 1. Verificar identificador de nodo (cluster.node.id en microprofile-config.properties)
         String configuredNodeId = getPropOrEnv(dbProps, 
-            new String[]{"jettra.node.id", "jettra.cluster.node.id", "node.id"}, 
-            new String[]{"JETTRA_NODE_ID", "JETTRA_CLUSTER_NODE_ID"}, "").trim();
+            new String[]{"cluster.node.id", "jettra.node.id", "jettra.cluster.node.id", "node.id"}, 
+            new String[]{"CLUSTER_NODE_ID", "JETTRA_NODE_ID", "JETTRA_CLUSTER_NODE_ID"}, "").trim();
+
+        ClusterNodeInfo targetNode = null;
         if (!configuredNodeId.isEmpty() && !nodes.isEmpty()) {
-            String nodeNum = extractNodeNumber(configuredNodeId);
-            boolean matchedNode = nodes.stream().anyMatch(n -> 
-                n.id().equalsIgnoreCase(configuredNodeId) || 
-                (nodeNum != null && nodeNum.equals(n.nodeNumber()))
-            );
-            if (!matchedNode) {
+            targetNode = findNodeInCluster(nodes, configuredNodeId);
+            if (targetNode == null) {
                 List<String> validIds = nodes.stream().map(ClusterNodeInfo::id).toList();
-                errors.add(String.format(
-                    "El identificador de nodo '%s' (definido en microprofile-config.properties o vía -Djettra.node.id) no coincide con ningún nodo registrado en cluster.config %s.",
+                String warnAndErrMsg = String.format(
+                    "ADVERTENCIA: El identificador de nodo '%s' indicado en 'cluster.node.id' (microprofile-config.properties) no existe en el archivo cluster.config %s. No se permite ejecutar JettraStore.",
                     configuredNodeId, validIds
-                ));
+                );
+                warnings.add(warnAndErrMsg);
+                System.err.println("[JettraStore] " + warnAndErrMsg);
+                errors.add(warnAndErrMsg);
             }
+        } else if (!nodes.isEmpty()) {
+            targetNode = nodes.get(0);
         }
 
-        // 2. Verificar storage.path y jettra.storage.path
-        // Los valores de ambas propiedades pueden ser cualquier ruta que el usuario indique
-        // para dar libertad a una mejor configuración.
-        // Lo único que debe verificar es que si en el archivo microprofile-config.properties se especifica
-        // el valor de jettra.node.id, deben coincidir el valor de storage.path / jettra.storage.path del archivo
-        // microprofile-config.properties con el valor de la propiedad cluster.node.<numero-nodo>.storage.path
-        // del archivo cluster.config. Si no coinciden, se envía una advertencia.
-        String dbStoragePath = null;
+        // 2. Resolver y verificar ruta de almacenamiento (storage.path):
+        //    Se obtiene directamente de cluster.node.<N>.storage.path en cluster.config.
+        //    Si adicionalmente se definió en microprofile-config.properties, se verifica que coincida.
+        String explicitDbStoragePath = null;
         for (String sp : new String[]{"storage.path", "jettra.storage.path", "data.dir"}) {
             String val = System.getProperty(sp);
             if (val != null && !val.isBlank()) {
-                dbStoragePath = val.trim();
+                explicitDbStoragePath = val.trim();
                 break;
             }
         }
-        if (dbStoragePath == null) {
+        if (explicitDbStoragePath == null) {
             for (String ev : new String[]{"STORAGE_PATH", "JETTRA_STORAGE_PATH", "JETTRA_DATA_DIR", "DATA_DIR"}) {
                 String val = System.getenv(ev);
                 if (val != null && !val.isBlank()) {
-                    dbStoragePath = val.trim();
+                    explicitDbStoragePath = val.trim();
                     break;
                 }
             }
         }
-        if (dbStoragePath == null && dbProps != null) {
+        if (explicitDbStoragePath == null && dbProps != null) {
             String spVal = dbProps.getProperty("storage.path");
             String jspVal = dbProps.getProperty("jettra.storage.path");
             String ddVal = dbProps.getProperty("data.dir");
@@ -574,71 +598,60 @@ cluster.index.max.inmemory.keys = 100000
             boolean jspCustom = jspVal != null && !jspVal.isBlank() && !jspVal.equals("~/jettra/data") && !jspVal.equals("/jettra/data");
 
             if (spCustom && !jspCustom) {
-                dbStoragePath = spVal.trim();
+                explicitDbStoragePath = spVal.trim();
             } else if (jspCustom && !spCustom) {
-                dbStoragePath = jspVal.trim();
+                explicitDbStoragePath = jspVal.trim();
             } else if (spVal != null && !spVal.isBlank()) {
-                dbStoragePath = spVal.trim();
+                explicitDbStoragePath = spVal.trim();
             } else if (jspVal != null && !jspVal.isBlank()) {
-                dbStoragePath = jspVal.trim();
+                explicitDbStoragePath = jspVal.trim();
             } else if (ddVal != null && !ddVal.isBlank()) {
-                dbStoragePath = ddVal.trim();
+                explicitDbStoragePath = ddVal.trim();
             }
         }
-        if (dbStoragePath == null) {
-            dbStoragePath = "";
-        }
 
-        if (dbStoragePath.isEmpty()) {
-            errors.add("La propiedad 'storage.path' o 'jettra.storage.path' no está definida en microprofile-config.properties.");
-        } else if (!configuredNodeId.isEmpty()) {
-            String nodeNum = extractNodeNumber(configuredNodeId);
-            ClusterNodeInfo targetNode = null;
-            for (ClusterNodeInfo node : nodes) {
-                if (node.id().equalsIgnoreCase(configuredNodeId)) {
-                    targetNode = node;
-                    break;
-                }
-            }
-            if (targetNode == null && nodeNum != null) {
-                for (ClusterNodeInfo node : nodes) {
-                    if (nodeNum.equals(node.nodeNumber())) {
-                        targetNode = node;
-                        break;
-                    }
-                }
-            }
+        String nodeIdxStr = (targetNode != null && targetNode.nodeNumber() != null)
+            ? targetNode.nodeNumber()
+            : extractNodeNumber(configuredNodeId);
 
-            String nodeIdxStr = (targetNode != null && targetNode.nodeNumber() != null)
-                ? targetNode.nodeNumber()
-                : (nodeNum != null ? nodeNum : "1");
+        String clusterNodeStoragePath = clusterProps != null
+            ? clusterProps.getProperty("cluster.node." + nodeIdxStr + ".storage.path",
+                targetNode != null ? targetNode.storagePath() : null)
+            : (targetNode != null ? targetNode.storagePath() : null);
 
-            String clusterNodeStoragePath = clusterProps.getProperty(
-                "cluster.node." + nodeIdxStr + ".storage.path",
-                targetNode != null ? targetNode.storagePath() : null
-            );
+        String effectiveStoragePath = (explicitDbStoragePath != null && !explicitDbStoragePath.isBlank())
+            ? explicitDbStoragePath
+            : (clusterNodeStoragePath != null ? clusterNodeStoragePath.trim() : "");
 
-            if (clusterNodeStoragePath != null && !clusterNodeStoragePath.isBlank()) {
-                if (!pathsMatch(dbStoragePath, clusterNodeStoragePath.trim())) {
+        if (effectiveStoragePath.isEmpty()) {
+            errors.add("La propiedad 'cluster.node." + nodeIdxStr + ".storage.path' no está definida en cluster.config.");
+        } else {
+            if (explicitDbStoragePath != null && !explicitDbStoragePath.isBlank()
+                && clusterNodeStoragePath != null && !clusterNodeStoragePath.isBlank()
+                && !configuredNodeId.isEmpty()) {
+                if (!pathsMatch(explicitDbStoragePath, clusterNodeStoragePath.trim())) {
                     String warnMsg = String.format(
                         "ADVERTENCIA: La propiedad de almacenamiento 'storage.path' / 'jettra.storage.path' ('%s') de microprofile-config.properties no coincide con la propiedad 'cluster.node.%s.storage.path' ('%s') de cluster.config para el nodo %s ('%s').",
-                        dbStoragePath, nodeIdxStr, clusterNodeStoragePath.trim(), nodeIdxStr, configuredNodeId
+                        explicitDbStoragePath, nodeIdxStr, clusterNodeStoragePath.trim(), nodeIdxStr, configuredNodeId
                     );
                     warnings.add(warnMsg);
                     System.err.println("[JettraStore] " + warnMsg);
                 }
             }
+            // Si el nodo es válido en cluster.config, verificar si existe el directorio cluster.node.<N>.storage.path y crearlo si no existe
+            if (errors.isEmpty()) {
+                ensureNodeStorageDirectoryExists(effectiveStoragePath);
+            }
         }
 
-        // 3. Verificar jettra.network.grpc.port
-        String grpcPortStr = getPropOrEnv(dbProps, 
+        // 3. Resolver y verificar puerto gRPC:
+        //    Se obtiene de cluster.node.<N>.grpc.port en cluster.config (o se valida si fue especificado explícitamente).
+        String explicitGrpcPortStr = getPropOrEnv(dbProps, 
             new String[]{"jettra.network.grpc.port", "jettra.grpc.port", "grpc.port"}, 
             new String[]{"JETTRA_GRPC_PORT", "JETTRA_NETWORK_GRPC_PORT"}, "").trim();
-        if (grpcPortStr.isEmpty()) {
-            errors.add("La propiedad 'jettra.network.grpc.port' no está definida en microprofile-config.properties.");
-        } else {
+        if (!explicitGrpcPortStr.isEmpty()) {
             try {
-                int grpcPort = Integer.parseInt(grpcPortStr);
+                int grpcPort = Integer.parseInt(explicitGrpcPortStr);
                 if (!nodeGrpcPorts.contains(grpcPort)) {
                     errors.add(String.format(
                         "El puerto 'jettra.network.grpc.port' (%d) de microprofile-config.properties no coincide con ningún puerto cluster.node.X.grpc.port de cluster.config %s.",
@@ -646,19 +659,22 @@ cluster.index.max.inmemory.keys = 100000
                     ));
                 }
             } catch (NumberFormatException e) {
-                errors.add("El valor de 'jettra.network.grpc.port' ('" + grpcPortStr + "') no es un número de puerto válido.");
+                errors.add("El valor de 'jettra.network.grpc.port' ('" + explicitGrpcPortStr + "') no es un número de puerto válido.");
+            }
+        } else if (targetNode == null || targetNode.grpcPort() <= 0) {
+            if (targetNode != null) {
+                errors.add("El puerto 'cluster.node." + nodeIdxStr + ".grpc.port' en cluster.config no es válido.");
             }
         }
 
-        // 4. Verificar puerto REST (server.port o jettra.network.rest.port)
-        String restPortStr = getPropOrEnv(dbProps, 
+        // 4. Resolver y verificar puerto REST:
+        //    Se obtiene de cluster.node.<N>.rest.port en cluster.config (o se valida si fue especificado explícitamente).
+        String explicitRestPortStr = getPropOrEnv(dbProps, 
             new String[]{"server.port", "jettra.network.rest.port", "jettra.rest.port", "rest.port", "jettra.server.port"}, 
             new String[]{"JETTRA_REST_PORT", "JETTRA_NETWORK_REST_PORT", "JETTRA_SERVER_PORT", "SERVER_PORT"}, "").trim();
-        if (restPortStr.isEmpty()) {
-            errors.add("La propiedad 'server.port' / 'jettra.network.rest.port' no está definida en microprofile-config.properties.");
-        } else {
+        if (!explicitRestPortStr.isEmpty()) {
             try {
-                int restPort = Integer.parseInt(restPortStr);
+                int restPort = Integer.parseInt(explicitRestPortStr);
                 if (!nodeRestPorts.contains(restPort)) {
                     errors.add(String.format(
                         "El puerto 'server.port' / 'jettra.network.rest.port' (%d) de microprofile-config.properties no coincide con ningún puerto cluster.node.X.rest.port de cluster.config %s.",
@@ -666,13 +682,15 @@ cluster.index.max.inmemory.keys = 100000
                     ));
                 }
             } catch (NumberFormatException e) {
-                errors.add("El valor de 'server.port' / 'jettra.network.rest.port' ('" + restPortStr + "') no es un número de puerto válido.");
+                errors.add("El valor de 'server.port' / 'jettra.network.rest.port' ('" + explicitRestPortStr + "') no es un número de puerto válido.");
+            }
+        } else if (targetNode == null || targetNode.restPort() <= 0) {
+            if (targetNode != null) {
+                errors.add("El puerto 'cluster.node." + nodeIdxStr + ".rest.port' en cluster.config no es válido.");
             }
         }
 
-        // 5. jettra.index.storage.path puede ser cualquier ruta que el usuario indique para dar libertad a una mejor configuración.
-
-        // 6. Verificar cluster.multinode.active (on / off)
+        // 5. Verificar cluster.multinode.active (on / off)
         String multinodeVal = getPropOrEnv(dbProps, "cluster.multinode.active", "JETTRA_CLUSTER_MULTINODE_ACTIVE", "on").trim();
         if (!multinodeVal.equalsIgnoreCase("on") && !multinodeVal.equalsIgnoreCase("off")
             && !multinodeVal.equalsIgnoreCase("true") && !multinodeVal.equalsIgnoreCase("false")) {
@@ -709,11 +727,11 @@ cluster.index.max.inmemory.keys = 100000
         }
         sb.append("────────────────────────────────────────────────────────────────────────────────\n");
         sb.append("DIRECTIVAS DE CORRECCIÓN:\n");
-        sb.append(" 1. Si especifica 'jettra.node.id' en microprofile-config.properties, verifique que\n");
-        sb.append("    'jettra.storage.path' coincida con 'cluster.node.<numero-nodo>.storage.path' en cluster.config.\n");
-        sb.append(" 2. Verifique que 'jettra.network.grpc.port' coincida con cluster.node.[1|2|3].grpc.port\n");
-        sb.append(" 3. Verifique que 'server.port' / 'jettra.network.rest.port' coincida con cluster.node.[1|2|3].rest.port\n");
-        sb.append(" 4. Verifique que 'cluster.multinode.active' sea 'on' u 'off' (on=consenso distribuido, off=servidor local).\n");
+        sb.append(" 1. Verifique que 'cluster.node.id' en microprofile-config.properties exista en\n");
+        sb.append("    'cluster.node.<numero-nodo>.id' dentro del archivo cluster.config.\n");
+        sb.append(" 2. Verifique que en cluster.config estén definidos 'ip', 'grpc.port', 'rest.port'\n");
+        sb.append("    y 'storage.path' para el nodo indicado en 'cluster.node.id'.\n");
+        sb.append(" 3. Verifique que 'cluster.multinode.active' sea 'on' u 'off' (on=consenso distribuido, off=servidor local).\n");
         sb.append("────────────────────────────────────────────────────────────────────────────────\n");
         sb.append("[JettraStore] La ejecución se detiene de forma preventiva. Corrija los archivos para iniciar.\n");
         return sb.toString();
@@ -748,10 +766,34 @@ cluster.index.max.inmemory.keys = 100000
     }
 
     private static String expandUserHome(String p) {
-        if (p.startsWith("~/") || p.equals("~")) {
+        if (p.startsWith("~/") || p.startsWith("~" + File.separator) || p.equals("~")) {
             return (System.getProperty("user.home") + p.substring(1)).replace('\\', '/');
         }
         return p;
+    }
+
+    /**
+     * Verifica si existe el directorio especificado en cluster.node.<N>.storage.path (expandiendo '~' si aplica)
+     * y lo crea automáticamente para almacenar las bases de datos y objetos.
+     */
+    public static Path ensureNodeStorageDirectoryExists(String rawStoragePath) {
+        if (rawStoragePath == null || rawStoragePath.isBlank()) {
+            return null;
+        }
+        String resolved = expandUserHome(rawStoragePath.trim());
+        Path storageDir = Path.of(resolved);
+        try {
+            if (!Files.exists(storageDir)) {
+                Files.createDirectories(storageDir);
+                System.out.printf("[JettraStore] Directorio de almacenamiento '%s' creado automáticamente para el nodo.%n",
+                    storageDir.toAbsolutePath().normalize());
+            }
+            return storageDir;
+        } catch (Exception ex) {
+            System.err.printf("[JettraStore] Advertencia: No se pudo crear el directorio de almacenamiento '%s': %s%n",
+                resolved, ex.getMessage());
+            return storageDir;
+        }
     }
 
     public static String getPropOrEnv(Properties props, String sysProp, String envVar, String defaultVal) {
@@ -790,46 +832,54 @@ cluster.index.max.inmemory.keys = 100000
     }
 
     /**
-     * Parsea la lista de nodos configurados en jettra.config.
+     * Parsea la lista de nodos configurados en cluster.config (soportando nodos iniciales y nodos agregados dinámicamente).
      */
     public static List<ClusterNodeInfo> parseClusterNodes(Properties props) {
         List<ClusterNodeInfo> list = new ArrayList<>();
-        int idx = 1;
-        while (props.containsKey("cluster.node." + idx + ".id") 
-               || props.containsKey("cluster.node." + idx + ".storage.path")
-               || props.containsKey("cluster.node." + idx + ".grpc.port")
-               || props.containsKey("cluster.node." + idx + ".rest.port")) {
-            String prefix = "cluster.node." + idx + ".";
-            String id = props.getProperty(prefix + "id", "node-0" + idx).trim();
-            String role = props.getProperty(prefix + "role", (idx == 1 ? "PRIMARY" : "SECONDARY")).trim();
-            String ip = props.getProperty(prefix + "ip", "127.0.0.1").trim();
-            int grpcPort = parseInt(props.getProperty(prefix + "grpc.port"), 9091);
-            int restPort = parseInt(props.getProperty(prefix + "rest.port"), 8080);
-            String storagePath = props.getProperty(prefix + "storage.path", "~/jettra/data").trim();
+        if (props != null) {
+            Set<String> discoveredIndices = new LinkedHashSet<>();
+            int idx = 1;
+            while (props.containsKey("cluster.node." + idx + ".id") 
+                   || props.containsKey("cluster.node." + idx + ".storage.path")
+                   || props.containsKey("cluster.node." + idx + ".grpc.port")
+                   || props.containsKey("cluster.node." + idx + ".rest.port")) {
+                discoveredIndices.add(String.valueOf(idx));
+                idx++;
+            }
 
-            list.add(new ClusterNodeInfo(id, role, ip, grpcPort, restPort, storagePath, String.valueOf(idx)));
-            idx++;
-        }
-
-        // Si no son secuenciales 1..N, buscar cualquier clave cluster.node.<idx>.
-        if (list.isEmpty()) {
-            Set<String> nodeIndices = new TreeSet<>();
+            // Buscar también cualquier otro índice de nodo agregado dinámicamente (incluso no consecutivo)
+            List<String> extraIndices = new ArrayList<>();
             for (String key : props.stringPropertyNames()) {
                 if (key.startsWith("cluster.node.")) {
                     String[] parts = key.split("\\.");
-                    if (parts.length >= 3) {
-                        nodeIndices.add(parts[2]);
+                    if (parts.length >= 4) {
+                        String candidateIdx = parts[2];
+                        if (!discoveredIndices.contains(candidateIdx) && !extraIndices.contains(candidateIdx)) {
+                            extraIndices.add(candidateIdx);
+                        }
                     }
                 }
             }
-            for (String nodeIdx : nodeIndices) {
+            extraIndices.sort((a, b) -> {
+                try {
+                    return Integer.compare(Integer.parseInt(a), Integer.parseInt(b));
+                } catch (NumberFormatException e) {
+                    return a.compareTo(b);
+                }
+            });
+            discoveredIndices.addAll(extraIndices);
+
+            for (String nodeIdx : discoveredIndices) {
                 String prefix = "cluster.node." + nodeIdx + ".";
-                String id = props.getProperty(prefix + "id", "node-" + nodeIdx).trim();
-                String role = props.getProperty(prefix + "role", "SECONDARY").trim();
+                int numVal = parseInt(nodeIdx, 0);
+                String defaultId = numVal > 0 && numVal < 10 ? "node-0" + numVal : "node-" + nodeIdx;
+                String id = props.getProperty(prefix + "id", defaultId).trim();
+                String role = props.getProperty(prefix + "role", ("1".equals(nodeIdx) ? "PRIMARY" : "SECONDARY")).trim();
                 String ip = props.getProperty(prefix + "ip", "127.0.0.1").trim();
                 int grpcPort = parseInt(props.getProperty(prefix + "grpc.port"), 9091);
                 int restPort = parseInt(props.getProperty(prefix + "rest.port"), 8080);
                 String storagePath = props.getProperty(prefix + "storage.path", "~/jettra/data").trim();
+
                 list.add(new ClusterNodeInfo(id, role, ip, grpcPort, restPort, storagePath, nodeIdx));
             }
         }
@@ -841,6 +891,160 @@ cluster.index.max.inmemory.keys = 100000
         }
 
         return list;
+    }
+
+    /**
+     * Registra o actualiza dinámicamente un nodo en un objeto Properties de cluster.config.
+     */
+    public static synchronized ClusterNodeInfo registerDynamicNodeInProperties(
+            Properties clusterProps,
+            String nodeId,
+            String role,
+            String ip,
+            int grpcPort,
+            int restPort,
+            String storagePath) {
+        if (clusterProps == null || nodeId == null || nodeId.isBlank()) {
+            throw new IllegalArgumentException("clusterProps y nodeId son requeridos para registrar un nodo dinámico.");
+        }
+        List<ClusterNodeInfo> existingNodes = parseClusterNodes(clusterProps);
+        ClusterNodeInfo existing = findNodeInCluster(existingNodes, nodeId);
+
+        String targetNumber;
+        if (existing != null && existing.id().equalsIgnoreCase(nodeId.trim())) {
+            targetNumber = existing.nodeNumber();
+        } else {
+            String candidateNum = extractNodeNumberOrNull(nodeId);
+            boolean candidateTaken = candidateNum != null && existingNodes.stream()
+                .anyMatch(n -> candidateNum.equals(n.nodeNumber()));
+            if (candidateNum != null && !candidateTaken) {
+                targetNumber = candidateNum;
+            } else {
+                int maxIdx = 0;
+                for (ClusterNodeInfo n : existingNodes) {
+                    int parsed = parseInt(n.nodeNumber(), 0);
+                    if (parsed > maxIdx) maxIdx = parsed;
+                }
+                targetNumber = String.valueOf(maxIdx + 1);
+            }
+        }
+
+        String resolvedId = nodeId.trim();
+        String resolvedRole = (role != null && !role.isBlank()) ? role.trim().toUpperCase(Locale.ROOT) : "SECONDARY";
+        String resolvedIp = (ip != null && !ip.isBlank()) ? ip.trim() : "127.0.0.1";
+        int resolvedGrpc = grpcPort > 0 ? grpcPort : 9091;
+        int resolvedRest = restPort > 0 ? restPort : 8082;
+        String resolvedStorage = (storagePath != null && !storagePath.isBlank()) ? storagePath.trim() : "~/jettra/data";
+
+        String prefix = "cluster.node." + targetNumber + ".";
+        clusterProps.setProperty(prefix + "id", resolvedId);
+        clusterProps.setProperty(prefix + "role", resolvedRole);
+        clusterProps.setProperty(prefix + "ip", resolvedIp);
+        clusterProps.setProperty(prefix + "grpc.port", String.valueOf(resolvedGrpc));
+        clusterProps.setProperty(prefix + "rest.port", String.valueOf(resolvedRest));
+        clusterProps.setProperty(prefix + "storage.path", resolvedStorage);
+
+        return new ClusterNodeInfo(resolvedId, resolvedRole, resolvedIp, resolvedGrpc, resolvedRest, resolvedStorage, targetNumber);
+    }
+
+    /**
+     * Registra dinámicamente un nuevo nodo en el archivo cluster.config localizado por defecto.
+     */
+    public static synchronized ClusterNodeInfo registerDynamicNodeInClusterConfig(
+            String nodeId,
+            String role,
+            String ip,
+            int grpcPort,
+            int restPort,
+            String storagePath) {
+        Path clusterFile = locateClusterConfigFile();
+        if (clusterFile == null) {
+            clusterFile = Path.of(DEFAULT_CLUSTER_CONFIG_PATH);
+        }
+        return registerDynamicNodeInClusterConfig(clusterFile, nodeId, role, ip, grpcPort, restPort, storagePath);
+    }
+
+    /**
+     * Registra dinámicamente un nuevo nodo en el archivo cluster.config especificado en disco.
+     */
+    public static synchronized ClusterNodeInfo registerDynamicNodeInClusterConfig(
+            Path clusterConfigFile,
+            String nodeId,
+            String role,
+            String ip,
+            int grpcPort,
+            int restPort,
+            String storagePath) {
+        Properties props = loadProperties(clusterConfigFile, "/cluster.config", "/jettra.config");
+        List<ClusterNodeInfo> beforeNodes = parseClusterNodes(props);
+        ClusterNodeInfo existing = findNodeInCluster(beforeNodes, nodeId);
+        boolean alreadyExistedById = existing != null && existing.id().equalsIgnoreCase(nodeId.trim());
+
+        ClusterNodeInfo registered = registerDynamicNodeInProperties(
+            props, nodeId, role, ip, grpcPort, restPort, storagePath
+        );
+
+        if (clusterConfigFile != null) {
+            try {
+                if (clusterConfigFile.getParent() != null && !Files.exists(clusterConfigFile.getParent())) {
+                    Files.createDirectories(clusterConfigFile.getParent());
+                }
+                if (!Files.exists(clusterConfigFile)) {
+                    generateDefaultClusterConfig(clusterConfigFile);
+                }
+                if (!alreadyExistedById) {
+                    String block = String.format(
+                        "%n# ==============================================================================%n" +
+                        "# NODO %s: NODO AGREGADO DINÁMICAMENTE (%s)%n" +
+                        "# ==============================================================================%n" +
+                        "cluster.node.%s.id = %s%n" +
+                        "cluster.node.%s.role = %s%n" +
+                        "cluster.node.%s.ip = %s%n" +
+                        "cluster.node.%s.grpc.port = %d%n" +
+                        "cluster.node.%s.rest.port = %d%n" +
+                        "cluster.node.%s.storage.path = %s%n",
+                        registered.nodeNumber(), registered.role(),
+                        registered.nodeNumber(), registered.id(),
+                        registered.nodeNumber(), registered.role(),
+                        registered.nodeNumber(), registered.ip(),
+                        registered.nodeNumber(), registered.grpcPort(),
+                        registered.nodeNumber(), registered.restPort(),
+                        registered.nodeNumber(), registered.storagePath()
+                    );
+                    Files.writeString(clusterConfigFile, block, StandardCharsets.UTF_8,
+                        StandardOpenOption.CREATE, StandardOpenOption.APPEND);
+                } else {
+                    // Actualizar propiedades existentes en el archivo cluster.config
+                    List<String> lines = Files.readAllLines(clusterConfigFile, StandardCharsets.UTF_8);
+                    String prefix = "cluster.node." + registered.nodeNumber() + ".";
+                    List<String> updatedLines = new ArrayList<>(lines.size());
+                    for (String line : lines) {
+                        String trimmed = line.trim();
+                        if (trimmed.startsWith(prefix + "id")) {
+                            updatedLines.add(prefix + "id = " + registered.id());
+                        } else if (trimmed.startsWith(prefix + "role")) {
+                            updatedLines.add(prefix + "role = " + registered.role());
+                        } else if (trimmed.startsWith(prefix + "ip")) {
+                            updatedLines.add(prefix + "ip = " + registered.ip());
+                        } else if (trimmed.startsWith(prefix + "grpc.port")) {
+                            updatedLines.add(prefix + "grpc.port = " + registered.grpcPort());
+                        } else if (trimmed.startsWith(prefix + "rest.port")) {
+                            updatedLines.add(prefix + "rest.port = " + registered.restPort());
+                        } else if (trimmed.startsWith(prefix + "storage.path")) {
+                            updatedLines.add(prefix + "storage.path = " + registered.storagePath());
+                        } else {
+                            updatedLines.add(line);
+                        }
+                    }
+                    Files.write(clusterConfigFile, updatedLines, StandardCharsets.UTF_8);
+                }
+            } catch (IOException e) {
+                System.err.printf("[JettraStore] Error al persistir nodo dinámico '%s' en '%s': %s%n",
+                    nodeId, clusterConfigFile, e.getMessage());
+            }
+        }
+
+        return registered;
     }
 
     /**

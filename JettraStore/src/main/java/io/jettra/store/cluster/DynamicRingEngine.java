@@ -32,6 +32,21 @@ public final class DynamicRingEngine {
         peers.add(peer);
     }
 
+    /**
+     * Registra dinámicamente un nodo en el anillo del clúster y lo persiste en cluster.config.
+     */
+    public void registerDynamicPeer(ClusterNode peer, int restPort, String storagePath) {
+        registerPeer(peer);
+        io.jettra.store.core.JettraConfigValidator.registerDynamicNodeInClusterConfig(
+            peer.getId(),
+            peer.getRole() != null ? peer.getRole().name() : "SECONDARY",
+            peer.getIp(),
+            peer.getPort(),
+            restPort > 0 ? restPort : 8082,
+            (storagePath != null && !storagePath.isBlank()) ? storagePath : "~/jettra/data"
+        );
+    }
+
     public boolean removePeer(String peerId) {
         return peers.removeIf(p -> p.getId().equalsIgnoreCase(peerId));
     }
