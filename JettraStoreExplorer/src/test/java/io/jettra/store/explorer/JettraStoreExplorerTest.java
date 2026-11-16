@@ -1313,6 +1313,8 @@ public class JettraStoreExplorerTest {
                 "Debe listar los buckets creados en la base de datos seleccionada");
         JettraAssert.assertTrue(idxDialogRes.body().contains("Índices del Bucket [Facturas]"),
                 "Debe mostrar la administración de índices del bucket seleccionado");
+        JettraAssert.assertTrue(idxDialogRes.body().contains("NUMBER") && idxDialogRes.body().contains("SEQUENTIAL"),
+                "El selector de Tipo de Índice debe incluir las opciones NUMBER y SEQUENTIAL");
 
         JettraStorePlugin plugin = JettraStorePlugin.getInstance();
         String idxName = "idx_test_total_estado";

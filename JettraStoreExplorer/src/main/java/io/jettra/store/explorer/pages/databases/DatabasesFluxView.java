@@ -476,7 +476,10 @@ public class DatabasesFluxView extends FluxView {
             idxHeader.modifier(new Modifier().style("font-size: 1rem; color: #ffd700; margin: 0 0 0.75rem 0;"));
             children.add(idxHeader);
 
-            List<String> indexTypes = List.of("BTREE", "HASH", "FULLTEXT", "VECTOR_HNSW", "GRAPH_ADJACENCY", "TIMESERIES_BRIN", "SPATIAL_R_TREE");
+            List<String> indexTypes = List.of(
+                    "BTREE", "HASH", "NUMBER", "SEQUENTIAL", "FULLTEXT",
+                    "VECTOR_HNSW", "GRAPH_ADJACENCY", "TIMESERIES_BRIN", "SPATIAL_R_TREE"
+            );
             Form addIndexForm = Form.of(
                     FluxUi.hidden("action", "add_index"),
                     FluxUi.hidden("db", targetDb),
