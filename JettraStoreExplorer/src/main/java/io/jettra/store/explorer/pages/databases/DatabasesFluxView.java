@@ -357,13 +357,11 @@ public class DatabasesFluxView extends FluxView {
         ).modifier(new Modifier().style("background: var(--bg-subtle); padding: 1rem; border-radius: 8px; margin-bottom: 1.25rem;"));
 
         List<Widget> bucketHeaders = List.of(
-            Text.of("Bucket / Almacén"),
-            Text.of("Tipo de Motor"),
-            Text.of("Objetos"),
-            Text.of("Capacidad"),
+            Text.of("Bucket / Descripción"),
+            Text.of("Motor"),
+            Text.of("Objetos / Capacidad"),
             Text.of("Índices Activos"),
-            Text.of("Descripción"),
-            Text.of("Acciones")
+            Div.of(Text.of("Acciones")).modifier(new Modifier().style("text-align:right;"))
         );
 
         List<List<Widget>> bucketRows = new ArrayList<>();
@@ -389,28 +387,42 @@ public class DatabasesFluxView extends FluxView {
                 List<Widget> idxChips = new ArrayList<>();
                 for (EngineIndexInfo idx : b.getIndexes()) {
                     idxChips.add(FluxUi.coloredSpan(idx.getName() + " [" + idx.getType() + "]",
-                            "background:rgba(255,255,255,0.06); padding:2px 5px; border-radius:4px; font-size:0.75rem; margin-right:4px; font-family:monospace;"));
+                            "background:rgba(255,255,255,0.06); padding:2px 6px; border-radius:4px; font-size:0.72rem; font-family:monospace; display:inline-block;"));
                 }
-                idxCell = Div.of(idxChips.toArray(new Widget[0]));
+                idxCell = Div.of(idxChips.toArray(new Widget[0]))
+                        .modifier(new Modifier().style("display:flex; flex-wrap:wrap; gap:4px; max-width:260px;"));
             }
 
             List<Widget> bucketActions = new ArrayList<>();
-            bucketActions.add(FluxUi.linkButton("/explorer?db=" + currentDb + "&bucket=" + b.getBucketName(), "📦 Registros", "app-btn-primary", "margin-right:6px;"));
+            bucketActions.add(FluxUi.linkButton("/explorer?db=" + currentDb + "&bucket=" + b.getBucketName(),
+                    "📦 Registros", "app-btn-primary", "padding:0.3rem 0.6rem; font-size:0.76rem;"));
             if (buckets.size() > 1) {
-                Widget delBucket = FluxUi.linkButton("/databases?action=delete_bucket&db=" + currentDb + "&bucket=" + b.getBucketName(), "🗑️", "app-btn-danger", null);
-                delBucket.modifier(new Modifier().cssClass("app-btn-danger")
+                Widget delBucket = FluxUi.linkButton("/databases?action=delete_bucket&db=" + currentDb + "&bucket=" + b.getBucketName(),
+                        "🗑️", "app-btn-danger", "padding:0.3rem 0.55rem; font-size:0.76rem;");
+                delBucket.modifier(new Modifier().cssClass("app-btn-danger").style("padding:0.3rem 0.55rem; font-size:0.76rem;")
                         .attribute("onclick", "return confirm('¿Seguro de eliminar el bucket " + b.getBucketName() + "?');"));
                 bucketActions.add(delBucket);
             }
 
+            Widget bucketDescCell = Div.of(
+                    FluxUi.coloredSpan(b.getBucketName(), "font-weight:700; display:block; color:var(--text-main);"),
+                    FluxUi.coloredSpan(b.getDescription(), "color:var(--text-muted); font-size:0.75rem; display:block; margin-top:2px;")
+            );
+
+            Widget statsCell = Div.of(
+                    FluxUi.coloredSpan(String.format("%,d", b.getTotalObjects()), "font-weight:700; display:block; color:var(--text-main);"),
+                    FluxUi.coloredSpan(b.getFormattedSize(), "color:var(--text-muted); font-size:0.75rem; display:block;")
+            );
+
+            Widget actionsCell = Div.of(bucketActions.toArray(new Widget[0]))
+                    .modifier(new Modifier().style("display:flex; justify-content:flex-end; align-items:center; gap:0.4rem; white-space:nowrap;"));
+
             bucketRows.add(List.of(
-                FluxUi.coloredSpan(b.getBucketName(), "font-weight:700;"),
+                bucketDescCell,
                 FluxUi.pillBadge(b.getEngineType(), engineColor),
-                Text.of(String.format("%,d", b.getTotalObjects())),
-                Text.of(b.getFormattedSize()),
+                statsCell,
                 idxCell,
-                FluxUi.coloredSpan(b.getDescription(), "color:var(--text-muted); font-size:0.8rem;"),
-                Div.of(bucketActions.toArray(new Widget[0]))
+                actionsCell
             ));
         }
 

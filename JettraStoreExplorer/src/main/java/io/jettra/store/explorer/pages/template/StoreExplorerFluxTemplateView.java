@@ -848,8 +848,8 @@ public class StoreExplorerFluxTemplateView extends FluxView {
               border: 1px solid var(--border-subtle) !important;
               border-radius: 12px !important;
               padding: 1.5rem !important;
-              max-width: 820px !important;
-              width: 94% !important;
+              max-width: 1060px !important;
+              width: 95% !important;
               max-height: 90vh !important;
               overflow-y: auto !important;
               box-shadow: 0 20px 50px rgba(0, 0, 0, 0.65) !important;
