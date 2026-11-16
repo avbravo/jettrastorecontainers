@@ -4,6 +4,7 @@ import io.jettra.flux.core.FluxView;
 import io.jettra.flux.core.Modifier;
 import io.jettra.flux.core.Widget;
 import io.jettra.flux.widgets.Badge;
+import io.jettra.flux.widgets.Datatable;
 import io.jettra.flux.widgets.Div;
 import io.jettra.flux.widgets.Header;
 import io.jettra.flux.widgets.RawHtml;
@@ -45,43 +46,60 @@ public class BackupFluxView extends FluxView {
         Header tableHeader = Header.of(3, "💾 Snapshots y Copias de Seguridad Disponibles");
         tableHeader.modifier(new Modifier().style("font-size: 1.15rem; color: var(--text-main); margin: 0 0 1rem 0;"));
 
-        StringBuilder table = new StringBuilder();
-        table.append("<table class=\"app-table\">");
-        table.append("<thead><tr><th>ID Snapshot</th><th>Base de Datos</th><th>Motor</th><th>Fecha</th><th>Objetos</th><th>Tamaño</th><th>Ratio</th><th>Algoritmo</th><th>Firma SHA-256</th><th style='text-align:right;'>Acciones</th></tr></thead>");
-        table.append("<tbody>");
+        List<Widget> headers = List.of(
+            Text.of("ID Snapshot"),
+            Text.of("Base de Datos"),
+            Text.of("Motor"),
+            Text.of("Fecha"),
+            Text.of("Objetos"),
+            Text.of("Tamaño"),
+            Text.of("Ratio"),
+            Text.of("Algoritmo"),
+            Text.of("Firma SHA-256"),
+            Div.of(Text.of("Acciones")).modifier(new Modifier().style("text-align:right;"))
+        );
 
+        List<List<Widget>> rows = new java.util.ArrayList<>();
         for (BackupSnapshotInfo b : snapshots) {
             String shaShort = b.getChecksumSha256().length() > 12 ? b.getChecksumSha256().substring(0, 12) + "..." : b.getChecksumSha256();
 
-            table.append("<tr>");
-            table.append("<td><code style='color:#ffd700; font-weight:700;'>").append(b.getId()).append("</code></td>");
-            table.append("<td><strong>").append(b.getDatabaseName()).append("</strong></td>");
-            table.append("<td><span style='background:rgba(255,255,255,0.06); border:1px solid #00d4ff; color:#00d4ff; padding:2px 6px; border-radius:9999px; font-weight:700; font-size:0.72rem;'>")
-                 .append(b.getEngineType()).append("</span></td>");
-            table.append("<td style='color:var(--text-muted); font-size:0.8rem;'>").append(b.getTimestamp()).append("</td>");
-            table.append("<td>").append(String.format("%,d", b.getTotalObjects())).append("</td>");
-            table.append("<td><strong style='color:#10b981;'>").append(b.getFormattedSize()).append("</strong></td>");
-            table.append("<td><span style='color:#ffd700; font-weight:700;'>").append(String.format("%.2f:1", b.getCompressionRatio())).append("</span></td>");
-            table.append("<td>").append(b.getCompressionAlgo()).append("</td>");
-            table.append("<td><code style='color:var(--text-muted); font-size:0.75rem;' title='").append(b.getChecksumSha256()).append("'>").append(shaShort).append("</code></td>");
-            table.append("<td style='text-align:right; white-space:nowrap;'>");
-            table.append("<form method='POST' action='/backups' style='display:inline;' onsubmit=\"return confirm('¿Restaurar snapshot ");
-            table.append(b.getId()).append(" en caliente?');\">");
-            table.append("<input type='hidden' name='action' value='restore'/>");
-            table.append("<input type='hidden' name='id' value='").append(b.getId()).append("'/>");
-            table.append("<input type='hidden' name='target_db' value='").append(b.getDatabaseName()).append("'/>");
-            table.append("<button type='submit' class='app-btn-primary' style='padding:0.3rem 0.65rem; font-size:0.78rem; margin-right:5px;'>♻️ Restaurar</button></form>");
+            Widget idCell = Div.of(Text.of(b.getId()))
+                .modifier(new Modifier().style("font-family: monospace; font-weight: 700; color: #ffd700;"));
+            Widget dbCell = Div.of(Text.of(b.getDatabaseName()))
+                .modifier(new Modifier().style("font-weight: 700; color: var(--text-main);"));
+            Widget engineCell = Badge.of(b.getEngineType())
+                .modifier(new Modifier().style("background: rgba(255,255,255,0.06); border: 1px solid #00d4ff; color: #00d4ff; font-weight: 700; font-size: 0.72rem;"));
+            Widget dateCell = Div.of(Text.of(b.getTimestamp()))
+                .modifier(new Modifier().style("color: var(--text-muted); font-size: 0.8rem;"));
+            Widget objCell = Text.of(String.format("%,d", b.getTotalObjects()));
+            Widget sizeCell = Div.of(Text.of(b.getFormattedSize()))
+                .modifier(new Modifier().style("color: #10b981; font-weight: 700;"));
+            Widget ratioCell = Div.of(Text.of(String.format("%.2f:1", b.getCompressionRatio())))
+                .modifier(new Modifier().style("color: #ffd700; font-weight: 700;"));
+            Widget algoCell = Text.of(b.getCompressionAlgo());
+            Widget shaCell = Div.of(Text.of(shaShort))
+                .modifier(new Modifier().style("color: var(--text-muted); font-family: monospace; font-size: 0.75rem;").attribute("title", b.getChecksumSha256()));
 
-            table.append("<form method='POST' action='/backups' style='display:inline;' onsubmit=\"return confirm('¿Eliminar snapshot?');\">");
-            table.append("<input type='hidden' name='action' value='delete'/>");
-            table.append("<input type='hidden' name='id' value='").append(b.getId()).append("'/>");
-            table.append("<button type='submit' class='app-btn-danger' style='padding:0.3rem 0.65rem; font-size:0.78rem;'>🗑️</button></form>");
-            table.append("</td></tr>");
+            String actionsHtml = "<div style='text-align:right; white-space:nowrap;'>"
+                + "<form method='POST' action='/backups' style='display:inline;' onsubmit=\"return confirm('¿Restaurar snapshot " + b.getId() + " en caliente?');\">"
+                + "<input type='hidden' name='action' value='restore'/>"
+                + "<input type='hidden' name='id' value='" + b.getId() + "'/>"
+                + "<input type='hidden' name='target_db' value='" + b.getDatabaseName() + "'/>"
+                + "<button type='submit' class='app-btn-primary' style='padding:0.3rem 0.65rem; font-size:0.78rem; margin-right:5px;'>♻️ Restaurar</button></form>"
+                + "<form method='POST' action='/backups' style='display:inline;' onsubmit=\"return confirm('¿Eliminar snapshot?');\">"
+                + "<input type='hidden' name='action' value='delete'/>"
+                + "<input type='hidden' name='id' value='" + b.getId() + "'/>"
+                + "<button type='submit' class='app-btn-danger' style='padding:0.3rem 0.65rem; font-size:0.78rem;'>🗑️</button></form>"
+                + "</div>";
+            Widget actionCell = RawHtml.of(actionsHtml);
+
+            rows.add(List.of(idCell, dbCell, engineCell, dateCell, objCell, sizeCell, ratioCell, algoCell, shaCell, actionCell));
         }
 
-        table.append("</tbody></table>");
+        Datatable datatable = Datatable.ofWidgets(headers, rows);
+        datatable.modifier(new Modifier().cssClass("app-table"));
 
-        Div card = Div.of(tableHeader, RawHtml.of(table.toString()));
+        Div card = Div.of(tableHeader, datatable);
         card.modifier(new Modifier().cssClass("ui-card"));
 
         List<Widget> rootChildren = new java.util.ArrayList<>();
@@ -96,10 +114,9 @@ public class BackupFluxView extends FluxView {
         Header header = Header.of(3, "➕ Crear Nueva Copia de Seguridad Inmutable");
         header.modifier(new Modifier().style("font-size: 1.15rem; color: var(--text-main); margin: 0 0 0.85rem 0;"));
 
-        StringBuilder dbOpts = new StringBuilder();
-        for (String db : dbs) {
-            dbOpts.append("<option value='").append(db).append("'>").append(db).append("</option>");
-        }
+        String dbOpts = dbs.stream()
+            .map(db -> "<option value='" + db + "'>" + db + "</option>")
+            .collect(java.util.stream.Collectors.joining("\n"));
 
         RawHtml formHtml = RawHtml.of(String.format("""
             <form method="POST" action="/backups" style="display: flex; flex-wrap: wrap; gap: 0.85rem; align-items: flex-end;">
@@ -126,7 +143,7 @@ public class BackupFluxView extends FluxView {
                 <button type="submit" class="app-btn-primary" style="height: 38px;">💾 Generar Snapshot</button>
               </div>
             </form>
-        """, dbOpts.toString()));
+        """, dbOpts));
 
         Div card = Div.of(header, formHtml);
         card.modifier(new Modifier().cssClass("ui-card").style("margin-bottom: 2rem; background: var(--bg-subtle);"));

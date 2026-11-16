@@ -5,6 +5,7 @@ import io.jettra.flux.core.Modifier;
 import io.jettra.flux.core.Widget;
 import io.jettra.flux.widgets.Accordion;
 import io.jettra.flux.widgets.AccordionTab;
+import io.jettra.flux.widgets.Datatable;
 import io.jettra.flux.widgets.Div;
 import io.jettra.flux.widgets.Header;
 import io.jettra.flux.widgets.JettraButton;
@@ -24,6 +25,7 @@ import io.jettra.store.explorer.plugin.JettraStoreShellExecutor.ShellExecutionRe
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.stream.Collectors;
 
 /**
  * Consola Interactiva JettraStoreShell, JettraSQL y JettraQL para ejecución directa de comandos y consultas.
@@ -70,19 +72,13 @@ public class QueryConsoleFluxView extends FluxView {
                 : (buckets.isEmpty() ? initialBucket : buckets.get(0).getBucketName());
 
         // Selectores HTML
-        StringBuilder dbOpts = new StringBuilder();
-        for (String db : plugin.getDatabaseNames()) {
-            dbOpts.append("<option value='").append(escapeHtml(db)).append("' ")
-                  .append(db.equalsIgnoreCase(activeDb) ? "selected" : "")
-                  .append(">").append(escapeHtml(db)).append("</option>");
-        }
+        String dbOpts = plugin.getDatabaseNames().stream()
+                .map(db -> "<option value='" + escapeHtml(db) + "' " + (db.equalsIgnoreCase(activeDb) ? "selected" : "") + ">" + escapeHtml(db) + "</option>")
+                .collect(Collectors.joining());
 
-        StringBuilder bucketOpts = new StringBuilder();
-        for (EngineBucketInfo b : buckets) {
-            bucketOpts.append("<option value='").append(escapeHtml(b.getBucketName())).append("' ")
-                      .append(b.getBucketName().equalsIgnoreCase(activeBucket) ? "selected" : "")
-                      .append(">").append(escapeHtml(b.getBucketName())).append(" [").append(escapeHtml(b.getEngineType())).append("]</option>");
-        }
+        String bucketOpts = buckets.stream()
+                .map(b -> "<option value='" + escapeHtml(b.getBucketName()) + "' " + (b.getBucketName().equalsIgnoreCase(activeBucket) ? "selected" : "") + ">" + escapeHtml(b.getBucketName()) + " [" + escapeHtml(b.getEngineType()) + "]</option>")
+                .collect(Collectors.joining());
 
         // Cabecera con título y botón 'Ayuda' (Help) de JettraFlux
         Header header = Header.of(3, "⚡ Consola de Consulta Directa JettraSQL / JettraQL & JettraStoreShell");
@@ -168,24 +164,29 @@ public class QueryConsoleFluxView extends FluxView {
 
         // Si existen registros estructurados resultantes, renderizar además la tabla interactiva
         if (shellResult.records() != null && !shellResult.records().isEmpty()) {
-            StringBuilder table = new StringBuilder();
-            table.append("<table class=\"app-table\">");
-            table.append("<thead><tr><th>ID</th><th>Resumen</th><th>Detalles JSON</th><th>Versión</th><th>Fecha</th></tr></thead>");
-            table.append("<tbody>");
+            List<Widget> tableHeaders = List.of(
+                Text.of("ID"),
+                Text.of("Resumen"),
+                Text.of("Detalles JSON"),
+                Text.of("Versión"),
+                Text.of("Fecha")
+            );
+            List<List<Widget>> rows = new ArrayList<>();
             for (EngineRecordInfo r : shellResult.records()) {
                 String snippet = r.getDetails().replaceAll("\\s+", " ");
                 if (snippet.length() > 80) snippet = snippet.substring(0, 80) + "...";
 
-                table.append("<tr>");
-                table.append("<td><code style='color:#00d4ff; font-weight:700;'>").append(escapeHtml(r.getId())).append("</code></td>");
-                table.append("<td><strong>").append(escapeHtml(r.getSummary())).append("</strong></td>");
-                table.append("<td><code style='color:#38bdf8; font-size:0.8rem;'>").append(escapeHtml(snippet)).append("</code></td>");
-                table.append("<td><span style='color:#ffd700; font-weight:700;'>v").append(r.getVersion()).append("</span></td>");
-                table.append("<td style='color:var(--text-muted); font-size:0.8rem;'>").append(escapeHtml(r.getTimestamp())).append("</td>");
-                table.append("</tr>");
+                rows.add(List.of(
+                    Div.of(RawHtml.of("<code style='color:#00d4ff; font-weight:700;'>" + escapeHtml(r.getId()) + "</code>")),
+                    Div.of(RawHtml.of("<strong>" + escapeHtml(r.getSummary()) + "</strong>")),
+                    Div.of(RawHtml.of("<code style='color:#38bdf8; font-size:0.8rem;'>" + escapeHtml(snippet) + "</code>")),
+                    Div.of(RawHtml.of("<span style='color:#ffd700; font-weight:700;'>v" + r.getVersion() + "</span>")),
+                    Div.of(RawHtml.of("<span style='color:var(--text-muted); font-size:0.8rem;'>" + escapeHtml(r.getTimestamp()) + "</span>"))
+                ));
             }
-            table.append("</tbody></table>");
-            resultChildren.add(RawHtml.of(table.toString()));
+            Datatable recordsTable = Datatable.ofWidgets(tableHeaders, rows);
+            recordsTable.modifier(new Modifier().cssClass("app-table"));
+            resultChildren.add(recordsTable);
         }
 
         Div resultCard = Div.of(resultChildren.toArray(new Widget[0]));
@@ -208,21 +209,26 @@ public class QueryConsoleFluxView extends FluxView {
         AccordionTab[] tabs = new AccordionTab[cats.size()];
         for (int i = 0; i < cats.size(); i++) {
             HelpCategory cat = cats.get(i);
-            StringBuilder rows = new StringBuilder();
-            rows.append("<div style='display: flex; flex-direction: column; gap: 0.65rem; padding: 0.5rem 0;'>");
+            List<Widget> cmdItems = new ArrayList<>();
             for (HelpCommand hc : cat.commands()) {
                 String jsExample = hc.example().replace("\\", "\\\\").replace("'", "\\'");
-                rows.append("<div style='background: #020617; border: 1px solid #334155; border-radius: 6px; padding: 0.65rem 0.8rem; display: flex; justify-content: space-between; align-items: center; gap: 0.75rem; flex-wrap: wrap;'>");
-                rows.append("  <div style='flex: 1; min-width: 240px;'>");
-                rows.append("    <div><code style='color:#ffd700; font-weight:700; font-size:0.85rem;'>").append(escapeHtml(hc.syntax())).append("</code></div>");
-                rows.append("    <div style='font-size:0.78rem; color:#cbd5e1; margin-top:2px;'>").append(escapeHtml(hc.description())).append("</div>");
-                rows.append("    <div style='font-size:0.76rem; color:#38bdf8; margin-top:4px; font-family:monospace;'>Ej: ").append(escapeHtml(hc.example())).append("</div>");
-                rows.append("  </div>");
-                rows.append("  <button type='button' onclick=\"applyHelpExample('").append(jsExample).append("')\" style='background: rgba(16,185,129,0.18); border:1px solid #10b981; color:#34d399; font-weight:700; font-size:0.76rem; padding:4px 10px; border-radius:6px; cursor:pointer;'>Usar Ejemplo</button>");
-                rows.append("</div>");
+                Div item = Div.of(
+                    RawHtml.of(String.format("""
+                        <div style='background: #020617; border: 1px solid #334155; border-radius: 6px; padding: 0.65rem 0.8rem; display: flex; justify-content: space-between; align-items: center; gap: 0.75rem; flex-wrap: wrap;'>
+                          <div style='flex: 1; min-width: 240px;'>
+                            <div><code style='color:#ffd700; font-weight:700; font-size:0.85rem;'>%s</code></div>
+                            <div style='font-size:0.78rem; color:#cbd5e1; margin-top:2px;'>%s</div>
+                            <div style='font-size:0.76rem; color:#38bdf8; margin-top:4px; font-family:monospace;'>Ej: %s</div>
+                          </div>
+                          <button type='button' onclick="applyHelpExample('%s')" style='background: rgba(16,185,129,0.18); border:1px solid #10b981; color:#34d399; font-weight:700; font-size:0.76rem; padding:4px 10px; border-radius:6px; cursor:pointer;'>Usar Ejemplo</button>
+                        </div>
+                    """, escapeHtml(hc.syntax()), escapeHtml(hc.description()), escapeHtml(hc.example()), jsExample))
+                );
+                cmdItems.add(item);
             }
-            rows.append("</div>");
-            tabs[i] = AccordionTab.of(cat.icon() + " " + cat.title(), RawHtml.of(rows.toString())).active(i == 0);
+            Div tabContent = Div.of(cmdItems.toArray(new Widget[0]));
+            tabContent.modifier(new Modifier().style("display: flex; flex-direction: column; gap: 0.65rem; padding: 0.5rem 0;"));
+            tabs[i] = AccordionTab.of(cat.icon() + " " + cat.title(), tabContent).active(i == 0);
         }
 
         Accordion accordion = Accordion.of(tabs);

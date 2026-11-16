@@ -4,6 +4,7 @@ import io.jettra.flux.core.FluxView;
 import io.jettra.flux.core.Modifier;
 import io.jettra.flux.core.Widget;
 import io.jettra.flux.widgets.Badge;
+import io.jettra.flux.widgets.Datatable;
 import io.jettra.flux.widgets.Div;
 import io.jettra.flux.widgets.Header;
 import io.jettra.flux.widgets.RawHtml;
@@ -60,26 +61,33 @@ public class UserManagerFluxView extends FluxView {
         Header tableHeader = Header.of(3, "👥 Usuarios Registrados y Permisos Granulares por Base de Datos");
         tableHeader.modifier(new Modifier().style("font-size: 1.15rem; color: var(--text-main); margin: 0 0 1rem 0;"));
 
-        StringBuilder table = new StringBuilder();
-        table.append("<table class=\"app-table\">");
-        table.append("<thead><tr><th>Usuario</th><th>Rol Global</th><th>Descripción</th>");
+        List<Widget> headers = new java.util.ArrayList<>();
+        headers.add(Text.of("Usuario"));
+        headers.add(Text.of("Rol Global"));
+        headers.add(Text.of("Descripción"));
         for (String db : dbs) {
-            table.append("<th>").append(escapeHtml(db)).append("</th>");
+            headers.add(Text.of(db));
         }
-        table.append("<th style='text-align:right;'>Acción</th></tr></thead><tbody>");
+        headers.add(Div.of(Text.of("Acción")).modifier(new Modifier().style("text-align:right;")));
 
+        List<List<Widget>> rows = new java.util.ArrayList<>();
         for (JettraUser u : users) {
             String roleColor = u.getGlobalRole() == JettraUser.GlobalRole.ADMIN ? "#ffd700" : "#38bdf8";
             boolean isSelf = loggedUsername != null && loggedUsername.equalsIgnoreCase(u.getUsername());
             boolean canEdit = isAdmin || isSelf;
 
-            table.append("<tr>");
-            table.append("<td><strong style='color:#ffd700;'>👤 ").append(escapeHtml(u.getUsername())).append("</strong>")
-                 .append(isSelf ? " <span style='color:#10b981; font-size:0.72rem; font-weight:700;'>(Tú)</span>" : "")
-                 .append("</td>");
-            table.append("<td><span style='background:rgba(255,255,255,0.08); border:1px solid ").append(roleColor).append("; color:").append(roleColor).append("; padding:2px 6px; border-radius:9999px; font-weight:700; font-size:0.75rem;'>")
-                 .append(u.getGlobalRole().name()).append("</span></td>");
-            table.append("<td style='color:var(--text-muted); font-size:0.8rem;'>").append(escapeHtml(u.getDescription())).append("</td>");
+            String userLabel = "👤 " + u.getUsername() + (isSelf ? " (Tú)" : "");
+            Widget userCell = Div.of(Text.of(userLabel))
+                .modifier(new Modifier().style("font-weight: 700; color: " + (isSelf ? "#10b981" : "#ffd700") + ";"));
+            Widget roleCell = Badge.of(u.getGlobalRole().name())
+                .modifier(new Modifier().style("background: rgba(255,255,255,0.08); border: 1px solid " + roleColor + "; color: " + roleColor + "; font-size: 0.75rem; font-weight: 700;"));
+            Widget descCell = Div.of(Text.of(u.getDescription() != null ? u.getDescription() : ""))
+                .modifier(new Modifier().style("color: var(--text-muted); font-size: 0.8rem;"));
+
+            List<Widget> rowCells = new java.util.ArrayList<>();
+            rowCells.add(userCell);
+            rowCells.add(roleCell);
+            rowCells.add(descCell);
 
             for (String db : dbs) {
                 JettraDatabaseRole r = u.getRoleForDatabase(db);
@@ -89,31 +97,31 @@ public class UserManagerFluxView extends FluxView {
                     case READ_ONLY -> "#38bdf8";
                     default -> "var(--text-muted)";
                 };
-                table.append("<td><span style='color:").append(dbRoleColor).append("; font-weight:600; font-size:0.8rem;'>")
-                     .append(r.name()).append("</span></td>");
+                rowCells.add(Div.of(Text.of(r.name()))
+                    .modifier(new Modifier().style("color: " + dbRoleColor + "; font-weight: 600; font-size: 0.8rem;")));
             }
 
-            table.append("<td style='text-align:right; white-space:nowrap;'>");
-            if (canEdit) {
-                table.append("<a href='/users?edit=").append(encodeUrl(u.getUsername())).append("' class='app-btn-secondary' style='margin-right:6px; padding:0.35rem 0.65rem; font-size:0.78rem;'>✏️ Editar</a>");
-            }
-            if (isAdmin && !"admin".equalsIgnoreCase(u.getUsername())) {
-                table.append("<form method='POST' action='/users' style='display:inline;'>")
-                     .append("<input type='hidden' name='action' value='delete_user'/>")
-                     .append("<input type='hidden' name='username' value='").append(escapeHtml(u.getUsername())).append("'/>")
-                     .append("<button type='submit' class='app-btn-danger' onclick=\"return confirm('¿Revocar usuario ")
-                     .append(escapeHtml(u.getUsername())).append("?');\">Revocar</button></form>");
-            } else if (!canEdit) {
-                table.append("<span style='color:var(--text-muted); font-size:0.75rem;'>Solo lectura</span>");
-            } else if ("admin".equalsIgnoreCase(u.getUsername())) {
-                table.append("<span style='color:var(--text-muted); font-size:0.75rem;'>Protegido</span>");
-            }
-            table.append("</td></tr>");
+            String actionHtml;
+            String editLink = canEdit
+                ? "<a href='/users?edit=" + encodeUrl(u.getUsername()) + "' class='app-btn-secondary' style='margin-right:6px; padding:0.35rem 0.65rem; font-size:0.78rem;'>✏️ Editar</a>"
+                : "";
+            String deleteForm = (isAdmin && !"admin".equalsIgnoreCase(u.getUsername()))
+                ? "<form method='POST' action='/users' style='display:inline;'>"
+                  + "<input type='hidden' name='action' value='delete_user'/>"
+                  + "<input type='hidden' name='username' value='" + escapeHtml(u.getUsername()) + "'/>"
+                  + "<button type='submit' class='app-btn-danger' onclick=\"return confirm('¿Revocar usuario " + escapeHtml(u.getUsername()) + "?');\">Revocar</button></form>"
+                : (!canEdit ? "<span style='color:var(--text-muted); font-size:0.75rem;'>Solo lectura</span>"
+                            : ("admin".equalsIgnoreCase(u.getUsername()) ? "<span style='color:var(--text-muted); font-size:0.75rem;'>Protegido</span>" : ""));
+            actionHtml = "<div style='text-align:right; white-space:nowrap;'>" + editLink + deleteForm + "</div>";
+            rowCells.add(RawHtml.of(actionHtml));
+
+            rows.add(rowCells);
         }
 
-        table.append("</tbody></table>");
+        Datatable datatable = Datatable.ofWidgets(headers, rows);
+        datatable.modifier(new Modifier().cssClass("app-table"));
 
-        Div usersCard = Div.of(tableHeader, RawHtml.of(table.toString()));
+        Div usersCard = Div.of(tableHeader, datatable);
         usersCard.modifier(new Modifier().cssClass("ui-card"));
 
         List<Widget> rootChildren = new java.util.ArrayList<>();
@@ -149,41 +157,33 @@ public class UserManagerFluxView extends FluxView {
         Header header = Header.of(3, title);
         header.modifier(new Modifier().style("font-size: 1.15rem; color: " + (isEditing ? "#ffd700" : "var(--text-main)") + "; margin: 0 0 0.85rem 0;"));
 
-        StringBuilder dbRoles = new StringBuilder();
-        for (String db : dbs) {
+        String dbRoles = dbs.stream().map(db -> {
             JettraDatabaseRole currentDbRole = isEditing ? editUser.getRoleForDatabase(db) : JettraDatabaseRole.READ_WRITE;
             if (isAdmin) {
-                dbRoles.append("<div style='flex:1; min-width:140px;'>")
-                       .append("<label style='font-size:0.75rem; color:var(--text-muted); font-weight:600; display:block; margin-bottom:0.25rem;'>").append(escapeHtml(db)).append("</label>")
-                       .append("<select class='app-input' name='db_role_").append(escapeHtml(db)).append("'>");
-                for (JettraDatabaseRole opt : JettraDatabaseRole.values()) {
-                    dbRoles.append("<option value='").append(opt.name()).append("'")
-                           .append(opt == currentDbRole ? " selected" : "")
-                           .append(">").append(opt.name()).append("</option>");
-                }
-                dbRoles.append("</select></div>");
+                String options = java.util.Arrays.stream(JettraDatabaseRole.values())
+                    .map(opt -> "<option value='" + opt.name() + "'" + (opt == currentDbRole ? " selected" : "") + ">" + opt.name() + "</option>")
+                    .collect(java.util.stream.Collectors.joining());
+                return "<div style='flex:1; min-width:140px;'>"
+                     + "<label style='font-size:0.75rem; color:var(--text-muted); font-weight:600; display:block; margin-bottom:0.25rem;'>" + escapeHtml(db) + "</label>"
+                     + "<select class='app-input' name='db_role_" + escapeHtml(db) + "'>" + options + "</select></div>";
             } else {
-                dbRoles.append("<div style='flex:1; min-width:140px;'>")
-                       .append("<label style='font-size:0.75rem; color:var(--text-muted); font-weight:600; display:block; margin-bottom:0.25rem;'>").append(escapeHtml(db)).append("</label>")
-                       .append("<input class='app-input' type='text' value='").append(currentDbRole.name()).append("' disabled style='opacity:0.7;' />")
-                       .append("</div>");
+                return "<div style='flex:1; min-width:140px;'>"
+                     + "<label style='font-size:0.75rem; color:var(--text-muted); font-weight:600; display:block; margin-bottom:0.25rem;'>" + escapeHtml(db) + "</label>"
+                     + "<input class='app-input' type='text' value='" + currentDbRole.name() + "' disabled style='opacity:0.7;' /></div>";
             }
-        }
+        }).collect(java.util.stream.Collectors.joining("\n"));
 
-        StringBuilder roleOptions = new StringBuilder();
+        String roleOptions;
         JettraUser.GlobalRole currentGlobalRole = isEditing ? editUser.getGlobalRole() : JettraUser.GlobalRole.DEVELOPER;
         boolean lockGlobalRole = !isAdmin || (isEditing && "admin".equalsIgnoreCase(editUser.getUsername()));
         if (lockGlobalRole) {
-            roleOptions.append("<input type='hidden' name='globalRole' value='").append(currentGlobalRole.name()).append("' />")
-                       .append("<input class='app-input' type='text' value='").append(currentGlobalRole.name()).append("' disabled style='opacity:0.7;' />");
+            roleOptions = "<input type='hidden' name='globalRole' value='" + currentGlobalRole.name() + "' />"
+                        + "<input class='app-input' type='text' value='" + currentGlobalRole.name() + "' disabled style='opacity:0.7;' />";
         } else {
-            roleOptions.append("<select class='app-input' name='globalRole'>");
-            for (JettraUser.GlobalRole gr : JettraUser.GlobalRole.values()) {
-                roleOptions.append("<option value='").append(gr.name()).append("'")
-                           .append(gr == currentGlobalRole ? " selected" : "")
-                           .append(">").append(gr.name()).append(" (").append(gr.getDescription()).append(")</option>");
-            }
-            roleOptions.append("</select>");
+            String opts = java.util.Arrays.stream(JettraUser.GlobalRole.values())
+                .map(gr -> "<option value='" + gr.name() + "'" + (gr == currentGlobalRole ? " selected" : "") + ">" + gr.name() + " (" + gr.getDescription() + ")</option>")
+                .collect(java.util.stream.Collectors.joining());
+            roleOptions = "<select class='app-input' name='globalRole'>" + opts + "</select>";
         }
 
         String usernameField = isEditing

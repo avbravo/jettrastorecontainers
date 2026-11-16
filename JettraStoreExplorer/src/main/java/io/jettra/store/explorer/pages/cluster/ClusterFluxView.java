@@ -4,6 +4,7 @@ import io.jettra.flux.core.FluxView;
 import io.jettra.flux.core.Modifier;
 import io.jettra.flux.core.Widget;
 import io.jettra.flux.widgets.Badge;
+import io.jettra.flux.widgets.Datatable;
 import io.jettra.flux.widgets.Div;
 import io.jettra.flux.widgets.Header;
 import io.jettra.flux.widgets.JettraButton;
@@ -85,18 +86,15 @@ public class ClusterFluxView extends FluxView {
 
         // Banner de Advertencia si hay Nodos Secundarios INACTIVE
         if (!inactiveOthers.isEmpty()) {
-            StringBuilder inactiveNames = new StringBuilder();
-            for (int i = 0; i < inactiveOthers.size(); i++) {
-                ServerNodeInfo off = inactiveOthers.get(i);
-                if (i > 0) inactiveNames.append(", ");
-                inactiveNames.append("<strong>").append(off.getName()).append("</strong> (").append(off.getHost()).append(":").append(off.getPort()).append(")");
-            }
+            String inactiveNames = inactiveOthers.stream()
+                .map(off -> "<strong>" + off.getName() + "</strong> (" + off.getHost() + ":" + off.getPort() + ")")
+                .collect(java.util.stream.Collectors.joining(", "));
             Div othersInactiveAlert = Div.of(
                 RawHtml.of("<div id=\"banner-secondaries-inactive\" style=\"display:flex; align-items:flex-start; gap:0.85rem; background: rgba(245, 158, 11, 0.15); border: 1px solid #f59e0b; border-radius: 8px; padding: 0.85rem 1.15rem; margin-bottom: 1.25rem;\">" +
                            "<span style=\"font-size:1.6rem; line-height:1;\">⚠️</span>" +
                            "<div>" +
                            "<div style=\"font-size:0.95rem; font-weight:800; color:#f59e0b;\">ESTADO INACTIVE • ESTADO OFFLINE: NODOS SECUNDARIOS DESCONECTADOS (" + inactiveOthers.size() + ")</div>" +
-                           "<div style=\"font-size:0.82rem; color:#fde68a; margin-top:3px;\">Los siguientes nodos réplica no responden en su puerto de replicación: " + inactiveNames.toString() + ". El clúster opera con quórum reducido.</div>" +
+                           "<div style=\"font-size:0.82rem; color:#fde68a; margin-top:3px;\">Los siguientes nodos réplica no responden en su puerto de replicación: " + inactiveNames + ". El clúster opera con quórum reducido.</div>" +
                            "</div></div>")
             );
             rootChildren.add(othersInactiveAlert);
@@ -337,43 +335,54 @@ public class ClusterFluxView extends FluxView {
         Header header = Header.of(3, "🚚 Matriz de Replicación y Enrutamiento Raft Consensus");
         header.modifier(new Modifier().style("font-size: 1.1rem; color: var(--text-main); margin: 0 0 0.85rem 0;"));
 
-        StringBuilder table = new StringBuilder();
-        table.append("<table class=\"app-table\">");
-        table.append("<thead><tr><th>Nodo</th><th>Host:Puerto</th><th>Rol Quorum</th><th>Estado</th><th>Latencia Réplica</th><th>Sincronización WAL</th></tr></thead>");
-        table.append("<tbody>");
+        List<Widget> headers = List.of(
+            Text.of("Nodo"),
+            Text.of("Host:Puerto"),
+            Text.of("Rol Quorum"),
+            Text.of("Estado"),
+            Text.of("Latencia Réplica"),
+            Text.of("Sincronización WAL")
+        );
 
+        List<List<Widget>> rows = new java.util.ArrayList<>();
         for (ServerNodeInfo n : nodes) {
             boolean isPrimary = "PRIMARY".equalsIgnoreCase(n.getRole()) || "LEADER".equalsIgnoreCase(n.getRole());
             boolean active = n.isActive();
-            String roleBadge = isPrimary 
+            String roleHtml = isPrimary 
                 ? "<span style='color:#ffd700; font-weight:700;'>PRIMARY (Leader)</span>"
                 : "<span style='color:#38bdf8;'>FOLLOWER (Sync)</span>";
-            String statusBadge = active
+            String statusHtml = active
                 ? "<span style='color:#10b981; font-weight:700; background:rgba(16,185,129,0.15); padding:2px 8px; border-radius:4px; border:1px solid #10b981;'>● ACTIVE (" + String.format(java.util.Locale.US, "%.2f ms", n.getLatencyMs()) + ")</span>"
                 : (isPrimary
                     ? "<span style='color:#ef4444; font-weight:800; background:rgba(239,68,68,0.22); padding:2px 8px; border-radius:4px; border:1px solid #ef4444;'>○ INACTIVE • ○ OFFLINE (NODO PRIMARY CAÍDO)</span>"
                     : "<span style='color:#ef4444; font-weight:800; background:rgba(239,68,68,0.22); padding:2px 8px; border-radius:4px; border:1px solid #ef4444;'>○ INACTIVE • ○ OFFLINE (Inaccesible)</span>");
 
-            String latencyCol = active
+            String latencyHtml = active
                 ? String.format(java.util.Locale.US, "%.2f ms", n.getLatencyMs())
                 : "<span style='color:#ef4444; font-size:0.8rem;'>Sin respuesta</span>";
-            String walCol = active
+            String walHtml = active
                 ? "<span style='color:#10b981;'>COMMITTED (Raft Term #" + n.getRaftTerm() + ")</span>"
                 : "<span style='color:#ef4444; font-weight:700;'>DISCONNECTED (Sin latido)</span>";
 
-            table.append("<tr id='matrix-row-").append(escapeHtml(n.getId())).append("'>");
-            table.append("<td><strong>").append(escapeHtml(n.getName())).append("</strong></td>");
-            table.append("<td>").append(escapeHtml(n.getHost())).append(":").append(n.getPort()).append("</td>");
-            table.append("<td id='matrix-role-").append(escapeHtml(n.getId())).append("'>").append(roleBadge).append("</td>");
-            table.append("<td id='matrix-status-").append(escapeHtml(n.getId())).append("'>").append(statusBadge).append("</td>");
-            table.append("<td id='matrix-latency-").append(escapeHtml(n.getId())).append("'>").append(latencyCol).append("</td>");
-            table.append("<td id='matrix-wal-").append(escapeHtml(n.getId())).append("'>").append(walCol).append("</td>");
-            table.append("</tr>");
+            Widget nameCell = Div.of(Text.of(n.getName()))
+                .modifier(new Modifier().style("font-weight: 700; color: var(--text-main);"));
+            Widget hostCell = Text.of(n.getHost() + ":" + n.getPort());
+            Widget roleCell = Div.of(RawHtml.of(roleHtml))
+                .modifier(new Modifier().attribute("id", "matrix-role-" + n.getId()));
+            Widget statusCell = Div.of(RawHtml.of(statusHtml))
+                .modifier(new Modifier().attribute("id", "matrix-status-" + n.getId()));
+            Widget latencyCell = Div.of(RawHtml.of(latencyHtml))
+                .modifier(new Modifier().attribute("id", "matrix-latency-" + n.getId()));
+            Widget walCell = Div.of(RawHtml.of(walHtml))
+                .modifier(new Modifier().attribute("id", "matrix-wal-" + n.getId()));
+
+            rows.add(List.of(nameCell, hostCell, roleCell, statusCell, latencyCell, walCell));
         }
 
-        table.append("</tbody></table>");
+        Datatable datatable = Datatable.ofWidgets(headers, rows);
+        datatable.modifier(new Modifier().cssClass("app-table"));
 
-        Div card = Div.of(header, RawHtml.of(table.toString()));
+        Div card = Div.of(header, datatable);
         card.modifier(new Modifier().cssClass("ui-card"));
         return card;
     }

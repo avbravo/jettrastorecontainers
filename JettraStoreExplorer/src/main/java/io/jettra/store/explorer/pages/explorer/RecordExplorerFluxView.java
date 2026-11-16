@@ -4,6 +4,7 @@ import io.jettra.flux.core.FluxView;
 import io.jettra.flux.core.Modifier;
 import io.jettra.flux.core.Widget;
 import io.jettra.flux.widgets.Badge;
+import io.jettra.flux.widgets.Datatable;
 import io.jettra.flux.widgets.Div;
 import io.jettra.flux.widgets.Header;
 import io.jettra.flux.widgets.JettraButton;
@@ -17,7 +18,9 @@ import io.jettra.store.explorer.model.EngineBucketInfo;
 import io.jettra.store.explorer.model.EngineRecordInfo;
 import io.jettra.store.explorer.model.EngineRecordVersion;
 import io.jettra.store.explorer.plugin.JettraStorePlugin;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.stream.Collectors;
 
 /**
  * Explorador de Registros con soporte completo de operaciones CRUD en JettraFlux.
@@ -139,23 +142,23 @@ public class RecordExplorerFluxView extends FluxView {
     }
 
     private Widget buildDbSelector(List<String> dbs, String currentDb) {
-        StringBuilder sb = new StringBuilder();
-        sb.append("<div style='display: flex; gap: 0.5rem; margin-bottom: 1rem; overflow-x: auto; padding-bottom: 4px;'>");
+        List<Widget> links = new ArrayList<>();
         for (String db : dbs) {
             boolean active = db.equalsIgnoreCase(currentDb);
             String style = active
-                ? "background: #00d4ff; color: #050b14; font-weight: 700; border: 1px solid #00d4ff;"
-                : "background: var(--bg-card); color: var(--text-muted); border: 1px solid var(--border-subtle);";
-            sb.append("<a href='/explorer?db=").append(db).append("' style='text-decoration: none; padding: 0.45rem 1rem; border-radius: 8px; font-size: 0.85rem; display: inline-flex; align-items: center; gap: 0.35rem; ").append(style).append("'>")
-              .append("🗄️ ").append(db).append("</a>");
+                ? "text-decoration: none; padding: 0.45rem 1rem; border-radius: 8px; font-size: 0.85rem; display: inline-flex; align-items: center; gap: 0.35rem; background: #00d4ff; color: #050b14; font-weight: 700; border: 1px solid #00d4ff;"
+                : "text-decoration: none; padding: 0.45rem 1rem; border-radius: 8px; font-size: 0.85rem; display: inline-flex; align-items: center; gap: 0.35rem; background: var(--bg-card); color: var(--text-muted); border: 1px solid var(--border-subtle);";
+            Link link = Link.of("/explorer?db=" + db, "🗄️ " + db);
+            link.modifier(new Modifier().style(style));
+            links.add(link);
         }
-        sb.append("</div>");
-        return RawHtml.of(sb.toString());
+        Div container = Div.of(links.toArray(new Widget[0]));
+        container.modifier(new Modifier().style("display: flex; gap: 0.5rem; margin-bottom: 1rem; overflow-x: auto; padding-bottom: 4px;"));
+        return container;
     }
 
     private Widget buildBucketSelector(List<EngineBucketInfo> buckets, String currentDb, String currentBucket) {
-        StringBuilder sb = new StringBuilder();
-        sb.append("<div style='display: flex; gap: 0.5rem; margin-bottom: 1.5rem; flex-wrap: wrap;'>");
+        List<Widget> bucketWidgets = new ArrayList<>();
         for (EngineBucketInfo b : buckets) {
             boolean active = b.getBucketName().equalsIgnoreCase(currentBucket);
             String engineColor = switch (b.getEngineType()) {
@@ -175,16 +178,17 @@ public class RecordExplorerFluxView extends FluxView {
             String border = active ? "border: 2px solid " + engineColor + ";" : "border: 1px solid var(--border-subtle);";
             String bg = active ? "background: rgba(0, 212, 255, 0.12);" : "background: var(--bg-subtle);";
 
-            sb.append("<a href='/explorer?db=").append(currentDb).append("&bucket=").append(b.getBucketName())
-              .append("' style='text-decoration: none; padding: 0.6rem 1.1rem; border-radius: 10px; display: inline-flex; align-items: center; gap: 0.6rem; ")
-              .append(bg).append(border).append("'>")
-              .append("<span style='background: ").append(engineColor).append("; color: #050b14; font-size: 0.7rem; font-weight: 800; padding: 0.15rem 0.45rem; border-radius: 9999px;'>").append(b.getEngineType()).append("</span>")
-              .append("<strong style='color: var(--text-main); font-size: 0.9rem;'>").append(b.getBucketName()).append("</strong>")
-              .append("<span style='color: var(--text-muted); font-size: 0.78rem;'>(").append(String.format("%,d", b.getTotalObjects())).append(")</span>")
-              .append("</a>");
+            Link link = Link.of("/explorer?db=" + currentDb + "&bucket=" + b.getBucketName(),
+                RawHtml.of("<span style='background: " + engineColor + "; color: #050b14; font-size: 0.7rem; font-weight: 800; padding: 0.15rem 0.45rem; border-radius: 9999px;'>" + b.getEngineType() + "</span>"
+                  + "<strong style='color: var(--text-main); font-size: 0.9rem;'>" + b.getBucketName() + "</strong>"
+                  + "<span style='color: var(--text-muted); font-size: 0.78rem;'>(" + String.format("%,d", b.getTotalObjects()) + ")</span>")
+            );
+            link.modifier(new Modifier().style("text-decoration: none; padding: 0.6rem 1.1rem; border-radius: 10px; display: inline-flex; align-items: center; gap: 0.6rem; " + bg + border));
+            bucketWidgets.add(link);
         }
-        sb.append("</div>");
-        return RawHtml.of(sb.toString());
+        Div container = Div.of(bucketWidgets.toArray(new Widget[0]));
+        container.modifier(new Modifier().style("display: flex; gap: 0.5rem; margin-bottom: 1.5rem; flex-wrap: wrap;"));
+        return container;
     }
 
     private Widget buildSearchToolbar(String currentDb, String currentBucket, String query,
@@ -339,11 +343,16 @@ public class RecordExplorerFluxView extends FluxView {
         String queryParam = (query != null && !query.isBlank()) ? "&q=" + encodeUrlParam(query) : "";
         String pageContextParams = "&page=" + currentPage + "&size=" + currentPageSize + queryParam;
 
-        StringBuilder table = new StringBuilder();
-        table.append("<table class=\"app-table\">");
-        table.append("<thead><tr><th>ID</th><th>Motor</th><th>Resumen</th><th>Versión</th><th>Fecha Mutación</th><th>Acciones</th></tr></thead>");
-        table.append("<tbody>");
+        List<Widget> headers = List.of(
+            Text.of("ID"),
+            Text.of("Motor"),
+            Text.of("Resumen"),
+            Text.of("Versión"),
+            Text.of("Fecha Mutación"),
+            Text.of("Acciones")
+        );
 
+        List<List<Widget>> rows = new ArrayList<>();
         for (EngineRecordInfo r : pageRecords) {
             String engineColor = switch (r.getEngineType()) {
                 case "DOCUMENT" -> "#00d4ff";
@@ -359,83 +368,45 @@ public class RecordExplorerFluxView extends FluxView {
                 default -> "#94a3b8";
             };
 
-            table.append("<tr>");
-            table.append("<td><code style='color:#00d4ff; font-weight:700;'>").append(r.getId()).append("</code></td>");
-            table.append("<td><span style='background:rgba(255,255,255,0.06); border:1px solid ").append(engineColor)
-                 .append("; color:").append(engineColor).append("; padding:2px 6px; border-radius:9999px; font-weight:700; font-size:0.72rem;'>")
-                 .append(r.getEngineType()).append("</span></td>");
-            table.append("<td><strong>").append(escapeHtml(r.getSummary())).append("</strong></td>");
-            table.append("<td><span style='color:#ffd700; font-weight:600;'>v").append(r.getVersion()).append("</span></td>");
-            table.append("<td style='color:var(--text-muted); font-size:0.8rem;'>").append(r.getTimestamp()).append("</td>");
-            table.append("<td>");
-            table.append("<a href='/explorer?db=").append(currentDb).append("&bucket=").append(currentBucket).append("&view_id=").append(r.getId()).append(pageContextParams).append("' class='app-btn-secondary' style='margin-right:5px; padding:0.3rem 0.6rem; font-size:0.78rem;'>👁️ Ver</a>");
-            table.append("<a href='/explorer?db=").append(currentDb).append("&bucket=").append(currentBucket).append("&edit_id=").append(r.getId()).append(pageContextParams).append("' class='app-btn-secondary' style='margin-right:5px; padding:0.3rem 0.6rem; font-size:0.78rem;'>✏️ Editar</a>");
-            table.append("<a href='/explorer?db=").append(currentDb).append("&bucket=").append(currentBucket).append("&history_id=").append(r.getId()).append(pageContextParams).append("' class='app-btn-secondary' style='margin-right:5px; padding:0.3rem 0.6rem; font-size:0.78rem; background:rgba(16,185,129,0.15); border-color:#10b981; color:#10b981;'>🕒 Versiones</a>");
-            table.append("<a href='/explorer?action=delete_record&db=").append(currentDb).append("&bucket=").append(currentBucket).append("&recordId=").append(r.getId()).append(pageContextParams).append("' class='app-btn-danger' style='padding:0.3rem 0.6rem; font-size:0.78rem;' onclick=\"return confirm('¿Seguro de eliminar el registro ").append(r.getId()).append("?');\">🗑️</a>");
-            table.append("</td>");
-            table.append("</tr>");
+            String actionsHtml = "<a href='/explorer?db=" + escapeHtml(currentDb) + "&bucket=" + escapeHtml(currentBucket) + "&view_id=" + escapeHtml(r.getId()) + pageContextParams + "' class='app-btn-secondary' style='margin-right:5px; padding:0.3rem 0.6rem; font-size:0.78rem;'>👁️ Ver</a>"
+                + "<a href='/explorer?db=" + escapeHtml(currentDb) + "&bucket=" + escapeHtml(currentBucket) + "&edit_id=" + escapeHtml(r.getId()) + pageContextParams + "' class='app-btn-secondary' style='margin-right:5px; padding:0.3rem 0.6rem; font-size:0.78rem;'>✏️ Editar</a>"
+                + "<a href='/explorer?db=" + escapeHtml(currentDb) + "&bucket=" + escapeHtml(currentBucket) + "&history_id=" + escapeHtml(r.getId()) + pageContextParams + "' class='app-btn-secondary' style='margin-right:5px; padding:0.3rem 0.6rem; font-size:0.78rem; background:rgba(16,185,129,0.15); border-color:#10b981; color:#10b981;'>🕒 Versiones</a>"
+                + "<a href='/explorer?action=delete_record&db=" + escapeHtml(currentDb) + "&bucket=" + escapeHtml(currentBucket) + "&recordId=" + escapeHtml(r.getId()) + pageContextParams + "' class='app-btn-danger' style='padding:0.3rem 0.6rem; font-size:0.78rem;' onclick=\"return confirm('¿Seguro de eliminar el registro " + escapeHtml(r.getId()) + "?');\">🗑️</a>";
+
+            rows.add(List.of(
+                Div.of(RawHtml.of("<code style='color:#00d4ff; font-weight:700;'>" + escapeHtml(r.getId()) + "</code>")),
+                Div.of(RawHtml.of("<span style='background:rgba(255,255,255,0.06); border:1px solid " + engineColor + "; color:" + engineColor + "; padding:2px 6px; border-radius:9999px; font-weight:700; font-size:0.72rem;'>" + escapeHtml(r.getEngineType()) + "</span>")),
+                Div.of(RawHtml.of("<strong>" + escapeHtml(r.getSummary()) + "</strong>")),
+                Div.of(RawHtml.of("<span style='color:#ffd700; font-weight:600;'>v" + r.getVersion() + "</span>")),
+                Div.of(RawHtml.of("<span style='color:var(--text-muted); font-size:0.8rem;'>" + escapeHtml(r.getTimestamp()) + "</span>")),
+                Div.of(RawHtml.of(actionsHtml))
+            ));
         }
 
-        table.append("</tbody></table>");
+        Datatable datatable = Datatable.ofWidgets(headers, rows);
+        datatable.modifier(new Modifier().cssClass("app-table"));
 
-        // Controles de Paginación y Desplazamiento entre Páginas (Streaming)
-        table.append(buildPaginationHtml(currentDb, currentBucket, query, currentPage, totalPages, currentPageSize, startRecord, endRecord, totalRecords, isStreamed));
+        Widget paginationWidget = buildPaginationWidget(currentDb, currentBucket, query, currentPage, totalPages, currentPageSize, startRecord, endRecord, totalRecords, isStreamed);
 
-        Div card = Div.of(RawHtml.of(table.toString()));
+        Div card = Div.of(datatable, paginationWidget);
         card.modifier(new Modifier().cssClass("ui-card"));
         return card;
     }
 
-    private String buildPaginationHtml(String currentDb, String currentBucket, String query,
-                                       int currentPage, int totalPages, int currentPageSize,
-                                       long startRecord, long endRecord, long totalRecords, boolean isStreamed) {
-        StringBuilder sb = new StringBuilder();
-        sb.append("<div class='explorer-pagination-bar' data-pagination='explorer-records' data-total-records='").append(totalRecords)
-          .append("' data-total-pages='").append(totalPages).append("' style='display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.85rem; margin-top: 1.1rem; padding-top: 0.9rem; border-top: 1px solid var(--border-subtle);'>");
+    private Widget buildPaginationWidget(String currentDb, String currentBucket, String query,
+                                         int currentPage, int totalPages, int currentPageSize,
+                                         long startRecord, long endRecord, long totalRecords, boolean isStreamed) {
+        String streamActive = isStreamed
+            ? "<span style='font-size: 0.75rem; color: #10b981;'>[Streaming activo: solo página en memoria]</span>"
+            : "";
 
-        // Indicador de rango y selector de tamaño de página
-        sb.append("<div style='display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; font-size: 0.84rem; color: var(--text-muted);'>");
-        sb.append("<span>Mostrando <strong style='color: var(--text-main);'>").append(String.format("%,d - %,d", startRecord, endRecord))
-          .append("</strong> de <strong style='color: #00d4ff;'>").append(String.format("%,d", totalRecords))
-          .append("</strong> registros (Página <strong style='color: #ffd700;'>").append(String.format("%,d", currentPage))
-          .append("</strong> de <strong>").append(String.format("%,d", totalPages)).append("</strong>)</span>");
-        if (isStreamed) {
-            sb.append("<span style='font-size: 0.75rem; color: #10b981;'>[Streaming activo: solo página en memoria]</span>");
-        }
+        String qHidden = (query != null && !query.isBlank())
+            ? "<input type='hidden' name='q' value='" + escapeHtml(query) + "' />"
+            : "";
 
-        sb.append("<form method='GET' action='/explorer' style='display: inline-flex; align-items: center; gap: 0.4rem; margin: 0;'>");
-        sb.append("<input type='hidden' name='db' value='").append(escapeHtml(currentDb)).append("' />");
-        sb.append("<input type='hidden' name='bucket' value='").append(escapeHtml(currentBucket)).append("' />");
-        if (query != null && !query.isBlank()) {
-            sb.append("<input type='hidden' name='q' value='").append(escapeHtml(query)).append("' />");
-        }
-        sb.append("<input type='hidden' name='page' value='1' />");
-        sb.append("<label style='font-size: 0.78rem; color: var(--text-muted);'>Filas por página:</label>");
-        sb.append("<select name='size' class='app-input' style='width: auto; padding: 0.25rem 0.5rem; height: 30px; font-size: 0.8rem;' onchange='this.form.submit()'>");
-        for (int opt : new int[]{5, 10, 20, 50}) {
-            sb.append("<option value='").append(opt).append("'").append(opt == currentPageSize ? " selected" : "").append(">").append(opt).append("</option>");
-        }
-        sb.append("</select>");
-        sb.append("</form>");
-
-        // Salto directo a página específica
-        sb.append("<form method='GET' action='/explorer' style='display: inline-flex; align-items: center; gap: 0.35rem; margin: 0;'>");
-        sb.append("<input type='hidden' name='db' value='").append(escapeHtml(currentDb)).append("' />");
-        sb.append("<input type='hidden' name='bucket' value='").append(escapeHtml(currentBucket)).append("' />");
-        sb.append("<input type='hidden' name='size' value='").append(currentPageSize).append("' />");
-        if (query != null && !query.isBlank()) {
-            sb.append("<input type='hidden' name='q' value='").append(escapeHtml(query)).append("' />");
-        }
-        sb.append("<label style='font-size: 0.78rem; color: var(--text-muted);'>Ir a pág.:</label>");
-        sb.append("<input type='number' name='page' min='1' max='").append(totalPages).append("' value='").append(currentPage)
-          .append("' class='app-input' style='width: 90px; padding: 0.2rem 0.45rem; height: 30px; font-size: 0.8rem;' />");
-        sb.append("<button type='submit' class='app-btn-secondary' style='padding: 0.25rem 0.55rem; height: 30px; font-size: 0.78rem;'>Ir</button>");
-        sb.append("</form>");
-
-        sb.append("</div>");
-
-        // Botones de desplazamiento entre páginas (Primera, Anterior, Números, Siguiente, Última)
-        sb.append("<div class='pagination-controls' style='display: flex; align-items: center; gap: 0.35rem; flex-wrap: wrap;'>");
+        String sizeOptions = java.util.Arrays.stream(new int[]{5, 10, 20, 50})
+            .mapToObj(opt -> "<option value='" + opt + "'" + (opt == currentPageSize ? " selected" : "") + ">" + opt + "</option>")
+            .collect(Collectors.joining());
 
         boolean hasPrev = currentPage > 1;
         boolean hasNext = currentPage < totalPages;
@@ -444,18 +415,15 @@ public class RecordExplorerFluxView extends FluxView {
         String activeNavStyle = btnBaseStyle + "background: var(--bg-subtle); color: var(--text-main); border: 1px solid var(--border-subtle); cursor: pointer;";
         String disabledNavStyle = btnBaseStyle + "background: rgba(255,255,255,0.03); color: var(--text-muted); border: 1px solid rgba(255,255,255,0.06); opacity: 0.45; pointer-events: none;";
 
-        // Primera y Anterior
+        List<String> pageNavButtons = new ArrayList<>();
         if (hasPrev) {
-            sb.append("<a href='").append(buildPageUrl(currentDb, currentBucket, query, 1, currentPageSize))
-              .append("' data-page='1' style='").append(activeNavStyle).append("' title='Primera Página'>⏮ Primera</a>");
-            sb.append("<a href='").append(buildPageUrl(currentDb, currentBucket, query, currentPage - 1, currentPageSize))
-              .append("' data-page='").append(currentPage - 1).append("' style='").append(activeNavStyle).append("' title='Página Anterior'>◀ Anterior</a>");
+            pageNavButtons.add("<a href='" + buildPageUrl(currentDb, currentBucket, query, 1, currentPageSize) + "' data-page='1' style='" + activeNavStyle + "' title='Primera Página'>⏮ Primera</a>");
+            pageNavButtons.add("<a href='" + buildPageUrl(currentDb, currentBucket, query, currentPage - 1, currentPageSize) + "' data-page='" + (currentPage - 1) + "' style='" + activeNavStyle + "' title='Página Anterior'>◀ Anterior</a>");
         } else {
-            sb.append("<span style='").append(disabledNavStyle).append("'>⏮ Primera</span>");
-            sb.append("<span style='").append(disabledNavStyle).append("'>◀ Anterior</span>");
+            pageNavButtons.add("<span style='" + disabledNavStyle + "'>⏮ Primera</span>");
+            pageNavButtons.add("<span style='" + disabledNavStyle + "'>◀ Anterior</span>");
         }
 
-        // Números de página (ventana centrada)
         int startPage = Math.max(1, currentPage - 2);
         int endPage = Math.min(totalPages, startPage + 4);
         if (endPage - startPage < 4) {
@@ -464,39 +432,65 @@ public class RecordExplorerFluxView extends FluxView {
 
         for (int p = startPage; p <= endPage; p++) {
             if (p == currentPage) {
-                sb.append("<span data-current-page='").append(p).append("' style='").append(btnBaseStyle)
-                  .append("background: #00d4ff; color: #050b14; font-weight: 800; border: 1px solid #00d4ff;'>").append(p).append("</span>");
+                pageNavButtons.add("<span data-current-page='" + p + "' style='" + btnBaseStyle + "background: #00d4ff; color: #050b14; font-weight: 800; border: 1px solid #00d4ff;'>" + p + "</span>");
             } else {
-                sb.append("<a href='").append(buildPageUrl(currentDb, currentBucket, query, p, currentPageSize))
-                  .append("' data-page='").append(p).append("' style='").append(activeNavStyle).append("'>").append(p).append("</a>");
+                pageNavButtons.add("<a href='" + buildPageUrl(currentDb, currentBucket, query, p, currentPageSize) + "' data-page='" + p + "' style='" + activeNavStyle + "'>" + p + "</a>");
             }
         }
 
-        // Siguiente y Última
         if (hasNext) {
-            sb.append("<a href='").append(buildPageUrl(currentDb, currentBucket, query, currentPage + 1, currentPageSize))
-              .append("' data-page='").append(currentPage + 1).append("' style='").append(activeNavStyle).append("' title='Página Siguiente'>Siguiente ▶</a>");
-            sb.append("<a href='").append(buildPageUrl(currentDb, currentBucket, query, totalPages, currentPageSize))
-              .append("' data-page='").append(totalPages).append("' style='").append(activeNavStyle).append("' title='Última Página'>Última ⏭</a>");
+            pageNavButtons.add("<a href='" + buildPageUrl(currentDb, currentBucket, query, currentPage + 1, currentPageSize) + "' data-page='" + (currentPage + 1) + "' style='" + activeNavStyle + "' title='Página Siguiente'>Siguiente ▶</a>");
+            pageNavButtons.add("<a href='" + buildPageUrl(currentDb, currentBucket, query, totalPages, currentPageSize) + "' data-page='" + totalPages + "' style='" + activeNavStyle + "' title='Última Página'>Última ⏭</a>");
         } else {
-            sb.append("<span style='").append(disabledNavStyle).append("'>Siguiente ▶</span>");
-            sb.append("<span style='").append(disabledNavStyle).append("'>Última ⏭</span>");
+            pageNavButtons.add("<span style='" + disabledNavStyle + "'>Siguiente ▶</span>");
+            pageNavButtons.add("<span style='" + disabledNavStyle + "'>Última ⏭</span>");
         }
 
-        sb.append("</div>");
-        sb.append("</div>");
-        return sb.toString();
+        String navControlsHtml = String.join("", pageNavButtons);
+
+        String paginationHtml = String.format("""
+            <div class='explorer-pagination-bar' data-pagination='explorer-records' data-total-records='%d' data-total-pages='%d' style='display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.85rem; margin-top: 1.1rem; padding-top: 0.9rem; border-top: 1px solid var(--border-subtle);'>
+              <div style='display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; font-size: 0.84rem; color: var(--text-muted);'>
+                <span>Mostrando <strong style='color: var(--text-main);'>%,d - %,d</strong> de <strong style='color: #00d4ff;'>%,d</strong> registros (Página <strong style='color: #ffd700;'>%,d</strong> de <strong>%,d</strong>)</span>
+                %s
+                <form method='GET' action='/explorer' style='display: inline-flex; align-items: center; gap: 0.4rem; margin: 0;'>
+                  <input type='hidden' name='db' value='%s' />
+                  <input type='hidden' name='bucket' value='%s' />
+                  %s
+                  <input type='hidden' name='page' value='1' />
+                  <label style='font-size: 0.78rem; color: var(--text-muted);'>Filas por página:</label>
+                  <select name='size' class='app-input' style='width: auto; padding: 0.25rem 0.5rem; height: 30px; font-size: 0.8rem;' onchange='this.form.submit()'>
+                    %s
+                  </select>
+                </form>
+                <form method='GET' action='/explorer' style='display: inline-flex; align-items: center; gap: 0.35rem; margin: 0;'>
+                  <input type='hidden' name='db' value='%s' />
+                  <input type='hidden' name='bucket' value='%s' />
+                  <input type='hidden' name='size' value='%d' />
+                  %s
+                  <label style='font-size: 0.78rem; color: var(--text-muted);'>Ir a pág.:</label>
+                  <input type='number' name='page' min='1' max='%d' value='%d' class='app-input' style='width: 90px; padding: 0.2rem 0.45rem; height: 30px; font-size: 0.8rem;' />
+                  <button type='submit' class='app-btn-secondary' style='padding: 0.25rem 0.55rem; height: 30px; font-size: 0.78rem;'>Ir</button>
+                </form>
+              </div>
+              <div class='pagination-controls' style='display: flex; align-items: center; gap: 0.35rem; flex-wrap: wrap;'>
+                %s
+              </div>
+            </div>
+            """, totalRecords, totalPages, startRecord, endRecord, totalRecords, currentPage, totalPages,
+            streamActive, escapeHtml(currentDb), escapeHtml(currentBucket), qHidden, sizeOptions,
+            escapeHtml(currentDb), escapeHtml(currentBucket), currentPageSize, qHidden, totalPages, currentPage,
+            navControlsHtml);
+
+        return RawHtml.of(paginationHtml);
     }
 
     private String buildPageUrl(String db, String bucket, String query, int page, int size) {
-        StringBuilder url = new StringBuilder("/explorer?db=").append(encodeUrlParam(db))
-                .append("&bucket=").append(encodeUrlParam(bucket))
-                .append("&page=").append(page)
-                .append("&size=").append(size);
-        if (query != null && !query.isBlank()) {
-            url.append("&q=").append(encodeUrlParam(query));
-        }
-        return url.toString();
+        String base = "/explorer?db=" + encodeUrlParam(db)
+                + "&bucket=" + encodeUrlParam(bucket)
+                + "&page=" + page
+                + "&size=" + size;
+        return (query != null && !query.isBlank()) ? base + "&q=" + encodeUrlParam(query) : base;
     }
 
     private static String encodeUrlParam(String val) {
@@ -511,9 +505,7 @@ public class RecordExplorerFluxView extends FluxView {
         Paragraph sub = Paragraph.of("Versión activa actual: v" + rec.getVersion() + " • Total versiones registradas: " + rec.getVersionHistory().size() + " • Bucket: " + rec.getBucketName());
         sub.modifier(new Modifier().style("font-size: 0.85rem; color: var(--text-muted); margin: 0 0 1.25rem 0;"));
 
-        StringBuilder sb = new StringBuilder();
-        sb.append("<div style='display: flex; flex-direction: column; gap: 1rem; margin-bottom: 1.25rem;'>");
-
+        List<Widget> versionItems = new ArrayList<>();
         for (EngineRecordVersion v : rec.getVersionHistory()) {
             boolean isCurrent = (v.getVersion() == rec.getVersion());
             boolean isRootV1 = (v.getVersion() == 1L);
@@ -521,55 +513,56 @@ public class RecordExplorerFluxView extends FluxView {
             String badgeBg = isCurrent ? "rgba(16, 185, 129, 0.2)" : (isRootV1 ? "rgba(56, 189, 248, 0.16)" : "rgba(255, 255, 255, 0.08)");
             String badgeColor = isCurrent ? "#10b981" : (isRootV1 ? "#38bdf8" : "#94a3b8");
 
-            sb.append("<div style='border: 1px solid ").append(borderColor).append("; background: var(--bg-card); border-radius: 8px; padding: 1rem; position: relative;'>");
-            sb.append("<div style='display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;'>");
-            sb.append("  <div style='display: flex; align-items: center; gap: 0.6rem;'>");
-            sb.append("    <span style='background: ").append(badgeBg).append("; color: ").append(badgeColor).append("; font-weight: 800; font-size: 0.85rem; padding: 2px 8px; border-radius: 6px; border: 1px solid ").append(badgeColor).append(";'>v").append(v.getVersion()).append("</span>");
-            if (isCurrent) {
-                sb.append("    <span style='color: #10b981; font-size: 0.75rem; font-weight: 700;'>[VERSIÓN ACTIVA EN MEMORIA]</span>");
-            }
-            if (isRootV1) {
-                sb.append("    <span style='color: #38bdf8; font-size: 0.72rem; font-weight: 700;'>[VERSIÓN INICIAL v1]</span>");
-            }
-            sb.append("    <strong style='color: var(--text-main); font-size: 0.92rem;'>").append(escapeHtml(v.getSummary())).append("</strong>");
-            sb.append("  </div>");
-            sb.append("  <div style='font-size: 0.78rem; color: var(--text-muted);'>");
-            sb.append("    <span>👤 ").append(escapeHtml(v.getAuthor())).append("</span> • <span>🕒 ").append(v.getTimestamp()).append("</span>");
-            sb.append("  </div>");
-            sb.append("</div>");
+            String activeBadge = isCurrent ? "<span style='color: #10b981; font-size: 0.75rem; font-weight: 700;'>[VERSIÓN ACTIVA EN MEMORIA]</span>" : "";
+            String v1Badge = isRootV1 ? "<span style='color: #38bdf8; font-size: 0.72rem; font-weight: 700;'>[VERSIÓN INICIAL v1]</span>" : "";
+            String changeNoteHtml = (v.getChangeNote() != null && !v.getChangeNote().isBlank())
+                ? "<div style='font-size: 0.8rem; color: #38bdf8; margin-bottom: 0.6rem;'>📝 <em>" + escapeHtml(v.getChangeNote()) + "</em></div>"
+                : "";
 
-            if (v.getChangeNote() != null && !v.getChangeNote().isBlank()) {
-                sb.append("<div style='font-size: 0.8rem; color: #38bdf8; margin-bottom: 0.6rem;'>📝 <em>").append(escapeHtml(v.getChangeNote())).append("</em></div>");
-            }
-
-            sb.append("<div style='margin-bottom: 0.75rem; max-height: 280px; overflow-y: auto;'>");
-            sb.append(EngineRecordRenderer.renderVersionViewHtml(rec, v));
-            sb.append("</div>");
-
-            sb.append("<div style='display: flex; justify-content: flex-end;'>");
+            String restoreButtonHtml;
             if (!isCurrent) {
                 long nextVersion = Math.max(rec.getVersion(), v.getVersion()) + 1L;
-                sb.append("  <button type='button' class='app-btn-primary' style='background: #10b981; color: #050b14; font-weight: 700; padding: 0.35rem 0.85rem; font-size: 0.8rem;'")
-                  .append(" data-db='").append(escapeHtml(currentDb)).append("'")
-                  .append(" data-bucket='").append(escapeHtml(currentBucket)).append("'")
-                  .append(" data-record-id='").append(escapeHtml(rec.getId())).append("'")
-                  .append(" data-version='").append(v.getVersion()).append("'")
-                  .append(" data-next-version='").append(nextVersion).append("'")
-                  .append(" data-summary='").append(escapeHtml(v.getSummary())).append("'")
-                  .append(" onclick=\"openRestoreModalFromBtn(this)\">♻️ Restaurar esta Versión (v").append(v.getVersion()).append(")</button>");
+                restoreButtonHtml = String.format("""
+                    <button type='button' class='app-btn-primary' style='background: #10b981; color: #050b14; font-weight: 700; padding: 0.35rem 0.85rem; font-size: 0.8rem;'
+                      data-db='%s' data-bucket='%s' data-record-id='%s' data-version='%d' data-next-version='%d' data-summary='%s'
+                      onclick="openRestoreModalFromBtn(this)">♻️ Restaurar esta Versión (v%d)</button>
+                """, escapeHtml(currentDb), escapeHtml(currentBucket), escapeHtml(rec.getId()), v.getVersion(), nextVersion, escapeHtml(v.getSummary()), v.getVersion());
             } else {
-                sb.append("<span style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>✓ Estado Vigente</span>");
+                restoreButtonHtml = "<span style='font-size: 0.8rem; color: #10b981; font-weight: 600;'>✓ Estado Vigente</span>";
             }
-            sb.append("</div>");
 
-            sb.append("</div>");
+            Div itemCard = Div.of(RawHtml.of(String.format("""
+                <div style='border: 1px solid %s; background: var(--bg-card); border-radius: 8px; padding: 1rem; position: relative;'>
+                  <div style='display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;'>
+                    <div style='display: flex; align-items: center; gap: 0.6rem;'>
+                      <span style='background: %s; color: %s; font-weight: 800; font-size: 0.85rem; padding: 2px 8px; border-radius: 6px; border: 1px solid %s;'>v%d</span>
+                      %s
+                      %s
+                      <strong style='color: var(--text-main); font-size: 0.92rem;'>%s</strong>
+                    </div>
+                    <div style='font-size: 0.78rem; color: var(--text-muted);'>
+                      <span>👤 %s</span> • <span>🕒 %s</span>
+                    </div>
+                  </div>
+                  %s
+                  <div style='margin-bottom: 0.75rem; max-height: 280px; overflow-y: auto;'>
+                    %s
+                  </div>
+                  <div style='display: flex; justify-content: flex-end;'>
+                    %s
+                  </div>
+                </div>
+            """, borderColor, badgeBg, badgeColor, badgeColor, v.getVersion(), activeBadge, v1Badge, escapeHtml(v.getSummary()), escapeHtml(v.getAuthor()), v.getTimestamp(), changeNoteHtml, EngineRecordRenderer.renderVersionViewHtml(rec, v), restoreButtonHtml)));
+            versionItems.add(itemCard);
         }
 
-        sb.append("</div>");
+        Div versionList = Div.of(versionItems.toArray(new Widget[0]));
+        versionList.modifier(new Modifier().style("display: flex; flex-direction: column; gap: 1rem; margin-bottom: 1.25rem;"));
 
-        sb.append("<div style='display: flex; justify-content: flex-end;'>");
-        sb.append("<a href='/explorer?db=").append(currentDb).append("&bucket=").append(currentBucket).append("' class='app-btn-secondary'>Cerrar Historial</a>");
-        sb.append("</div>");
+        Link closeHistoryLink = Link.of("/explorer?db=" + escapeHtml(currentDb) + "&bucket=" + escapeHtml(currentBucket), "Cerrar Historial");
+        closeHistoryLink.modifier(new Modifier().cssClass("app-btn-secondary"));
+        Div closeBar = Div.of(closeHistoryLink);
+        closeBar.modifier(new Modifier().style("display: flex; justify-content: flex-end;"));
 
         // Formulario POST oculto conectado al botón de confirmación del Modal JettraFlux
         RawHtml hiddenFormAndScript = RawHtml.of(String.format("""
@@ -632,7 +625,7 @@ public class RecordExplorerFluxView extends FluxView {
 
         Modal restoreModal = buildRestoreConfirmationModal();
 
-        Div card = Div.of(header, sub, RawHtml.of(sb.toString()), hiddenFormAndScript, restoreModal);
+        Div card = Div.of(header, sub, versionList, closeBar, hiddenFormAndScript, restoreModal);
         card.modifier(new Modifier().cssClass("ui-card").style("margin-bottom: 1.5rem; border: 2px solid #10b981; background: var(--bg-subtle);"));
         return card;
     }

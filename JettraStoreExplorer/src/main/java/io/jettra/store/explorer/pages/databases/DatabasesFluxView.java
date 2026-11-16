@@ -4,6 +4,7 @@ import io.jettra.flux.core.FluxView;
 import io.jettra.flux.core.Modifier;
 import io.jettra.flux.core.Widget;
 import io.jettra.flux.widgets.Badge;
+import io.jettra.flux.widgets.Datatable;
 import io.jettra.flux.widgets.Div;
 import io.jettra.flux.widgets.Header;
 import io.jettra.flux.widgets.Link;
@@ -16,8 +17,10 @@ import io.jettra.store.explorer.model.EngineIndexInfo;
 import io.jettra.store.explorer.model.JettraDatabaseRole;
 import io.jettra.store.explorer.model.JettraUser;
 import io.jettra.store.explorer.plugin.JettraStorePlugin;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 /**
  * Vista de Administración de Bases de Datos y Motores Multimodelo en JettraFlux.
@@ -155,11 +158,15 @@ public class DatabasesFluxView extends FluxView {
         Header header = Header.of(3, "🗄️ Catálogo Maestro de Bases de Datos");
         header.modifier(new Modifier().style("font-size: 1.1rem; color: var(--text-main); margin: 0 0 0.85rem 0;"));
 
-        StringBuilder table = new StringBuilder();
-        table.append("<table class=\"app-table\">");
-        table.append("<thead><tr><th>Base de Datos</th><th>Motores / Buckets</th><th>Total Registros</th><th>Espacio en Memoria/Disco</th><th>Acciones</th></tr></thead>");
-        table.append("<tbody>");
+        List<Widget> headers = List.of(
+            Text.of("Base de Datos"),
+            Text.of("Motores / Buckets"),
+            Text.of("Total Registros"),
+            Text.of("Espacio en Memoria/Disco"),
+            Text.of("Acciones")
+        );
 
+        List<List<Widget>> rows = new java.util.ArrayList<>();
         for (Map.Entry<String, List<EngineBucketInfo>> entry : catalog.entrySet()) {
             String db = entry.getKey();
             List<EngineBucketInfo> buckets = entry.getValue();
@@ -168,29 +175,34 @@ public class DatabasesFluxView extends FluxView {
             long dbObjects = buckets.stream().mapToLong(EngineBucketInfo::getTotalObjects).sum();
             long dbBytes = buckets.stream().mapToLong(EngineBucketInfo::getTotalBytes).sum();
 
-            table.append("<tr style='").append(isSelected ? "background: rgba(0, 212, 255, 0.08); font-weight: 600;" : "").append("'>");
-            table.append("<td><strong style='color:#00d4ff;'>📁 ").append(db).append("</strong>").append(isSelected ? " <span style='color:#ffd700; font-size:0.75rem;'>[SELECCIONADA]</span>" : "").append("</td>");
-            table.append("<td>").append(buckets.size()).append(" motores</td>");
-            table.append("<td>").append(String.format("%,d", dbObjects)).append("</td>");
-            table.append("<td>").append(formatBytes(dbBytes)).append("</td>");
-            table.append("<td>");
-            table.append("<a href='/databases?db=").append(db).append("' class='app-btn-secondary' style='margin-right:6px;'>⚙️ Administrar Motores</a>");
-            if (isAdmin) {
-                table.append("<a href='/databases?db=").append(db).append("&manage_users_db=").append(db).append("' class='app-btn-secondary' style='margin-right:6px;'>👥 Administrar Usuarios</a>");
-            } else {
-                table.append("<span class='app-btn-secondary' style='margin-right:6px; opacity:0.45; cursor:not-allowed;' title='Opción habilitada únicamente para usuarios con rol ADMIN'>🔒 Administrar Usuarios</span>");
-            }
-            table.append("<a href='/explorer?db=").append(db).append("' class='app-btn-primary' style='margin-right:6px;'>📦 Ver Registros</a>");
-            if (!"system_metadata_db".equalsIgnoreCase(db)) {
-                table.append("<a href='/databases?action=delete_db&db=").append(db).append("' class='app-btn-danger' onclick=\"return confirm('¿Seguro de eliminar la base de datos ").append(db).append("?');\">🗑️</a>");
-            }
-            table.append("</td>");
-            table.append("</tr>");
+            Widget dbCell = Div.of(
+                RawHtml.of("<strong style='color:#00d4ff;'>📁 " + db + "</strong>" + (isSelected ? " <span style='color:#ffd700; font-size:0.75rem;'>[SELECCIONADA]</span>" : ""))
+            );
+            Widget bucketsCell = Text.of(buckets.size() + " motores");
+            Widget objCell = Text.of(String.format("%,d", dbObjects));
+            Widget sizeCell = Text.of(formatBytes(dbBytes));
+
+            String manageUsersBtn = isAdmin
+                ? "<a href='/databases?db=" + db + "&manage_users_db=" + db + "' class='app-btn-secondary' style='margin-right:6px;'>👥 Administrar Usuarios</a>"
+                : "<span class='app-btn-secondary' style='margin-right:6px; opacity:0.45; cursor:not-allowed;' title='Opción habilitada únicamente para usuarios con rol ADMIN'>🔒 Administrar Usuarios</span>";
+            String deleteBtn = !"system_metadata_db".equalsIgnoreCase(db)
+                ? "<a href='/databases?action=delete_db&db=" + db + "' class='app-btn-danger' onclick=\"return confirm('¿Seguro de eliminar la base de datos " + db + "?');\">🗑️</a>"
+                : "";
+            String actionsHtml = "<div>"
+                + "<a href='/databases?db=" + db + "' class='app-btn-secondary' style='margin-right:6px;'>⚙️ Administrar Motores</a>"
+                + manageUsersBtn
+                + "<a href='/explorer?db=" + db + "' class='app-btn-primary' style='margin-right:6px;'>📦 Ver Registros</a>"
+                + deleteBtn
+                + "</div>";
+            Widget actionsCell = RawHtml.of(actionsHtml);
+
+            rows.add(List.of(dbCell, bucketsCell, objCell, sizeCell, actionsCell));
         }
 
-        table.append("</tbody></table>");
+        Datatable datatable = Datatable.ofWidgets(headers, rows);
+        datatable.modifier(new Modifier().cssClass("app-table"));
 
-        Div card = Div.of(header, RawHtml.of(table.toString()));
+        Div card = Div.of(header, datatable);
         card.modifier(new Modifier().cssClass("ui-card").style("margin-bottom: 2rem;"));
         return card;
     }
@@ -200,15 +212,14 @@ public class DatabasesFluxView extends FluxView {
         Header header = Header.of(3, "👥 Administración de Usuarios de la Base de Datos [" + targetDb + "]");
         header.modifier(new Modifier().style("font-size: 1.1rem; color: #ffd700; margin: 0 0 0.75rem 0;"));
 
-        StringBuilder userOptions = new StringBuilder();
-        int assignableCount = 0;
-        for (JettraUser u : allUsers) {
-            if (u.getGlobalRole() != JettraUser.GlobalRole.ADMIN) {
-                userOptions.append("<option value='").append(escapeHtml(u.getUsername())).append("'>")
-                           .append(escapeHtml(u.getUsername())).append(" (").append(u.getGlobalRole().name()).append(")</option>");
-                assignableCount++;
-            }
-        }
+        String userOptions = allUsers.stream()
+                .filter(u -> u.getGlobalRole() != JettraUser.GlobalRole.ADMIN)
+                .map(u -> "<option value='" + escapeHtml(u.getUsername()) + "'>" + escapeHtml(u.getUsername()) + " (" + u.getGlobalRole().name() + ")</option>")
+                .collect(Collectors.joining());
+
+        long assignableCount = allUsers.stream()
+                .filter(u -> u.getGlobalRole() != JettraUser.GlobalRole.ADMIN)
+                .count();
 
         String addFormHtml = assignableCount > 0
                 ? String.format("""
@@ -232,7 +243,7 @@ public class DatabasesFluxView extends FluxView {
                         <a href="/databases?db=%s" class="app-btn-secondary" style="height: 38px; display:inline-flex; align-items:center;">Cerrar</a>
                       </div>
                     </form>
-                """, escapeHtml(targetDb), userOptions.toString(), escapeHtml(targetDb), escapeHtml(targetDb))
+                """, escapeHtml(targetDb), userOptions, escapeHtml(targetDb), escapeHtml(targetDb))
                 : String.format("""
                     <div style="display:flex; justify-content:space-between; align-items:center; background:var(--bg-subtle); padding:0.85rem 1rem; border-radius:8px; margin-bottom:1.1rem;">
                       <span style="font-size:0.85rem; color:var(--text-muted);">No hay usuarios adicionales no-admin registrados. Crea usuarios en <a href="/users" style="color:#00d4ff;">/users</a> para asignarlos a esta base de datos.</span>
@@ -240,34 +251,45 @@ public class DatabasesFluxView extends FluxView {
                     </div>
                 """, escapeHtml(targetDb));
 
-        StringBuilder table = new StringBuilder();
-        table.append("<table class=\"app-table\">");
-        table.append("<thead><tr><th>Usuario</th><th>Rol Global</th><th>Rol en ").append(escapeHtml(targetDb)).append("</th><th style='text-align:right;'>Acción</th></tr></thead><tbody>");
+        List<Widget> userTableHeaders = List.of(
+            Text.of("Usuario"),
+            Text.of("Rol Global"),
+            Text.of("Rol en " + targetDb),
+            Div.of(Text.of("Acción")).modifier(new Modifier().style("text-align:right;"))
+        );
 
+        List<List<Widget>> userRows = new ArrayList<>();
         for (JettraUser u : allUsers) {
             JettraDatabaseRole dbRole = u.getRoleForDatabase(targetDb);
             if (dbRole == JettraDatabaseRole.NONE && u.getGlobalRole() != JettraUser.GlobalRole.ADMIN) {
                 continue;
             }
-            table.append("<tr>");
-            table.append("<td><strong style='color:#ffd700;'>👤 ").append(escapeHtml(u.getUsername())).append("</strong></td>");
-            table.append("<td><span style='color:#38bdf8; font-weight:700; font-size:0.78rem;'>").append(u.getGlobalRole().name()).append("</span></td>");
-            table.append("<td><span style='color:#10b981; font-weight:700; font-size:0.8rem;'>").append(dbRole.name()).append("</span></td>");
-            table.append("<td style='text-align:right;'>");
+            Widget actionCell;
             if (u.getGlobalRole() == JettraUser.GlobalRole.ADMIN) {
-                table.append("<span style='color:var(--text-muted); font-size:0.75rem;'>Superadmin Global</span>");
+                actionCell = Div.of(RawHtml.of("<span style='color:var(--text-muted); font-size:0.75rem;'>Superadmin Global</span>"));
             } else {
-                table.append("<form method='POST' action='/databases' style='display:inline;'>")
-                     .append("<input type='hidden' name='action' value='remove_db_user'/>")
-                     .append("<input type='hidden' name='db' value='").append(escapeHtml(targetDb)).append("'/>")
-                     .append("<input type='hidden' name='username' value='").append(escapeHtml(u.getUsername())).append("'/>")
-                     .append("<button type='submit' class='app-btn-danger'>➖ Remover</button></form>");
+                actionCell = Div.of(RawHtml.of(String.format("""
+                    <form method='POST' action='/databases' style='display:inline;'>
+                      <input type='hidden' name='action' value='remove_db_user'/>
+                      <input type='hidden' name='db' value='%s'/>
+                      <input type='hidden' name='username' value='%s'/>
+                      <button type='submit' class='app-btn-danger'>➖ Remover</button>
+                    </form>
+                """, escapeHtml(targetDb), escapeHtml(u.getUsername()))));
             }
-            table.append("</td></tr>");
-        }
-        table.append("</tbody></table>");
 
-        Div card = Div.of(header, RawHtml.of(addFormHtml), RawHtml.of(table.toString()));
+            userRows.add(List.of(
+                Div.of(RawHtml.of("<strong style='color:#ffd700;'>👤 " + escapeHtml(u.getUsername()) + "</strong>")),
+                Div.of(RawHtml.of("<span style='color:#38bdf8; font-weight:700; font-size:0.78rem;'>" + u.getGlobalRole().name() + "</span>")),
+                Div.of(RawHtml.of("<span style='color:#10b981; font-weight:700; font-size:0.8rem;'>" + dbRole.name() + "</span>")),
+                Div.of(actionCell).modifier(new Modifier().style("text-align:right;"))
+            ));
+        }
+
+        Datatable userDatatable = Datatable.ofWidgets(userTableHeaders, userRows);
+        userDatatable.modifier(new Modifier().cssClass("app-table"));
+
+        Div card = Div.of(header, RawHtml.of(addFormHtml), userDatatable);
         card.modifier(new Modifier().cssClass("ui-card").style("margin-bottom: 2rem; border-left: 4px solid #ffd700;"));
         return card;
     }
@@ -320,11 +342,17 @@ public class DatabasesFluxView extends FluxView {
             </div>
         """, currentDb, currentDb));
 
-        StringBuilder table = new StringBuilder();
-        table.append("<table class=\"app-table\">");
-        table.append("<thead><tr><th>Bucket / Almacén</th><th>Tipo de Motor</th><th>Objetos</th><th>Capacidad</th><th>Índices Activos</th><th>Descripción</th><th>Acciones</th></tr></thead>");
-        table.append("<tbody>");
+        List<Widget> bucketHeaders = List.of(
+            Text.of("Bucket / Almacén"),
+            Text.of("Tipo de Motor"),
+            Text.of("Objetos"),
+            Text.of("Capacidad"),
+            Text.of("Índices Activos"),
+            Text.of("Descripción"),
+            Text.of("Acciones")
+        );
 
+        List<List<Widget>> bucketRows = new ArrayList<>();
         for (EngineBucketInfo b : buckets) {
             String engineColor = switch (b.getEngineType()) {
                 case "DOCUMENT" -> "#00d4ff";
@@ -340,37 +368,30 @@ public class DatabasesFluxView extends FluxView {
                 default -> "#94a3b8";
             };
 
-            StringBuilder indexesStr = new StringBuilder();
-            if (b.getIndexes().isEmpty()) {
-                indexesStr.append("<span style='color:var(--text-muted); font-size:0.75rem;'>Sin índices</span>");
-            } else {
-                for (EngineIndexInfo idx : b.getIndexes()) {
-                    indexesStr.append("<code style='background:rgba(255,255,255,0.06); padding:2px 5px; border-radius:4px; font-size:0.75rem; margin-right:4px;'>")
-                              .append(idx.getName()).append(" [").append(idx.getType()).append("]</code>");
-                }
-            }
+            String indexesStr = b.getIndexes().isEmpty()
+                ? "<span style='color:var(--text-muted); font-size:0.75rem;'>Sin índices</span>"
+                : b.getIndexes().stream()
+                    .map(idx -> "<code style='background:rgba(255,255,255,0.06); padding:2px 5px; border-radius:4px; font-size:0.75rem; margin-right:4px;'>" + escapeHtml(idx.getName()) + " [" + escapeHtml(idx.getType()) + "]</code>")
+                    .collect(Collectors.joining());
 
-            table.append("<tr>");
-            table.append("<td><strong>").append(b.getBucketName()).append("</strong></td>");
-            table.append("<td><span style='background:rgba(255,255,255,0.08); border:1px solid ").append(engineColor)
-                 .append("; color:").append(engineColor).append("; padding:3px 8px; border-radius:9999px; font-weight:700; font-size:0.75rem;'>")
-                 .append(b.getEngineType()).append("</span></td>");
-            table.append("<td>").append(String.format("%,d", b.getTotalObjects())).append("</td>");
-            table.append("<td>").append(b.getFormattedSize()).append("</td>");
-            table.append("<td>").append(indexesStr).append("</td>");
-            table.append("<td style='color:var(--text-muted); font-size:0.8rem;'>").append(b.getDescription()).append("</td>");
-            table.append("<td>");
-            table.append("<a href='/explorer?db=").append(currentDb).append("&bucket=").append(b.getBucketName()).append("' class='app-btn-primary' style='margin-right:6px;'>📦 Registros</a>");
-            if (buckets.size() > 1) {
-                table.append("<a href='/databases?action=delete_bucket&db=").append(currentDb).append("&bucket=").append(b.getBucketName()).append("' class='app-btn-danger' onclick=\"return confirm('¿Seguro de eliminar el bucket ").append(b.getBucketName()).append("?');\">🗑️</a>");
-            }
-            table.append("</td>");
-            table.append("</tr>");
+            String actionHtml = "<a href='/explorer?db=" + escapeHtml(currentDb) + "&bucket=" + escapeHtml(b.getBucketName()) + "' class='app-btn-primary' style='margin-right:6px;'>📦 Registros</a>"
+                + (buckets.size() > 1 ? "<a href='/databases?action=delete_bucket&db=" + escapeHtml(currentDb) + "&bucket=" + escapeHtml(b.getBucketName()) + "' class='app-btn-danger' onclick=\"return confirm('¿Seguro de eliminar el bucket " + escapeHtml(b.getBucketName()) + "?');\">🗑️</a>" : "");
+
+            bucketRows.add(List.of(
+                Div.of(RawHtml.of("<strong>" + escapeHtml(b.getBucketName()) + "</strong>")),
+                Div.of(RawHtml.of("<span style='background:rgba(255,255,255,0.08); border:1px solid " + engineColor + "; color:" + engineColor + "; padding:3px 8px; border-radius:9999px; font-weight:700; font-size:0.75rem;'>" + escapeHtml(b.getEngineType()) + "</span>")),
+                Text.of(String.format("%,d", b.getTotalObjects())),
+                Text.of(b.getFormattedSize()),
+                Div.of(RawHtml.of(indexesStr)),
+                Div.of(RawHtml.of("<span style='color:var(--text-muted); font-size:0.8rem;'>" + escapeHtml(b.getDescription()) + "</span>")),
+                Div.of(RawHtml.of(actionHtml))
+            ));
         }
 
-        table.append("</tbody></table>");
+        Datatable bucketDatatable = Datatable.ofWidgets(bucketHeaders, bucketRows);
+        bucketDatatable.modifier(new Modifier().cssClass("app-table"));
 
-        Div card = Div.of(header, addBucketForm, RawHtml.of(table.toString()));
+        Div card = Div.of(header, addBucketForm, bucketDatatable);
         card.modifier(new Modifier().cssClass("ui-card"));
         return card;
     }

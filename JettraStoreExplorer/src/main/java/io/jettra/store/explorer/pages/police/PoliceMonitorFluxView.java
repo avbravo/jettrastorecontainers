@@ -4,6 +4,7 @@ import io.jettra.flux.core.FluxView;
 import io.jettra.flux.core.Modifier;
 import io.jettra.flux.core.Widget;
 import io.jettra.flux.widgets.Badge;
+import io.jettra.flux.widgets.Datatable;
 import io.jettra.flux.widgets.Div;
 import io.jettra.flux.widgets.Header;
 import io.jettra.flux.widgets.Paragraph;
@@ -99,24 +100,35 @@ public class PoliceMonitorFluxView extends FluxView {
         Header logHeader = Header.of(3, "📜 Historial de Incidentes y Resoluciones Automáticas");
         logHeader.modifier(new Modifier().style("font-size: 1.15rem; color: var(--text-main); margin: 0 0 0.85rem 0;"));
 
-        StringBuilder table = new StringBuilder();
-        table.append("<table class=\"app-table\">");
-        table.append("<thead><tr><th>Hora</th><th>Centinela</th><th>Severidad</th><th>Descripción</th><th>Acción Aplicada</th></tr></thead>");
-        table.append("<tbody>");
+        List<Widget> headers = List.of(
+            Text.of("Hora"),
+            Text.of("Centinela"),
+            Text.of("Severidad"),
+            Text.of("Descripción"),
+            Text.of("Acción Aplicada")
+        );
 
+        List<List<Widget>> rows = new ArrayList<>();
         for (PoliceIncident inc : incidents) {
             String sevColor = "OK".equalsIgnoreCase(inc.getSeverity()) ? "#10b981" : ("WARN".equalsIgnoreCase(inc.getSeverity()) ? "#f59e0b" : "#ef4444");
-            table.append("<tr>");
-            table.append("<td><code>").append(inc.getTimestamp()).append("</code></td>");
-            table.append("<td><strong>").append(inc.getSentinelName()).append("</strong></td>");
-            table.append("<td><span style='color:").append(sevColor).append("; font-weight:700;'>").append(inc.getSeverity()).append("</span></td>");
-            table.append("<td>").append(inc.getEventDescription()).append("</td>");
-            table.append("<td style='color:var(--text-muted);'>").append(inc.getActionTaken()).append("</td>");
-            table.append("</tr>");
-        }
-        table.append("</tbody></table>");
 
-        Div logCard = Div.of(logHeader, RawHtml.of(table.toString()));
+            Widget timeCell = Div.of(Text.of(inc.getTimestamp()))
+                .modifier(new Modifier().style("font-family: monospace; font-size: 0.85rem; color: #ffd700;"));
+            Widget sentinelCell = Div.of(Text.of(inc.getSentinelName()))
+                .modifier(new Modifier().style("font-weight: 700; color: var(--text-main);"));
+            Widget sevCell = Badge.of(inc.getSeverity())
+                .modifier(new Modifier().style("color: " + sevColor + "; border: 1px solid " + sevColor + "; background: transparent; font-weight: 700;"));
+            Widget descCell = Text.of(inc.getEventDescription());
+            Widget actionCell = Div.of(Text.of(inc.getActionTaken()))
+                .modifier(new Modifier().style("color: var(--text-muted); font-size: 0.85rem;"));
+
+            rows.add(List.of(timeCell, sentinelCell, sevCell, descCell, actionCell));
+        }
+
+        Datatable datatable = Datatable.ofWidgets(headers, rows);
+        datatable.modifier(new Modifier().cssClass("app-table"));
+
+        Div logCard = Div.of(logHeader, datatable);
         logCard.modifier(new Modifier().cssClass("ui-card"));
         rootChildren.add(logCard);
 
