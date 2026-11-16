@@ -1530,6 +1530,52 @@ public class JettraStorePlugin {
         return removed;
     }
 
+    public synchronized boolean addIndex(String dbName, String bucketName, String indexName, String fields, String type, boolean unique) {
+        EngineBucketInfo bucket = getBucket(dbName, bucketName);
+        if (bucket == null || indexName == null || indexName.isBlank() || fields == null || fields.isBlank()) {
+            return false;
+        }
+        String cleanName = indexName.trim();
+        for (EngineIndexInfo idx : bucket.getIndexes()) {
+            if (idx.getName().equalsIgnoreCase(cleanName)) {
+                return false;
+            }
+        }
+        String idxType = (type != null && !type.isBlank()) ? type.trim().toUpperCase(Locale.ROOT) : "BTREE";
+        bucket.getIndexes().add(new EngineIndexInfo(cleanName, fields.trim(), idxType, unique, "READY"));
+        logPoliceIncident("Index Patrol", "Índice '" + cleanName + "' [" + idxType + "] creado en " + dbName + "." + bucketName, "OK", "Índice Zero-Lock READY");
+        return true;
+    }
+
+    public synchronized boolean deleteIndex(String dbName, String bucketName, String indexName) {
+        EngineBucketInfo bucket = getBucket(dbName, bucketName);
+        if (bucket == null || indexName == null || indexName.isBlank()) {
+            return false;
+        }
+        boolean removed = bucket.getIndexes().removeIf(idx -> idx.getName().equalsIgnoreCase(indexName.trim()));
+        if (removed) {
+            logPoliceIncident("Index Patrol", "Índice '" + indexName + "' eliminado de " + dbName + "." + bucketName, "WARN", "Metadatos de índice liberados");
+        }
+        return removed;
+    }
+
+    public synchronized boolean rebuildIndex(String dbName, String bucketName, String indexName) {
+        EngineBucketInfo bucket = getBucket(dbName, bucketName);
+        if (bucket == null || indexName == null || indexName.isBlank()) {
+            return false;
+        }
+        List<EngineIndexInfo> list = bucket.getIndexes();
+        for (int i = 0; i < list.size(); i++) {
+            EngineIndexInfo idx = list.get(i);
+            if (idx.getName().equalsIgnoreCase(indexName.trim())) {
+                list.set(i, new EngineIndexInfo(idx.getName(), idx.getFields(), idx.getType(), idx.isUnique(), "READY"));
+                logPoliceIncident("Index Patrol", "Índice '" + idx.getName() + "' reconstruido en caliente en " + dbName + "." + bucketName, "OK", "Reindexación Zero-Lock completada");
+                return true;
+            }
+        }
+        return false;
+    }
+
     public synchronized EngineRecordInfo getRecord(String dbName, String bucketName, String id) {
         EngineBucketInfo b = getBucket(dbName, bucketName);
         if (b == null || id == null || id.isBlank()) return null;

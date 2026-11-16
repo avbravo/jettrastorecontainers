@@ -1292,4 +1292,49 @@ public class JettraStoreExplorerTest {
         JettraAssert.assertTrue(modalRes.body().contains("Motores de Almacenamiento y Buckets en [example_factura_db]"),
                 "El diálogo debe mostrar los motores y buckets de la base de datos seleccionada");
     }
+
+    @Test
+    @DisplayName("33. Diálogo Administrar Índices por Base de Datos y por Bucket en /databases")
+    public void testManageIndexesDialogAndBucketIndexCrudInDatabasesPage() throws Exception {
+        HttpResponse<String> baseRes = get("/databases");
+        JettraAssert.assertEquals(200, baseRes.statusCode(), "/databases debe responder HTTP 200");
+        JettraAssert.assertTrue(baseRes.body().contains("Administrar Índices"),
+                "Cada base de datos debe mostrar el botón Administrar Índices");
+        JettraAssert.assertFalse(baseRes.body().contains("id=\"dbIndexesDialog\""),
+                "Sin pulsar Administrar Índices no debe abrirse el diálogo de índices");
+
+        HttpResponse<String> idxDialogRes = get("/databases?db=example_factura_db&manage_indexes_db=example_factura_db&index_bucket=Facturas");
+        JettraAssert.assertEquals(200, idxDialogRes.statusCode(), "Diálogo de índices debe responder HTTP 200");
+        JettraAssert.assertTrue(idxDialogRes.body().contains("id=\"dbIndexesDialog\""),
+                "Debe abrir el diálogo modal dbIndexesDialog sobre /databases");
+        JettraAssert.assertTrue(idxDialogRes.body().contains("Administración de Índices en [example_factura_db]"),
+                "Debe mostrar el título del diálogo de índices de la BD");
+        JettraAssert.assertTrue(idxDialogRes.body().contains("Facturas") && idxDialogRes.body().contains("Clientes"),
+                "Debe listar los buckets creados en la base de datos seleccionada");
+        JettraAssert.assertTrue(idxDialogRes.body().contains("Índices del Bucket [Facturas]"),
+                "Debe mostrar la administración de índices del bucket seleccionado");
+
+        JettraStorePlugin plugin = JettraStorePlugin.getInstance();
+        String idxName = "idx_test_total_estado";
+        plugin.deleteIndex("example_factura_db", "Facturas", idxName);
+        try {
+            HttpResponse<String> addIdxRes = postForm("/databases",
+                    "action=add_index&db=example_factura_db&bucket=Facturas&indexName=" + idxName + "&fields=total,estado&indexType=BTREE&unique=NO");
+            JettraAssert.assertEquals(302, addIdxRes.statusCode(), "Crear índice debe redirigir 302");
+            JettraAssert.assertTrue(
+                    plugin.getBucket("example_factura_db", "Facturas").getIndexes().stream()
+                            .anyMatch(i -> idxName.equalsIgnoreCase(i.getName())),
+                    "El nuevo índice debe quedar registrado en el bucket Facturas");
+
+            HttpResponse<String> delIdxRes = postForm("/databases",
+                    "action=delete_index&db=example_factura_db&bucket=Facturas&indexName=" + idxName);
+            JettraAssert.assertEquals(302, delIdxRes.statusCode(), "Eliminar índice debe redirigir 302");
+            JettraAssert.assertFalse(
+                    plugin.getBucket("example_factura_db", "Facturas").getIndexes().stream()
+                            .anyMatch(i -> idxName.equalsIgnoreCase(i.getName())),
+                    "El índice eliminado no debe permanecer en el bucket");
+        } finally {
+            plugin.deleteIndex("example_factura_db", "Facturas", idxName);
+        }
+    }
 }

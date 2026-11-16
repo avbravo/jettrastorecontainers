@@ -30,21 +30,30 @@ public class DatabasesFluxView extends FluxView {
 
     private final String selectedDb;
     private final String manageUsersDb;
+    private final String manageIndexesDb;
+    private final String manageIndexesBucket;
     private final boolean manageEngines;
     private final boolean isAdmin;
     private final String message;
 
     public DatabasesFluxView(String selectedDb, String message) {
-        this(selectedDb, null, false, true, message);
+        this(selectedDb, null, null, null, false, true, message);
     }
 
     public DatabasesFluxView(String selectedDb, String manageUsersDb, boolean isAdmin, String message) {
-        this(selectedDb, manageUsersDb, false, isAdmin, message);
+        this(selectedDb, manageUsersDb, null, null, false, isAdmin, message);
     }
 
     public DatabasesFluxView(String selectedDb, String manageUsersDb, boolean manageEngines, boolean isAdmin, String message) {
+        this(selectedDb, manageUsersDb, null, null, manageEngines, isAdmin, message);
+    }
+
+    public DatabasesFluxView(String selectedDb, String manageUsersDb, String manageIndexesDb, String manageIndexesBucket,
+                             boolean manageEngines, boolean isAdmin, String message) {
         this.selectedDb = selectedDb;
         this.manageUsersDb = manageUsersDb;
+        this.manageIndexesDb = manageIndexesDb;
+        this.manageIndexesBucket = manageIndexesBucket;
         this.manageEngines = manageEngines;
         this.isAdmin = isAdmin;
         this.message = message;
@@ -112,6 +121,14 @@ public class DatabasesFluxView extends FluxView {
             enginesSection = enginesModal;
         }
 
+        // 6. Diálogo Modal de Índices por Base de Datos y Bucket (al dar clic en Administrar Índices)
+        Widget indexesSection = null;
+        if (manageIndexesDb != null && !manageIndexesDb.isBlank() && catalog.containsKey(manageIndexesDb)) {
+            Modal indexesModal = Modal.of(buildDatabaseIndexesSection(plugin, manageIndexesDb, manageIndexesBucket)).open(true);
+            indexesModal.id("dbIndexesDialog");
+            indexesSection = indexesModal;
+        }
+
         List<Widget> rootChildren = new java.util.ArrayList<>();
         if (flashWidget != null) rootChildren.add(flashWidget);
         rootChildren.add(kpiGrid);
@@ -119,6 +136,7 @@ public class DatabasesFluxView extends FluxView {
         rootChildren.add(databasesTable);
         if (dbUsersSection != null) rootChildren.add(dbUsersSection);
         if (enginesSection != null) rootChildren.add(enginesSection);
+        if (indexesSection != null) rootChildren.add(indexesSection);
 
         return Div.of(rootChildren.toArray(new Widget[0]));
     }
@@ -194,6 +212,7 @@ public class DatabasesFluxView extends FluxView {
 
             List<Widget> actionsList = new ArrayList<>();
             actionsList.add(FluxUi.linkButton("/databases?db=" + db + "&manage_engines=true", "⚙️ Administrar Motores", "app-btn-secondary", "margin-right:6px;"));
+            actionsList.add(FluxUi.linkButton("/databases?db=" + db + "&manage_indexes_db=" + db, "⚡ Administrar Índices", "app-btn-secondary", "margin-right:6px;"));
             if (isAdmin) {
                 actionsList.add(FluxUi.linkButton("/databases?db=" + db + "&manage_users_db=" + db, "👥 Administrar Usuarios", "app-btn-secondary", "margin-right:6px;"));
             } else {
@@ -399,6 +418,123 @@ public class DatabasesFluxView extends FluxView {
         bucketDatatable.modifier(new Modifier().cssClass("app-table"));
 
         Div card = Div.of(headerBar, addBucketForm, bucketDatatable);
+        card.modifier(new Modifier().cssClass("ui-card"));
+        return card;
+    }
+
+    private Widget buildDatabaseIndexesSection(JettraStorePlugin plugin, String targetDb, String selectedBucket) {
+        List<EngineBucketInfo> buckets = plugin.getBuckets(targetDb);
+        String activeBucketName = (selectedBucket != null && buckets.stream().anyMatch(b -> b.getBucketName().equalsIgnoreCase(selectedBucket)))
+                ? selectedBucket
+                : (buckets.isEmpty() ? "" : buckets.get(0).getBucketName());
+
+        Header header = Header.of(3, "⚡ Administración de Índices en [" + targetDb + "]");
+        header.modifier(new Modifier().style("font-size: 1.1rem; color: #00d4ff; margin: 0;"));
+        Widget headerBar = Div.of(
+                header,
+                FluxUi.linkButton("/databases?db=" + targetDb, "✖ Cerrar", "app-btn-secondary", null)
+        ).modifier(new Modifier().style("display: flex; justify-content: space-between; align-items: center; gap: 0.75rem; margin-bottom: 1rem; flex-wrap: wrap;"));
+
+        List<Widget> bucketHeaders = List.of(
+                Text.of("Bucket / Almacén"),
+                Text.of("Motor"),
+                Text.of("Índices"),
+                Div.of(Text.of("Acción")).modifier(new Modifier().style("text-align:right;"))
+        );
+
+        List<List<Widget>> bucketRows = new ArrayList<>();
+        EngineBucketInfo activeBucket = null;
+        for (EngineBucketInfo b : buckets) {
+            boolean isCurrent = b.getBucketName().equalsIgnoreCase(activeBucketName);
+            if (isCurrent) activeBucket = b;
+
+            Widget bucketNameCell = Div.of(
+                    FluxUi.coloredSpan("📦 " + b.getBucketName(), isCurrent ? "color:#ffd700; font-weight:800;" : "font-weight:700;")
+            );
+            Widget engineCell = FluxUi.pillBadge(b.getEngineType(), "#00d4ff");
+            Widget countCell = Text.of(b.getIndexes().size() + " índice(s)");
+            Widget manageBtn = FluxUi.linkButton(
+                    "/databases?db=" + targetDb + "&manage_indexes_db=" + targetDb + "&index_bucket=" + b.getBucketName(),
+                    isCurrent ? "✓ Seleccionado" : "⚡ Administrar Índices",
+                    isCurrent ? "app-btn-primary" : "app-btn-secondary",
+                    "padding: 0.3rem 0.7rem; font-size: 0.78rem;");
+
+            bucketRows.add(List.of(bucketNameCell, engineCell, countCell, Div.of(manageBtn).modifier(new Modifier().style("text-align:right;"))));
+        }
+
+        Datatable bucketsTable = Datatable.ofWidgets(bucketHeaders, bucketRows);
+        bucketsTable.modifier(new Modifier().cssClass("app-table").style("margin-bottom: 1.25rem;"));
+
+        List<Widget> children = new ArrayList<>();
+        children.add(headerBar);
+        children.add(FluxUi.coloredSpan("Buckets creados en " + targetDb + " (seleccione un bucket para administrar sus índices):",
+                "font-size: 0.82rem; color: var(--text-muted); display: block; margin-bottom: 0.5rem;"));
+        children.add(bucketsTable);
+
+        if (activeBucket != null) {
+            Header idxHeader = Header.of(4, "📋 Índices del Bucket [" + activeBucket.getBucketName() + "] • " + activeBucket.getEngineType());
+            idxHeader.modifier(new Modifier().style("font-size: 1rem; color: #ffd700; margin: 0 0 0.75rem 0;"));
+            children.add(idxHeader);
+
+            List<String> indexTypes = List.of("BTREE", "HASH", "FULLTEXT", "VECTOR_HNSW", "GRAPH_ADJACENCY", "TIMESERIES_BRIN", "SPATIAL_R_TREE");
+            Form addIndexForm = Form.of(
+                    FluxUi.hidden("action", "add_index"),
+                    FluxUi.hidden("db", targetDb),
+                    FluxUi.hidden("bucket", activeBucket.getBucketName()),
+                    FluxUi.fieldColumn("Nombre del Índice", FluxUi.textInput("indexName", "", "idx_campo", true), "flex: 1.2; min-width: 150px;"),
+                    FluxUi.fieldColumn("Campos", FluxUi.textInput("fields", "", "campo1, campo2", true), "flex: 1.5; min-width: 170px;"),
+                    FluxUi.fieldColumn("Tipo de Índice", FluxUi.dropdown("indexType", indexTypes, "BTREE"), "flex: 1.1; min-width: 140px;"),
+                    FluxUi.fieldColumn("Único", FluxUi.dropdown("unique", List.of("NO", "SI"), "NO"), "flex: 0.7; min-width: 90px;"),
+                    Div.of(FluxUi.submitButton("➕ Crear Índice", "app-btn-primary", "height: 38px;"))
+            ).action("/databases").method("POST");
+            addIndexForm.modifier(new Modifier().style("display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: flex-end; background: var(--bg-subtle); padding: 0.9rem; border-radius: 8px; margin-bottom: 1rem;"));
+            children.add(addIndexForm);
+
+            List<Widget> idxHeaders = List.of(
+                    Text.of("Índice"),
+                    Text.of("Campos"),
+                    Text.of("Tipo"),
+                    Text.of("Único"),
+                    Text.of("Estado"),
+                    Div.of(Text.of("Acciones")).modifier(new Modifier().style("text-align:right;"))
+            );
+
+            List<List<Widget>> idxRows = new ArrayList<>();
+            for (EngineIndexInfo idx : activeBucket.getIndexes()) {
+                Form rebuildForm = Form.of(
+                        FluxUi.hidden("action", "rebuild_index"),
+                        FluxUi.hidden("db", targetDb),
+                        FluxUi.hidden("bucket", activeBucket.getBucketName()),
+                        FluxUi.hidden("indexName", idx.getName()),
+                        FluxUi.submitButton("🔄 Reconstruir", "app-btn-secondary", "padding:0.25rem 0.6rem; font-size:0.75rem; margin-right:5px;")
+                ).action("/databases").method("POST");
+                rebuildForm.modifier(new Modifier().style("display:inline;"));
+
+                Form delIdxForm = Form.of(
+                        FluxUi.hidden("action", "delete_index"),
+                        FluxUi.hidden("db", targetDb),
+                        FluxUi.hidden("bucket", activeBucket.getBucketName()),
+                        FluxUi.hidden("indexName", idx.getName()),
+                        FluxUi.submitButton("🗑️", "app-btn-danger", "padding:0.25rem 0.6rem; font-size:0.75rem;")
+                ).action("/databases").method("POST");
+                delIdxForm.modifier(new Modifier().style("display:inline;"));
+
+                idxRows.add(List.of(
+                        FluxUi.coloredSpan(idx.getName(), "font-family:monospace; font-weight:700; color:#00d4ff;"),
+                        FluxUi.coloredSpan(idx.getFields(), "font-family:monospace; color:#ffd700;"),
+                        FluxUi.pillBadge(idx.getType(), "#38bdf8"),
+                        Text.of(idx.isUnique() ? "SÍ" : "NO"),
+                        FluxUi.pillBadge(idx.getStatus(), "#10b981"),
+                        Div.of(rebuildForm, delIdxForm).modifier(new Modifier().style("text-align:right; white-space:nowrap;"))
+                ));
+            }
+
+            Datatable idxTable = Datatable.ofWidgets(idxHeaders, idxRows);
+            idxTable.modifier(new Modifier().cssClass("app-table"));
+            children.add(idxTable);
+        }
+
+        Div card = Div.of(children.toArray(new Widget[0]));
         card.modifier(new Modifier().cssClass("ui-card"));
         return card;
     }

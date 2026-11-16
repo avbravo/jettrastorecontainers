@@ -407,6 +407,8 @@ public class App {
 
         String db = req.getQueryParam("db");
         String manageUsersDb = req.getQueryParam("manage_users_db");
+        String manageIndexesDb = req.getQueryParam("manage_indexes_db");
+        String indexBucket = req.getQueryParam("index_bucket");
         boolean manageEngines = "true".equalsIgnoreCase(req.getQueryParam("manage_engines"));
         boolean isAdmin = isLoggedUserAdmin(req);
         String msg = req.getQueryParam("msg");
@@ -417,6 +419,9 @@ public class App {
         else if ("bucket_deleted".equals(msg)) messageText = "Bucket eliminado.";
         else if ("db_user_added".equals(msg)) messageText = "Usuario añadido/actualizado en la base de datos.";
         else if ("db_user_removed".equals(msg)) messageText = "Usuario removido de la base de datos.";
+        else if ("index_added".equals(msg)) messageText = "Índice creado y habilitado exitosamente.";
+        else if ("index_deleted".equals(msg)) messageText = "Índice eliminado del bucket.";
+        else if ("index_rebuilt".equals(msg)) messageText = "Índice reconstruido en caliente (Zero-Lock).";
         else if ("forbidden".equals(msg)) messageText = "Acceso denegado: se requiere rol ADMIN para administrar usuarios de la base de datos.";
 
         if (manageUsersDb != null && !manageUsersDb.isBlank() && !isAdmin) {
@@ -426,7 +431,7 @@ public class App {
             }
         }
 
-        Widget content = new DatabasesFluxView(db, manageUsersDb, manageEngines, isAdmin, messageText);
+        Widget content = new DatabasesFluxView(db, manageUsersDb, manageIndexesDb, indexBucket, manageEngines, isAdmin, messageText);
         renderTemplate(resp, server, getLoggedUser(req), "Catálogo de Bases de Datos & Motores", "databases", content);
     }
 
@@ -482,6 +487,30 @@ public class App {
             String username = form.get("username");
             plugin.removeUserFromDatabase(db, username);
             redirect(resp, "/databases?db=" + db + "&manage_users_db=" + db + "&msg=db_user_removed");
+            return;
+        } else if ("add_index".equalsIgnoreCase(action)) {
+            String db = form.get("db");
+            String bucket = form.get("bucket");
+            String indexName = form.get("indexName");
+            String fields = form.get("fields");
+            String indexType = form.get("indexType");
+            boolean unique = "SI".equalsIgnoreCase(form.get("unique")) || "true".equalsIgnoreCase(form.get("unique"));
+            plugin.addIndex(db, bucket, indexName, fields, indexType, unique);
+            redirect(resp, "/databases?db=" + db + "&manage_indexes_db=" + db + "&index_bucket=" + bucket + "&msg=index_added");
+            return;
+        } else if ("delete_index".equalsIgnoreCase(action)) {
+            String db = form.get("db");
+            String bucket = form.get("bucket");
+            String indexName = form.get("indexName");
+            plugin.deleteIndex(db, bucket, indexName);
+            redirect(resp, "/databases?db=" + db + "&manage_indexes_db=" + db + "&index_bucket=" + bucket + "&msg=index_deleted");
+            return;
+        } else if ("rebuild_index".equalsIgnoreCase(action)) {
+            String db = form.get("db");
+            String bucket = form.get("bucket");
+            String indexName = form.get("indexName");
+            plugin.rebuildIndex(db, bucket, indexName);
+            redirect(resp, "/databases?db=" + db + "&manage_indexes_db=" + db + "&index_bucket=" + bucket + "&msg=index_rebuilt");
             return;
         }
         redirect(resp, "/databases");
