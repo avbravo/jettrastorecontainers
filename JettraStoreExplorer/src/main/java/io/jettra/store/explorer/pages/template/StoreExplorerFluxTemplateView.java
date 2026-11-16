@@ -829,6 +829,31 @@ public class StoreExplorerFluxTemplateView extends FluxView {
               color: var(--primary);
               font-weight: 700;
             }
+            .espresso-modal-overlay {
+              position: fixed !important;
+              inset: 0 !important;
+              width: 100vw !important;
+              height: 100vh !important;
+              z-index: 3000 !important;
+              background: rgba(2, 6, 23, 0.75) !important;
+              backdrop-filter: blur(4px);
+              align-items: center !important;
+              justify-content: center !important;
+              padding: 1.5rem !important;
+              overflow-y: auto !important;
+            }
+            .espresso-modal-content {
+              background: var(--bg-card) !important;
+              color: var(--text-main) !important;
+              border: 1px solid var(--border-subtle) !important;
+              border-radius: 12px !important;
+              padding: 1.5rem !important;
+              max-width: 820px !important;
+              width: 94% !important;
+              max-height: 90vh !important;
+              overflow-y: auto !important;
+              box-shadow: 0 20px 50px rgba(0, 0, 0, 0.65) !important;
+            }
             .app-btn-primary {
               background: var(--primary);
               color: #050b14;

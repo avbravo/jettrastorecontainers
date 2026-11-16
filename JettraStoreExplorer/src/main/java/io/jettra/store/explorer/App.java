@@ -401,12 +401,13 @@ public class App {
             String db = req.getQueryParam("db");
             String bucket = req.getQueryParam("bucket");
             if (db != null && bucket != null) plugin.deleteBucket(db, bucket);
-            redirect(resp, "/databases?db=" + db + "&msg=bucket_deleted");
+            redirect(resp, "/databases?db=" + db + "&manage_engines=true&msg=bucket_deleted");
             return;
         }
 
         String db = req.getQueryParam("db");
         String manageUsersDb = req.getQueryParam("manage_users_db");
+        boolean manageEngines = "true".equalsIgnoreCase(req.getQueryParam("manage_engines"));
         boolean isAdmin = isLoggedUserAdmin(req);
         String msg = req.getQueryParam("msg");
         String messageText = null;
@@ -425,7 +426,7 @@ public class App {
             }
         }
 
-        Widget content = new DatabasesFluxView(db, manageUsersDb, isAdmin, messageText);
+        Widget content = new DatabasesFluxView(db, manageUsersDb, manageEngines, isAdmin, messageText);
         renderTemplate(resp, server, getLoggedUser(req), "Catálogo de Bases de Datos & Motores", "databases", content);
     }
 
@@ -455,7 +456,7 @@ public class App {
             String description = form.get("description");
 
             plugin.addBucket(db, bucketName, engineType, description);
-            redirect(resp, "/databases?db=" + db + "&msg=bucket_added");
+            redirect(resp, "/databases?db=" + db + "&manage_engines=true&msg=bucket_added");
             return;
         } else if ("add_db_user".equalsIgnoreCase(action)) {
             String db = form.get("db");

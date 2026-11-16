@@ -261,9 +261,8 @@ public class QueryConsoleFluxView extends FluxView {
         footer.modifier(new Modifier().style("display: flex; justify-content: flex-end;"));
 
         Modal modal = Modal.of(title, intro, accordion, footer).open(false);
-        modal.modifier(new Modifier()
-            .attribute("id", "queryHelpModal")
-            .style("background: #0f172a; border: 1px solid #a855f7; max-width: 780px; width: 94%; color: var(--text-main);"));
+        modal.id("queryHelpModal");
+        modal.modifier(new Modifier().attribute("id", "queryHelpModal"));
         return modal;
     }
 

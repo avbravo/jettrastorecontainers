@@ -89,13 +89,15 @@ public class LoginFluxView extends FluxView {
         cardChildren.add(loginForm);
         cardChildren.add(footer);
 
-        Div card = Div.of(cardChildren.toArray(new Widget[0]));
-        card.modifier(new Modifier().style(
-                "width: 100%; max-width: 420px; background: #0c1626; border: 1px solid #1e3a5f; border-radius: 14px; padding: 2.25rem; box-shadow: 0 10px 30px rgba(0,0,0,0.6);"));
+        Widget card = Div.of(cardChildren.toArray(new Widget[0]))
+                .modifier(new Modifier().style(
+                        "margin: 0 auto; width: 100%; max-width: 420px; background: #0c1626; border: 1px solid #1e3a5f; border-radius: 14px; padding: 2.25rem; box-shadow: 0 10px 30px rgba(0,0,0,0.6);"));
 
-        Div outer = Div.of(card);
-        outer.modifier(new Modifier().style(
-                "min-height: 100vh; display: flex; align-items: center; justify-content: center; background: #050b14; font-family: 'Inter', -apple-system, sans-serif; padding: 1rem;"));
-        return outer;
+        Widget resetCss = FluxUi.styleSheet(
+                "html, body { margin: 0; padding: 0; width: 100%; min-height: 100vh; background: #050b14; } "
+                + "* { box-sizing: border-box; }");
+
+        return Div.of(resetCss, card).modifier(new Modifier().style(
+                "position: fixed; inset: 0; width: 100vw; min-height: 100vh; display: flex; align-items: center; justify-content: center; background: #050b14; font-family: 'Inter', -apple-system, sans-serif; padding: 1rem; overflow-y: auto;"));
     }
 }

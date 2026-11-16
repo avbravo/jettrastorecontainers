@@ -252,9 +252,12 @@ public class JettraStoreExplorerTest {
         JettraAssert.assertTrue(res.body().contains("Catálogo Maestro de Bases de Datos"), "Debe contener catálogo maestro");
         JettraAssert.assertTrue(res.body().contains("example_factura_db"), "Debe incluir example_factura_db");
         JettraAssert.assertTrue(res.body().contains("samples_hostipal_db"), "Debe incluir samples_hostipal_db");
-        JettraAssert.assertTrue(res.body().contains("DOCUMENT"), "Debe mostrar motores documentales");
-        JettraAssert.assertTrue(res.body().contains("RELATIONAL"), "Debe mostrar motores relacionales");
-        JettraAssert.assertTrue(res.body().contains("Añadir Nuevo Motor / Bucket"), "Debe permitir añadir motores");
+
+        HttpResponse<String> enginesModalRes = get("/databases?db=example_factura_db&manage_engines=true");
+        JettraAssert.assertEquals(200, enginesModalRes.statusCode(), "El diálogo Administrar Motores debe responder HTTP 200");
+        JettraAssert.assertTrue(enginesModalRes.body().contains("DOCUMENT"), "Debe mostrar motores documentales");
+        JettraAssert.assertTrue(enginesModalRes.body().contains("RELATIONAL"), "Debe mostrar motores relacionales");
+        JettraAssert.assertTrue(enginesModalRes.body().contains("Añadir Nuevo Motor / Bucket"), "Debe permitir añadir motores");
     }
 
     @Test
@@ -1268,5 +1271,25 @@ public class JettraStoreExplorerTest {
         } finally {
             plugin.updateRecord("samples_ambiental_db", "EstacionesGeo", "GEO-EST-01", origSummary, origDetails);
         }
+    }
+
+    @Test
+    @DisplayName("32. Diálogo Modal Administrar Motores sobre el Formulario en /databases")
+    public void testManageEnginesOpensModalOverDatabasesPage() throws Exception {
+        HttpResponse<String> baseRes = get("/databases");
+        JettraAssert.assertEquals(200, baseRes.statusCode(), "/databases debe responder HTTP 200");
+        JettraAssert.assertTrue(baseRes.body().contains("manage_engines=true"),
+                "El botón Administrar Motores debe apuntar a ?db=...&manage_engines=true");
+        JettraAssert.assertFalse(baseRes.body().contains("id=\"dbEnginesDialog\""),
+                "Sin pulsar Administrar Motores no debe abrirse el diálogo modal");
+
+        HttpResponse<String> modalRes = get("/databases?db=example_factura_db&manage_engines=true");
+        JettraAssert.assertEquals(200, modalRes.statusCode(), "/databases con manage_engines=true debe responder HTTP 200");
+        JettraAssert.assertTrue(modalRes.body().contains("id=\"dbEnginesDialog\""),
+                "Debe renderizar el diálogo modal dbEnginesDialog sobre la página /databases");
+        JettraAssert.assertTrue(modalRes.body().contains("espresso-modal-overlay"),
+                "El diálogo debe usar la superposición modal .espresso-modal-overlay");
+        JettraAssert.assertTrue(modalRes.body().contains("Motores de Almacenamiento y Buckets en [example_factura_db]"),
+                "El diálogo debe mostrar los motores y buckets de la base de datos seleccionada");
     }
 }

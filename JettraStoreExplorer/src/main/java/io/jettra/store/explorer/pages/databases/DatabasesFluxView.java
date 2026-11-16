@@ -9,6 +9,7 @@ import io.jettra.flux.widgets.Div;
 import io.jettra.flux.widgets.Form;
 import io.jettra.flux.widgets.Header;
 import io.jettra.flux.widgets.Link;
+import io.jettra.flux.widgets.Modal;
 import io.jettra.flux.widgets.Paragraph;
 import io.jettra.flux.widgets.Row;
 import io.jettra.flux.widgets.Text;
@@ -29,16 +30,22 @@ public class DatabasesFluxView extends FluxView {
 
     private final String selectedDb;
     private final String manageUsersDb;
+    private final boolean manageEngines;
     private final boolean isAdmin;
     private final String message;
 
     public DatabasesFluxView(String selectedDb, String message) {
-        this(selectedDb, null, true, message);
+        this(selectedDb, null, false, true, message);
     }
 
     public DatabasesFluxView(String selectedDb, String manageUsersDb, boolean isAdmin, String message) {
+        this(selectedDb, manageUsersDb, false, isAdmin, message);
+    }
+
+    public DatabasesFluxView(String selectedDb, String manageUsersDb, boolean manageEngines, boolean isAdmin, String message) {
         this.selectedDb = selectedDb;
         this.manageUsersDb = manageUsersDb;
+        this.manageEngines = manageEngines;
         this.isAdmin = isAdmin;
         this.message = message;
     }
@@ -89,14 +96,21 @@ public class DatabasesFluxView extends FluxView {
         // 4. Tabla de Catálogo de Bases de Datos
         Widget databasesTable = buildDatabasesTable(catalog, currentDb);
 
-        // 4.5 Panel de Administración de Usuarios por Base de Datos (Solo ADMIN)
+        // 4.5 Panel de Administración de Usuarios por Base de Datos (Solo ADMIN) como diálogo modal encima del formulario
         Widget dbUsersSection = null;
         if (isAdmin && manageUsersDb != null && !manageUsersDb.isBlank() && catalog.containsKey(manageUsersDb)) {
-            dbUsersSection = buildDatabaseUsersSection(plugin, manageUsersDb);
+            Modal dbUsersModal = Modal.of(buildDatabaseUsersSection(plugin, manageUsersDb)).open(true);
+            dbUsersModal.id("dbUsersDialog");
+            dbUsersSection = dbUsersModal;
         }
 
-        // 5. Sección Detallada de Motores / Buckets para la BD seleccionada
-        Widget enginesSection = buildEnginesSection(plugin, currentDb);
+        // 5. Diálogo Modal de Motores / Buckets para la BD seleccionada (al dar clic en Administrar Motores)
+        Widget enginesSection = null;
+        if (manageEngines) {
+            Modal enginesModal = Modal.of(buildEnginesSection(plugin, currentDb)).open(true);
+            enginesModal.id("dbEnginesDialog");
+            enginesSection = enginesModal;
+        }
 
         List<Widget> rootChildren = new java.util.ArrayList<>();
         if (flashWidget != null) rootChildren.add(flashWidget);
@@ -104,7 +118,7 @@ public class DatabasesFluxView extends FluxView {
         rootChildren.add(createDbCard);
         rootChildren.add(databasesTable);
         if (dbUsersSection != null) rootChildren.add(dbUsersSection);
-        rootChildren.add(enginesSection);
+        if (enginesSection != null) rootChildren.add(enginesSection);
 
         return Div.of(rootChildren.toArray(new Widget[0]));
     }
@@ -179,7 +193,7 @@ public class DatabasesFluxView extends FluxView {
             Widget sizeCell = Text.of(formatBytes(dbBytes));
 
             List<Widget> actionsList = new ArrayList<>();
-            actionsList.add(FluxUi.linkButton("/databases?db=" + db, "⚙️ Administrar Motores", "app-btn-secondary", "margin-right:6px;"));
+            actionsList.add(FluxUi.linkButton("/databases?db=" + db + "&manage_engines=true", "⚙️ Administrar Motores", "app-btn-secondary", "margin-right:6px;"));
             if (isAdmin) {
                 actionsList.add(FluxUi.linkButton("/databases?db=" + db + "&manage_users_db=" + db, "👥 Administrar Usuarios", "app-btn-secondary", "margin-right:6px;"));
             } else {
@@ -296,7 +310,11 @@ public class DatabasesFluxView extends FluxView {
         List<EngineBucketInfo> buckets = plugin.getBuckets(currentDb);
 
         Header header = Header.of(3, "⚙️ Motores de Almacenamiento y Buckets en [" + currentDb + "]");
-        header.modifier(new Modifier().style("font-size: 1.1rem; color: var(--text-main); margin: 0 0 0.85rem 0;"));
+        header.modifier(new Modifier().style("font-size: 1.1rem; color: var(--text-main); margin: 0;"));
+        Widget headerBar = Div.of(
+                header,
+                FluxUi.linkButton("/databases?db=" + currentDb, "✖ Cerrar", "app-btn-secondary", null)
+        ).modifier(new Modifier().style("display: flex; justify-content: space-between; align-items: center; gap: 0.75rem; margin-bottom: 0.85rem; flex-wrap: wrap;"));
 
         // Formulario para Añadir Motor / Bucket a la BD seleccionada
         List<String> engineOptions = List.of(
@@ -380,7 +398,7 @@ public class DatabasesFluxView extends FluxView {
         Datatable bucketDatatable = Datatable.ofWidgets(bucketHeaders, bucketRows);
         bucketDatatable.modifier(new Modifier().cssClass("app-table"));
 
-        Div card = Div.of(header, addBucketForm, bucketDatatable);
+        Div card = Div.of(headerBar, addBucketForm, bucketDatatable);
         card.modifier(new Modifier().cssClass("ui-card"));
         return card;
     }

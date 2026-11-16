@@ -140,7 +140,11 @@ public class RecordExplorerFluxView extends FluxView {
         rootChildren.add(dbSelector);
         rootChildren.add(bucketSelector);
         rootChildren.add(searchAndActions);
-        if (formPanel != null) rootChildren.add(formPanel);
+        if (formPanel != null) {
+            Modal dialog = Modal.of(formPanel).open(true);
+            dialog.id("explorerActionDialog");
+            rootChildren.add(dialog);
+        }
         rootChildren.add(recordsTable);
 
         return Div.of(rootChildren.toArray(new Widget[0]));
@@ -667,8 +671,7 @@ public class RecordExplorerFluxView extends FluxView {
 
         Modal modal = Modal.of(modalTitle, modalPrompt, detailsBox, actionsRow).open(false);
         modal.id("restoreVersionModal");
-        modal.modifier(new Modifier()
-            .style("background: #0f172a; border: 1px solid #10b981; max-width: 520px; width: 92%; color: var(--text-main);"));
+        modal.modifier(new Modifier().attribute("id", "restoreVersionModal").style("z-index: 3100 !important;"));
         return modal;
     }
 
