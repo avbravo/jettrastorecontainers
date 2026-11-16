@@ -8,7 +8,6 @@ import io.jettra.flux.widgets.Datatable;
 import io.jettra.flux.widgets.Div;
 import io.jettra.flux.widgets.Header;
 import io.jettra.flux.widgets.Paragraph;
-import io.jettra.flux.widgets.RawHtml;
 import io.jettra.flux.widgets.Text;
 import io.jettra.server.core.JettraServer;
 import io.jettra.server.core.storage.StorageMetrics;
@@ -106,11 +105,10 @@ public class StatusFluxView extends FluxView {
             Paragraph desc = Paragraph.of(s.getDescription());
             desc.modifier(new Modifier().style("font-size: 0.82rem; color: var(--text-muted); margin: 0 0 0.75rem 0;"));
 
-            RawHtml progress = RawHtml.of(String.format("""
-                <div style="background: rgba(255,255,255,0.08); border-radius: 4px; height: 6px; overflow: hidden;">
-                  <div style="background: %s; width: %d%%; height: 100%%;"></div>
-                </div>
-            """, s.getColor(), s.getHealthScore()));
+            Div barFill = Div.of();
+            barFill.modifier(new Modifier().style("background: " + s.getColor() + "; width: " + s.getHealthScore() + "%; height: 100%;"));
+            Div progress = Div.of(barFill);
+            progress.modifier(new Modifier().style("background: rgba(255,255,255,0.08); border-radius: 4px; height: 6px; overflow: hidden;"));
 
             Div card = Div.of(headerRow, desc, progress);
             card.modifier(new Modifier().cssClass("ui-card").style("border-left: 3px solid " + s.getColor() + ";"));
@@ -127,29 +125,23 @@ public class StatusFluxView extends FluxView {
         Header header = Header.of(3, "📊 Métricas del Motor de Almacenamiento & Telemetría IO");
         header.modifier(new Modifier().style("font-size: 1.1rem; color: var(--text-main); margin: 0 0 0.85rem 0;"));
 
-        RawHtml content = RawHtml.of(String.format("""
-            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1.25rem;">
-              <div style="background: var(--bg-subtle); padding: 1rem; border-radius: 8px;">
-                <div style="font-size: 0.78rem; text-transform: uppercase; color: var(--text-muted); font-weight: 700;">Latencia de Acceso Directo</div>
-                <div style="font-size: 1.4rem; font-weight: 800; color: #00d4ff; margin: 0.25rem 0;">0.38 µs (Read) / 1.15 µs (Write)</div>
-                <div style="font-size: 0.8rem; color: var(--text-muted);">Slotted-Page Off-Heap Panama Zero-Copy</div>
-              </div>
-              <div style="background: var(--bg-subtle); padding: 1rem; border-radius: 8px;">
-                <div style="font-size: 0.78rem; text-transform: uppercase; color: var(--text-muted); font-weight: 700;">Tasa de Compactación SSTable</div>
-                <div style="font-size: 1.4rem; font-weight: 800; color: #10b981; margin: 0.25rem 0;">18,450 p/s (Ratio 3.4:1)</div>
-                <div style="font-size: 0.8rem; color: var(--text-muted);">ZSTD SIMD Compression Activa</div>
-              </div>
-              <div style="background: var(--bg-subtle); padding: 1rem; border-radius: 8px;">
-                <div style="font-size: 0.78rem; text-transform: uppercase; color: var(--text-muted); font-weight: 700;">Hilos Virtuales Project Loom</div>
-                <div style="font-size: 1.4rem; font-weight: 800; color: #ffd700; margin: 0.25rem 0;">1,240 vthreads activos</div>
-                <div style="font-size: 0.8rem; color: var(--text-muted);">Pool sin bloqueo de sockets NIO</div>
-              </div>
-            </div>
-        """));
+        Div content = Div.of(
+                telemetryBox("Latencia de Acceso Directo", "0.38 µs (Read) / 1.15 µs (Write)", "Slotted-Page Off-Heap Panama Zero-Copy", "#00d4ff"),
+                telemetryBox("Tasa de Compactación SSTable", "18,450 p/s (Ratio 3.4:1)", "ZSTD SIMD Compression Activa", "#10b981"),
+                telemetryBox("Hilos Virtuales Project Loom", "1,240 vthreads activos", "Pool sin bloqueo de sockets NIO", "#ffd700")
+        );
+        content.modifier(new Modifier().style("display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1.25rem;"));
 
         Div card = Div.of(header, content);
         card.modifier(new Modifier().cssClass("ui-card").style("margin-bottom: 1.75rem;"));
         return card;
+    }
+
+    private Widget telemetryBox(String title, String value, String subtitle, String color) {
+        Widget t = Div.of(Text.of(title)).modifier(new Modifier().style("font-size: 0.78rem; text-transform: uppercase; color: var(--text-muted); font-weight: 700;"));
+        Widget v = Div.of(Text.of(value)).modifier(new Modifier().style("font-size: 1.4rem; font-weight: 800; color: " + color + "; margin: 0.25rem 0;"));
+        Widget s = Div.of(Text.of(subtitle)).modifier(new Modifier().style("font-size: 0.8rem; color: var(--text-muted);"));
+        return Div.of(t, v, s).modifier(new Modifier().style("background: var(--bg-subtle); padding: 1rem; border-radius: 8px;"));
     }
 
     private Widget buildIncidentsTable(List<PoliceIncident> incidents) {

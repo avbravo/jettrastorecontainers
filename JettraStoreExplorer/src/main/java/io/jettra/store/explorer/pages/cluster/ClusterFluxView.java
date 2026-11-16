@@ -6,14 +6,16 @@ import io.jettra.flux.core.Widget;
 import io.jettra.flux.widgets.Badge;
 import io.jettra.flux.widgets.Datatable;
 import io.jettra.flux.widgets.Div;
+import io.jettra.flux.widgets.Form;
 import io.jettra.flux.widgets.Header;
 import io.jettra.flux.widgets.JettraButton;
 import io.jettra.flux.widgets.Link;
 import io.jettra.flux.widgets.Paragraph;
-import io.jettra.flux.widgets.RawHtml;
+import io.jettra.flux.widgets.RawScript;
 import io.jettra.flux.widgets.Row;
 import io.jettra.flux.widgets.Text;
 import io.jettra.store.explorer.model.ServerNodeInfo;
+import io.jettra.store.explorer.pages.template.FluxUi;
 import io.jettra.store.explorer.plugin.JettraStorePlugin;
 import java.util.ArrayList;
 import java.util.List;
@@ -64,56 +66,62 @@ public class ClusterFluxView extends FluxView {
                 .toList();
 
         // Banner de Alerta Crítica si el nodo PRIMARY está INACTIVE (con placeholder reactivo si está oculto)
+        String primaryBannerStyle = "display:" + (!primaryActive ? "flex" : "none") + "; align-items:flex-start; gap:0.85rem; background: rgba(239, 68, 68, 0.18); border: 2px solid #ef4444; border-radius: 8px; padding: 1rem 1.25rem; margin-bottom: 1.25rem; box-shadow: 0 4px 14px rgba(239, 68, 68, 0.25);";
+        Div primaryInactiveBanner = Div.of();
         if (!primaryActive) {
             String primaryDesc = primaryNode != null
                 ? (primaryNode.getName() + " (" + primaryNode.getHost() + ":" + primaryNode.getPort() + ")")
                 : "node-01";
-            String errorDetail = (primaryNode != null && primaryNode.getLastError() != null && !primaryNode.getLastError().isBlank())
-                ? "<br/><span style=\"font-size:0.8rem; color:#fecaca;\"><strong>Diagnóstico:</strong> " + escapeHtml(primaryNode.getLastError()) + "</span>"
-                : "";
-            Div primaryInactiveAlert = Div.of(
-                RawHtml.of("<div id=\"banner-primary-inactive\" style=\"display:flex; align-items:flex-start; gap:0.85rem; background: rgba(239, 68, 68, 0.18); border: 2px solid #ef4444; border-radius: 8px; padding: 1rem 1.25rem; margin-bottom: 1.25rem; box-shadow: 0 4px 14px rgba(239, 68, 68, 0.25);\">" +
-                           "<span style=\"font-size:1.75rem; line-height:1;\">🚨</span>" +
-                           "<div>" +
-                           "<div style=\"font-size:1.05rem; font-weight:800; color:#ef4444; letter-spacing:0.01em;\">ESTADO INACTIVE • ESTADO OFFLINE: NODO PRIMARY DESCONECTADO</div>" +
-                           "<div style=\"font-size:0.85rem; color:#fca5a5; margin-top:3px;\">El nodo maestro principal <strong>" + escapeHtml(primaryDesc) + "</strong> no responde a los latidos TCP. Las transacciones de escritura distribuida y el quórum Raft se encuentran suspendidos. Verifique el socket y los parámetros en <code>microprofile-config.properties</code>." + errorDetail + "</div>" +
-                           "</div></div>")
+            List<Widget> msgParts = new ArrayList<>();
+            msgParts.add(FluxUi.coloredSpan("ESTADO INACTIVE • ESTADO OFFLINE: NODO PRIMARY DESCONECTADO",
+                    "font-size:1.05rem; font-weight:800; color:#ef4444; letter-spacing:0.01em; display:block;"));
+            msgParts.add(FluxUi.coloredSpan(
+                    "El nodo maestro principal " + primaryDesc + " no responde a los latidos TCP. Las transacciones de escritura distribuida y el quórum Raft se encuentran suspendidos. Verifique el socket y los parámetros en microprofile-config.properties.",
+                    "font-size:0.85rem; color:#fca5a5; margin-top:3px; display:block;"));
+            if (primaryNode != null && primaryNode.getLastError() != null && !primaryNode.getLastError().isBlank()) {
+                msgParts.add(FluxUi.coloredSpan("Diagnóstico: " + primaryNode.getLastError(),
+                        "font-size:0.8rem; color:#fecaca; display:block; margin-top:2px;"));
+            }
+            primaryInactiveBanner = Div.of(
+                    FluxUi.coloredSpan("🚨", "font-size:1.75rem; line-height:1;"),
+                    Div.of(msgParts.toArray(new Widget[0]))
             );
-            rootChildren.add(primaryInactiveAlert);
-        } else {
-            rootChildren.add(Div.of(RawHtml.of("<div id=\"banner-primary-inactive\" style=\"display:none; align-items:flex-start; gap:0.85rem; background: rgba(239, 68, 68, 0.18); border: 2px solid #ef4444; border-radius: 8px; padding: 1rem 1.25rem; margin-bottom: 1.25rem; box-shadow: 0 4px 14px rgba(239, 68, 68, 0.25);\"></div>")));
         }
+        primaryInactiveBanner.id("banner-primary-inactive");
+        primaryInactiveBanner.modifier(new Modifier().attribute("id", "banner-primary-inactive").style(primaryBannerStyle));
+        rootChildren.add(primaryInactiveBanner);
 
         // Banner de Advertencia si hay Nodos Secundarios INACTIVE
+        String secBannerStyle = "display:" + (!inactiveOthers.isEmpty() ? "flex" : "none") + "; align-items:flex-start; gap:0.85rem; background: rgba(245, 158, 11, 0.15); border: 1px solid #f59e0b; border-radius: 8px; padding: 0.85rem 1.15rem; margin-bottom: 1.25rem;";
+        Div secondariesInactiveBanner = Div.of();
         if (!inactiveOthers.isEmpty()) {
             String inactiveNames = inactiveOthers.stream()
-                .map(off -> "<strong>" + off.getName() + "</strong> (" + off.getHost() + ":" + off.getPort() + ")")
+                .map(off -> off.getName() + " (" + off.getHost() + ":" + off.getPort() + ")")
                 .collect(java.util.stream.Collectors.joining(", "));
-            Div othersInactiveAlert = Div.of(
-                RawHtml.of("<div id=\"banner-secondaries-inactive\" style=\"display:flex; align-items:flex-start; gap:0.85rem; background: rgba(245, 158, 11, 0.15); border: 1px solid #f59e0b; border-radius: 8px; padding: 0.85rem 1.15rem; margin-bottom: 1.25rem;\">" +
-                           "<span style=\"font-size:1.6rem; line-height:1;\">⚠️</span>" +
-                           "<div>" +
-                           "<div style=\"font-size:0.95rem; font-weight:800; color:#f59e0b;\">ESTADO INACTIVE • ESTADO OFFLINE: NODOS SECUNDARIOS DESCONECTADOS (" + inactiveOthers.size() + ")</div>" +
-                           "<div style=\"font-size:0.82rem; color:#fde68a; margin-top:3px;\">Los siguientes nodos réplica no responden en su puerto de replicación: " + inactiveNames + ". El clúster opera con quórum reducido.</div>" +
-                           "</div></div>")
+            secondariesInactiveBanner = Div.of(
+                    FluxUi.coloredSpan("⚠️", "font-size:1.6rem; line-height:1;"),
+                    Div.of(
+                            FluxUi.coloredSpan("ESTADO INACTIVE • ESTADO OFFLINE: NODOS SECUNDARIOS DESCONECTADOS (" + inactiveOthers.size() + ")",
+                                    "font-size:0.95rem; font-weight:800; color:#f59e0b; display:block;"),
+                            FluxUi.coloredSpan("Los siguientes nodos réplica no responden en su puerto de replicación: " + inactiveNames + ". El clúster opera con quórum reducido.",
+                                    "font-size:0.82rem; color:#fde68a; margin-top:3px; display:block;")
+                    )
             );
-            rootChildren.add(othersInactiveAlert);
-        } else {
-            rootChildren.add(Div.of(RawHtml.of("<div id=\"banner-secondaries-inactive\" style=\"display:none; align-items:flex-start; gap:0.85rem; background: rgba(245, 158, 11, 0.15); border: 1px solid #f59e0b; border-radius: 8px; padding: 0.85rem 1.15rem; margin-bottom: 1.25rem;\"></div>")));
         }
+        secondariesInactiveBanner.id("banner-secondaries-inactive");
+        secondariesInactiveBanner.modifier(new Modifier().attribute("id", "banner-secondaries-inactive").style(secBannerStyle));
+        rootChildren.add(secondariesInactiveBanner);
 
         // Banner Informativo si todos los nodos están ACTIVE
-        if (primaryActive && inactiveOthers.isEmpty()) {
-            Div allActiveBanner = Div.of(
-                RawHtml.of("<div id=\"banner-all-active\" style=\"display:flex; align-items:center; gap:0.6rem; background: rgba(16, 185, 129, 0.12); border: 1px solid rgba(16, 185, 129, 0.4); border-radius: 8px; padding: 0.75rem 1rem; margin-bottom: 1.25rem;\">" +
-                           "<span style=\"font-size:1.2rem;\">✅</span>" +
-                           "<span style=\"font-size:0.85rem; color:#34d399; font-weight:600;\">Todos los nodos del clúster (incluyendo PRIMARY y réplicas secundarias) se encuentran en estado ACTIVE con latencias normales y quórum óptimo.</span>" +
-                           "</div>")
-            );
-            rootChildren.add(allActiveBanner);
-        } else {
-            rootChildren.add(Div.of(RawHtml.of("<div id=\"banner-all-active\" style=\"display:none; align-items:center; gap:0.6rem; background: rgba(16, 185, 129, 0.12); border: 1px solid rgba(16, 185, 129, 0.4); border-radius: 8px; padding: 0.75rem 1rem; margin-bottom: 1.25rem;\"><span style=\"font-size:1.2rem;\">✅</span><span style=\"font-size:0.85rem; color:#34d399; font-weight:600;\">Todos los nodos del clúster (incluyendo PRIMARY y réplicas secundarias) se encuentran en estado ACTIVE con latencias normales y quórum óptimo.</span></div>")));
-        }
+        String allActiveStyle = "display:" + (primaryActive && inactiveOthers.isEmpty() ? "flex" : "none") + "; align-items:center; gap:0.6rem; background: rgba(16, 185, 129, 0.12); border: 1px solid rgba(16, 185, 129, 0.4); border-radius: 8px; padding: 0.75rem 1rem; margin-bottom: 1.25rem;";
+        Div allActiveBanner = Div.of(
+                FluxUi.coloredSpan("✅", "font-size:1.2rem;"),
+                FluxUi.coloredSpan("Todos los nodos del clúster (incluyendo PRIMARY y réplicas secundarias) se encuentran en estado ACTIVE con latencias normales y quórum óptimo.",
+                        "font-size:0.85rem; color:#34d399; font-weight:600;")
+        );
+        allActiveBanner.id("banner-all-active");
+        allActiveBanner.modifier(new Modifier().attribute("id", "banner-all-active").style(allActiveStyle));
+        rootChildren.add(allActiveBanner);
 
         // 2. Tarjetas KPI Superiores
         Div kpi1 = buildKpiCard("Nodos ACTIVE", activeCount + " / " + nodes.size(), "Quorum Raft: " + (activeCount >= (nodes.size()/2 + 1) ? "Óptimo (100%)" : "Degradado"), "#00d4ff", "kpi-active-nodes-val");
@@ -169,46 +177,30 @@ public class ClusterFluxView extends FluxView {
         Header header = Header.of(3, "➕ Registrar Nuevo Nodo en el Clúster");
         header.modifier(new Modifier().style("font-size: 1.1rem; color: var(--text-main); margin: 0 0 0.85rem 0;"));
 
-        RawHtml formHtml = RawHtml.of("""
-            <form method="POST" action="/cluster" style="display: flex; flex-wrap: wrap; gap: 0.85rem; align-items: flex-end;">
-              <input type="hidden" name="action" value="add_node" />
-              <div style="flex: 1; min-width: 140px;">
-                <label style="font-size: 0.75rem; color: var(--text-muted); display: block; margin-bottom: 0.25rem; font-weight: 600;">ID del Nodo</label>
-                <input class="app-input" type="text" name="nodeId" placeholder="node-05" required />
-              </div>
-              <div style="flex: 1.5; min-width: 180px;">
-                <label style="font-size: 0.75rem; color: var(--text-muted); display: block; margin-bottom: 0.25rem; font-weight: 600;">Nombre del Nodo</label>
-                <input class="app-input" type="text" name="nodeName" placeholder="node-05-replica" required />
-              </div>
-              <div style="flex: 1; min-width: 130px;">
-                <label style="font-size: 0.75rem; color: var(--text-muted); display: block; margin-bottom: 0.25rem; font-weight: 600;">Rol Raft</label>
-                <select class="app-input" name="nodeRole">
-                  <option value="FOLLOWER">FOLLOWER</option>
-                  <option value="PRIMARY">PRIMARY</option>
-                  <option value="LEADER">LEADER</option>
-                  <option value="EDGE">EDGE</option>
-                </select>
-              </div>
-              <div style="flex: 1.2; min-width: 140px;">
-                <label style="font-size: 0.75rem; color: var(--text-muted); display: block; margin-bottom: 0.25rem; font-weight: 600;">Host / IP</label>
-                <input class="app-input" type="text" name="nodeHost" value="127.0.0.1" required />
-              </div>
-              <div style="flex: 0.8; min-width: 90px;">
-                <label style="font-size: 0.75rem; color: var(--text-muted); display: block; margin-bottom: 0.25rem; font-weight: 600;">Puerto</label>
-                <input class="app-input" type="number" name="nodePort" value="8769" required />
-              </div>
-              <div style="flex: 0.8; min-width: 110px;">
-                <label style="font-size: 0.75rem; color: var(--text-muted); display: block; margin-bottom: 0.25rem; font-weight: 600;">Max RAM (MB)</label>
-                <input class="app-input" type="number" name="nodeRam" value="2048" required />
-              </div>
-              <div style="display: flex; gap: 0.5rem;">
-                <button type="submit" class="app-btn-primary" style="height: 38px;">➕ Agregar Nodo</button>
-                <a href="/cluster?action=check_nodes" class="app-btn-secondary" style="height: 38px; display: inline-flex; align-items: center;" title="Efectuar sondeo TCP en vivo">🔄 Probar Conectividad</a>
-              </div>
-            </form>
-        """);
+        Widget portInput = FluxUi.textInput("nodePort", "8769", "", true);
+        portInput.modifier(new Modifier().cssClass("app-input").attribute("type", "number").attribute("required", "required"));
+        Widget ramInput = FluxUi.textInput("nodeRam", "2048", "", true);
+        ramInput.modifier(new Modifier().cssClass("app-input").attribute("type", "number").attribute("required", "required"));
+        Link checkBtn = FluxUi.linkButton("/cluster?action=check_nodes", "🔄 Probar Conectividad", "app-btn-secondary", "height: 38px; display: inline-flex; align-items: center;");
+        checkBtn.modifier(new Modifier().cssClass("app-btn-secondary").style("height: 38px; display: inline-flex; align-items: center;")
+                .attribute("title", "Efectuar sondeo TCP en vivo"));
 
-        Div card = Div.of(header, formHtml);
+        Form addNodeForm = Form.of(
+                FluxUi.hidden("action", "add_node"),
+                FluxUi.fieldColumn("ID del Nodo", FluxUi.textInput("nodeId", "", "node-05", true), "flex: 1; min-width: 140px;"),
+                FluxUi.fieldColumn("Nombre del Nodo", FluxUi.textInput("nodeName", "", "node-05-replica", true), "flex: 1.5; min-width: 180px;"),
+                FluxUi.fieldColumn("Rol Raft", FluxUi.dropdown("nodeRole", List.of("FOLLOWER", "PRIMARY", "LEADER", "EDGE"), "FOLLOWER"), "flex: 1; min-width: 130px;"),
+                FluxUi.fieldColumn("Host / IP", FluxUi.textInput("nodeHost", "127.0.0.1", "", true), "flex: 1.2; min-width: 140px;"),
+                FluxUi.fieldColumn("Puerto", portInput, "flex: 0.8; min-width: 90px;"),
+                FluxUi.fieldColumn("Max RAM (MB)", ramInput, "flex: 0.8; min-width: 110px;"),
+                Div.of(
+                        FluxUi.submitButton("➕ Agregar Nodo", "app-btn-primary", "height: 38px;"),
+                        checkBtn
+                ).modifier(new Modifier().style("display: flex; gap: 0.5rem;"))
+        ).action("/cluster").method("POST");
+        addNodeForm.modifier(new Modifier().style("display: flex; flex-wrap: wrap; gap: 0.85rem; align-items: flex-end;"));
+
+        Div card = Div.of(header, addNodeForm);
         card.modifier(new Modifier().cssClass("ui-card").style("margin-bottom: 1.5rem; background: var(--bg-subtle);"));
         return card;
     }
@@ -255,14 +247,19 @@ public class ClusterFluxView extends FluxView {
         // Indicador de Estado Prominente dentro de la tarjeta
         Div nodeStatusBox;
         if (isActive) {
-            nodeStatusBox = Div.of(RawHtml.of("<div style=\"background:rgba(16, 185, 129, 0.15); border:1px solid #10b981; border-radius:6px; padding:0.4rem 0.6rem; margin-bottom:0.75rem; font-size:0.8rem; color:#34d399; font-weight:700; display:flex; align-items:center; justify-content:space-between;\">" +
-                    "<span>🟢 ESTADO: ACTIVE • 🟢 ESTADO: ONLINE</span><span style=\"font-weight:400; font-size:0.75rem;\">Latencia: " + String.format(java.util.Locale.US, "%.2f ms", node.getLatencyMs()) + "</span></div>"));
+            Widget inner = Div.of(
+                    FluxUi.coloredSpan("🟢 ESTADO: ACTIVE • 🟢 ESTADO: ONLINE", "color:#34d399; font-weight:700;"),
+                    FluxUi.coloredSpan(String.format(java.util.Locale.US, "Latencia: %.2f ms", node.getLatencyMs()), "font-weight:400; font-size:0.75rem;")
+            ).modifier(new Modifier().style("background:rgba(16, 185, 129, 0.15); border:1px solid #10b981; border-radius:6px; padding:0.4rem 0.6rem; margin-bottom:0.75rem; font-size:0.8rem; color:#34d399; font-weight:700; display:flex; align-items:center; justify-content:space-between;"));
+            nodeStatusBox = Div.of(inner);
         } else {
             String roleOfflineMsg = isPrimary ? "🔴 NODO PRIMARY INACTIVE • 🔴 NODO PRIMARY OFFLINE (Inaccesible)" : "🔴 ESTADO: INACTIVE • 🔴 ESTADO: OFFLINE (Inaccesible)";
-            String reason = (node.getLastError() != null && !node.getLastError().isBlank()) ? escapeHtml(node.getLastError()) : "Socket TCP no responde";
-            nodeStatusBox = Div.of(RawHtml.of("<div style=\"background:rgba(239, 68, 68, 0.2); border:1px solid #ef4444; border-radius:6px; padding:0.45rem 0.65rem; margin-bottom:0.75rem; font-size:0.8rem; color:#ef4444; font-weight:800; display:flex; flex-direction:column; gap:2px;\">" +
-                    "<div style=\"display:flex; align-items:center; justify-content:space-between;\"><span>" + roleOfflineMsg + "</span></div>" +
-                    "<span style=\"font-weight:500; font-size:0.72rem; color:#fca5a5;\">" + reason + "</span></div>"));
+            String reason = (node.getLastError() != null && !node.getLastError().isBlank()) ? node.getLastError() : "Socket TCP no responde";
+            Widget inner = Div.of(
+                    Div.of(FluxUi.coloredSpan(roleOfflineMsg, null)).modifier(new Modifier().style("display:flex; align-items:center; justify-content:space-between;")),
+                    FluxUi.coloredSpan(reason, "font-weight:500; font-size:0.72rem; color:#fca5a5;")
+            ).modifier(new Modifier().style("background:rgba(239, 68, 68, 0.2); border:1px solid #ef4444; border-radius:6px; padding:0.45rem 0.65rem; margin-bottom:0.75rem; font-size:0.8rem; color:#ef4444; font-weight:800; display:flex; flex-direction:column; gap:2px;"));
+            nodeStatusBox = Div.of(inner);
         }
         nodeStatusBox.id("node-status-box-" + node.getId());
         nodeStatusBox.modifier(new Modifier()
@@ -273,21 +270,14 @@ public class ClusterFluxView extends FluxView {
         long displayQps = isActive ? node.getQps() : 0L;
         String latencyText = isActive ? String.format(java.util.Locale.US, "%.2f ms", node.getLatencyMs()) : "N/A (INACTIVE)";
 
-        RawHtml statsHtml = RawHtml.of(String.format(java.util.Locale.US, """
-            <table style="width: 100%%; font-size: 0.82rem; border-collapse: collapse; margin-bottom: 1rem;">
-              <tr><td style="padding: 4px 0; color: var(--text-muted);">CPU:</td><td id="node-cpu-%s" data-node-cpu="%s" style="text-align: right; font-weight: 700; color: #ffd700;">%.1f%%</td></tr>
-              <tr><td style="padding: 4px 0; color: var(--text-muted);">Heap JVM:</td><td id="node-heap-%s" data-node-heap="%s" style="text-align: right; font-weight: 700; color: #10b981;">%d MB / %d MB</td></tr>
-              <tr><td style="padding: 4px 0; color: var(--text-muted);">Panama Direct:</td><td id="node-panama-%s" data-node-panama="%s" style="text-align: right; font-weight: 700; color: #00d4ff;">%d MB</td></tr>
-              <tr><td style="padding: 4px 0; color: var(--text-muted);">Almacén SSTable:</td><td id="node-disk-%s" data-node-disk="%s" style="text-align: right; font-weight: 700; color: var(--text-main);">%,d MB</td></tr>
-              <tr><td style="padding: 4px 0; color: var(--text-muted);">Loom Virtual Threads:</td><td id="node-vthreads-%s" data-node-vthreads="%s" style="text-align: right; font-weight: 700; color: var(--text-main);">%d vthreads</td></tr>
-              <tr><td style="padding: 4px 0; color: var(--text-muted);">Rendimiento QPS:</td><td id="node-qps-%s" data-node-qps="%s" style="text-align: right; font-weight: 700; color: #38bdf8;">%,d ops/s (%s)</td></tr>
-            </table>
-        """, node.getId(), node.getId(), displayCpu,
-             node.getId(), node.getId(), isActive ? node.getHeapUsedMb() : 0L, node.getHeapMaxMb(),
-             node.getId(), node.getId(), isActive ? node.getPanamaDirectMb() : 0L,
-             node.getId(), node.getId(), node.getDiskUsedMb(),
-             node.getId(), node.getId(), isActive ? node.getVirtualThreads() : 0,
-             node.getId(), node.getId(), displayQps, latencyText));
+        Widget statsBox = Div.of(
+                nodeStatRow("CPU:", String.format(java.util.Locale.US, "%.1f%%", displayCpu), "node-cpu-", node.getId(), "#ffd700"),
+                nodeStatRow("Heap JVM:", (isActive ? node.getHeapUsedMb() : 0L) + " MB / " + node.getHeapMaxMb() + " MB", "node-heap-", node.getId(), "#10b981"),
+                nodeStatRow("Panama Direct:", (isActive ? node.getPanamaDirectMb() : 0L) + " MB", "node-panama-", node.getId(), "#00d4ff"),
+                nodeStatRow("Almacén SSTable:", String.format(java.util.Locale.US, "%,d MB", node.getDiskUsedMb()), "node-disk-", node.getId(), "var(--text-main)"),
+                nodeStatRow("Loom Virtual Threads:", (isActive ? node.getVirtualThreads() : 0) + " vthreads", "node-vthreads-", node.getId(), "var(--text-main)"),
+                nodeStatRow("Rendimiento QPS:", String.format(java.util.Locale.US, "%,d ops/s (%s)", displayQps, latencyText), "node-qps-", node.getId(), "#38bdf8")
+        ).modifier(new Modifier().style("width: 100%; font-size: 0.82rem; margin-bottom: 1rem;"));
 
         // Acciones sobre el nodo: Apagar / Encender en tiempo real vía LifecycleManager + Explorar + Expulsar
         String jsSafeId = node.getId().replace("'", "\\'");
@@ -321,7 +311,7 @@ public class ClusterFluxView extends FluxView {
         Row actionsRow = Row.of(actionWidgets.toArray(new Widget[0]));
         actionsRow.modifier(new Modifier().style("display: flex; gap: 0.5rem; align-items: center; justify-content: flex-end;"));
 
-        Div card = Div.of(cardHeader, addressInfo, nodeStatusBox, statsHtml, actionsRow);
+        Div card = Div.of(cardHeader, addressInfo, nodeStatusBox, statsBox, actionsRow);
         card.id("node-card-" + node.getId());
         card.modifier(new Modifier()
             .attribute("id", "node-card-" + node.getId())
@@ -329,6 +319,19 @@ public class ClusterFluxView extends FluxView {
             .cssClass("ui-card")
             .style("border-top: 4px solid " + (isActive ? (isPrimary ? "#ffd700" : "#10b981") : "#ef4444") + ";"));
         return card;
+    }
+
+    private static Widget nodeStatRow(String label, String value, String idPrefix, String nodeId, String color) {
+        String dataAttr = "data-" + idPrefix.substring(0, idPrefix.length() - 1);
+        Div valDiv = Div.of(Text.of(value));
+        valDiv.modifier(new Modifier()
+                .attribute("id", idPrefix + nodeId)
+                .attribute(dataAttr, nodeId)
+                .style("text-align: right; font-weight: 700; color: " + color + ";"));
+        return Div.of(
+                FluxUi.coloredSpan(label, "color: var(--text-muted);"),
+                valDiv
+        ).modifier(new Modifier().style("display: flex; justify-content: space-between; align-items: center; padding: 4px 0;"));
     }
 
     private Widget buildReplicationMatrix(List<ServerNodeInfo> nodes) {
@@ -348,32 +351,35 @@ public class ClusterFluxView extends FluxView {
         for (ServerNodeInfo n : nodes) {
             boolean isPrimary = "PRIMARY".equalsIgnoreCase(n.getRole()) || "LEADER".equalsIgnoreCase(n.getRole());
             boolean active = n.isActive();
-            String roleHtml = isPrimary 
-                ? "<span style='color:#ffd700; font-weight:700;'>PRIMARY (Leader)</span>"
-                : "<span style='color:#38bdf8;'>FOLLOWER (Sync)</span>";
-            String statusHtml = active
-                ? "<span style='color:#10b981; font-weight:700; background:rgba(16,185,129,0.15); padding:2px 8px; border-radius:4px; border:1px solid #10b981;'>● ACTIVE (" + String.format(java.util.Locale.US, "%.2f ms", n.getLatencyMs()) + ")</span>"
+            Widget roleInner = isPrimary
+                ? FluxUi.coloredSpan("PRIMARY (Leader)", "color:#ffd700; font-weight:700;")
+                : FluxUi.coloredSpan("FOLLOWER (Sync)", "color:#38bdf8;");
+            Widget statusInner = active
+                ? FluxUi.coloredSpan("● ACTIVE (" + String.format(java.util.Locale.US, "%.2f ms", n.getLatencyMs()) + ")",
+                        "color:#10b981; font-weight:700; background:rgba(16,185,129,0.15); padding:2px 8px; border-radius:4px; border:1px solid #10b981;")
                 : (isPrimary
-                    ? "<span style='color:#ef4444; font-weight:800; background:rgba(239,68,68,0.22); padding:2px 8px; border-radius:4px; border:1px solid #ef4444;'>○ INACTIVE • ○ OFFLINE (NODO PRIMARY CAÍDO)</span>"
-                    : "<span style='color:#ef4444; font-weight:800; background:rgba(239,68,68,0.22); padding:2px 8px; border-radius:4px; border:1px solid #ef4444;'>○ INACTIVE • ○ OFFLINE (Inaccesible)</span>");
+                    ? FluxUi.coloredSpan("○ INACTIVE • ○ OFFLINE (NODO PRIMARY CAÍDO)",
+                            "color:#ef4444; font-weight:800; background:rgba(239,68,68,0.22); padding:2px 8px; border-radius:4px; border:1px solid #ef4444;")
+                    : FluxUi.coloredSpan("○ INACTIVE • ○ OFFLINE (Inaccesible)",
+                            "color:#ef4444; font-weight:800; background:rgba(239,68,68,0.22); padding:2px 8px; border-radius:4px; border:1px solid #ef4444;"));
 
-            String latencyHtml = active
-                ? String.format(java.util.Locale.US, "%.2f ms", n.getLatencyMs())
-                : "<span style='color:#ef4444; font-size:0.8rem;'>Sin respuesta</span>";
-            String walHtml = active
-                ? "<span style='color:#10b981;'>COMMITTED (Raft Term #" + n.getRaftTerm() + ")</span>"
-                : "<span style='color:#ef4444; font-weight:700;'>DISCONNECTED (Sin latido)</span>";
+            Widget latencyInner = active
+                ? Text.of(String.format(java.util.Locale.US, "%.2f ms", n.getLatencyMs()))
+                : FluxUi.coloredSpan("Sin respuesta", "color:#ef4444; font-size:0.8rem;");
+            Widget walInner = active
+                ? FluxUi.coloredSpan("COMMITTED (Raft Term #" + n.getRaftTerm() + ")", "color:#10b981;")
+                : FluxUi.coloredSpan("DISCONNECTED (Sin latido)", "color:#ef4444; font-weight:700;");
 
             Widget nameCell = Div.of(Text.of(n.getName()))
                 .modifier(new Modifier().style("font-weight: 700; color: var(--text-main);"));
             Widget hostCell = Text.of(n.getHost() + ":" + n.getPort());
-            Widget roleCell = Div.of(RawHtml.of(roleHtml))
+            Widget roleCell = Div.of(roleInner)
                 .modifier(new Modifier().attribute("id", "matrix-role-" + n.getId()));
-            Widget statusCell = Div.of(RawHtml.of(statusHtml))
+            Widget statusCell = Div.of(statusInner)
                 .modifier(new Modifier().attribute("id", "matrix-status-" + n.getId()));
-            Widget latencyCell = Div.of(RawHtml.of(latencyHtml))
+            Widget latencyCell = Div.of(latencyInner)
                 .modifier(new Modifier().attribute("id", "matrix-latency-" + n.getId()));
-            Widget walCell = Div.of(RawHtml.of(walHtml))
+            Widget walCell = Div.of(walInner)
                 .modifier(new Modifier().attribute("id", "matrix-wal-" + n.getId()));
 
             rows.add(List.of(nameCell, hostCell, roleCell, statusCell, latencyCell, walCell));
@@ -388,9 +394,11 @@ public class ClusterFluxView extends FluxView {
     }
 
     private Widget buildLifecycleControlScript() {
-        return RawHtml.of("""
-            <div id="lifecycle-toast" style="display:none; position:fixed; bottom:1.25rem; right:1.25rem; z-index:1200; background:#0f172a; border:1px solid #334155; color:#f8fafc; padding:0.75rem 1rem; border-radius:8px; box-shadow:0 10px 25px rgba(0,0,0,0.45); font-size:0.85rem; max-width:380px;"></div>
-            <script>
+        Div toast = Div.of();
+        toast.id("lifecycle-toast");
+        toast.modifier(new Modifier().attribute("id", "lifecycle-toast")
+                .style("display:none; position:fixed; bottom:1.25rem; right:1.25rem; z-index:1200; background:#0f172a; border:1px solid #334155; color:#f8fafc; padding:0.75rem 1rem; border-radius:8px; box-shadow:0 10px 25px rgba(0,0,0,0.45); font-size:0.85rem; max-width:380px;"));
+        RawScript script = RawScript.of("""
             function showLifecycleToast(text, color) {
                 const t = document.getElementById('lifecycle-toast');
                 if (!t) return;
@@ -693,8 +701,8 @@ public class ClusterFluxView extends FluxView {
                     showLifecycleToast('❌ Error al verificar nodo: ' + err.message, '#ef4444');
                 }
             }
-            </script>
             """);
+        return Div.of(toast, script);
     }
 
     private String escapeHtml(String s) {

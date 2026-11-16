@@ -9,8 +9,9 @@ import io.jettra.flux.widgets.Div;
 import io.jettra.flux.widgets.Header;
 import io.jettra.flux.widgets.Link;
 import io.jettra.flux.widgets.Paragraph;
-import io.jettra.flux.widgets.RawHtml;
+import io.jettra.flux.widgets.RawScript;
 import io.jettra.flux.widgets.Row;
+import io.jettra.flux.widgets.Span;
 import io.jettra.flux.widgets.Text;
 import io.jettra.server.core.JettraServer;
 import io.jettra.server.core.storage.StorageMetrics;
@@ -73,8 +74,11 @@ public class StoreExplorerFluxTemplateView extends FluxView {
         // Sincronizar en tiempo real el estado TCP de los nodos antes de construir la barra superior y el contenido
         plugin.refreshAllNodeStatuses(true);
 
-        // Estilos CSS y scripts reactivos encapsulados en un widget RawHtml
-        Widget stylesAndScripts = RawHtml.of(getTemplateStylesAndScripts());
+        // Estilos CSS y scripts reactivos encapsulados en widgets nativos JettraFlux
+        Widget stylesAndScripts = Div.of(
+                FluxUi.styleSheet(getTemplateCss()),
+                RawScript.of(getTemplateScript())
+        );
 
         // Backdrop para apertura de menú en dispositivos móviles
         Div backdrop = Div.of();
@@ -186,7 +190,10 @@ public class StoreExplorerFluxTemplateView extends FluxView {
                 .style("text-decoration:none; font-size:0.75rem; font-weight:700; padding:0.32rem 0.65rem; border-radius:9999px; display:inline-flex; align-items:center; gap:0.3rem;"));
 
         // Indicador de Modo de Almacenamiento
-        Div storageBadge = Div.of(RawHtml.of("Modo: <strong style=\"color:#38bdf8;\">" + escapeHtml(storageMode) + "</strong>"));
+        Div storageBadge = Div.of(
+                Text.of("Modo: "),
+                FluxUi.coloredSpan(storageMode, "color:#38bdf8; font-weight:700;")
+        );
         storageBadge.modifier(new Modifier()
                 .cssClass("hide-mobile")
                 .style("background: rgba(15, 23, 42, 0.55); border: 1px solid rgba(148, 163, 184, 0.25); color: #e2e8f0; font-size: 0.8rem; padding: 0.3rem 0.65rem; border-radius: 6px;"));
@@ -200,9 +207,12 @@ public class StoreExplorerFluxTemplateView extends FluxView {
                 .style("background: rgba(16, 185, 129, 0.15); border: 1px solid rgba(16, 185, 129, 0.35); color: #34d399; font-size: 0.8rem; padding: 0.3rem 0.65rem; border-radius: 6px; font-weight:600;"));
 
         // Conmutador de tema Claro / Oscuro
-        Button themeBtn = Button.of(
-                RawHtml.of("<span id=\"themeIcon\">🌙</span> <span id=\"themeLabel\" class=\"hide-mobile\">Oscuro</span>")
-        );
+        Span themeIcon = Span.of("🌙");
+        themeIcon.id("themeIcon");
+        Span themeLabel = Span.of("Oscuro");
+        themeLabel.id("themeLabel");
+        themeLabel.modifier(new Modifier().cssClass("hide-mobile"));
+        Button themeBtn = Button.of(themeIcon, Text.of(" "), themeLabel);
         themeBtn.id("btnThemeToggle");
         themeBtn.modifier(new Modifier()
                 .cssClass("theme-toggle-btn")
@@ -329,14 +339,14 @@ public class StoreExplorerFluxTemplateView extends FluxView {
         Div toolbar = Div.of(toolbarLeft, tabs);
         toolbar.modifier(new Modifier().cssClass("flux-center-toolbar"));
 
-        // Superficie de contenido que encapsula el widget hijo y el HTML complementario
+        // Superficie de contenido que encapsula el widget hijo
         Widget innerContent;
         if (contentWidget != null && extraCenterHtml != null && !extraCenterHtml.isBlank()) {
-            innerContent = Div.of(contentWidget, RawHtml.of(extraCenterHtml));
+            innerContent = Div.of(contentWidget, Text.of(extraCenterHtml));
         } else if (contentWidget != null) {
             innerContent = contentWidget;
         } else if (extraCenterHtml != null && !extraCenterHtml.isBlank()) {
-            innerContent = RawHtml.of(extraCenterHtml);
+            innerContent = Text.of(extraCenterHtml);
         } else {
             innerContent = Div.of();
         }
@@ -351,8 +361,13 @@ public class StoreExplorerFluxTemplateView extends FluxView {
     }
 
     private Widget buildFooter() {
-        Div footerLeft = Div.of(Text.of("JettraStore Explorer • Powered by JettraFlux & JettraServer (Java 25 Virtual Threads) • Zero Manual HTML"));
-        Div footerRight = Div.of(RawHtml.of("Estado: <span style=\"color: var(--success); font-weight: bold;\">● OPERATIVO</span> • Modo Persistencia: <strong>[" + escapeHtml(storageMode) + "]</strong>"));
+        Div footerLeft = Div.of(Text.of("JettraStore Explorer • Powered by JettraFlux & JettraServer (Java 25 Virtual Threads) • Pure JettraFlux Widgets"));
+        Div footerRight = Div.of(
+                Text.of("Estado: "),
+                FluxUi.coloredSpan("● OPERATIVO", "color: var(--success); font-weight: bold;"),
+                Text.of(" • Modo Persistencia: "),
+                FluxUi.coloredSpan("[" + storageMode + "]", "font-weight: 700;")
+        );
 
         Div footer = Div.of(footerLeft, footerRight);
         footer.modifier(new Modifier().cssClass("ui-layout-footer flux-layout-footer"));
@@ -398,9 +413,8 @@ public class StoreExplorerFluxTemplateView extends FluxView {
                    .replace("'", "&#39;");
     }
 
-    private static String getTemplateStylesAndScripts() {
+    private static String getTemplateCss() {
         return """
-          <style>
             :root, [data-theme="dark"] {
               color-scheme: dark;
               --bg-body: #050b14;
@@ -928,8 +942,11 @@ public class StoreExplorerFluxTemplateView extends FluxView {
                 display: block;
               }
             }
-          </style>
-          <script>
+        """;
+    }
+
+    private static String getTemplateScript() {
+        return """
             (function() {
               const savedTheme = localStorage.getItem('jettra-theme') || 'dark';
               document.documentElement.setAttribute('data-theme', savedTheme);
@@ -1141,7 +1158,6 @@ public class StoreExplorerFluxTemplateView extends FluxView {
               pollClusterHealth();
               setInterval(pollClusterHealth, 3000);
             });
-          </script>
         """;
     }
 }

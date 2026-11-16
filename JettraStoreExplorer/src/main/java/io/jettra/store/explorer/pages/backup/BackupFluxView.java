@@ -6,10 +6,11 @@ import io.jettra.flux.core.Widget;
 import io.jettra.flux.widgets.Badge;
 import io.jettra.flux.widgets.Datatable;
 import io.jettra.flux.widgets.Div;
+import io.jettra.flux.widgets.Form;
 import io.jettra.flux.widgets.Header;
-import io.jettra.flux.widgets.RawHtml;
 import io.jettra.flux.widgets.Text;
 import io.jettra.store.explorer.model.BackupSnapshotInfo;
+import io.jettra.store.explorer.pages.template.FluxUi;
 import io.jettra.store.explorer.plugin.JettraStorePlugin;
 import java.util.List;
 
@@ -80,18 +81,25 @@ public class BackupFluxView extends FluxView {
             Widget shaCell = Div.of(Text.of(shaShort))
                 .modifier(new Modifier().style("color: var(--text-muted); font-family: monospace; font-size: 0.75rem;").attribute("title", b.getChecksumSha256()));
 
-            String actionsHtml = "<div style='text-align:right; white-space:nowrap;'>"
-                + "<form method='POST' action='/backups' style='display:inline;' onsubmit=\"return confirm('¿Restaurar snapshot " + b.getId() + " en caliente?');\">"
-                + "<input type='hidden' name='action' value='restore'/>"
-                + "<input type='hidden' name='id' value='" + b.getId() + "'/>"
-                + "<input type='hidden' name='target_db' value='" + b.getDatabaseName() + "'/>"
-                + "<button type='submit' class='app-btn-primary' style='padding:0.3rem 0.65rem; font-size:0.78rem; margin-right:5px;'>♻️ Restaurar</button></form>"
-                + "<form method='POST' action='/backups' style='display:inline;' onsubmit=\"return confirm('¿Eliminar snapshot?');\">"
-                + "<input type='hidden' name='action' value='delete'/>"
-                + "<input type='hidden' name='id' value='" + b.getId() + "'/>"
-                + "<button type='submit' class='app-btn-danger' style='padding:0.3rem 0.65rem; font-size:0.78rem;'>🗑️</button></form>"
-                + "</div>";
-            Widget actionCell = RawHtml.of(actionsHtml);
+            Form restoreForm = Form.of(
+                    FluxUi.hidden("action", "restore"),
+                    FluxUi.hidden("id", b.getId()),
+                    FluxUi.hidden("target_db", b.getDatabaseName()),
+                    FluxUi.submitButton("♻️ Restaurar", "app-btn-primary", "padding:0.3rem 0.65rem; font-size:0.78rem; margin-right:5px;")
+            ).action("/backups").method("POST");
+            restoreForm.modifier(new Modifier().style("display:inline;")
+                    .attribute("onsubmit", "return confirm('¿Restaurar snapshot " + b.getId() + " en caliente?');"));
+
+            Form deleteForm = Form.of(
+                    FluxUi.hidden("action", "delete"),
+                    FluxUi.hidden("id", b.getId()),
+                    FluxUi.submitButton("🗑️", "app-btn-danger", "padding:0.3rem 0.65rem; font-size:0.78rem;")
+            ).action("/backups").method("POST");
+            deleteForm.modifier(new Modifier().style("display:inline;")
+                    .attribute("onsubmit", "return confirm('¿Eliminar snapshot?');"));
+
+            Widget actionCell = Div.of(restoreForm, deleteForm)
+                    .modifier(new Modifier().style("text-align:right; white-space:nowrap;"));
 
             rows.add(List.of(idCell, dbCell, engineCell, dateCell, objCell, sizeCell, ratioCell, algoCell, shaCell, actionCell));
         }
@@ -114,38 +122,16 @@ public class BackupFluxView extends FluxView {
         Header header = Header.of(3, "➕ Crear Nueva Copia de Seguridad Inmutable");
         header.modifier(new Modifier().style("font-size: 1.15rem; color: var(--text-main); margin: 0 0 0.85rem 0;"));
 
-        String dbOpts = dbs.stream()
-            .map(db -> "<option value='" + db + "'>" + db + "</option>")
-            .collect(java.util.stream.Collectors.joining("\n"));
+        Form form = Form.of(
+                FluxUi.hidden("action", "create"),
+                FluxUi.fieldColumn("Base de Datos Origen", FluxUi.dropdown("db_name", dbs, dbs.isEmpty() ? "" : dbs.get(0)), "flex: 1.5; min-width: 180px;"),
+                FluxUi.fieldColumn("Algoritmo Compresión", FluxUi.dropdown("algo", List.of("ZSTD_SIMD", "LZ4_PANAMA", "GZIP_NATIVE"), "ZSTD_SIMD"), "flex: 1.2; min-width: 140px;"),
+                FluxUi.fieldColumn("Ruta Destino", FluxUi.textInput("path", "", "~/jettra/backups/snapshot_autobkp.jbk", false), "flex: 2; min-width: 220px;"),
+                Div.of(FluxUi.submitButton("💾 Generar Snapshot", "app-btn-primary", "height: 38px;"))
+        ).action("/backups").method("POST");
+        form.modifier(new Modifier().style("display: flex; flex-wrap: wrap; gap: 0.85rem; align-items: flex-end;"));
 
-        RawHtml formHtml = RawHtml.of(String.format("""
-            <form method="POST" action="/backups" style="display: flex; flex-wrap: wrap; gap: 0.85rem; align-items: flex-end;">
-              <input type="hidden" name="action" value="create" />
-              <div style="flex: 1.5; min-width: 180px;">
-                <label style="font-size: 0.75rem; color: var(--text-muted); display: block; margin-bottom: 0.25rem; font-weight: 600;">Base de Datos Origen</label>
-                <select class="app-input" name="db_name">
-                  %s
-                </select>
-              </div>
-              <div style="flex: 1.2; min-width: 140px;">
-                <label style="font-size: 0.75rem; color: var(--text-muted); display: block; margin-bottom: 0.25rem; font-weight: 600;">Algoritmo Compresión</label>
-                <select class="app-input" name="algo">
-                  <option value="ZSTD_SIMD">ZSTD SIMD (Ultra Rápido)</option>
-                  <option value="LZ4_PANAMA">LZ4 Panama Direct (Baja Latencia)</option>
-                  <option value="GZIP_NATIVE">GZIP Native</option>
-                </select>
-              </div>
-              <div style="flex: 2; min-width: 220px;">
-                <label style="font-size: 0.75rem; color: var(--text-muted); display: block; margin-bottom: 0.25rem; font-weight: 600;">Ruta Destino</label>
-                <input class="app-input" type="text" name="path" placeholder="~/jettra/backups/snapshot_autobkp.jbk" />
-              </div>
-              <div>
-                <button type="submit" class="app-btn-primary" style="height: 38px;">💾 Generar Snapshot</button>
-              </div>
-            </form>
-        """, dbOpts));
-
-        Div card = Div.of(header, formHtml);
+        Div card = Div.of(header, form);
         card.modifier(new Modifier().cssClass("ui-card").style("margin-bottom: 2rem; background: var(--bg-subtle);"));
         return card;
     }

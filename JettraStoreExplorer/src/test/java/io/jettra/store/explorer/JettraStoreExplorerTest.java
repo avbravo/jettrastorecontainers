@@ -1005,7 +1005,7 @@ public class JettraStoreExplorerTest {
         // 1. Página 1 por defecto (10 registros por página de 25 totales en Facturas -> 3 páginas)
         HttpResponse<String> page1Res = get("/explorer?db=example_factura_db&bucket=Facturas&page=1&size=10");
         JettraAssert.assertEquals(200, page1Res.statusCode(), "Página 1 de /explorer debe responder HTTP 200");
-        JettraAssert.assertTrue(page1Res.body().contains("data-pagination='explorer-records'"), "Debe renderizar barra de paginación");
+        JettraAssert.assertTrue(page1Res.body().contains("data-pagination=\"explorer-records\"") || page1Res.body().contains("data-pagination='explorer-records'"), "Debe renderizar barra de paginación");
         JettraAssert.assertTrue(page1Res.body().contains("FAC-2026-001"), "Página 1 debe mostrar FAC-2026-001");
         JettraAssert.assertTrue(page1Res.body().contains("FAC-2026-010"), "Página 1 debe mostrar FAC-2026-010");
         JettraAssert.assertFalse(page1Res.body().contains("FAC-2026-011"), "Página 1 no debe mostrar FAC-2026-011");
@@ -1073,8 +1073,8 @@ public class JettraStoreExplorerTest {
         // 1. Página 1 muestra streaming activo y total real de 100,003 páginas (con size=10)
         HttpResponse<String> p1Res = get("/explorer?db=example_factura_db&bucket=Facturas&page=1&size=10");
         JettraAssert.assertEquals(200, p1Res.statusCode(), "Página 1 debe responder HTTP 200");
-        JettraAssert.assertTrue(p1Res.body().contains("data-total-records='1000025'"), "Debe reportar 1,000,025 registros totales");
-        JettraAssert.assertTrue(p1Res.body().contains("data-total-pages='100003'"), "Debe calcular 100,003 páginas con size=10");
+        JettraAssert.assertTrue(p1Res.body().contains("data-total-records=\"1000025\"") || p1Res.body().contains("data-total-records='1000025'"), "Debe reportar 1,000,025 registros totales");
+        JettraAssert.assertTrue(p1Res.body().contains("data-total-pages=\"100003\"") || p1Res.body().contains("data-total-pages='100003'"), "Debe calcular 100,003 páginas con size=10");
         JettraAssert.assertTrue(p1Res.body().contains("Streaming por página"), "Debe indicar paginación por streaming");
 
         // 2. Desplazamiento a página intermedia (página 50,000 -> registros 499,991 al 500,000)
@@ -1208,6 +1208,8 @@ public class JettraStoreExplorerTest {
     public void testDarkThemeSelectOptionStylesInDatabasesPage() throws Exception {
         HttpResponse<String> dbPage = get("/databases?db=example_factura_db");
         JettraAssert.assertEquals(200, dbPage.statusCode(), "/databases debe responder HTTP 200");
+        JettraAssert.assertTrue(dbPage.body().contains("<style>"), "La plantilla debe renderizar etiquetas <style> válidas y no texto plano");
+        JettraAssert.assertFalse(dbPage.body().contains("espresso-style"), "No debe renderizar CSS como <div class='espresso-style'>");
         JettraAssert.assertTrue(dbPage.body().contains("color-scheme: dark;"), "Debe declarar color-scheme: dark para controles nativos");
         JettraAssert.assertTrue(dbPage.body().contains("[data-theme=\"dark\"] select.app-input option"),
                 "Debe definir color de fondo y texto explícito para <option> en tema oscuro");
@@ -1232,7 +1234,8 @@ public class JettraStoreExplorerTest {
             String db = tc[0], bucket = tc[1], id = tc[2], engine = tc[3];
             HttpResponse<String> viewRes = get("/explorer?db=" + db + "&bucket=" + bucket + "&view_id=" + id);
             JettraAssert.assertEquals(200, viewRes.statusCode(), "Ver " + engine + " debe responder HTTP 200");
-            JettraAssert.assertTrue(viewRes.body().contains("data-engine-viewer='" + engine + "'"),
+            JettraAssert.assertTrue(viewRes.body().contains("data-engine-viewer=\"" + engine + "\"")
+                    || viewRes.body().contains("data-engine-viewer='" + engine + "'"),
                     "El botón Ver para " + engine + " debe usar su visualizador específico");
 
             HttpResponse<String> editRes = get("/explorer?db=" + db + "&bucket=" + bucket + "&edit_id=" + id);
@@ -1243,7 +1246,8 @@ public class JettraStoreExplorerTest {
 
             HttpResponse<String> histRes = get("/explorer?db=" + db + "&bucket=" + bucket + "&history_id=" + id);
             JettraAssert.assertEquals(200, histRes.statusCode(), "Versiones " + engine + " debe responder HTTP 200");
-            JettraAssert.assertTrue(histRes.body().contains("data-engine-viewer='" + engine + "'"),
+            JettraAssert.assertTrue(histRes.body().contains("data-engine-viewer=\"" + engine + "\"")
+                    || histRes.body().contains("data-engine-viewer='" + engine + "'"),
                     "El botón Versiones para " + engine + " debe usar su visualizador específico");
         }
 

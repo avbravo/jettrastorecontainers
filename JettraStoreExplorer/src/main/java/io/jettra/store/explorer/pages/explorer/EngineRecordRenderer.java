@@ -3,18 +3,23 @@ package io.jettra.store.explorer.pages.explorer;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
+import io.jettra.flux.core.Modifier;
+import io.jettra.flux.core.Widget;
+import io.jettra.flux.widgets.Datatable;
+import io.jettra.flux.widgets.Div;
+import io.jettra.flux.widgets.Text;
 import io.jettra.store.explorer.model.EngineRecordInfo;
+import io.jettra.store.explorer.model.EngineRecordVersion;
+import io.jettra.store.explorer.pages.template.FluxUi;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.stream.Collectors;
 
 /**
- * Renderizador y constructor de formularios adaptado al formato de almacenamiento
- * de cada motor (engine) de JettraStore: DOCUMENT, OBJECT, JAVA_RECORD/RECORD,
- * GRAPH, KEY_VALUE, GEOSPATIAL, VECTOR, TIMESERIES, COLUMNAR y RELATIONAL.
+ * Renderizador y constructor de formularios en widgets nativos JettraFlux
+ * adaptado al formato de almacenamiento de cada motor (engine) de JettraStore.
  */
 public final class EngineRecordRenderer {
 
@@ -43,10 +48,10 @@ public final class EngineRecordRenderer {
     }
 
     // =========================================================================
-    // VISUALIZADOR POR TIPO DE MOTOR (VER)
+    // VISUALIZADOR POR TIPO DE MOTOR (VER / VERSIONES)
     // =========================================================================
 
-    public static String renderVersionViewHtml(EngineRecordInfo parentRec, io.jettra.store.explorer.model.EngineRecordVersion version) {
+    public static Widget renderVersionViewWidget(EngineRecordInfo parentRec, EngineRecordVersion version) {
         EngineRecordInfo snapshot = new EngineRecordInfo(
                 parentRec.getId(),
                 parentRec.getEngineType(),
@@ -56,10 +61,10 @@ public final class EngineRecordRenderer {
                 version.getTimestamp(),
                 version.getVersion()
         );
-        return renderViewHtml(snapshot);
+        return renderViewWidget(snapshot);
     }
 
-    public static String renderViewHtml(EngineRecordInfo rec) {
+    public static Widget renderViewWidget(EngineRecordInfo rec) {
         String engine = normalizeEngine(rec.getEngineType());
         Map<String, Object> data = parseDetailsMap(rec.getDetails());
 
@@ -71,218 +76,243 @@ public final class EngineRecordRenderer {
             case "GEOSPATIAL" -> renderGeospatialView(rec, data);
             case "VECTOR" -> renderVectorView(rec, data);
             case "TIMESERIES" -> renderTimeseriesView(rec, data);
-            case "COLUMNAR", "RELATIONAL" -> renderTabularView(rec, engine, data);
+            case "COLUMNAR", "RELATIONAL" -> renderTabularView(engine, data);
             default -> renderDocumentView(rec, data);
         };
     }
 
-    private static String renderDocumentView(EngineRecordInfo rec, Map<String, Object> data) {
-        return String.format("""
-            <div data-engine-viewer='DOCUMENT' style='margin-bottom:1rem;'>
-              <div style='font-size:0.8rem; font-weight:700; color:#00d4ff; margin-bottom:0.6rem;'>📄 Visualizador de Documento BSON / JSON</div>
-              %s
-              <details style='margin-top:0.85rem;'><summary style='cursor:pointer; font-size:0.8rem; color:var(--text-muted); font-weight:600;'>Ver documento JSON completo</summary>
-                <pre style='background:#020617; border:1px solid var(--border-subtle); border-radius:8px; padding:1rem; margin-top:0.5rem; font-family:monospace; font-size:0.84rem; color:#38bdf8; overflow-x:auto;'>%s</pre>
-              </details>
-            </div>
-            """, renderKeyValueGrid(data, "#00d4ff"), escapeHtml(rec.getDetails()));
+    private static Widget renderDocumentView(EngineRecordInfo rec, Map<String, Object> data) {
+        Widget title = FluxUi.coloredSpan("📄 Visualizador de Documento BSON / JSON",
+                "font-size:0.8rem; font-weight:700; color:#00d4ff; display:block; margin-bottom:0.6rem;");
+        Widget grid = renderKeyValueGrid(data, "#00d4ff");
+        Widget rawPre = Div.of(FluxUi.preBlock(rec.getDetails(), "color:#38bdf8;"))
+                .modifier(new Modifier().style("background:#020617; border:1px solid var(--border-subtle); border-radius:8px; padding:1rem; margin-top:0.65rem; overflow-x:auto;"));
+
+        Widget box = Div.of(title, grid, rawPre);
+        box.modifier(new Modifier().attribute("data-engine-viewer", "DOCUMENT").style("margin-bottom:1rem;"));
+        return box;
     }
 
     @SuppressWarnings("unchecked")
-    private static String renderObjectView(EngineRecordInfo rec, Map<String, Object> data) {
+    private static Widget renderObjectView(EngineRecordInfo rec, Map<String, Object> data) {
         String className = strVal(data.get("className"), "io.jettra.model.Entity");
         String serialVersion = strVal(data.get("serialVersion"), "1");
         Map<String, Object> props = (data.get("properties") instanceof Map<?, ?> m)
                 ? (Map<String, Object>) m : data;
 
-        String rows = props.entrySet().stream()
-                .map(e -> "<tr><td><code>" + escapeHtml(e.getKey()) + "</code></td>"
-                        + "<td style='color:var(--text-muted); font-size:0.78rem;'>" + escapeHtml(javaTypeName(e.getValue())) + "</td>"
-                        + "<td><strong>" + escapeHtml(String.valueOf(e.getValue())) + "</strong></td></tr>")
-                .collect(Collectors.joining());
+        Widget title = FluxUi.coloredSpan("🧩 Visualizador de Objeto Java (POJO Serializado)",
+                "font-size:0.8rem; font-weight:700; color:#eab308; display:block; margin-bottom:0.6rem;");
 
-        return String.format("""
-            <div data-engine-viewer='OBJECT' style='margin-bottom:1rem;'>
-              <div style='font-size:0.8rem; font-weight:700; color:#eab308; margin-bottom:0.6rem;'>🧩 Visualizador de Objeto Java (POJO Serializado)</div>
-              <div style='display:flex; gap:1rem; flex-wrap:wrap; background:var(--bg-subtle); border:1px solid #eab308; border-radius:8px; padding:0.75rem 1rem; margin-bottom:0.85rem;'>
-                <div><span style='font-size:0.72rem; color:var(--text-muted); display:block;'>Clase Java</span><code style='color:#eab308; font-weight:700;'>%s</code></div>
-                <div><span style='font-size:0.72rem; color:var(--text-muted); display:block;'>serialVersionUID</span><code style='color:var(--text-main); font-weight:700;'>%sL</code></div>
-                <div><span style='font-size:0.72rem; color:var(--text-muted); display:block;'>ID Instancia</span><code style='color:#00d4ff; font-weight:700;'>%s</code></div>
-              </div>
-              <table class='app-table'><thead><tr><th>Atributo / Propiedad</th><th>Tipo</th><th>Valor</th></tr></thead><tbody>%s</tbody></table>
-            </div>
-            """, escapeHtml(className), escapeHtml(serialVersion), escapeHtml(rec.getId()), rows);
+        Widget metaBar = Div.of(
+                Div.of(FluxUi.coloredSpan("Clase Java", "font-size:0.72rem; color:var(--text-muted); display:block;"),
+                       FluxUi.coloredSpan(className, "color:#eab308; font-weight:700; font-family:monospace;")),
+                Div.of(FluxUi.coloredSpan("serialVersionUID", "font-size:0.72rem; color:var(--text-muted); display:block;"),
+                       FluxUi.coloredSpan(serialVersion + "L", "color:var(--text-main); font-weight:700; font-family:monospace;")),
+                Div.of(FluxUi.coloredSpan("ID Instancia", "font-size:0.72rem; color:var(--text-muted); display:block;"),
+                       FluxUi.coloredSpan(rec.getId(), "color:#00d4ff; font-weight:700; font-family:monospace;"))
+        ).modifier(new Modifier().style("display:flex; gap:1rem; flex-wrap:wrap; background:var(--bg-subtle); border:1px solid #eab308; border-radius:8px; padding:0.75rem 1rem; margin-bottom:0.85rem;"));
+
+        List<Widget> headers = List.of(Text.of("Atributo / Propiedad"), Text.of("Tipo"), Text.of("Valor"));
+        List<List<Widget>> rows = new ArrayList<>();
+        for (Map.Entry<String, Object> e : props.entrySet()) {
+            rows.add(List.of(
+                    FluxUi.coloredSpan(e.getKey(), "font-family:monospace;"),
+                    FluxUi.coloredSpan(javaTypeName(e.getValue()), "color:var(--text-muted); font-size:0.78rem;"),
+                    FluxUi.coloredSpan(String.valueOf(e.getValue()), "font-weight:700;")
+            ));
+        }
+        Datatable table = Datatable.ofWidgets(headers, rows);
+        table.modifier(new Modifier().cssClass("app-table"));
+
+        Widget box = Div.of(title, metaBar, table);
+        box.modifier(new Modifier().attribute("data-engine-viewer", "OBJECT").style("margin-bottom:1rem;"));
+        return box;
     }
 
     @SuppressWarnings("unchecked")
-    private static String renderJavaRecordView(EngineRecordInfo rec, Map<String, Object> data) {
+    private static Widget renderJavaRecordView(EngineRecordInfo rec, Map<String, Object> data) {
         String recordClass = strVal(data.get("recordClass"), "io.jettra.store.domain.Record");
         Map<String, Object> components = (data.get("components") instanceof Map<?, ?> m)
                 ? (Map<String, Object>) m : data;
 
-        String rows = components.entrySet().stream()
-                .map(e -> "<tr><td><code style='color:#3b82f6; font-weight:700;'>" + escapeHtml(e.getKey()) + "</code></td>"
-                        + "<td style='color:var(--text-muted); font-size:0.78rem;'>" + escapeHtml(javaTypeName(e.getValue())) + "</td>"
-                        + "<td><strong>" + escapeHtml(String.valueOf(e.getValue())) + "</strong></td></tr>")
-                .collect(Collectors.joining());
+        Widget title = FluxUi.coloredSpan("💎 Visualizador de Java Canonical Record (Inmutable)",
+                "font-size:0.8rem; font-weight:700; color:#3b82f6; display:block; margin-bottom:0.6rem;");
 
-        return String.format("""
-            <div data-engine-viewer='JAVA_RECORD' style='margin-bottom:1rem;'>
-              <div style='font-size:0.8rem; font-weight:700; color:#3b82f6; margin-bottom:0.6rem;'>💎 Visualizador de Java Canonical Record (Inmutable)</div>
-              <div style='background:var(--bg-subtle); border:1px solid #3b82f6; border-radius:8px; padding:0.75rem 1rem; margin-bottom:0.85rem; font-family:monospace; font-size:0.85rem;'>
-                <span style='color:#94a3b8;'>public record </span><strong style='color:#3b82f6;'>%s</strong> (%s)
-              </div>
-              <table class='app-table'><thead><tr><th>Componente Canónico</th><th>Tipo Inferido</th><th>Valor</th></tr></thead><tbody>%s</tbody></table>
-            </div>
-            """, escapeHtml(recordClass), escapeHtml(String.join(", ", components.keySet())), rows);
+        Widget sigBar = Div.of(
+                FluxUi.coloredSpan("public record ", "color:#94a3b8; font-family:monospace; font-size:0.85rem;"),
+                FluxUi.coloredSpan(recordClass, "color:#3b82f6; font-weight:700; font-family:monospace; font-size:0.85rem;"),
+                FluxUi.coloredSpan(" (" + String.join(", ", components.keySet()) + ")", "font-family:monospace; font-size:0.85rem;")
+        ).modifier(new Modifier().style("background:var(--bg-subtle); border:1px solid #3b82f6; border-radius:8px; padding:0.75rem 1rem; margin-bottom:0.85rem;"));
+
+        List<Widget> headers = List.of(Text.of("Componente Canónico"), Text.of("Tipo Inferido"), Text.of("Valor"));
+        List<List<Widget>> rows = new ArrayList<>();
+        for (Map.Entry<String, Object> e : components.entrySet()) {
+            rows.add(List.of(
+                    FluxUi.coloredSpan(e.getKey(), "color:#3b82f6; font-weight:700; font-family:monospace;"),
+                    FluxUi.coloredSpan(javaTypeName(e.getValue()), "color:var(--text-muted); font-size:0.78rem;"),
+                    FluxUi.coloredSpan(String.valueOf(e.getValue()), "font-weight:700;")
+            ));
+        }
+        Datatable table = Datatable.ofWidgets(headers, rows);
+        table.modifier(new Modifier().cssClass("app-table"));
+
+        Widget box = Div.of(title, sigBar, table);
+        box.modifier(new Modifier().attribute("data-engine-viewer", "JAVA_RECORD").style("margin-bottom:1rem;"));
+        return box;
     }
 
-    private static String renderGraphView(EngineRecordInfo rec, Map<String, Object> data) {
+    private static Widget renderGraphView(EngineRecordInfo rec, Map<String, Object> data) {
         String edgeId = strVal(data.get("edge_id"), rec.getId());
         String source = strVal(data.get("source"), "N/A");
         String target = strVal(data.get("target"), "N/A");
         String rel = strVal(data.get("rel"), "CONNECTED_TO");
 
-        return String.format("""
-            <div data-engine-viewer='GRAPH' style='margin-bottom:1rem;'>
-              <div style='font-size:0.8rem; font-weight:700; color:#ec4899; margin-bottom:0.6rem;'>🕸️ Visualizador de Grafo (Vértices y Arista Dirigida)</div>
-              <div style='display:flex; align-items:center; justify-content:center; gap:0.85rem; flex-wrap:wrap; background:#020617; border:1px solid #ec4899; border-radius:10px; padding:1.15rem; margin-bottom:0.85rem;'>
-                <div style='background:rgba(0,212,255,0.12); border:2px solid #00d4ff; border-radius:9999px; padding:0.5rem 1rem; font-weight:800; color:#00d4ff;'>● %s</div>
-                <div style='text-align:center; color:#ec4899; font-family:monospace; font-size:0.82rem; font-weight:700;'>───[ %s ]───▶</div>
-                <div style='background:rgba(16,185,129,0.12); border:2px solid #10b981; border-radius:9999px; padding:0.5rem 1rem; font-weight:800; color:#10b981;'>● %s</div>
-              </div>
-              <div style='font-size:0.78rem; color:var(--text-muted); margin-bottom:0.5rem;'>ID Arista: <code>%s</code> • Propiedades de la arista:</div>
-              %s
-            </div>
-            """, escapeHtml(source), escapeHtml(rel), escapeHtml(target), escapeHtml(edgeId), renderKeyValueGrid(data, "#ec4899"));
+        Widget title = FluxUi.coloredSpan("🕸️ Visualizador de Grafo (Vértices y Arista Dirigida)",
+                "font-size:0.8rem; font-weight:700; color:#ec4899; display:block; margin-bottom:0.6rem;");
+
+        Widget srcNode = Div.of(Text.of("● " + source)).modifier(new Modifier().style(
+                "background:rgba(0,212,255,0.12); border:2px solid #00d4ff; border-radius:9999px; padding:0.5rem 1rem; font-weight:800; color:#00d4ff;"));
+        Widget relEdge = Div.of(Text.of("───[ " + rel + " ]───▶")).modifier(new Modifier().style(
+                "text-align:center; color:#ec4899; font-family:monospace; font-size:0.82rem; font-weight:700;"));
+        Widget dstNode = Div.of(Text.of("● " + target)).modifier(new Modifier().style(
+                "background:rgba(16,185,129,0.12); border:2px solid #10b981; border-radius:9999px; padding:0.5rem 1rem; font-weight:800; color:#10b981;"));
+
+        Widget diagram = Div.of(srcNode, relEdge, dstNode).modifier(new Modifier().style(
+                "display:flex; align-items:center; justify-content:center; gap:0.85rem; flex-wrap:wrap; background:#020617; border:1px solid #ec4899; border-radius:10px; padding:1.15rem; margin-bottom:0.85rem;"));
+
+        Widget sub = FluxUi.coloredSpan("ID Arista: " + edgeId + " • Propiedades de la arista:",
+                "font-size:0.78rem; color:var(--text-muted); display:block; margin-bottom:0.5rem;");
+
+        Widget box = Div.of(title, diagram, sub, renderKeyValueGrid(data, "#ec4899"));
+        box.modifier(new Modifier().attribute("data-engine-viewer", "GRAPH").style("margin-bottom:1rem;"));
+        return box;
     }
 
-    private static String renderKeyValueView(EngineRecordInfo rec, Map<String, Object> data) {
+    private static Widget renderKeyValueView(EngineRecordInfo rec, Map<String, Object> data) {
         String keyName = strVal(data.getOrDefault("key", data.get("account")), rec.getId());
-        return String.format("""
-            <div data-engine-viewer='KEY_VALUE' style='margin-bottom:1rem;'>
-              <div style='font-size:0.8rem; font-weight:700; color:#f97316; margin-bottom:0.6rem;'>🔑 Visualizador Clave-Valor (In-Memory Key/Value Store)</div>
-              <div style='display:grid; grid-template-columns: 1fr 2fr; gap:1rem; background:var(--bg-subtle); border:1px solid #f97316; border-radius:8px; padding:1rem;'>
-                <div>
-                  <div style='font-size:0.72rem; color:var(--text-muted); font-weight:700; text-transform:uppercase;'>Clave (KEY)</div>
-                  <code style='font-size:1rem; color:#f97316; font-weight:800;'>%s</code>
-                </div>
-                <div>
-                  <div style='font-size:0.72rem; color:var(--text-muted); font-weight:700; text-transform:uppercase; margin-bottom:0.4rem;'>Valor Asociado (VALUE)</div>
-                  %s
-                </div>
-              </div>
-            </div>
-            """, escapeHtml(keyName), renderKeyValueGrid(data, "#f97316"));
+        Widget title = FluxUi.coloredSpan("🔑 Visualizador Clave-Valor (In-Memory Key/Value Store)",
+                "font-size:0.8rem; font-weight:700; color:#f97316; display:block; margin-bottom:0.6rem;");
+
+        Widget keyCol = Div.of(
+                FluxUi.coloredSpan("Clave (KEY)", "font-size:0.72rem; color:var(--text-muted); font-weight:700; text-transform:uppercase; display:block;"),
+                FluxUi.coloredSpan(keyName, "font-size:1rem; color:#f97316; font-weight:800; font-family:monospace;")
+        );
+        Widget valCol = Div.of(
+                FluxUi.coloredSpan("Valor Asociado (VALUE)", "font-size:0.72rem; color:var(--text-muted); font-weight:700; text-transform:uppercase; display:block; margin-bottom:0.4rem;"),
+                renderKeyValueGrid(data, "#f97316")
+        );
+        Widget panel = Div.of(keyCol, valCol).modifier(new Modifier().style(
+                "display:grid; grid-template-columns: 1fr 2fr; gap:1rem; background:var(--bg-subtle); border:1px solid #f97316; border-radius:8px; padding:1rem;"));
+
+        Widget box = Div.of(title, panel);
+        box.modifier(new Modifier().attribute("data-engine-viewer", "KEY_VALUE").style("margin-bottom:1rem;"));
+        return box;
     }
 
-    private static String renderGeospatialView(EngineRecordInfo rec, Map<String, Object> data) {
+    private static Widget renderGeospatialView(EngineRecordInfo rec, Map<String, Object> data) {
         String stationId = strVal(data.get("station_id"), rec.getId());
         String lat = strVal(data.get("lat"), "0.0");
         String lng = strVal(data.get("lng"), "0.0");
         String alt = strVal(data.getOrDefault("altitud_m", data.get("altitud")), "0");
         String zona = strVal(data.get("zona"), "N/A");
 
-        return String.format("""
-            <div data-engine-viewer='GEOSPATIAL' style='margin-bottom:1rem;'>
-              <div style='font-size:0.8rem; font-weight:700; color:#06b6d4; margin-bottom:0.6rem;'>🌍 Visualizador Geoespacial (GeoJSON &amp; R-Tree)</div>
-              <div style='display:grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap:0.75rem; margin-bottom:0.85rem;'>
-                %s
-                %s
-                %s
-                %s
-                %s
-              </div>
-              <div style='background:#020617; border:1px solid #06b6d4; border-radius:8px; padding:0.75rem 1rem; font-family:monospace; font-size:0.82rem; color:#38bdf8;'>
-                GeoJSON Geometry: { "type": "Point", "coordinates": [%s, %s] }
-              </div>
-            </div>
-            """, metricBox("Estación / Punto", stationId, "#06b6d4"),
-                 metricBox("Latitud (WGS84)", lat + "°", "#00d4ff"),
-                 metricBox("Longitud (WGS84)", lng + "°", "#00d4ff"),
-                 metricBox("Altitud", alt + " m", "#10b981"),
-                 metricBox("Zona", zona, "#ffd700"),
-                 escapeHtml(lng), escapeHtml(lat));
+        Widget title = FluxUi.coloredSpan("🌍 Visualizador Geoespacial (GeoJSON & R-Tree)",
+                "font-size:0.8rem; font-weight:700; color:#06b6d4; display:block; margin-bottom:0.6rem;");
+
+        Widget metrics = Div.of(
+                metricBox("Estación / Punto", stationId, "#06b6d4"),
+                metricBox("Latitud (WGS84)", lat + "°", "#00d4ff"),
+                metricBox("Longitud (WGS84)", lng + "°", "#00d4ff"),
+                metricBox("Altitud", alt + " m", "#10b981"),
+                metricBox("Zona", zona, "#ffd700")
+        ).modifier(new Modifier().style("display:grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap:0.75rem; margin-bottom:0.85rem;"));
+
+        Widget geoJson = Div.of(Text.of("GeoJSON Geometry: { \"type\": \"Point\", \"coordinates\": [" + lng + ", " + lat + "] }"))
+                .modifier(new Modifier().style("background:#020617; border:1px solid #06b6d4; border-radius:8px; padding:0.75rem 1rem; font-family:monospace; font-size:0.82rem; color:#38bdf8;"));
+
+        Widget box = Div.of(title, metrics, geoJson);
+        box.modifier(new Modifier().attribute("data-engine-viewer", "GEOSPATIAL").style("margin-bottom:1rem;"));
+        return box;
     }
 
-    private static String renderVectorView(EngineRecordInfo rec, Map<String, Object> data) {
+    private static Widget renderVectorView(EngineRecordInfo rec, Map<String, Object> data) {
         String model = strVal(data.get("model"), "embedding-model");
         String dims = strVal(data.get("dims"), "1536");
         String label = strVal(data.get("etiqueta"), rec.getSummary());
         Object embObj = data.getOrDefault("embedding_preview", data.get("embedding"));
-        List<String> dimsList = new ArrayList<>();
+        List<Widget> dimChips = new ArrayList<>();
         if (embObj instanceof List<?> list) {
-            for (Object item : list) dimsList.add(String.valueOf(item));
+            for (int i = 0; i < list.size(); i++) {
+                dimChips.add(FluxUi.coloredSpan("[" + i + "]: " + list.get(i),
+                        "background:rgba(168,85,247,0.18); border:1px solid #a855f7; color:#e9d5ff; padding:3px 8px; border-radius:6px; font-family:monospace; font-size:0.8rem;"));
+            }
         }
 
-        String chips = java.util.stream.IntStream.range(0, dimsList.size())
-                .mapToObj(i -> "<span style='background:rgba(168,85,247,0.18); border:1px solid #a855f7; color:#e9d5ff; padding:3px 8px; border-radius:6px; font-family:monospace; font-size:0.8rem;'>["
-                        + i + "]: " + escapeHtml(dimsList.get(i)) + "</span>")
-                .collect(Collectors.joining());
+        Widget title = FluxUi.coloredSpan("🧠 Visualizador Vectorial (HNSW Dense Embedding)",
+                "font-size:0.8rem; font-weight:700; color:#a855f7; display:block; margin-bottom:0.6rem;");
 
-        return String.format("""
-            <div data-engine-viewer='VECTOR' style='margin-bottom:1rem;'>
-              <div style='font-size:0.8rem; font-weight:700; color:#a855f7; margin-bottom:0.6rem;'>🧠 Visualizador Vectorial (HNSW Dense Embedding)</div>
-              <div style='display:grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap:0.75rem; margin-bottom:0.85rem;'>
-                %s
-                %s
-                %s
-              </div>
-              <div style='background:#020617; border:1px solid #a855f7; border-radius:8px; padding:0.85rem 1rem;'>
-                <div style='font-size:0.75rem; color:var(--text-muted); margin-bottom:0.5rem;'>Componentes del Vector (Preview):</div>
-                <div style='display:flex; gap:0.5rem; flex-wrap:wrap;'>
-                  %s
-                </div>
-              </div>
-            </div>
-            """, metricBox("Modelo", model, "#a855f7"),
-                 metricBox("Dimensiones", dims + "d", "#00d4ff"),
-                 metricBox("Etiqueta Semántica", label, "#10b981"),
-                 chips);
+        Widget metrics = Div.of(
+                metricBox("Modelo", model, "#a855f7"),
+                metricBox("Dimensiones", dims + "d", "#00d4ff"),
+                metricBox("Etiqueta Semántica", label, "#10b981")
+        ).modifier(new Modifier().style("display:grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap:0.75rem; margin-bottom:0.85rem;"));
+
+        Widget chipsWrap = Div.of(dimChips.toArray(new Widget[0]))
+                .modifier(new Modifier().style("display:flex; gap:0.5rem; flex-wrap:wrap;"));
+        Widget embBox = Div.of(
+                FluxUi.coloredSpan("Componentes del Vector (Preview):", "font-size:0.75rem; color:var(--text-muted); display:block; margin-bottom:0.5rem;"),
+                chipsWrap
+        ).modifier(new Modifier().style("background:#020617; border:1px solid #a855f7; border-radius:8px; padding:0.85rem 1rem;"));
+
+        Widget box = Div.of(title, metrics, embBox);
+        box.modifier(new Modifier().attribute("data-engine-viewer", "VECTOR").style("margin-bottom:1rem;"));
+        return box;
     }
 
-    private static String renderTimeseriesView(EngineRecordInfo rec, Map<String, Object> data) {
-        String dataBoxes = data.entrySet().stream()
-                .map(e -> metricBox(e.getKey(), String.valueOf(e.getValue()), "#00d4ff"))
-                .collect(Collectors.joining());
+    private static Widget renderTimeseriesView(EngineRecordInfo rec, Map<String, Object> data) {
+        Widget title = FluxUi.coloredSpan("📈 Visualizador de Serie Temporal (BRIN / Telemetry)",
+                "font-size:0.8rem; font-weight:700; color:#22c55e; display:block; margin-bottom:0.6rem;");
 
-        return String.format("""
-            <div data-engine-viewer='TIMESERIES' style='margin-bottom:1rem;'>
-              <div style='font-size:0.8rem; font-weight:700; color:#22c55e; margin-bottom:0.6rem;'>📈 Visualizador de Serie Temporal (BRIN / Telemetry)</div>
-              <div style='display:grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap:0.75rem; margin-bottom:0.85rem;'>
-                %s
-                %s
-              </div>
-            </div>
-            """, metricBox("Timestamp", rec.getTimestamp(), "#22c55e"), dataBoxes);
+        List<Widget> boxes = new ArrayList<>();
+        boxes.add(metricBox("Timestamp", rec.getTimestamp(), "#22c55e"));
+        for (Map.Entry<String, Object> e : data.entrySet()) {
+            boxes.add(metricBox(e.getKey(), String.valueOf(e.getValue()), "#00d4ff"));
+        }
+        Widget grid = Div.of(boxes.toArray(new Widget[0]))
+                .modifier(new Modifier().style("display:grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap:0.75rem; margin-bottom:0.85rem;"));
+
+        Widget box = Div.of(title, grid);
+        box.modifier(new Modifier().attribute("data-engine-viewer", "TIMESERIES").style("margin-bottom:1rem;"));
+        return box;
     }
 
-    private static String renderTabularView(EngineRecordInfo rec, String engine, Map<String, Object> data) {
+    private static Widget renderTabularView(String engine, Map<String, Object> data) {
         String accent = "COLUMNAR".equals(engine) ? "#38bdf8" : "#ffd700";
-        String title = "COLUMNAR".equals(engine)
+        String titleText = "COLUMNAR".equals(engine)
                 ? "📊 Visualizador Columnar (Almacenamiento por Columnas)"
                 : "🗃️ Visualizador Relacional (Registro Tabular)";
+        Widget title = FluxUi.coloredSpan(titleText,
+                "font-size:0.8rem; font-weight:700; color:" + accent + "; display:block; margin-bottom:0.6rem;");
 
-        String ths = data.keySet().stream()
-                .map(col -> "<th>" + escapeHtml(col) + "</th>")
-                .collect(Collectors.joining());
-        String tds = data.values().stream()
-                .map(val -> "<td><strong>" + escapeHtml(String.valueOf(val)) + "</strong></td>")
-                .collect(Collectors.joining());
+        List<Widget> headers = new ArrayList<>();
+        List<Widget> rowVals = new ArrayList<>();
+        for (Map.Entry<String, Object> e : data.entrySet()) {
+            headers.add(Text.of(e.getKey()));
+            rowVals.add(FluxUi.coloredSpan(String.valueOf(e.getValue()), "font-weight:700;"));
+        }
+        Datatable table = Datatable.ofWidgets(headers, List.of(rowVals));
+        table.modifier(new Modifier().cssClass("app-table"));
 
-        return String.format("""
-            <div data-engine-viewer='%s' style='margin-bottom:1rem;'>
-              <div style='font-size:0.8rem; font-weight:700; color:%s; margin-bottom:0.6rem;'>%s</div>
-              <table class='app-table'><thead><tr>%s</tr></thead><tbody><tr>%s</tr></tbody></table>
-            </div>
-            """, engine, accent, title, ths, tds);
+        Widget box = Div.of(title, table);
+        box.modifier(new Modifier().attribute("data-engine-viewer", engine).style("margin-bottom:1rem;"));
+        return box;
     }
 
     // =========================================================================
     // EDITOR POR TIPO DE MOTOR (EDITAR)
     // =========================================================================
 
-    public static String renderEditFieldsHtml(EngineRecordInfo rec) {
+    public static Widget renderEditFieldsWidget(EngineRecordInfo rec) {
         String engine = normalizeEngine(rec.getEngineType());
         Map<String, Object> data = parseDetailsMap(rec.getDetails());
 
@@ -299,134 +329,109 @@ public final class EngineRecordRenderer {
         };
     }
 
-    private static String renderDocumentEditor(EngineRecordInfo rec) {
-        return String.format("""
-            <div data-engine-editor="DOCUMENT" style="margin-bottom: 1rem;">
-              <label style="font-size: 0.78rem; font-weight: 700; color: #00d4ff; display: block; margin-bottom: 0.35rem;">📄 Editor de Documento (JSON / BSON)</label>
-              <textarea class="app-input" name="details" rows="8" style="font-family: monospace; font-size: 0.85rem;" required>%s</textarea>
-            </div>
-        """, escapeHtml(rec.getDetails()));
+    private static Widget renderDocumentEditor(EngineRecordInfo rec) {
+        Widget box = Div.of(
+                FluxUi.coloredSpan("📄 Editor de Documento (JSON / BSON)",
+                        "font-size: 0.78rem; font-weight: 700; color: #00d4ff; display: block; margin-bottom: 0.35rem;"),
+                FluxUi.textArea("details", rec.getDetails(), 8, true, null)
+        );
+        box.modifier(new Modifier().attribute("data-engine-editor", "DOCUMENT").style("margin-bottom: 1rem;"));
+        return box;
     }
 
     @SuppressWarnings("unchecked")
-    private static String renderObjectEditor(Map<String, Object> data) {
+    private static Widget renderObjectEditor(Map<String, Object> data) {
         String className = strVal(data.get("className"), "io.jettra.model.Entity");
         String serialVersion = strVal(data.get("serialVersion"), "1");
         Map<String, Object> props = (data.get("properties") instanceof Map<?, ?> m)
                 ? (Map<String, Object>) m : data;
 
-        String propInputs = props.entrySet().stream()
-                .map(e -> fieldInput(e.getKey(), "prop_" + e.getKey(), String.valueOf(e.getValue())))
-                .collect(Collectors.joining());
+        Widget topRow = Div.of(
+                FluxUi.fieldColumn("Clase Java (className)", FluxUi.textInput("obj_className", className, "", false), null),
+                FluxUi.fieldColumn("serialVersionUID", FluxUi.textInput("obj_serialVersion", serialVersion, "", false), null)
+        ).modifier(new Modifier().style("display: grid; grid-template-columns: 2fr 1fr; gap: 0.85rem; margin-bottom: 0.85rem;"));
 
-        return String.format("""
-            <div data-engine-editor='OBJECT' style='margin-bottom: 1rem; padding: 0.9rem; border: 1px solid #eab308; border-radius: 8px;'>
-              <div style='font-size: 0.8rem; font-weight: 700; color: #eab308; margin-bottom: 0.75rem;'>🧩 Editor de Objeto Java (POJO)</div>
-              <input type='hidden' name='engineEditorMode' value='OBJECT' />
-              <div style='display: grid; grid-template-columns: 2fr 1fr; gap: 0.85rem; margin-bottom: 0.85rem;'>
-                %s
-                %s
-              </div>
-              <div style='font-size:0.75rem; font-weight:700; color:var(--text-muted); margin-bottom:0.45rem;'>Propiedades de la instancia:</div>
-              <div style='display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 0.75rem;'>
-                %s
-              </div>
-            </div>
-            """, fieldInput("Clase Java (className)", "obj_className", className),
-                 fieldInput("serialVersionUID", "obj_serialVersion", serialVersion),
-                 propInputs);
+        List<Widget> propFields = new ArrayList<>();
+        for (Map.Entry<String, Object> e : props.entrySet()) {
+            propFields.add(FluxUi.fieldColumn(e.getKey(), FluxUi.textInput("prop_" + e.getKey(), String.valueOf(e.getValue()), "", false), null));
+        }
+        Widget propsGrid = Div.of(propFields.toArray(new Widget[0]))
+                .modifier(new Modifier().style("display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 0.75rem;"));
+
+        return editorCard("OBJECT", "#eab308", "🧩 Editor de Objeto Java (POJO)",
+                FluxUi.hidden("engineEditorMode", "OBJECT"),
+                topRow,
+                FluxUi.coloredSpan("Propiedades de la instancia:", "font-size:0.75rem; font-weight:700; color:var(--text-muted); display:block; margin-bottom:0.45rem;"),
+                propsGrid);
     }
 
     @SuppressWarnings("unchecked")
-    private static String renderJavaRecordEditor(Map<String, Object> data) {
+    private static Widget renderJavaRecordEditor(Map<String, Object> data) {
         String recordClass = strVal(data.get("recordClass"), "io.jettra.store.domain.Record");
         Map<String, Object> components = (data.get("components") instanceof Map<?, ?> m)
                 ? (Map<String, Object>) m : data;
 
-        String compInputs = components.entrySet().stream()
-                .map(e -> fieldInput(e.getKey(), "comp_" + e.getKey(), String.valueOf(e.getValue())))
-                .collect(Collectors.joining());
+        List<Widget> compFields = new ArrayList<>();
+        for (Map.Entry<String, Object> e : components.entrySet()) {
+            compFields.add(FluxUi.fieldColumn(e.getKey(), FluxUi.textInput("comp_" + e.getKey(), String.valueOf(e.getValue()), "", false), null));
+        }
+        Widget compsGrid = Div.of(compFields.toArray(new Widget[0]))
+                .modifier(new Modifier().style("display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 0.75rem;"));
 
-        return String.format("""
-            <div data-engine-editor='JAVA_RECORD' style='margin-bottom: 1rem; padding: 0.9rem; border: 1px solid #3b82f6; border-radius: 8px;'>
-              <div style='font-size: 0.8rem; font-weight: 700; color: #3b82f6; margin-bottom: 0.75rem;'>💎 Editor de Java Canonical Record (Nueva versión inmutable)</div>
-              <input type='hidden' name='engineEditorMode' value='JAVA_RECORD' />
-              <div style='margin-bottom: 0.85rem;'>
-                %s
-              </div>
-              <div style='display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 0.75rem;'>
-                %s
-              </div>
-            </div>
-            """, fieldInput("Record Class", "rec_recordClass", recordClass), compInputs);
+        return editorCard("JAVA_RECORD", "#3b82f6", "💎 Editor de Java Canonical Record (Nueva versión inmutable)",
+                FluxUi.hidden("engineEditorMode", "JAVA_RECORD"),
+                Div.of(FluxUi.fieldColumn("Record Class", FluxUi.textInput("rec_recordClass", recordClass, "", false), null))
+                        .modifier(new Modifier().style("margin-bottom: 0.85rem;")),
+                compsGrid);
     }
 
-    private static String renderGraphEditor(EngineRecordInfo rec, Map<String, Object> data) {
-        String extraFields = data.entrySet().stream()
-                .filter(e -> !"edge_id".equals(e.getKey()) && !"source".equals(e.getKey()) && !"rel".equals(e.getKey()) && !"target".equals(e.getKey()))
-                .map(e -> fieldInput(e.getKey(), "prop_" + e.getKey(), String.valueOf(e.getValue())))
-                .collect(Collectors.joining());
+    private static Widget renderGraphEditor(EngineRecordInfo rec, Map<String, Object> data) {
+        List<Widget> fields = new ArrayList<>();
+        fields.add(FluxUi.fieldColumn("ID Arista (edge_id)", FluxUi.textInput("prop_edge_id", strVal(data.get("edge_id"), rec.getId()), "", false), null));
+        fields.add(FluxUi.fieldColumn("Nodo Origen (source)", FluxUi.textInput("prop_source", strVal(data.get("source"), ""), "", false), null));
+        fields.add(FluxUi.fieldColumn("Relación (rel)", FluxUi.textInput("prop_rel", strVal(data.get("rel"), ""), "", false), null));
+        fields.add(FluxUi.fieldColumn("Nodo Destino (target)", FluxUi.textInput("prop_target", strVal(data.get("target"), ""), "", false), null));
+        for (Map.Entry<String, Object> e : data.entrySet()) {
+            String k = e.getKey();
+            if ("edge_id".equals(k) || "source".equals(k) || "rel".equals(k) || "target".equals(k)) continue;
+            fields.add(FluxUi.fieldColumn(k, FluxUi.textInput("prop_" + k, String.valueOf(e.getValue()), "", false), null));
+        }
+        Widget grid = Div.of(fields.toArray(new Widget[0]))
+                .modifier(new Modifier().style("display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 0.75rem;"));
 
-        return String.format("""
-            <div data-engine-editor='GRAPH' style='margin-bottom: 1rem; padding: 0.9rem; border: 1px solid #ec4899; border-radius: 8px;'>
-              <div style='font-size: 0.8rem; font-weight: 700; color: #ec4899; margin-bottom: 0.75rem;'>🕸️ Editor de Arista de Grafo (Nodos y Relación)</div>
-              <input type='hidden' name='engineEditorMode' value='GRAPH' />
-              <div style='display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 0.75rem;'>
-                %s
-                %s
-                %s
-                %s
-                %s
-              </div>
-            </div>
-            """, fieldInput("ID Arista (edge_id)", "prop_edge_id", strVal(data.get("edge_id"), rec.getId())),
-                 fieldInput("Nodo Origen (source)", "prop_source", strVal(data.get("source"), "")),
-                 fieldInput("Relación (rel)", "prop_rel", strVal(data.get("rel"), "")),
-                 fieldInput("Nodo Destino (target)", "prop_target", strVal(data.get("target"), "")),
-                 extraFields);
+        return editorCard("GRAPH", "#ec4899", "🕸️ Editor de Arista de Grafo (Nodos y Relación)",
+                FluxUi.hidden("engineEditorMode", "GRAPH"), grid);
     }
 
-    private static String renderKeyValueEditor(EngineRecordInfo rec, Map<String, Object> data) {
-        String keyField = (!data.containsKey("key") && !data.containsKey("account"))
-                ? fieldInput("key", "prop_key", rec.getId())
-                : "";
-        String propFields = data.entrySet().stream()
-                .map(e -> fieldInput(e.getKey(), "prop_" + e.getKey(), String.valueOf(e.getValue())))
-                .collect(Collectors.joining());
+    private static Widget renderKeyValueEditor(EngineRecordInfo rec, Map<String, Object> data) {
+        List<Widget> fields = new ArrayList<>();
+        if (!data.containsKey("key") && !data.containsKey("account")) {
+            fields.add(FluxUi.fieldColumn("key", FluxUi.textInput("prop_key", rec.getId(), "", false), null));
+        }
+        for (Map.Entry<String, Object> e : data.entrySet()) {
+            fields.add(FluxUi.fieldColumn(e.getKey(), FluxUi.textInput("prop_" + e.getKey(), String.valueOf(e.getValue()), "", false), null));
+        }
+        Widget grid = Div.of(fields.toArray(new Widget[0]))
+                .modifier(new Modifier().style("display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 0.75rem;"));
 
-        return String.format("""
-            <div data-engine-editor='KEY_VALUE' style='margin-bottom: 1rem; padding: 0.9rem; border: 1px solid #f97316; border-radius: 8px;'>
-              <div style='font-size: 0.8rem; font-weight: 700; color: #f97316; margin-bottom: 0.75rem;'>🔑 Editor Clave-Valor</div>
-              <input type='hidden' name='engineEditorMode' value='KEY_VALUE' />
-              <div style='display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 0.75rem;'>
-                %s
-                %s
-              </div>
-            </div>
-            """, keyField, propFields);
+        return editorCard("KEY_VALUE", "#f97316", "🔑 Editor Clave-Valor",
+                FluxUi.hidden("engineEditorMode", "KEY_VALUE"), grid);
     }
 
-    private static String renderGeospatialEditor(EngineRecordInfo rec, Map<String, Object> data) {
-        return String.format("""
-            <div data-engine-editor='GEOSPATIAL' style='margin-bottom: 1rem; padding: 0.9rem; border: 1px solid #06b6d4; border-radius: 8px;'>
-              <div style='font-size: 0.8rem; font-weight: 700; color: #06b6d4; margin-bottom: 0.75rem;'>🌍 Editor Geoespacial (Coordenadas WGS84 &amp; Metadatos)</div>
-              <input type='hidden' name='engineEditorMode' value='GEOSPATIAL' />
-              <div style='display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 0.75rem;'>
-                %s
-                %s
-                %s
-                %s
-                %s
-              </div>
-            </div>
-            """, fieldInput("Estación (station_id)", "prop_station_id", strVal(data.get("station_id"), rec.getId())),
-                 fieldInput("Latitud (lat)", "prop_lat", strVal(data.get("lat"), "0.0")),
-                 fieldInput("Longitud (lng)", "prop_lng", strVal(data.get("lng"), "0.0")),
-                 fieldInput("Altitud m (altitud_m)", "prop_altitud_m", strVal(data.getOrDefault("altitud_m", data.get("altitud")), "0")),
-                 fieldInput("Zona", "prop_zona", strVal(data.get("zona"), "")));
+    private static Widget renderGeospatialEditor(EngineRecordInfo rec, Map<String, Object> data) {
+        Widget grid = Div.of(
+                FluxUi.fieldColumn("Estación (station_id)", FluxUi.textInput("prop_station_id", strVal(data.get("station_id"), rec.getId()), "", false), null),
+                FluxUi.fieldColumn("Latitud (lat)", FluxUi.textInput("prop_lat", strVal(data.get("lat"), "0.0"), "", false), null),
+                FluxUi.fieldColumn("Longitud (lng)", FluxUi.textInput("prop_lng", strVal(data.get("lng"), "0.0"), "", false), null),
+                FluxUi.fieldColumn("Altitud m (altitud_m)", FluxUi.textInput("prop_altitud_m", strVal(data.getOrDefault("altitud_m", data.get("altitud")), "0"), "", false), null),
+                FluxUi.fieldColumn("Zona", FluxUi.textInput("prop_zona", strVal(data.get("zona"), ""), "", false), null)
+        ).modifier(new Modifier().style("display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 0.75rem;"));
+
+        return editorCard("GEOSPATIAL", "#06b6d4", "🌍 Editor Geoespacial (Coordenadas WGS84 & Metadatos)",
+                FluxUi.hidden("engineEditorMode", "GEOSPATIAL"), grid);
     }
 
-    private static String renderVectorEditor(EngineRecordInfo rec, Map<String, Object> data) {
+    private static Widget renderVectorEditor(EngineRecordInfo rec, Map<String, Object> data) {
         Object embObj = data.getOrDefault("embedding_preview", data.get("embedding"));
         String embStr = "";
         if (embObj instanceof List<?> list) {
@@ -437,56 +442,54 @@ public final class EngineRecordRenderer {
             embStr = String.valueOf(embObj);
         }
 
-        return String.format("""
-            <div data-engine-editor='VECTOR' style='margin-bottom: 1rem; padding: 0.9rem; border: 1px solid #a855f7; border-radius: 8px;'>
-              <div style='font-size: 0.8rem; font-weight: 700; color: #a855f7; margin-bottom: 0.75rem;'>🧠 Editor de Vector Embedding (HNSW)</div>
-              <input type='hidden' name='engineEditorMode' value='VECTOR' />
-              <div style='display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 0.75rem; margin-bottom: 0.75rem;'>
-                %s
-                %s
-                %s
-                %s
-              </div>
-              %s
-            </div>
-            """, fieldInput("ID Vector", "prop_id", strVal(data.get("id"), rec.getId())),
-                 fieldInput("Modelo", "prop_model", strVal(data.get("model"), "biomed-clip-v3")),
-                 fieldInput("Dimensiones", "prop_dims", strVal(data.get("dims"), "1536")),
-                 fieldInput("Etiqueta", "prop_etiqueta", strVal(data.get("etiqueta"), "")),
-                 fieldInput("Vector Embedding (floats separados por coma)", "vec_embedding", embStr));
+        Widget grid = Div.of(
+                FluxUi.fieldColumn("ID Vector", FluxUi.textInput("prop_id", strVal(data.get("id"), rec.getId()), "", false), null),
+                FluxUi.fieldColumn("Modelo", FluxUi.textInput("prop_model", strVal(data.get("model"), "biomed-clip-v3"), "", false), null),
+                FluxUi.fieldColumn("Dimensiones", FluxUi.textInput("prop_dims", strVal(data.get("dims"), "1536"), "", false), null),
+                FluxUi.fieldColumn("Etiqueta", FluxUi.textInput("prop_etiqueta", strVal(data.get("etiqueta"), ""), "", false), null)
+        ).modifier(new Modifier().style("display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 0.75rem; margin-bottom: 0.75rem;"));
+
+        return editorCard("VECTOR", "#a855f7", "🧠 Editor de Vector Embedding (HNSW)",
+                FluxUi.hidden("engineEditorMode", "VECTOR"),
+                grid,
+                FluxUi.fieldColumn("Vector Embedding (floats separados por coma)", FluxUi.textInput("vec_embedding", embStr, "", false), null));
     }
 
-    private static String renderTimeseriesEditor(Map<String, Object> data) {
-        String inputs = data.entrySet().stream()
-                .map(e -> fieldInput(e.getKey(), "prop_" + e.getKey(), String.valueOf(e.getValue())))
-                .collect(Collectors.joining());
+    private static Widget renderTimeseriesEditor(Map<String, Object> data) {
+        List<Widget> fields = new ArrayList<>();
+        for (Map.Entry<String, Object> e : data.entrySet()) {
+            fields.add(FluxUi.fieldColumn(e.getKey(), FluxUi.textInput("prop_" + e.getKey(), String.valueOf(e.getValue()), "", false), null));
+        }
+        Widget grid = Div.of(fields.toArray(new Widget[0]))
+                .modifier(new Modifier().style("display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 0.75rem;"));
 
-        return String.format("""
-            <div data-engine-editor='TIMESERIES' style='margin-bottom: 1rem; padding: 0.9rem; border: 1px solid #22c55e; border-radius: 8px;'>
-              <div style='font-size: 0.8rem; font-weight: 700; color: #22c55e; margin-bottom: 0.75rem;'>📈 Editor de Serie Temporal</div>
-              <input type='hidden' name='engineEditorMode' value='TIMESERIES' />
-              <div style='display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 0.75rem;'>
-                %s
-              </div>
-            </div>
-            """, inputs);
+        return editorCard("TIMESERIES", "#22c55e", "📈 Editor de Serie Temporal",
+                FluxUi.hidden("engineEditorMode", "TIMESERIES"), grid);
     }
 
-    private static String renderTabularEditor(String engine, Map<String, Object> data) {
+    private static Widget renderTabularEditor(String engine, Map<String, Object> data) {
         String accent = "COLUMNAR".equals(engine) ? "#38bdf8" : "#ffd700";
-        String inputs = data.entrySet().stream()
-                .map(e -> fieldInput(e.getKey(), "prop_" + e.getKey(), String.valueOf(e.getValue())))
-                .collect(Collectors.joining());
+        List<Widget> fields = new ArrayList<>();
+        for (Map.Entry<String, Object> e : data.entrySet()) {
+            fields.add(FluxUi.fieldColumn(e.getKey(), FluxUi.textInput("prop_" + e.getKey(), String.valueOf(e.getValue()), "", false), null));
+        }
+        Widget grid = Div.of(fields.toArray(new Widget[0]))
+                .modifier(new Modifier().style("display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 0.75rem;"));
 
-        return String.format("""
-            <div data-engine-editor='%s' style='margin-bottom: 1rem; padding: 0.9rem; border: 1px solid %s; border-radius: 8px;'>
-              <div style='font-size: 0.8rem; font-weight: 700; color: %s; margin-bottom: 0.75rem;'>📊 Editor %s (Columnas / Campos)</div>
-              <input type='hidden' name='engineEditorMode' value='%s' />
-              <div style='display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 0.75rem;'>
-                %s
-              </div>
-            </div>
-            """, engine, accent, accent, engine, engine, inputs);
+        return editorCard(engine, accent, "📊 Editor " + engine + " (Columnas / Campos)",
+                FluxUi.hidden("engineEditorMode", engine), grid);
+    }
+
+    private static Widget editorCard(String engine, String accent, String title, Widget... children) {
+        List<Widget> all = new ArrayList<>();
+        all.add(FluxUi.coloredSpan(title, "font-size: 0.8rem; font-weight: 700; color: " + accent + "; display: block; margin-bottom: 0.75rem;"));
+        for (Widget w : children) {
+            all.add(w);
+        }
+        Widget box = Div.of(all.toArray(new Widget[0]));
+        box.modifier(new Modifier().attribute("data-engine-editor", engine)
+                .style("margin-bottom: 1rem; padding: 0.9rem; border: 1px solid " + accent + "; border-radius: 8px;"));
+        return box;
     }
 
     // =========================================================================
@@ -565,32 +568,31 @@ public final class EngineRecordRenderer {
     }
 
     // =========================================================================
-    // UTILIDADES HTML
+    // UTILIDADES WIDGETS
     // =========================================================================
 
-    private static String renderKeyValueGrid(Map<String, Object> data, String accent) {
-        String items = data.entrySet().stream()
-                .map(e -> "<div style='background:var(--bg-subtle); border-left:3px solid " + accent + "; border-radius:6px; padding:0.5rem 0.7rem;'>"
-                        + "<div style='font-size:0.72rem; color:var(--text-muted); font-weight:700;'>" + escapeHtml(e.getKey()) + "</div>"
-                        + "<div style='font-size:0.86rem; color:var(--text-main); font-weight:600; word-break:break-word;'>" + escapeHtml(String.valueOf(e.getValue())) + "</div>"
-                        + "</div>")
-                .collect(Collectors.joining());
-
-        return "<div style='display:grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap:0.6rem;'>" + items + "</div>";
+    private static Widget renderKeyValueGrid(Map<String, Object> data, String accent) {
+        List<Widget> cells = new ArrayList<>();
+        for (Map.Entry<String, Object> e : data.entrySet()) {
+            Widget cell = Div.of(
+                    FluxUi.coloredSpan(e.getKey(), "font-size:0.72rem; color:var(--text-muted); font-weight:700; display:block;"),
+                    FluxUi.coloredSpan(String.valueOf(e.getValue()), "font-size:0.86rem; color:var(--text-main); font-weight:600; word-break:break-word; display:block;")
+            );
+            cell.modifier(new Modifier().style("background:var(--bg-subtle); border-left:3px solid " + accent + "; border-radius:6px; padding:0.5rem 0.7rem;"));
+            cells.add(cell);
+        }
+        Widget grid = Div.of(cells.toArray(new Widget[0]));
+        grid.modifier(new Modifier().style("display:grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap:0.6rem;"));
+        return grid;
     }
 
-    private static String metricBox(String label, String value, String color) {
-        return "<div style='background:var(--bg-subtle); border:1px solid var(--border-subtle); border-top:3px solid " + color + "; border-radius:8px; padding:0.6rem 0.8rem;'>"
-                + "<div style='font-size:0.72rem; color:var(--text-muted); font-weight:700;'>" + escapeHtml(label) + "</div>"
-                + "<div style='font-size:0.95rem; color:var(--text-main); font-weight:800; margin-top:0.2rem;'>" + escapeHtml(value) + "</div>"
-                + "</div>";
-    }
-
-    private static String fieldInput(String label, String name, String value) {
-        return "<div>"
-                + "<label style='font-size:0.74rem; font-weight:700; color:var(--text-muted); display:block; margin-bottom:0.25rem;'>" + escapeHtml(label) + "</label>"
-                + "<input class='app-input' type='text' name='" + escapeHtml(name) + "' value='" + escapeHtml(value) + "' />"
-                + "</div>";
+    private static Widget metricBox(String label, String value, String color) {
+        Widget box = Div.of(
+                FluxUi.coloredSpan(label, "font-size:0.72rem; color:var(--text-muted); font-weight:700; display:block;"),
+                FluxUi.coloredSpan(value, "font-size:0.95rem; color:var(--text-main); font-weight:800; margin-top:0.2rem; display:block;")
+        );
+        box.modifier(new Modifier().style("background:var(--bg-subtle); border:1px solid var(--border-subtle); border-top:3px solid " + color + "; border-radius:8px; padding:0.6rem 0.8rem;"));
+        return box;
     }
 
     private static String javaTypeName(Object val) {
@@ -605,10 +607,4 @@ public final class EngineRecordRenderer {
     private static String strVal(Object obj, String def) {
         return obj != null ? String.valueOf(obj) : def;
     }
-
-    private static String escapeHtml(String s) {
-        if (s == null) return "";
-        return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;").replace("'", "&#39;");
-    }
 }
-

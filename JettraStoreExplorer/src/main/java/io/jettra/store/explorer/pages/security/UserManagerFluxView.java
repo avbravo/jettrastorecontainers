@@ -6,12 +6,14 @@ import io.jettra.flux.core.Widget;
 import io.jettra.flux.widgets.Badge;
 import io.jettra.flux.widgets.Datatable;
 import io.jettra.flux.widgets.Div;
+import io.jettra.flux.widgets.Form;
 import io.jettra.flux.widgets.Header;
-import io.jettra.flux.widgets.RawHtml;
 import io.jettra.flux.widgets.Text;
 import io.jettra.store.explorer.model.JettraDatabaseRole;
 import io.jettra.store.explorer.model.JettraUser;
+import io.jettra.store.explorer.pages.template.FluxUi;
 import io.jettra.store.explorer.plugin.JettraStorePlugin;
+import java.util.Arrays;
 import java.util.List;
 
 /**
@@ -101,19 +103,27 @@ public class UserManagerFluxView extends FluxView {
                     .modifier(new Modifier().style("color: " + dbRoleColor + "; font-weight: 600; font-size: 0.8rem;")));
             }
 
-            String actionHtml;
-            String editLink = canEdit
-                ? "<a href='/users?edit=" + encodeUrl(u.getUsername()) + "' class='app-btn-secondary' style='margin-right:6px; padding:0.35rem 0.65rem; font-size:0.78rem;'>✏️ Editar</a>"
-                : "";
-            String deleteForm = (isAdmin && !"admin".equalsIgnoreCase(u.getUsername()))
-                ? "<form method='POST' action='/users' style='display:inline;'>"
-                  + "<input type='hidden' name='action' value='delete_user'/>"
-                  + "<input type='hidden' name='username' value='" + escapeHtml(u.getUsername()) + "'/>"
-                  + "<button type='submit' class='app-btn-danger' onclick=\"return confirm('¿Revocar usuario " + escapeHtml(u.getUsername()) + "?');\">Revocar</button></form>"
-                : (!canEdit ? "<span style='color:var(--text-muted); font-size:0.75rem;'>Solo lectura</span>"
-                            : ("admin".equalsIgnoreCase(u.getUsername()) ? "<span style='color:var(--text-muted); font-size:0.75rem;'>Protegido</span>" : ""));
-            actionHtml = "<div style='text-align:right; white-space:nowrap;'>" + editLink + deleteForm + "</div>";
-            rowCells.add(RawHtml.of(actionHtml));
+            List<Widget> actionItems = new java.util.ArrayList<>();
+            if (canEdit) {
+                actionItems.add(FluxUi.linkButton("/users?edit=" + encodeUrl(u.getUsername()), "✏️ Editar", "app-btn-secondary",
+                        "margin-right:6px; padding:0.35rem 0.65rem; font-size:0.78rem;"));
+            }
+            if (isAdmin && !"admin".equalsIgnoreCase(u.getUsername())) {
+                Form delForm = Form.of(
+                        FluxUi.hidden("action", "delete_user"),
+                        FluxUi.hidden("username", u.getUsername()),
+                        FluxUi.submitButton("Revocar", "app-btn-danger", null)
+                ).action("/users").method("POST");
+                delForm.modifier(new Modifier().style("display:inline;")
+                        .attribute("onsubmit", "return confirm('¿Revocar usuario " + escapeHtml(u.getUsername()) + "?');"));
+                actionItems.add(delForm);
+            } else if (!canEdit) {
+                actionItems.add(FluxUi.coloredSpan("Solo lectura", "color:var(--text-muted); font-size:0.75rem;"));
+            } else if ("admin".equalsIgnoreCase(u.getUsername())) {
+                actionItems.add(FluxUi.coloredSpan("Protegido", "color:var(--text-muted); font-size:0.75rem;"));
+            }
+            rowCells.add(Div.of(actionItems.toArray(new Widget[0]))
+                    .modifier(new Modifier().style("text-align:right; white-space:nowrap;")));
 
             rows.add(rowCells);
         }
@@ -135,18 +145,24 @@ public class UserManagerFluxView extends FluxView {
     private Widget buildUserFormCard(List<String> dbs) {
         boolean isEditing = editUser != null;
         if (!isAdmin && !isEditing) {
-            RawHtml info = RawHtml.of(String.format("""
-                <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.75rem;">
-                  <div style="font-size:0.88rem; color:var(--text-muted);">
-                    🔐 Sesión estándar (<strong style="color:#00d4ff;">%s</strong>): puedes editar tus propios datos desde el botón <strong>✏️ Editar</strong> en la tabla. Solo usuarios con rol <strong style="color:#ffd700;">ADMIN</strong> pueden crear o editar otros usuarios.
-                  </div>
-                  %s
-                </div>
-            """, escapeHtml(loggedUsername != null ? loggedUsername : ""),
-                 (loggedUsername != null && !loggedUsername.isBlank()
-                     ? "<a href='/users?edit=" + encodeUrl(loggedUsername) + "' class='app-btn-primary'>✏️ Editar Mi Perfil</a>"
-                     : "")));
-            Div card = Div.of(info);
+            Widget msgDiv = Div.of(
+                    Text.of("🔐 Sesión estándar ("),
+                    FluxUi.coloredSpan(loggedUsername != null ? loggedUsername : "", "color:#00d4ff; font-weight:700;"),
+                    Text.of("): puedes editar tus propios datos desde el botón "),
+                    FluxUi.coloredSpan("✏️ Editar", "font-weight:700;"),
+                    Text.of(" en la tabla. Solo usuarios con rol "),
+                    FluxUi.coloredSpan("ADMIN", "color:#ffd700; font-weight:700;"),
+                    Text.of(" pueden crear o editar otros usuarios.")
+            ).modifier(new Modifier().style("font-size:0.88rem; color:var(--text-muted);"));
+
+            List<Widget> infoChildren = new java.util.ArrayList<>();
+            infoChildren.add(msgDiv);
+            if (loggedUsername != null && !loggedUsername.isBlank()) {
+                infoChildren.add(FluxUi.linkButton("/users?edit=" + encodeUrl(loggedUsername), "✏️ Editar Mi Perfil", "app-btn-primary", null));
+            }
+            Widget row = Div.of(infoChildren.toArray(new Widget[0]))
+                    .modifier(new Modifier().style("display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.75rem;"));
+            Div card = Div.of(row);
             card.modifier(new Modifier().cssClass("ui-card").style("margin-bottom: 1.5rem; background: var(--bg-subtle);"));
             return card;
         }
@@ -157,84 +173,58 @@ public class UserManagerFluxView extends FluxView {
         Header header = Header.of(3, title);
         header.modifier(new Modifier().style("font-size: 1.15rem; color: " + (isEditing ? "#ffd700" : "var(--text-main)") + "; margin: 0 0 0.85rem 0;"));
 
-        String dbRoles = dbs.stream().map(db -> {
+        List<String> dbRoleOptions = Arrays.stream(JettraDatabaseRole.values()).map(Enum::name).toList();
+        List<Widget> dbRoleCols = new java.util.ArrayList<>();
+        for (String db : dbs) {
             JettraDatabaseRole currentDbRole = isEditing ? editUser.getRoleForDatabase(db) : JettraDatabaseRole.READ_WRITE;
-            if (isAdmin) {
-                String options = java.util.Arrays.stream(JettraDatabaseRole.values())
-                    .map(opt -> "<option value='" + opt.name() + "'" + (opt == currentDbRole ? " selected" : "") + ">" + opt.name() + "</option>")
-                    .collect(java.util.stream.Collectors.joining());
-                return "<div style='flex:1; min-width:140px;'>"
-                     + "<label style='font-size:0.75rem; color:var(--text-muted); font-weight:600; display:block; margin-bottom:0.25rem;'>" + escapeHtml(db) + "</label>"
-                     + "<select class='app-input' name='db_role_" + escapeHtml(db) + "'>" + options + "</select></div>";
-            } else {
-                return "<div style='flex:1; min-width:140px;'>"
-                     + "<label style='font-size:0.75rem; color:var(--text-muted); font-weight:600; display:block; margin-bottom:0.25rem;'>" + escapeHtml(db) + "</label>"
-                     + "<input class='app-input' type='text' value='" + currentDbRole.name() + "' disabled style='opacity:0.7;' /></div>";
-            }
-        }).collect(java.util.stream.Collectors.joining("\n"));
-
-        String roleOptions;
-        JettraUser.GlobalRole currentGlobalRole = isEditing ? editUser.getGlobalRole() : JettraUser.GlobalRole.DEVELOPER;
-        boolean lockGlobalRole = !isAdmin || (isEditing && "admin".equalsIgnoreCase(editUser.getUsername()));
-        if (lockGlobalRole) {
-            roleOptions = "<input type='hidden' name='globalRole' value='" + currentGlobalRole.name() + "' />"
-                        + "<input class='app-input' type='text' value='" + currentGlobalRole.name() + "' disabled style='opacity:0.7;' />";
-        } else {
-            String opts = java.util.Arrays.stream(JettraUser.GlobalRole.values())
-                .map(gr -> "<option value='" + gr.name() + "'" + (gr == currentGlobalRole ? " selected" : "") + ">" + gr.name() + " (" + gr.getDescription() + ")</option>")
-                .collect(java.util.stream.Collectors.joining());
-            roleOptions = "<select class='app-input' name='globalRole'>" + opts + "</select>";
+            Widget ctrl = isAdmin
+                    ? FluxUi.dropdown("db_role_" + db, dbRoleOptions, currentDbRole.name())
+                    : FluxUi.disabledInput(currentDbRole.name());
+            dbRoleCols.add(FluxUi.fieldColumn(db, ctrl, "flex:1; min-width:140px;"));
         }
 
-        String usernameField = isEditing
-                ? "<input type='hidden' name='username' value='" + escapeHtml(editUser.getUsername()) + "' />"
-                  + "<input type='hidden' name='editMode' value='true' />"
-                  + "<input class='app-input' type='text' value='" + escapeHtml(editUser.getUsername()) + "' disabled style='opacity:0.7;' />"
-                : "<input class='app-input' type='text' name='username' placeholder='developer01' required />";
+        JettraUser.GlobalRole currentGlobalRole = isEditing ? editUser.getGlobalRole() : JettraUser.GlobalRole.DEVELOPER;
+        boolean lockGlobalRole = !isAdmin || (isEditing && "admin".equalsIgnoreCase(editUser.getUsername()));
+        Widget roleControl = lockGlobalRole
+                ? Div.of(FluxUi.hidden("globalRole", currentGlobalRole.name()), FluxUi.disabledInput(currentGlobalRole.name()))
+                : FluxUi.dropdown("globalRole", Arrays.stream(JettraUser.GlobalRole.values()).map(Enum::name).toList(), currentGlobalRole.name());
 
-        String passwordField = isEditing
-                ? "<input class='app-input' type='password' name='password' placeholder='Dejar vacío para conservar actual' />"
-                : "<input class='app-input' type='password' name='password' placeholder='••••••••' required />";
+        Widget usernameControl = isEditing
+                ? Div.of(FluxUi.hidden("username", editUser.getUsername()), FluxUi.hidden("editMode", "true"), FluxUi.disabledInput(editUser.getUsername()))
+                : FluxUi.textInput("username", "", "developer01", true);
 
-        String descVal = isEditing && editUser.getDescription() != null ? escapeHtml(editUser.getDescription()) : "";
-        String cancelBtn = isEditing ? "<a href='/users' class='app-btn-secondary' style='margin-right:0.5rem;'>Cancelar</a>" : "";
-        String submitLabel = isEditing ? "💾 Actualizar Usuario" : "➕ Guardar Usuario";
+        Widget passwordControl = isEditing
+                ? FluxUi.passwordInput("password", "Dejar vacío para conservar actual", false)
+                : FluxUi.passwordInput("password", "••••••••", true);
 
-        RawHtml formHtml = RawHtml.of(String.format("""
-            <form method="POST" action="/users">
-              <input type="hidden" name="action" value="save_user" />
-              <div style="display: flex; flex-wrap: wrap; gap: 0.85rem; margin-bottom: 1rem;">
-                <div style="flex: 1.2; min-width: 140px;">
-                  <label style="font-size: 0.75rem; color: var(--text-muted); display: block; margin-bottom: 0.25rem; font-weight: 600;">Usuario</label>
-                  %s
-                </div>
-                <div style="flex: 1.2; min-width: 140px;">
-                  <label style="font-size: 0.75rem; color: var(--text-muted); display: block; margin-bottom: 0.25rem; font-weight: 600;">Contraseña</label>
-                  %s
-                </div>
-                <div style="flex: 1.2; min-width: 140px;">
-                  <label style="font-size: 0.75rem; color: var(--text-muted); display: block; margin-bottom: 0.25rem; font-weight: 600;">Rol Global</label>
-                  %s
-                </div>
-                <div style="flex: 2; min-width: 200px;">
-                  <label style="font-size: 0.75rem; color: var(--text-muted); display: block; margin-bottom: 0.25rem; font-weight: 600;">Descripción</label>
-                  <input class="app-input" type="text" name="description" value="%s" placeholder="Desarrollador backend área facturación" />
-                </div>
-              </div>
+        String descVal = isEditing && editUser.getDescription() != null ? editUser.getDescription() : "";
+        Widget descControl = FluxUi.textInput("description", descVal, "Desarrollador backend área facturación", false);
 
-              <div style="font-size: 0.8rem; font-weight: 700; color: #00d4ff; margin-bottom: 0.5rem;">Permisos por Base de Datos:</div>
-              <div style="display: flex; flex-wrap: wrap; gap: 0.85rem; margin-bottom: 1.25rem;">
-                %s
-              </div>
+        Div topFields = Div.of(
+                FluxUi.fieldColumn("Usuario", usernameControl, "flex: 1.2; min-width: 140px;"),
+                FluxUi.fieldColumn("Contraseña", passwordControl, "flex: 1.2; min-width: 140px;"),
+                FluxUi.fieldColumn("Rol Global", roleControl, "flex: 1.2; min-width: 140px;"),
+                FluxUi.fieldColumn("Descripción", descControl, "flex: 2; min-width: 200px;")
+        );
+        topFields.modifier(new Modifier().style("display: flex; flex-wrap: wrap; gap: 0.85rem; margin-bottom: 1rem;"));
 
-              <div style="display: flex; justify-content: flex-end; align-items: center;">
-                %s
-                <button type="submit" class="app-btn-primary">%s</button>
-              </div>
-            </form>
-        """, usernameField, passwordField, roleOptions.toString(), descVal, dbRoles.toString(), cancelBtn, submitLabel));
+        Widget dbRolesTitle = Div.of(Text.of("Permisos por Base de Datos:"))
+                .modifier(new Modifier().style("font-size: 0.8rem; font-weight: 700; color: #00d4ff; margin-bottom: 0.5rem;"));
+        Widget dbRolesRow = Div.of(dbRoleCols.toArray(new Widget[0]))
+                .modifier(new Modifier().style("display: flex; flex-wrap: wrap; gap: 0.85rem; margin-bottom: 1.25rem;"));
 
-        Div card = Div.of(header, formHtml);
+        List<Widget> footerBtns = new java.util.ArrayList<>();
+        if (isEditing) {
+            footerBtns.add(FluxUi.linkButton("/users", "Cancelar", "app-btn-secondary", "margin-right:0.5rem;"));
+        }
+        footerBtns.add(FluxUi.submitButton(isEditing ? "💾 Actualizar Usuario" : "➕ Guardar Usuario", "app-btn-primary", null));
+        Widget footerRow = Div.of(footerBtns.toArray(new Widget[0]))
+                .modifier(new Modifier().style("display: flex; justify-content: flex-end; align-items: center;"));
+
+        Form form = Form.of(FluxUi.hidden("action", "save_user"), topFields, dbRolesTitle, dbRolesRow, footerRow)
+                .action("/users").method("POST");
+
+        Div card = Div.of(header, form);
         String borderStyle = isEditing ? " border-left: 4px solid #ffd700;" : "";
         card.modifier(new Modifier().cssClass("ui-card").style("margin-bottom: 2rem; background: var(--bg-subtle);" + borderStyle));
         return card;

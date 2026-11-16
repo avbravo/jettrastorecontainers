@@ -6,21 +6,21 @@ import io.jettra.flux.core.Widget;
 import io.jettra.flux.widgets.Badge;
 import io.jettra.flux.widgets.Datatable;
 import io.jettra.flux.widgets.Div;
+import io.jettra.flux.widgets.Form;
 import io.jettra.flux.widgets.Header;
 import io.jettra.flux.widgets.Link;
 import io.jettra.flux.widgets.Paragraph;
-import io.jettra.flux.widgets.RawHtml;
 import io.jettra.flux.widgets.Row;
 import io.jettra.flux.widgets.Text;
 import io.jettra.store.explorer.model.EngineBucketInfo;
 import io.jettra.store.explorer.model.EngineIndexInfo;
 import io.jettra.store.explorer.model.JettraDatabaseRole;
 import io.jettra.store.explorer.model.JettraUser;
+import io.jettra.store.explorer.pages.template.FluxUi;
 import io.jettra.store.explorer.plugin.JettraStorePlugin;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.stream.Collectors;
 
 /**
  * Vista de Administración de Bases de Datos y Motores Multimodelo en JettraFlux.
@@ -128,28 +128,21 @@ public class DatabasesFluxView extends FluxView {
         Header header = Header.of(3, "➕ Crear Nueva Base de Datos");
         header.modifier(new Modifier().style("font-size: 1.1rem; color: var(--text-main); margin: 0 0 0.5rem 0;"));
 
-        RawHtml formHtml = RawHtml.of("""
-            <div style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 0.85rem;">
-              ⚡ Toda base de datos creada habilita automáticamente soporte nativo para los <strong style="color: #00d4ff;">9 motores (engines) de JettraStore</strong>:
-              <code>DOCUMENT</code>, <code>KEY_VALUE</code>, <code>COLUMNAR</code>, <code>TIMESERIES</code>, <code>GEOSPATIAL</code>, <code>GRAPH</code>, <code>VECTOR</code>, <code>JAVA_RECORD</code> y <code>OBJECT</code>.
-            </div>
-            <form method="POST" action="/databases" style="display: flex; flex-wrap: wrap; gap: 0.85rem; align-items: flex-end;">
-              <input type="hidden" name="action" value="create_db" />
-              <div style="flex: 1.5; min-width: 220px;">
-                <label style="font-size: 0.75rem; color: var(--text-muted); display: block; margin-bottom: 0.25rem; font-weight: 600;">Nombre de la Base de Datos</label>
-                <input class="app-input" type="text" name="dbName" placeholder="ecommerce_core_db" required />
-              </div>
-              <div style="flex: 2.5; min-width: 260px;">
-                <label style="font-size: 0.75rem; color: var(--text-muted); display: block; margin-bottom: 0.25rem; font-weight: 600;">Descripción</label>
-                <input class="app-input" type="text" name="description" placeholder="Base de datos empresarial multimodelo para gestión de inventarios" />
-              </div>
-              <div>
-                <button type="submit" class="app-btn-primary" style="height: 38px;">➕ Crear Base de Datos</button>
-              </div>
-            </form>
-        """);
+        Widget infoNote = Div.of(
+                Text.of("⚡ Toda base de datos creada habilita automáticamente soporte nativo para los "),
+                FluxUi.coloredSpan("9 motores (engines) de JettraStore", "color: #00d4ff; font-weight: 700;"),
+                Text.of(": DOCUMENT, KEY_VALUE, COLUMNAR, TIMESERIES, GEOSPATIAL, GRAPH, VECTOR, JAVA_RECORD y OBJECT.")
+        ).modifier(new Modifier().style("font-size: 0.8rem; color: var(--text-muted); margin-bottom: 0.85rem;"));
 
-        Div card = Div.of(header, formHtml);
+        Form form = Form.of(
+                FluxUi.hidden("action", "create_db"),
+                FluxUi.fieldColumn("Nombre de la Base de Datos", FluxUi.textInput("dbName", "", "ecommerce_core_db", true), "flex: 1.5; min-width: 220px;"),
+                FluxUi.fieldColumn("Descripción", FluxUi.textInput("description", "", "Base de datos empresarial multimodelo para gestión de inventarios", false), "flex: 2.5; min-width: 260px;"),
+                Div.of(FluxUi.submitButton("➕ Crear Base de Datos", "app-btn-primary", "height: 38px;"))
+        ).action("/databases").method("POST");
+        form.modifier(new Modifier().style("display: flex; flex-wrap: wrap; gap: 0.85rem; align-items: flex-end;"));
+
+        Div card = Div.of(header, infoNote, form);
         card.modifier(new Modifier().cssClass("ui-card").style("margin-bottom: 1.5rem; background: var(--bg-subtle);"));
         return card;
     }
@@ -175,26 +168,34 @@ public class DatabasesFluxView extends FluxView {
             long dbObjects = buckets.stream().mapToLong(EngineBucketInfo::getTotalObjects).sum();
             long dbBytes = buckets.stream().mapToLong(EngineBucketInfo::getTotalBytes).sum();
 
-            Widget dbCell = Div.of(
-                RawHtml.of("<strong style='color:#00d4ff;'>📁 " + db + "</strong>" + (isSelected ? " <span style='color:#ffd700; font-size:0.75rem;'>[SELECCIONADA]</span>" : ""))
-            );
+            List<Widget> dbCellItems = new ArrayList<>();
+            dbCellItems.add(FluxUi.coloredSpan("📁 " + db, "color:#00d4ff; font-weight:700;"));
+            if (isSelected) {
+                dbCellItems.add(FluxUi.coloredSpan(" [SELECCIONADA]", "color:#ffd700; font-size:0.75rem; font-weight:700;"));
+            }
+            Widget dbCell = Div.of(dbCellItems.toArray(new Widget[0]));
             Widget bucketsCell = Text.of(buckets.size() + " motores");
             Widget objCell = Text.of(String.format("%,d", dbObjects));
             Widget sizeCell = Text.of(formatBytes(dbBytes));
 
-            String manageUsersBtn = isAdmin
-                ? "<a href='/databases?db=" + db + "&manage_users_db=" + db + "' class='app-btn-secondary' style='margin-right:6px;'>👥 Administrar Usuarios</a>"
-                : "<span class='app-btn-secondary' style='margin-right:6px; opacity:0.45; cursor:not-allowed;' title='Opción habilitada únicamente para usuarios con rol ADMIN'>🔒 Administrar Usuarios</span>";
-            String deleteBtn = !"system_metadata_db".equalsIgnoreCase(db)
-                ? "<a href='/databases?action=delete_db&db=" + db + "' class='app-btn-danger' onclick=\"return confirm('¿Seguro de eliminar la base de datos " + db + "?');\">🗑️</a>"
-                : "";
-            String actionsHtml = "<div>"
-                + "<a href='/databases?db=" + db + "' class='app-btn-secondary' style='margin-right:6px;'>⚙️ Administrar Motores</a>"
-                + manageUsersBtn
-                + "<a href='/explorer?db=" + db + "' class='app-btn-primary' style='margin-right:6px;'>📦 Ver Registros</a>"
-                + deleteBtn
-                + "</div>";
-            Widget actionsCell = RawHtml.of(actionsHtml);
+            List<Widget> actionsList = new ArrayList<>();
+            actionsList.add(FluxUi.linkButton("/databases?db=" + db, "⚙️ Administrar Motores", "app-btn-secondary", "margin-right:6px;"));
+            if (isAdmin) {
+                actionsList.add(FluxUi.linkButton("/databases?db=" + db + "&manage_users_db=" + db, "👥 Administrar Usuarios", "app-btn-secondary", "margin-right:6px;"));
+            } else {
+                Widget locked = FluxUi.coloredSpan("🔒 Administrar Usuarios", "margin-right:6px; opacity:0.45; cursor:not-allowed;");
+                locked.modifier(new Modifier().cssClass("app-btn-secondary").style("margin-right:6px; opacity:0.45; cursor:not-allowed;")
+                        .attribute("title", "Opción habilitada únicamente para usuarios con rol ADMIN"));
+                actionsList.add(locked);
+            }
+            actionsList.add(FluxUi.linkButton("/explorer?db=" + db, "📦 Ver Registros", "app-btn-primary", "margin-right:6px;"));
+            if (!"system_metadata_db".equalsIgnoreCase(db)) {
+                Widget delLink = FluxUi.linkButton("/databases?action=delete_db&db=" + db, "🗑️", "app-btn-danger", null);
+                delLink.modifier(new Modifier().cssClass("app-btn-danger")
+                        .attribute("onclick", "return confirm('¿Seguro de eliminar la base de datos " + db + "?');"));
+                actionsList.add(delLink);
+            }
+            Widget actionsCell = Div.of(actionsList.toArray(new Widget[0]));
 
             rows.add(List.of(dbCell, bucketsCell, objCell, sizeCell, actionsCell));
         }
@@ -212,44 +213,36 @@ public class DatabasesFluxView extends FluxView {
         Header header = Header.of(3, "👥 Administración de Usuarios de la Base de Datos [" + targetDb + "]");
         header.modifier(new Modifier().style("font-size: 1.1rem; color: #ffd700; margin: 0 0 0.75rem 0;"));
 
-        String userOptions = allUsers.stream()
+        List<String> assignableUsernames = allUsers.stream()
                 .filter(u -> u.getGlobalRole() != JettraUser.GlobalRole.ADMIN)
-                .map(u -> "<option value='" + escapeHtml(u.getUsername()) + "'>" + escapeHtml(u.getUsername()) + " (" + u.getGlobalRole().name() + ")</option>")
-                .collect(Collectors.joining());
+                .map(JettraUser::getUsername)
+                .toList();
 
-        long assignableCount = allUsers.stream()
-                .filter(u -> u.getGlobalRole() != JettraUser.GlobalRole.ADMIN)
-                .count();
-
-        String addFormHtml = assignableCount > 0
-                ? String.format("""
-                    <form method="POST" action="/databases" style="display: flex; flex-wrap: wrap; gap: 0.85rem; align-items: flex-end; background: var(--bg-subtle); padding: 1rem; border-radius: 8px; margin-bottom: 1.1rem;">
-                      <input type="hidden" name="action" value="add_db_user" />
-                      <input type="hidden" name="db" value="%s" />
-                      <div style="flex: 1.5; min-width: 180px;">
-                        <label style="font-size: 0.75rem; color: var(--text-muted); display: block; margin-bottom: 0.25rem; font-weight: 600;">Usuario</label>
-                        <select class="app-input" name="username">%s</select>
-                      </div>
-                      <div style="flex: 1.2; min-width: 160px;">
-                        <label style="font-size: 0.75rem; color: var(--text-muted); display: block; margin-bottom: 0.25rem; font-weight: 600;">Rol en %s</label>
-                        <select class="app-input" name="role">
-                          <option value="READ_WRITE">READ_WRITE</option>
-                          <option value="READ_ONLY">READ_ONLY</option>
-                          <option value="ADMIN">ADMIN</option>
-                        </select>
-                      </div>
-                      <div style="display:flex; gap:0.5rem;">
-                        <button type="submit" class="app-btn-primary" style="height: 38px;">➕ Añadir Usuario a la BD</button>
-                        <a href="/databases?db=%s" class="app-btn-secondary" style="height: 38px; display:inline-flex; align-items:center;">Cerrar</a>
-                      </div>
-                    </form>
-                """, escapeHtml(targetDb), userOptions, escapeHtml(targetDb), escapeHtml(targetDb))
-                : String.format("""
-                    <div style="display:flex; justify-content:space-between; align-items:center; background:var(--bg-subtle); padding:0.85rem 1rem; border-radius:8px; margin-bottom:1.1rem;">
-                      <span style="font-size:0.85rem; color:var(--text-muted);">No hay usuarios adicionales no-admin registrados. Crea usuarios en <a href="/users" style="color:#00d4ff;">/users</a> para asignarlos a esta base de datos.</span>
-                      <a href="/databases?db=%s" class="app-btn-secondary">Cerrar</a>
-                    </div>
-                """, escapeHtml(targetDb));
+        Widget addFormWidget;
+        if (!assignableUsernames.isEmpty()) {
+            Form addForm = Form.of(
+                    FluxUi.hidden("action", "add_db_user"),
+                    FluxUi.hidden("db", targetDb),
+                    FluxUi.fieldColumn("Usuario", FluxUi.dropdown("username", assignableUsernames, assignableUsernames.get(0)), "flex: 1.5; min-width: 180px;"),
+                    FluxUi.fieldColumn("Rol en " + targetDb, FluxUi.dropdown("role", List.of("READ_WRITE", "READ_ONLY", "ADMIN"), "READ_WRITE"), "flex: 1.2; min-width: 160px;"),
+                    Div.of(
+                            FluxUi.submitButton("➕ Añadir Usuario a la BD", "app-btn-primary", "height: 38px;"),
+                            FluxUi.linkButton("/databases?db=" + targetDb, "Cerrar", "app-btn-secondary", "height: 38px; display:inline-flex; align-items:center;")
+                    ).modifier(new Modifier().style("display:flex; gap:0.5rem;"))
+            ).action("/databases").method("POST");
+            addForm.modifier(new Modifier().style("display: flex; flex-wrap: wrap; gap: 0.85rem; align-items: flex-end; background: var(--bg-subtle); padding: 1rem; border-radius: 8px; margin-bottom: 1.1rem;"));
+            addFormWidget = addForm;
+        } else {
+            Widget msgRow = Div.of(
+                    Div.of(
+                            FluxUi.coloredSpan("No hay usuarios adicionales no-admin registrados. Crea usuarios en ", "font-size:0.85rem; color:var(--text-muted);"),
+                            Link.of("/users", "/users").modifier(new Modifier().style("color:#00d4ff; font-size:0.85rem;")),
+                            FluxUi.coloredSpan(" para asignarlos a esta base de datos.", "font-size:0.85rem; color:var(--text-muted);")
+                    ),
+                    FluxUi.linkButton("/databases?db=" + targetDb, "Cerrar", "app-btn-secondary", null)
+            ).modifier(new Modifier().style("display:flex; justify-content:space-between; align-items:center; background:var(--bg-subtle); padding:0.85rem 1rem; border-radius:8px; margin-bottom:1.1rem;"));
+            addFormWidget = msgRow;
+        }
 
         List<Widget> userTableHeaders = List.of(
             Text.of("Usuario"),
@@ -266,22 +259,22 @@ public class DatabasesFluxView extends FluxView {
             }
             Widget actionCell;
             if (u.getGlobalRole() == JettraUser.GlobalRole.ADMIN) {
-                actionCell = Div.of(RawHtml.of("<span style='color:var(--text-muted); font-size:0.75rem;'>Superadmin Global</span>"));
+                actionCell = FluxUi.coloredSpan("Superadmin Global", "color:var(--text-muted); font-size:0.75rem;");
             } else {
-                actionCell = Div.of(RawHtml.of(String.format("""
-                    <form method='POST' action='/databases' style='display:inline;'>
-                      <input type='hidden' name='action' value='remove_db_user'/>
-                      <input type='hidden' name='db' value='%s'/>
-                      <input type='hidden' name='username' value='%s'/>
-                      <button type='submit' class='app-btn-danger'>➖ Remover</button>
-                    </form>
-                """, escapeHtml(targetDb), escapeHtml(u.getUsername()))));
+                Form remForm = Form.of(
+                        FluxUi.hidden("action", "remove_db_user"),
+                        FluxUi.hidden("db", targetDb),
+                        FluxUi.hidden("username", u.getUsername()),
+                        FluxUi.submitButton("➖ Remover", "app-btn-danger", null)
+                ).action("/databases").method("POST");
+                remForm.modifier(new Modifier().style("display:inline;"));
+                actionCell = remForm;
             }
 
             userRows.add(List.of(
-                Div.of(RawHtml.of("<strong style='color:#ffd700;'>👤 " + escapeHtml(u.getUsername()) + "</strong>")),
-                Div.of(RawHtml.of("<span style='color:#38bdf8; font-weight:700; font-size:0.78rem;'>" + u.getGlobalRole().name() + "</span>")),
-                Div.of(RawHtml.of("<span style='color:#10b981; font-weight:700; font-size:0.8rem;'>" + dbRole.name() + "</span>")),
+                FluxUi.coloredSpan("👤 " + u.getUsername(), "color:#ffd700; font-weight:700;"),
+                FluxUi.coloredSpan(u.getGlobalRole().name(), "color:#38bdf8; font-weight:700; font-size:0.78rem;"),
+                FluxUi.coloredSpan(dbRole.name(), "color:#10b981; font-weight:700; font-size:0.8rem;"),
                 Div.of(actionCell).modifier(new Modifier().style("text-align:right;"))
             ));
         }
@@ -289,7 +282,7 @@ public class DatabasesFluxView extends FluxView {
         Datatable userDatatable = Datatable.ofWidgets(userTableHeaders, userRows);
         userDatatable.modifier(new Modifier().cssClass("app-table"));
 
-        Div card = Div.of(header, RawHtml.of(addFormHtml), userDatatable);
+        Div card = Div.of(header, addFormWidget, userDatatable);
         card.modifier(new Modifier().cssClass("ui-card").style("margin-bottom: 2rem; border-left: 4px solid #ffd700;"));
         return card;
     }
@@ -306,41 +299,25 @@ public class DatabasesFluxView extends FluxView {
         header.modifier(new Modifier().style("font-size: 1.1rem; color: var(--text-main); margin: 0 0 0.85rem 0;"));
 
         // Formulario para Añadir Motor / Bucket a la BD seleccionada
-        RawHtml addBucketForm = RawHtml.of(String.format("""
-            <div style="background: var(--bg-subtle); padding: 1rem; border-radius: 8px; margin-bottom: 1.25rem;">
-              <div style="font-weight: 700; font-size: 0.9rem; margin-bottom: 0.75rem; color: #00d4ff;">➕ Añadir Nuevo Motor / Bucket a %s</div>
-              <form method="POST" action="/databases" style="display: flex; flex-wrap: wrap; gap: 0.85rem; align-items: flex-end;">
-                <input type="hidden" name="action" value="add_bucket" />
-                <input type="hidden" name="db" value="%s" />
-                <div style="flex: 1.5; min-width: 160px;">
-                  <label style="font-size: 0.75rem; color: var(--text-muted); display: block; margin-bottom: 0.25rem; font-weight: 600;">Nombre del Bucket</label>
-                  <input class="app-input" type="text" name="bucketName" placeholder="AuditLog" required />
-                </div>
-                <div style="flex: 1.5; min-width: 160px;">
-                  <label style="font-size: 0.75rem; color: var(--text-muted); display: block; margin-bottom: 0.25rem; font-weight: 600;">Tipo de Motor</label>
-                  <select class="app-input" name="engineType">
-                    <option value="DOCUMENT">DOCUMENT (Colección JSON)</option>
-                    <option value="RELATIONAL">RELATIONAL (Tabular)</option>
-                    <option value="KEY_VALUE">KEY_VALUE (Cache Clave-Valor)</option>
-                    <option value="GRAPH">GRAPH (Grafo de Conocimiento)</option>
-                    <option value="VECTOR">VECTOR (HNSW Embeddings)</option>
-                    <option value="TIMESERIES">TIMESERIES (Serie Temporal)</option>
-                    <option value="COLUMNAR">COLUMNAR (Columnar)</option>
-                    <option value="GEOSPATIAL">GEOSPATIAL (GeoJSON & R-Tree)</option>
-                    <option value="JAVA_RECORD">JAVA_RECORD (Java Record Inmutable)</option>
-                    <option value="OBJECT">OBJECT (Objeto / Entidad POJO)</option>
-                  </select>
-                </div>
-                <div style="flex: 2; min-width: 200px;">
-                  <label style="font-size: 0.75rem; color: var(--text-muted); display: block; margin-bottom: 0.25rem; font-weight: 600;">Descripción del Almacén</label>
-                  <input class="app-input" type="text" name="description" placeholder="Colección de logs de auditoría transaccional" />
-                </div>
-                <div>
-                  <button type="submit" class="app-btn-primary" style="height: 38px;">➕ Añadir Motor</button>
-                </div>
-              </form>
-            </div>
-        """, currentDb, currentDb));
+        List<String> engineOptions = List.of(
+                "DOCUMENT", "RELATIONAL", "KEY_VALUE", "GRAPH", "VECTOR",
+                "TIMESERIES", "COLUMNAR", "GEOSPATIAL", "JAVA_RECORD", "OBJECT"
+        );
+        Form bucketForm = Form.of(
+                FluxUi.hidden("action", "add_bucket"),
+                FluxUi.hidden("db", currentDb),
+                FluxUi.fieldColumn("Nombre del Bucket", FluxUi.textInput("bucketName", "", "AuditLog", true), "flex: 1.5; min-width: 160px;"),
+                FluxUi.fieldColumn("Tipo de Motor", FluxUi.dropdown("engineType", engineOptions, "DOCUMENT"), "flex: 1.5; min-width: 160px;"),
+                FluxUi.fieldColumn("Descripción del Almacén", FluxUi.textInput("description", "", "Colección de logs de auditoría transaccional", false), "flex: 2; min-width: 200px;"),
+                Div.of(FluxUi.submitButton("➕ Añadir Motor", "app-btn-primary", "height: 38px;"))
+        ).action("/databases").method("POST");
+        bucketForm.modifier(new Modifier().style("display: flex; flex-wrap: wrap; gap: 0.85rem; align-items: flex-end;"));
+
+        Widget addBucketForm = Div.of(
+                Div.of(Text.of("➕ Añadir Nuevo Motor / Bucket a " + currentDb))
+                        .modifier(new Modifier().style("font-weight: 700; font-size: 0.9rem; margin-bottom: 0.75rem; color: #00d4ff;")),
+                bucketForm
+        ).modifier(new Modifier().style("background: var(--bg-subtle); padding: 1rem; border-radius: 8px; margin-bottom: 1.25rem;"));
 
         List<Widget> bucketHeaders = List.of(
             Text.of("Bucket / Almacén"),
@@ -368,23 +345,35 @@ public class DatabasesFluxView extends FluxView {
                 default -> "#94a3b8";
             };
 
-            String indexesStr = b.getIndexes().isEmpty()
-                ? "<span style='color:var(--text-muted); font-size:0.75rem;'>Sin índices</span>"
-                : b.getIndexes().stream()
-                    .map(idx -> "<code style='background:rgba(255,255,255,0.06); padding:2px 5px; border-radius:4px; font-size:0.75rem; margin-right:4px;'>" + escapeHtml(idx.getName()) + " [" + escapeHtml(idx.getType()) + "]</code>")
-                    .collect(Collectors.joining());
+            Widget idxCell;
+            if (b.getIndexes().isEmpty()) {
+                idxCell = FluxUi.coloredSpan("Sin índices", "color:var(--text-muted); font-size:0.75rem;");
+            } else {
+                List<Widget> idxChips = new ArrayList<>();
+                for (EngineIndexInfo idx : b.getIndexes()) {
+                    idxChips.add(FluxUi.coloredSpan(idx.getName() + " [" + idx.getType() + "]",
+                            "background:rgba(255,255,255,0.06); padding:2px 5px; border-radius:4px; font-size:0.75rem; margin-right:4px; font-family:monospace;"));
+                }
+                idxCell = Div.of(idxChips.toArray(new Widget[0]));
+            }
 
-            String actionHtml = "<a href='/explorer?db=" + escapeHtml(currentDb) + "&bucket=" + escapeHtml(b.getBucketName()) + "' class='app-btn-primary' style='margin-right:6px;'>📦 Registros</a>"
-                + (buckets.size() > 1 ? "<a href='/databases?action=delete_bucket&db=" + escapeHtml(currentDb) + "&bucket=" + escapeHtml(b.getBucketName()) + "' class='app-btn-danger' onclick=\"return confirm('¿Seguro de eliminar el bucket " + escapeHtml(b.getBucketName()) + "?');\">🗑️</a>" : "");
+            List<Widget> bucketActions = new ArrayList<>();
+            bucketActions.add(FluxUi.linkButton("/explorer?db=" + currentDb + "&bucket=" + b.getBucketName(), "📦 Registros", "app-btn-primary", "margin-right:6px;"));
+            if (buckets.size() > 1) {
+                Widget delBucket = FluxUi.linkButton("/databases?action=delete_bucket&db=" + currentDb + "&bucket=" + b.getBucketName(), "🗑️", "app-btn-danger", null);
+                delBucket.modifier(new Modifier().cssClass("app-btn-danger")
+                        .attribute("onclick", "return confirm('¿Seguro de eliminar el bucket " + b.getBucketName() + "?');"));
+                bucketActions.add(delBucket);
+            }
 
             bucketRows.add(List.of(
-                Div.of(RawHtml.of("<strong>" + escapeHtml(b.getBucketName()) + "</strong>")),
-                Div.of(RawHtml.of("<span style='background:rgba(255,255,255,0.08); border:1px solid " + engineColor + "; color:" + engineColor + "; padding:3px 8px; border-radius:9999px; font-weight:700; font-size:0.75rem;'>" + escapeHtml(b.getEngineType()) + "</span>")),
+                FluxUi.coloredSpan(b.getBucketName(), "font-weight:700;"),
+                FluxUi.pillBadge(b.getEngineType(), engineColor),
                 Text.of(String.format("%,d", b.getTotalObjects())),
                 Text.of(b.getFormattedSize()),
-                Div.of(RawHtml.of(indexesStr)),
-                Div.of(RawHtml.of("<span style='color:var(--text-muted); font-size:0.8rem;'>" + escapeHtml(b.getDescription()) + "</span>")),
-                Div.of(RawHtml.of(actionHtml))
+                idxCell,
+                FluxUi.coloredSpan(b.getDescription(), "color:var(--text-muted); font-size:0.8rem;"),
+                Div.of(bucketActions.toArray(new Widget[0]))
             ));
         }
 

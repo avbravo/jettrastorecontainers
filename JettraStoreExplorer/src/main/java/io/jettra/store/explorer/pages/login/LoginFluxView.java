@@ -4,10 +4,12 @@ import io.jettra.flux.core.FluxView;
 import io.jettra.flux.core.Modifier;
 import io.jettra.flux.core.Widget;
 import io.jettra.flux.widgets.Div;
+import io.jettra.flux.widgets.Form;
 import io.jettra.flux.widgets.Header;
+import io.jettra.flux.widgets.Label;
 import io.jettra.flux.widgets.Paragraph;
-import io.jettra.flux.widgets.RawHtml;
 import io.jettra.flux.widgets.Text;
+import io.jettra.store.explorer.pages.template.FluxUi;
 
 /**
  * Página de Inicio de Sesión y Autenticación en JettraFlux.
@@ -37,42 +39,63 @@ public class LoginFluxView extends FluxView {
             errorMsg = error;
         }
 
-        RawHtml loginCard = RawHtml.of(String.format("""
-            <div style="min-height: 100vh; display: flex; align-items: center; justify-content: center; background: #050b14; font-family: 'Inter', -apple-system, sans-serif; padding: 1rem;">
-              <div style="width: 100%%; max-width: 420px; background: #0c1626; border: 1px solid #1e3a5f; border-radius: 14px; padding: 2.25rem; box-shadow: 0 10px 30px rgba(0,0,0,0.6);">
-                <div style="text-align: center; margin-bottom: 1.75rem;">
-                  <div style="display: inline-flex; width: 48px; height: 48px; border-radius: 12px; background: linear-gradient(135deg, #00d4ff, #2563eb); align-items: center; justify-content: center; font-weight: 900; color: #ffffff; font-size: 1.3rem; margin-bottom: 0.75rem;">JS</div>
-                  <h1 style="color: #ffffff; font-size: 1.4rem; font-weight: 800; margin: 0 0 0.35rem 0;">JettraStore Explorer</h1>
-                  <p style="color: #94a3b8; font-size: 0.85rem; margin: 0;">Panel de Administración y Gestión Multimodelo</p>
-                </div>
+        Div logoBox = Div.of(Text.of("JS"));
+        logoBox.modifier(new Modifier().style(
+                "display: inline-flex; width: 48px; height: 48px; border-radius: 12px; background: linear-gradient(135deg, #00d4ff, #2563eb); align-items: center; justify-content: center; font-weight: 900; color: #ffffff; font-size: 1.3rem; margin-bottom: 0.75rem;"));
 
-                %s
+        Header title = Header.of(1, "JettraStore Explorer");
+        title.modifier(new Modifier().style("color: #ffffff; font-size: 1.4rem; font-weight: 800; margin: 0 0 0.35rem 0;"));
 
-                <form method="POST" action="/login">
-                  <div style="margin-bottom: 1.25rem;">
-                    <label style="display: block; font-size: 0.8rem; font-weight: 600; color: #94a3b8; margin-bottom: 0.4rem;">Usuario</label>
-                    <input type="text" name="username" value="admin" style="width: 100%%; box-sizing: border-box; padding: 0.65rem 0.85rem; background: #050b14; border: 1px solid #1e3a5f; border-radius: 8px; color: #ffffff; font-size: 0.9rem; outline: none;" required />
-                  </div>
+        Paragraph subtitle = Paragraph.of("Panel de Administración y Gestión Multimodelo");
+        subtitle.modifier(new Modifier().style("color: #94a3b8; font-size: 0.85rem; margin: 0;"));
 
-                  <div style="margin-bottom: 1.5rem;">
-                    <label style="display: block; font-size: 0.8rem; font-weight: 600; color: #94a3b8; margin-bottom: 0.4rem;">Contraseña</label>
-                    <input type="password" name="password" value="admin123" style="width: 100%%; box-sizing: border-box; padding: 0.65rem 0.85rem; background: #050b14; border: 1px solid #1e3a5f; border-radius: 8px; color: #ffffff; font-size: 0.9rem; outline: none;" required />
-                  </div>
+        Div headerBlock = Div.of(logoBox, title, subtitle);
+        headerBlock.modifier(new Modifier().style("text-align: center; margin-bottom: 1.75rem;"));
 
-                  <button type="submit" style="width: 100%%; padding: 0.75rem; background: #00d4ff; color: #050b14; font-weight: 800; border: none; border-radius: 8px; font-size: 0.95rem; cursor: pointer; transition: opacity 0.2s;">
-                    ⚡ Iniciar Sesión en JettraStore
-                  </button>
-                </form>
+        Label userLbl = Label.of("Usuario");
+        userLbl.modifier(new Modifier().style("display: block; font-size: 0.8rem; font-weight: 600; color: #94a3b8; margin-bottom: 0.4rem;"));
+        Widget userInput = FluxUi.textInput("username", "admin", "", true)
+                .modifier(new Modifier().style("width: 100%; box-sizing: border-box; padding: 0.65rem 0.85rem; background: #050b14; border: 1px solid #1e3a5f; border-radius: 8px; color: #ffffff; font-size: 0.9rem; outline: none;").attribute("type", "text").attribute("required", "required"));
+        Div userGroup = Div.of(userLbl, userInput);
+        userGroup.modifier(new Modifier().style("margin-bottom: 1.25rem;"));
 
-                <div style="margin-top: 1.5rem; text-align: center; border-top: 1px solid #1e3a5f; padding-top: 1rem; font-size: 0.78rem; color: #64748b;">
-                  Credenciales por defecto: <strong>admin / admin123</strong><br/>
-                  Powered by JettraServer & Project Loom Virtual Threads
-                </div>
-              </div>
-            </div>
-        """, errorMsg != null ? "<div style='background:rgba(239,68,68,0.15); border:1px solid #ef4444; color:#ef4444; padding:0.65rem 0.85rem; border-radius:8px; font-size:0.85rem; font-weight:600; margin-bottom:1.25rem;'>⚠️ " + errorMsg + "</div>" : ""));
+        Label passLbl = Label.of("Contraseña");
+        passLbl.modifier(new Modifier().style("display: block; font-size: 0.8rem; font-weight: 600; color: #94a3b8; margin-bottom: 0.4rem;"));
+        Widget passInput = FluxUi.passwordInput("password", "", true)
+                .value("admin123")
+                .modifier(new Modifier().style("width: 100%; box-sizing: border-box; padding: 0.65rem 0.85rem; background: #050b14; border: 1px solid #1e3a5f; border-radius: 8px; color: #ffffff; font-size: 0.9rem; outline: none;").attribute("required", "required"));
+        Div passGroup = Div.of(passLbl, passInput);
+        passGroup.modifier(new Modifier().style("margin-bottom: 1.5rem;"));
 
-        return loginCard;
+        Widget submitBtn = FluxUi.submitButton("⚡ Iniciar Sesión en JettraStore", "",
+                "width: 100%; padding: 0.75rem; background: #00d4ff; color: #050b14; font-weight: 800; border: none; border-radius: 8px; font-size: 0.95rem; cursor: pointer; transition: opacity 0.2s;");
+
+        Form loginForm = Form.of(userGroup, passGroup, submitBtn).action("/login").method("POST");
+
+        Div footer = Div.of(
+                Paragraph.of("Credenciales por defecto: admin / admin123").modifier(new Modifier().style("margin: 0 0 0.25rem 0; font-weight: 700;")),
+                Paragraph.of("Powered by JettraServer & Project Loom Virtual Threads").modifier(new Modifier().style("margin: 0;"))
+        );
+        footer.modifier(new Modifier().style("margin-top: 1.5rem; text-align: center; border-top: 1px solid #1e3a5f; padding-top: 1rem; font-size: 0.78rem; color: #64748b;"));
+
+        java.util.List<Widget> cardChildren = new java.util.ArrayList<>();
+        cardChildren.add(headerBlock);
+        if (errorMsg != null) {
+            Div errBox = Div.of(Text.of("⚠️ " + errorMsg));
+            errBox.modifier(new Modifier().style(
+                    "background:rgba(239,68,68,0.15); border:1px solid #ef4444; color:#ef4444; padding:0.65rem 0.85rem; border-radius:8px; font-size:0.85rem; font-weight:600; margin-bottom:1.25rem;"));
+            cardChildren.add(errBox);
+        }
+        cardChildren.add(loginForm);
+        cardChildren.add(footer);
+
+        Div card = Div.of(cardChildren.toArray(new Widget[0]));
+        card.modifier(new Modifier().style(
+                "width: 100%; max-width: 420px; background: #0c1626; border: 1px solid #1e3a5f; border-radius: 14px; padding: 2.25rem; box-shadow: 0 10px 30px rgba(0,0,0,0.6);"));
+
+        Div outer = Div.of(card);
+        outer.modifier(new Modifier().style(
+                "min-height: 100vh; display: flex; align-items: center; justify-content: center; background: #050b14; font-family: 'Inter', -apple-system, sans-serif; padding: 1rem;"));
+        return outer;
     }
 }
-

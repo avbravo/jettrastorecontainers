@@ -6,12 +6,14 @@ import io.jettra.flux.core.Widget;
 import io.jettra.flux.widgets.Badge;
 import io.jettra.flux.widgets.Datatable;
 import io.jettra.flux.widgets.Div;
+import io.jettra.flux.widgets.Form;
 import io.jettra.flux.widgets.Header;
 import io.jettra.flux.widgets.Paragraph;
-import io.jettra.flux.widgets.RawHtml;
+import io.jettra.flux.widgets.Span;
 import io.jettra.flux.widgets.Text;
 import io.jettra.store.explorer.model.PoliceIncident;
 import io.jettra.store.explorer.model.PoliceSentinelInfo;
+import io.jettra.store.explorer.pages.template.FluxUi;
 import io.jettra.store.explorer.plugin.JettraStorePlugin;
 import java.util.ArrayList;
 import java.util.List;
@@ -44,19 +46,18 @@ public class PoliceMonitorFluxView extends FluxView {
         }
 
         // 2. Barra de Comando y Patrullaje
-        RawHtml controlHtml = RawHtml.of("""
-            <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem;">
-              <div>
-                <strong style="color: var(--text-main); font-size: 0.95rem;">Centro de Comando JettraStorePolice:</strong>
-                <span style="color: var(--text-muted); font-size: 0.85rem; margin-left: 0.5rem;">Ejecute inspección heurística en caliente sobre todos los submundos de datos y nodos Raft.</span>
-              </div>
-              <form method="POST" action="/police" style="margin: 0;">
-                <input type="hidden" name="action" value="patrol_scan" />
-                <button type="submit" class="app-btn-primary">🚨 Ejecutar Patrullaje Heurístico General</button>
-              </form>
-            </div>
-        """);
-        Div controlCard = Div.of(controlHtml);
+        Div cmdInfo = Div.of(
+                FluxUi.coloredSpan("Centro de Comando JettraStorePolice:", "color: var(--text-main); font-size: 0.95rem; font-weight: 700;"),
+                FluxUi.coloredSpan("Ejecute inspección heurística en caliente sobre todos los submundos de datos y nodos Raft.", "color: var(--text-muted); font-size: 0.85rem; margin-left: 0.5rem;")
+        );
+        Form patrolForm = Form.of(
+                FluxUi.hidden("action", "patrol_scan"),
+                FluxUi.submitButton("🚨 Ejecutar Patrullaje Heurístico General", "app-btn-primary", null)
+        ).action("/police").method("POST");
+        patrolForm.modifier(new Modifier().style("margin: 0;"));
+        Div controlRow = Div.of(cmdInfo, patrolForm);
+        controlRow.modifier(new Modifier().style("display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem;"));
+        Div controlCard = Div.of(controlRow);
         controlCard.modifier(new Modifier().cssClass("ui-card").style("margin-bottom: 1.5rem; background: var(--bg-subtle);"));
         rootChildren.add(controlCard);
 
@@ -79,13 +80,12 @@ public class PoliceMonitorFluxView extends FluxView {
             Paragraph desc = Paragraph.of(s.getDescription());
             desc.modifier(new Modifier().style("font-size: 0.82rem; color: var(--text-muted); margin: 0 0 1rem 0;"));
 
-            RawHtml meta = RawHtml.of(String.format("""
-                <div style="display: flex; justify-content: space-between; font-size: 0.8rem; border-top: 1px solid var(--border-subtle); padding-top: 0.75rem;">
-                  <div>Nodo: <strong style="color: #ffd700;">%s</strong></div>
-                  <div>Salud: <strong style="color: #10b981;">%d%%</strong></div>
-                  <div>Alertas: <strong style="color: %s;">%d</strong></div>
-                </div>
-            """, s.getAssignedNode(), s.getHealthScore(), (s.getTotalAlerts() > 0 ? "#ffd700" : "var(--text-muted)"), s.getTotalAlerts()));
+            Div meta = Div.of(
+                    Div.of(Text.of("Nodo: "), FluxUi.coloredSpan(s.getAssignedNode(), "color: #ffd700; font-weight: 700;")),
+                    Div.of(Text.of("Salud: "), FluxUi.coloredSpan(s.getHealthScore() + "%", "color: #10b981; font-weight: 700;")),
+                    Div.of(Text.of("Alertas: "), FluxUi.coloredSpan(String.valueOf(s.getTotalAlerts()), "color: " + (s.getTotalAlerts() > 0 ? "#ffd700" : "var(--text-muted)") + "; font-weight: 700;"))
+            );
+            meta.modifier(new Modifier().style("display: flex; justify-content: space-between; font-size: 0.8rem; border-top: 1px solid var(--border-subtle); padding-top: 0.75rem;"));
 
             Div card = Div.of(headerRow, desc, meta);
             card.modifier(new Modifier().cssClass("ui-card").style("border-left: 4px solid " + s.getColor() + ";"));

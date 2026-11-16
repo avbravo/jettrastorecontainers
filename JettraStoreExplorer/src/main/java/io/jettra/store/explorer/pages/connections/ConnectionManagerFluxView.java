@@ -5,11 +5,11 @@ import io.jettra.flux.core.Modifier;
 import io.jettra.flux.core.Widget;
 import io.jettra.flux.widgets.Badge;
 import io.jettra.flux.widgets.Div;
+import io.jettra.flux.widgets.Form;
 import io.jettra.flux.widgets.Header;
-import io.jettra.flux.widgets.Paragraph;
-import io.jettra.flux.widgets.RawHtml;
 import io.jettra.flux.widgets.Text;
 import io.jettra.store.explorer.model.ConnectionProfile;
+import io.jettra.store.explorer.pages.template.FluxUi;
 import io.jettra.store.explorer.plugin.JettraStorePlugin;
 import java.util.ArrayList;
 import java.util.List;
@@ -77,25 +77,46 @@ public class ConnectionManagerFluxView extends FluxView {
             Div headerRow = Div.of(title, badges);
             headerRow.modifier(new Modifier().style("display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;"));
 
-            RawHtml info = RawHtml.of(String.format("""
-                <div style="font-size: 0.82rem; color: var(--text-muted); margin-bottom: 0.35rem;">ID: <code style="color: var(--text-main);">%s</code></div>
-                <div style="font-size: 0.82rem; color: var(--text-muted); margin-bottom: 0.35rem;">URL TCP / Cluster: <code style="color: #00d4ff;">%s</code></div>
-                <div style="font-size: 0.82rem; color: var(--text-muted); margin-bottom: 1rem;">Usuario: <code style="color: var(--text-main);">%s</code></div>
-                <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
-                  <form method="POST" action="/connections" style="display:inline;">
-                    <input type="hidden" name="action" value="connect" />
-                    <input type="hidden" name="id" value="%s" />
-                    <button type="submit" class="app-btn-primary" style="padding: 0.35rem 0.75rem; font-size: 0.8rem;">⚡ Conectar</button>
-                  </form>
-                  %s
-                  %s
-                </div>
-            """, cp.getId(), cp.getUrl(), cp.getUsername(), cp.getId(),
-                 (!cp.isDefault() ? "<form method='POST' action='/connections' style='display:inline;'><input type='hidden' name='action' value='set_default'/><input type='hidden' name='id' value='" + cp.getId() + "'/><button type='submit' class='app-btn-secondary' style='padding:0.35rem 0.75rem; font-size:0.8rem;'>Fijar Default</button></form>" : ""),
-                 (!cp.isDefault() && !isActive ? "<form method='POST' action='/connections' style='display:inline;'><input type='hidden' name='action' value='delete'/><input type='hidden' name='id' value='" + cp.getId() + "'/><button type='submit' class='app-btn-danger' style='padding:0.35rem 0.75rem; font-size:0.8rem;' onclick=\"return confirm('¿Eliminar perfil?');\">🗑️</button></form>" : "")
-            ));
+            Widget idRow = Div.of(Text.of("ID: "), FluxUi.coloredSpan(cp.getId(), "color: var(--text-main); font-family: monospace;"))
+                    .modifier(new Modifier().style("font-size: 0.82rem; color: var(--text-muted); margin-bottom: 0.35rem;"));
+            Widget urlRow = Div.of(Text.of("URL TCP / Cluster: "), FluxUi.coloredSpan(cp.getUrl(), "color: #00d4ff; font-family: monospace;"))
+                    .modifier(new Modifier().style("font-size: 0.82rem; color: var(--text-muted); margin-bottom: 0.35rem;"));
+            Widget userRow = Div.of(Text.of("Usuario: "), FluxUi.coloredSpan(cp.getUsername(), "color: var(--text-main); font-family: monospace;"))
+                    .modifier(new Modifier().style("font-size: 0.82rem; color: var(--text-muted); margin-bottom: 1rem;"));
 
-            Div card = Div.of(headerRow, info);
+            List<Widget> btnForms = new ArrayList<>();
+            Form connectForm = Form.of(
+                    FluxUi.hidden("action", "connect"),
+                    FluxUi.hidden("id", cp.getId()),
+                    FluxUi.submitButton("⚡ Conectar", "app-btn-primary", "padding: 0.35rem 0.75rem; font-size: 0.8rem;")
+            ).action("/connections").method("POST");
+            connectForm.modifier(new Modifier().style("display:inline;"));
+            btnForms.add(connectForm);
+
+            if (!cp.isDefault()) {
+                Form defForm = Form.of(
+                        FluxUi.hidden("action", "set_default"),
+                        FluxUi.hidden("id", cp.getId()),
+                        FluxUi.submitButton("Fijar Default", "app-btn-secondary", "padding:0.35rem 0.75rem; font-size:0.8rem;")
+                ).action("/connections").method("POST");
+                defForm.modifier(new Modifier().style("display:inline;"));
+                btnForms.add(defForm);
+
+                if (!isActive) {
+                    Form delForm = Form.of(
+                            FluxUi.hidden("action", "delete"),
+                            FluxUi.hidden("id", cp.getId()),
+                            FluxUi.submitButton("🗑️", "app-btn-danger", "padding:0.35rem 0.75rem; font-size:0.8rem;")
+                    ).action("/connections").method("POST");
+                    delForm.modifier(new Modifier().style("display:inline;").attribute("onsubmit", "return confirm('¿Eliminar perfil?');"));
+                    btnForms.add(delForm);
+                }
+            }
+
+            Widget actionsRow = Div.of(btnForms.toArray(new Widget[0]))
+                    .modifier(new Modifier().style("display: flex; gap: 0.5rem; flex-wrap: wrap;"));
+
+            Div card = Div.of(headerRow, idRow, urlRow, userRow, actionsRow);
             card.modifier(new Modifier().cssClass("ui-card").style("border: 2px solid " + borderColor + ";"));
             cardList.add(card);
         }
@@ -111,36 +132,18 @@ public class ConnectionManagerFluxView extends FluxView {
         Header header = Header.of(3, "➕ Registrar Perfil de Conexión a Clúster");
         header.modifier(new Modifier().style("font-size: 1.15rem; color: var(--text-main); margin: 0 0 0.85rem 0;"));
 
-        RawHtml formHtml = RawHtml.of("""
-            <form method="POST" action="/connections" style="display: flex; flex-wrap: wrap; gap: 0.85rem; align-items: flex-end;">
-              <input type="hidden" name="action" value="save" />
-              <div style="flex: 1.2; min-width: 140px;">
-                <label style="font-size: 0.75rem; color: var(--text-muted); display: block; margin-bottom: 0.25rem; font-weight: 600;">ID del Perfil</label>
-                <input class="app-input" type="text" name="id" placeholder="conn_prod_cluster" required />
-              </div>
-              <div style="flex: 1.5; min-width: 180px;">
-                <label style="font-size: 0.75rem; color: var(--text-muted); display: block; margin-bottom: 0.25rem; font-weight: 600;">Nombre Descriptivo</label>
-                <input class="app-input" type="text" name="name" placeholder="Producción Clúster Central" required />
-              </div>
-              <div style="flex: 2; min-width: 200px;">
-                <label style="font-size: 0.75rem; color: var(--text-muted); display: block; margin-bottom: 0.25rem; font-weight: 600;">URL JettraStore TCP / Raft</label>
-                <input class="app-input" type="text" name="url" placeholder="tcp://127.0.0.1:8765,127.0.0.1:8766" required />
-              </div>
-              <div style="flex: 1; min-width: 120px;">
-                <label style="font-size: 0.75rem; color: var(--text-muted); display: block; margin-bottom: 0.25rem; font-weight: 600;">Usuario</label>
-                <input class="app-input" type="text" name="username" value="admin" required />
-              </div>
-              <div style="flex: 1; min-width: 120px;">
-                <label style="font-size: 0.75rem; color: var(--text-muted); display: block; margin-bottom: 0.25rem; font-weight: 600;">Contraseña</label>
-                <input class="app-input" type="password" name="password" value="admin123" required />
-              </div>
-              <div>
-                <button type="submit" class="app-btn-primary" style="height: 38px;">➕ Guardar Perfil</button>
-              </div>
-            </form>
-        """);
+        Form form = Form.of(
+                FluxUi.hidden("action", "save"),
+                FluxUi.fieldColumn("ID del Perfil", FluxUi.textInput("id", "", "conn_prod_cluster", true), "flex: 1.2; min-width: 140px;"),
+                FluxUi.fieldColumn("Nombre Descriptivo", FluxUi.textInput("name", "", "Producción Clúster Central", true), "flex: 1.5; min-width: 180px;"),
+                FluxUi.fieldColumn("URL JettraStore TCP / Raft", FluxUi.textInput("url", "", "tcp://127.0.0.1:8765,127.0.0.1:8766", true), "flex: 2; min-width: 200px;"),
+                FluxUi.fieldColumn("Usuario", FluxUi.textInput("username", "admin", "", true), "flex: 1; min-width: 120px;"),
+                FluxUi.fieldColumn("Contraseña", FluxUi.passwordInput("password", "", true).value("admin123"), "flex: 1; min-width: 120px;"),
+                Div.of(FluxUi.submitButton("➕ Guardar Perfil", "app-btn-primary", "height: 38px;"))
+        ).action("/connections").method("POST");
+        form.modifier(new Modifier().style("display: flex; flex-wrap: wrap; gap: 0.85rem; align-items: flex-end;"));
 
-        Div card = Div.of(header, formHtml);
+        Div card = Div.of(header, form);
         card.modifier(new Modifier().cssClass("ui-card").style("margin-bottom: 2rem; background: var(--bg-subtle);"));
         return card;
     }
