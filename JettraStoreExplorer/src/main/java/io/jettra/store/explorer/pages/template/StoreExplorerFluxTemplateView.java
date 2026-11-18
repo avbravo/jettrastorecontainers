@@ -913,6 +913,18 @@ public class StoreExplorerFluxTemplateView extends FluxView {
               gap: 0.3rem;
             }
 
+            .jettra-table-responsive {
+              width: 100%;
+              max-width: 100%;
+              overflow-x: auto;
+              -webkit-overflow-scrolling: touch;
+            }
+            .ui-card,
+            .flux-layout-center,
+            .flux-content-surface {
+              min-width: 0;
+              max-width: 100%;
+            }
             .app-table {
               width: 100%;
               border-collapse: collapse;
@@ -965,6 +977,68 @@ public class StoreExplorerFluxTemplateView extends FluxView {
               }
               body.mobile-sidebar-open .sidebar-backdrop {
                 display: block;
+              }
+            }
+            @media (max-width: 640px) {
+              .flux-layout-center {
+                padding: 0.65rem !important;
+              }
+              .flux-content-surface,
+              .ui-card {
+                padding: 0.75rem !important;
+              }
+              .kpi-grid {
+                grid-template-columns: 1fr !important;
+              }
+              .espresso-datatable,
+              .app-table {
+                display: block !important;
+                width: 100% !important;
+              }
+              .espresso-datatable thead,
+              .app-table thead {
+                display: none !important;
+              }
+              .espresso-datatable tbody,
+              .app-table tbody {
+                display: block !important;
+                width: 100% !important;
+              }
+              .espresso-datatable tr,
+              .app-table tr {
+                display: block !important;
+                background: var(--bg-subtle);
+                border: 1px solid var(--border-subtle);
+                border-radius: 8px;
+                padding: 0.5rem 0.75rem;
+                margin-bottom: 0.75rem;
+              }
+              .espresso-datatable td,
+              .app-table td {
+                display: flex !important;
+                justify-content: space-between;
+                align-items: center;
+                gap: 0.65rem;
+                flex-wrap: wrap;
+                padding: 0.45rem 0 !important;
+                border-bottom: 1px solid rgba(148, 163, 184, 0.14) !important;
+                text-align: right !important;
+                word-break: break-word;
+              }
+              .espresso-datatable td:last-child,
+              .app-table td:last-child {
+                border-bottom: none !important;
+                justify-content: flex-end;
+              }
+              .espresso-datatable td[data-label]::before,
+              .app-table td[data-label]::before {
+                content: attr(data-label);
+                font-size: 0.7rem;
+                font-weight: 700;
+                text-transform: uppercase;
+                color: var(--text-muted);
+                text-align: left;
+                margin-right: auto;
               }
             }
         """;
@@ -1164,10 +1238,38 @@ public class StoreExplorerFluxTemplateView extends FluxView {
                 });
               }
 
+              function initResponsiveDatatables() {
+                const tables = document.querySelectorAll('table.espresso-datatable, table.app-table');
+                tables.forEach(function(tbl) {
+                  if (!tbl.parentElement || !tbl.parentElement.classList.contains('jettra-table-responsive')) {
+                    const wrap = document.createElement('div');
+                    wrap.className = 'jettra-table-responsive';
+                    tbl.parentNode.insertBefore(wrap, tbl);
+                    wrap.appendChild(tbl);
+                  }
+                  const headers = Array.from(tbl.querySelectorAll('thead th')).map(function(th) {
+                    return (th.textContent || '').trim();
+                  });
+                  if (headers.length > 0) {
+                    tbl.querySelectorAll('tbody tr').forEach(function(tr) {
+                      Array.from(tr.children).forEach(function(td, idx) {
+                        if (td.tagName === 'TD' && headers[idx] && !td.getAttribute('data-label')) {
+                          td.setAttribute('data-label', headers[idx]);
+                        }
+                      });
+                    });
+                  }
+                });
+              }
+
               if (document.readyState === 'loading') {
-                document.addEventListener('DOMContentLoaded', initThemedSelects);
+                document.addEventListener('DOMContentLoaded', function() {
+                  initThemedSelects();
+                  initResponsiveDatatables();
+                });
               } else {
                 initThemedSelects();
+                initResponsiveDatatables();
               }
 
               if (typeof EventSource !== 'undefined') {

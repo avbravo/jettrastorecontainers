@@ -1339,4 +1339,19 @@ public class JettraStoreExplorerTest {
             plugin.deleteIndex("example_factura_db", "Facturas", idxName);
         }
     }
+
+    @Test
+    @DisplayName("34. Datatables Responsive en Todas las Páginas (/explorer, /databases, /status)")
+    public void testResponsiveDatatablesAcrossAllPages() throws Exception {
+        for (String path : new String[]{"/explorer", "/databases", "/status"}) {
+            HttpResponse<String> res = get(path);
+            JettraAssert.assertEquals(200, res.statusCode(), path + " debe responder HTTP 200");
+            JettraAssert.assertTrue(res.body().contains(".jettra-table-responsive"),
+                    path + " debe incluir contenedor responsive .jettra-table-responsive");
+            JettraAssert.assertTrue(res.body().contains("@media (max-width: 640px)"),
+                    path + " debe incluir media query móvil para pantallas pequeñas (360x780)");
+            JettraAssert.assertTrue(res.body().contains("initResponsiveDatatables()"),
+                    path + " debe inicializar automáticamente las etiquetas data-label y el contenedor responsive");
+        }
+    }
 }
