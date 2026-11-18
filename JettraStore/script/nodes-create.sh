@@ -9,6 +9,9 @@ echo " "
 echo " "
 echo ":::::::::::::::::::::::::::::::::::::::::::::::::::::::"
 
+# Obtener la ruta absoluta del directorio del proyecto (padre de la carpeta script)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 
 # -----------------------------------------------------------------------------
 # FUNCIÓN 1: Actualiza o inserta una propiedad/variable en un archivo
@@ -20,7 +23,6 @@ update_property() {
     local value="$3"
     
     if [ -f "$file" ]; then
-        # Busca líneas que comiencen con la clave (con o sin comillas, o con sintaxis de bash)
         if grep -q "^$key=" "$file" || grep -q "^$key[[:space:]]*=" "$file"; then
             sed -i "s/^$key=.*/$key=\"$value\"/" "$file"
         else
@@ -30,8 +32,6 @@ update_property() {
         echo "Advertencia: El archivo $file no existe."
     fi
 }
-
-
 
 # -----------------------------------------------------------------------------
 # FUNCIÓN 2: Crea el directorio, copia los archivos y configura el nodo
@@ -50,21 +50,18 @@ setup_node() {
     # 1. Crear directorios
     mkdir -p "$node_dir/config"
 
-    # 2. Copiar archivos base de configuración
-    cp cluster.config "$node_dir/config/"
-    cp microprofile-config.properties "$node_dir/config/"
+    # 2. Copiar archivos base de configuración desde la carpeta config/
+    cp "$PROJECT_ROOT/config/cluster.config" "$node_dir/config/"
+    cp "$PROJECT_ROOT/config/microprofile-config.properties" "$node_dir/config/"
 
-    # 3. Copiar archivo start-node.sh
-    # cp start-node.sh "$node_dir/"
-
-   # 3. Copiar archivo start-node.sh y ajustar la ruta del jar eliminando target/
-    cp start-node.sh "$node_dir/"
+    # 3. Copiar archivo start-node.sh desde la carpeta script/ y ajustar la ruta del jar
+    cp "$PROJECT_ROOT/script/start-node.sh" "$node_dir/"
     if [ -f "$start_node_file" ]; then
         sed -i 's|-jar target/|-jar |g' "$start_node_file"
     fi
 
-    # 4. Copiar el archivo uber jar
-    cp target/JettraStore-1.0-SNAPSHOT-uber.jar "$node_dir/"
+    # 4. Copiar el archivo uber jar desde la carpeta target/
+    cp "$PROJECT_ROOT/target/JettraStore-1.0-SNAPSHOT-uber.jar" "$node_dir/"
 
     # 5. Actualizar propiedades en microprofile-config.properties
     update_property "$config_file" "cluster.node.id" "$node_num"
@@ -87,7 +84,6 @@ setup_node() {
 setup_node "node-01" "PRIMARY"
 setup_node "node-02" "SECONDARY"
 setup_node "node-03" "SECONDARY"
-
 
 echo ""
 echo "_____________________________________________________________________________"

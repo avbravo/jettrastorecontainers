@@ -165,9 +165,9 @@ public final class JettraStoreConfig {
             defaultMultinode).trim();
         this.clusterMultinodeActive = "on".equalsIgnoreCase(multinodeStr) || "true".equalsIgnoreCase(multinodeStr);
 
-        String defaultStorage = effectiveServerProps.getProperty("data.dir",
-            (currentNode != null && currentNode.storagePath() != null && !currentNode.storagePath().isBlank())
-            ? currentNode.storagePath() : "/jettra/data");
+        String defaultStorage = (currentNode != null && currentNode.storagePath() != null && !currentNode.storagePath().isBlank())
+            ? currentNode.storagePath().trim()
+            : effectiveServerProps.getProperty("data.dir", "/jettra/data");
 
         // 1. Prioridad: System property explícito
         String configuredPath = null;
@@ -178,7 +178,7 @@ public final class JettraStoreConfig {
                 break;
             }
         }
-        // 2. Variables de entorno
+        // 2. Variables de entorno (ej. Docker Compose JETTRA_STORAGE_PATH)
         if (configuredPath == null) {
             for (String ev : new String[]{"STORAGE_PATH", "JETTRA_STORAGE_PATH", "JETTRA_DATA_DIR", "DATA_DIR"}) {
                 String val = System.getenv(ev);
@@ -188,25 +188,49 @@ public final class JettraStoreConfig {
                 }
             }
         }
-        // 3. Archivo microprofile-config.properties
-        if (configuredPath == null && props != null) {
+        // 3. Archivo cluster.config (cluster.node.<N>.storage.path) vs microprofile-config.properties
+        String nodeClusterStorage = (currentNode != null && currentNode.storagePath() != null && !currentNode.storagePath().isBlank())
+            ? currentNode.storagePath().trim()
+            : null;
+        boolean nodeClusterCustom = nodeClusterStorage != null
+            && !nodeClusterStorage.equals("~/jettra/data")
+            && !nodeClusterStorage.equals("/jettra/data");
+
+        String propsConfiguredPath = null;
+        boolean propsHasCustom = false;
+        if (props != null) {
             String spVal = props.getProperty("storage.path");
             String jspVal = props.getProperty("jettra.storage.path");
             String ddVal = props.getProperty("data.dir");
 
             boolean spCustom = spVal != null && !spVal.isBlank() && !spVal.equals("~/jettra/data") && !spVal.equals("/jettra/data");
             boolean jspCustom = jspVal != null && !jspVal.isBlank() && !jspVal.equals("~/jettra/data") && !jspVal.equals("/jettra/data");
+            boolean ddCustom = ddVal != null && !ddVal.isBlank() && !ddVal.equals("~/jettra/data") && !ddVal.equals("/jettra/data");
+
+            propsHasCustom = spCustom || jspCustom || ddCustom;
 
             if (spCustom && !jspCustom) {
-                configuredPath = spVal.trim();
+                propsConfiguredPath = spVal.trim();
             } else if (jspCustom && !spCustom) {
-                configuredPath = jspVal.trim();
+                propsConfiguredPath = jspVal.trim();
             } else if (spVal != null && !spVal.isBlank()) {
-                configuredPath = spVal.trim();
+                propsConfiguredPath = spVal.trim();
             } else if (jspVal != null && !jspVal.isBlank()) {
-                configuredPath = jspVal.trim();
+                propsConfiguredPath = jspVal.trim();
             } else if (ddVal != null && !ddVal.isBlank()) {
-                configuredPath = ddVal.trim();
+                propsConfiguredPath = ddVal.trim();
+            }
+        }
+
+        if (configuredPath == null) {
+            if (nodeClusterCustom) {
+                configuredPath = nodeClusterStorage;
+            } else if (propsHasCustom) {
+                configuredPath = propsConfiguredPath;
+            } else if (nodeClusterStorage != null) {
+                configuredPath = nodeClusterStorage;
+            } else if (propsConfiguredPath != null) {
+                configuredPath = propsConfiguredPath;
             }
         }
         if (configuredPath == null) {

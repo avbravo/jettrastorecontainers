@@ -786,7 +786,7 @@ public final class JettraStoreServer {
                     Thread.sleep(300);
                     if (config.getNodeRole() == ClusterNode.Role.SECONDARY && config.isClusterMultinodeActive()) {
                         long elapsed = System.currentTimeMillis() - lastLeaderHeartbeatTime;
-                        if (elapsed > 2000) {
+                        if (elapsed > 2000 && !failoverInProgress.get()) {
                             String currentPrimaryId = "node-01";
                             for (ClusterNode p : ringEngine.getPeers()) {
                                 if (p.getRole() == ClusterNode.Role.PRIMARY) {

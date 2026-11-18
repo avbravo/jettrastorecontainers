@@ -456,6 +456,18 @@ public final class JettraClusterReplicationClient implements AutoCloseable {
         }
     }
 
+    public void broadcastClusterConfigSync(byte[] clusterConfigBytes) {
+        if (clusterConfigBytes == null || clusterConfigBytes.length == 0) return;
+        JettraRaftFrame frame = JettraRaftFrame.syncClusterConfig(currentTerm.get(), localNodeId, clusterConfigBytes);
+        for (ClusterNode peer : peers) {
+            executor.submit(() -> {
+                try {
+                    sendFrameToPeer(peer, frame);
+                } catch (Exception ignored) {}
+            });
+        }
+    }
+
     public JettraRaftFrame sendFrameToPeer(ClusterNode peer, JettraRaftFrame frame) throws IOException {
         try (Socket s = new Socket()) {
             s.setTcpNoDelay(true);

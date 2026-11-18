@@ -498,6 +498,35 @@ public final class JettraClusterTransportServer implements AutoCloseable {
                 return JettraRaftFrame.syncCatalogResp(frame.term(), nodeId, role, csv);
             }
 
+            case JettraRaftFrame.TYPE_SYNC_CLUSTER_CONFIG -> {
+                byte[] cfgBytes = frame.payload();
+                if (cfgBytes != null && cfgBytes.length > 0) {
+                    try {
+                        Path target = io.jettra.store.core.JettraConfigValidator.locateClusterConfigFile();
+                        if (target == null) {
+                            target = Path.of(io.jettra.store.core.JettraConfigValidator.DEFAULT_CLUSTER_CONFIG_PATH);
+                        }
+                        if (target.getParent() != null) {
+                            Files.createDirectories(target.getParent());
+                        }
+                        Files.write(target, cfgBytes, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
+                        System.out.printf("[JettraClusterTransport] ✅ Archivo cluster.config sincronizado (%d bytes) en '%s' desde '%s'.%n",
+                            cfgBytes.length, target.toAbsolutePath().normalize(), frame.senderNodeId());
+                        if (server != null
+                                && server.getConfig().getNodeRole() == ClusterNode.Role.PRIMARY
+                                && !"cluster-master".equalsIgnoreCase(frame.senderNodeId())
+                                && !server.getConfig().getNodeId().equalsIgnoreCase(frame.senderNodeId())
+                                && server.getReplicationClient() != null) {
+                            server.getReplicationClient().broadcastClusterConfigSync(cfgBytes);
+                        }
+                    } catch (Exception ex) {
+                        System.err.printf("[JettraClusterTransport] Error sincronizando cluster.config: %s%n", ex.getMessage());
+                    }
+                }
+                return JettraRaftFrame.ack(frame.term(), frame.logIndex(),
+                    server != null ? server.getConfig().getNodeId() : "local", "CLUSTER_CONFIG_SYNCED");
+            }
+
             default -> {
                 return JettraRaftFrame.ack(frame.term(), frame.logIndex(), 
                     server != null ? server.getConfig().getNodeId() : "local", "OK");

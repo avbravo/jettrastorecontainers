@@ -367,12 +367,13 @@ public class App {
             String nodeName = form.get("nodeName");
             String nodeRole = form.get("nodeRole");
             String nodeHost = form.get("nodeHost");
+            String nodeStoragePath = form.get("nodeStoragePath");
             int port = 8769;
             long ram = 2048;
             try { port = Integer.parseInt(form.get("nodePort")); } catch (Exception ignored) {}
             try { ram = Long.parseLong(form.get("nodeRam")); } catch (Exception ignored) {}
 
-            JettraStorePlugin.getInstance().addNode(nodeId, nodeName, nodeRole, nodeHost, port, ram);
+            JettraStorePlugin.getInstance().addNode(nodeId, nodeName, nodeRole, nodeHost, port, ram, nodeStoragePath);
             redirect(resp, "/cluster?msg=node_added");
             return;
         }

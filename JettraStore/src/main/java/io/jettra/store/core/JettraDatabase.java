@@ -109,8 +109,11 @@ public final class JettraDatabase implements AutoCloseable {
         // 1. Cargar estado previo de disco si existe
         boolean loaded = loadFromDisk();
 
-        // 2. Si es una base de datos de muestra y no tiene datos, cargar muestra automáticamente (sólo en modo writable)
-        if (!loaded && getAllCollectionNames().isEmpty() && JettraStoreSamples.isSampleDatabase(databaseName)) {
+        // 2. No cargar bases de datos de ejemplo automáticamente al ejecutar JettraStore
+        // (solo se instalan si se habilita explícitamente -Djettra.samples.autoload=true)
+        if (!loaded && getAllCollectionNames().isEmpty()
+                && Boolean.getBoolean("jettra.samples.autoload")
+                && JettraStoreSamples.isSampleDatabase(databaseName)) {
             if (!isReadOnlyNode()) {
                 JettraStoreSamples.installSample(databaseName, this);
                 try {

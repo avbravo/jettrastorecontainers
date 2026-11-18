@@ -19,6 +19,7 @@ public class ServerNodeInfo implements Serializable {
     private long raftTerm;
     private volatile String raftState = "DISCONNECTED";
     private volatile int restPort = 0;
+    private volatile String storagePath;
     private volatile boolean online;
     private volatile String lastError;
     private volatile long lastCheckedEpochMs;
@@ -68,6 +69,8 @@ public class ServerNodeInfo implements Serializable {
     public void setRaftState(String raftState) { this.raftState = raftState; }
     public int getRestPort() { return restPort; }
     public void setRestPort(int restPort) { this.restPort = restPort; }
+    public String getStoragePath() { return storagePath; }
+    public void setStoragePath(String storagePath) { this.storagePath = storagePath; }
     public boolean isOnline() { return online; }
     public void setOnline(boolean online) { this.online = online; }
     public boolean isActive() { return online; }

@@ -193,6 +193,7 @@ public class ClusterFluxView extends FluxView {
                 FluxUi.fieldColumn("Host / IP", FluxUi.textInput("nodeHost", "127.0.0.1", "", true), "flex: 1.2; min-width: 140px;"),
                 FluxUi.fieldColumn("Puerto", portInput, "flex: 0.8; min-width: 90px;"),
                 FluxUi.fieldColumn("Max RAM (MB)", ramInput, "flex: 0.8; min-width: 110px;"),
+                FluxUi.fieldColumn("Storage Path", FluxUi.textInput("nodeStoragePath", "", "~/jettra/data-5", false), "flex: 1.4; min-width: 170px;"),
                 Div.of(
                         FluxUi.submitButton("➕ Agregar Nodo", "app-btn-primary", "height: 38px;"),
                         checkBtn
@@ -270,11 +271,15 @@ public class ClusterFluxView extends FluxView {
         long displayQps = isActive ? node.getQps() : 0L;
         String latencyText = isActive ? String.format(java.util.Locale.US, "%.2f ms", node.getLatencyMs()) : "N/A (INACTIVE)";
 
+        String storagePathVal = (node.getStoragePath() != null && !node.getStoragePath().isBlank())
+                ? node.getStoragePath()
+                : "~/jettra/data";
         Widget statsBox = Div.of(
                 nodeStatRow("CPU:", String.format(java.util.Locale.US, "%.1f%%", displayCpu), "node-cpu-", node.getId(), "#ffd700"),
                 nodeStatRow("Heap JVM:", (isActive ? node.getHeapUsedMb() : 0L) + " MB / " + node.getHeapMaxMb() + " MB", "node-heap-", node.getId(), "#10b981"),
                 nodeStatRow("Panama Direct:", (isActive ? node.getPanamaDirectMb() : 0L) + " MB", "node-panama-", node.getId(), "#00d4ff"),
                 nodeStatRow("Almacén SSTable:", String.format(java.util.Locale.US, "%,d MB", node.getDiskUsedMb()), "node-disk-", node.getId(), "var(--text-main)"),
+                nodeStatRow("Storage Path:", storagePathVal, "node-storage-path-", node.getId(), "#a78bfa"),
                 nodeStatRow("Loom Virtual Threads:", (isActive ? node.getVirtualThreads() : 0) + " vthreads", "node-vthreads-", node.getId(), "var(--text-main)"),
                 nodeStatRow("Rendimiento QPS:", String.format(java.util.Locale.US, "%,d ops/s (%s)", displayQps, latencyText), "node-qps-", node.getId(), "#38bdf8")
         ).modifier(new Modifier().style("width: 100%; font-size: 0.82rem; margin-bottom: 1rem;"));

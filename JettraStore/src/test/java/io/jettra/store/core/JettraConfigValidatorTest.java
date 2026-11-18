@@ -606,4 +606,85 @@ public class JettraConfigValidatorTest extends JettraStoreBaseTest {
             } catch (Exception ignored) {}
         }
     }
+
+    @Test
+    @DisplayName("Debe almacenar los datos en cluster.node.<N>.storage.path para node-01, node-02, node-03, node-04 y con -Djettra.node.id")
+    public void testPerNodeClusterStoragePathResolutionAndPersistence() throws IOException {
+        Path tempRoot = Files.createTempDirectory("jettra_per_node_storage_test");
+        Path data1 = tempRoot.resolve("data-1");
+        Path data2 = tempRoot.resolve("data-2");
+        Path data3 = tempRoot.resolve("data-3");
+        Path data4 = tempRoot.resolve("data-4");
+
+        String prevNodeId = System.getProperty("jettra.node.id");
+        String prevNodeRole = System.getProperty("jettra.node.role");
+        try {
+            Properties clusterProps = createValidClusterProperties();
+            clusterProps.setProperty("cluster.node.1.storage.path", data1.toAbsolutePath().toString());
+            clusterProps.setProperty("cluster.node.2.storage.path", data2.toAbsolutePath().toString());
+            clusterProps.setProperty("cluster.node.3.storage.path", data3.toAbsolutePath().toString());
+
+            clusterProps.setProperty("cluster.node.4.id", "node-04");
+            clusterProps.setProperty("cluster.node.4.ip", "192.168.60.244");
+            clusterProps.setProperty("cluster.node.4.rest.port", "8084");
+            clusterProps.setProperty("cluster.node.4.grpc.port", "9094");
+            clusterProps.setProperty("cluster.node.4.role", "SECONDARY");
+            clusterProps.setProperty("cluster.node.4.storage.path", data4.toAbsolutePath().toString());
+
+            // 1. Verificar resolución via cluster.node.id en microprofile-config.properties para 4 nodos
+            String[] nodeIds = {"node-01", "node-02", "node-03", "node-04"};
+            String[] roles = {"PRIMARY", "SECONDARY", "SECONDARY", "SECONDARY"};
+            Path[] expectedPaths = {data1, data2, data3, data4};
+
+            for (int i = 0; i < nodeIds.length; i++) {
+                Properties mpProps = new Properties();
+                mpProps.setProperty("cluster.node.id", nodeIds[i]);
+                mpProps.setProperty("cluster.node.role", roles[i]);
+                mpProps.setProperty("cluster.multinode.active", "on");
+                mpProps.setProperty("jettra.storage.mode", "JVM_RAM");
+
+                JettraStoreConfig cfg = new JettraStoreConfig(mpProps, clusterProps);
+                assertEquals(expectedPaths[i].toAbsolutePath().toString(), cfg.getStoragePath(),
+                    "El nodo " + nodeIds[i] + " debe resolver su propio storage.path");
+            }
+
+            // 2. Verificar override estilo start-node.sh (-Djettra.node.id=node-03 -Djettra.node.role=SECONDARY)
+            Properties baseMpProps = new Properties();
+            baseMpProps.setProperty("cluster.node.id", "node-01");
+            baseMpProps.setProperty("cluster.node.role", "PRIMARY");
+            baseMpProps.setProperty("cluster.multinode.active", "on");
+            baseMpProps.setProperty("jettra.storage.mode", "JVM_RAM");
+
+            System.setProperty("jettra.node.id", "node-03");
+            System.setProperty("jettra.node.role", "SECONDARY");
+
+            JettraStoreConfig node3Cfg = new JettraStoreConfig(baseMpProps, clusterProps);
+            assertEquals("node-03", node3Cfg.getNodeId());
+            assertEquals(io.jettra.store.cluster.ClusterNode.Role.SECONDARY, node3Cfg.getNodeRole());
+            assertEquals(data3.toAbsolutePath().toString(), node3Cfg.getStoragePath());
+
+            try (JettraDatabase db = new JettraDatabase("node3_persist_db", node3Cfg)) {
+                db.saveToDisk();
+
+                assertTrue(Files.exists(data3.resolve("node3_persist_db_meta.json")),
+                    "Los datos deben guardarse en cluster.node.3.storage.path");
+            }
+        } finally {
+            if (prevNodeId == null) {
+                System.clearProperty("jettra.node.id");
+            } else {
+                System.setProperty("jettra.node.id", prevNodeId);
+            }
+            if (prevNodeRole == null) {
+                System.clearProperty("jettra.node.role");
+            } else {
+                System.setProperty("jettra.node.role", prevNodeRole);
+            }
+            try (var stream = Files.walk(tempRoot)) {
+                stream.sorted(java.util.Comparator.reverseOrder()).forEach(p -> {
+                    try { Files.deleteIfExists(p); } catch (Exception ignored) {}
+                });
+            } catch (Exception ignored) {}
+        }
+    }
 }

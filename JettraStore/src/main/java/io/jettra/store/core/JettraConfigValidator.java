@@ -1048,6 +1048,68 @@ cluster.index.max.inmemory.keys = 100000
     }
 
     /**
+     * Elimina dinámicamente un nodo del archivo cluster.config localizado por defecto.
+     */
+    public static synchronized boolean removeDynamicNodeFromClusterConfig(String nodeId) {
+        Path clusterFile = locateClusterConfigFile();
+        if (clusterFile == null) {
+            clusterFile = Path.of(DEFAULT_CLUSTER_CONFIG_PATH);
+        }
+        return removeDynamicNodeFromClusterConfig(clusterFile, nodeId);
+    }
+
+    /**
+     * Elimina dinámicamente un nodo del archivo cluster.config especificado en disco.
+     */
+    public static synchronized boolean removeDynamicNodeFromClusterConfig(Path clusterConfigFile, String nodeId) {
+        if (clusterConfigFile == null || nodeId == null || nodeId.isBlank() || "node-01".equalsIgnoreCase(nodeId.trim())) {
+            return false;
+        }
+        try {
+            if (!Files.exists(clusterConfigFile)) {
+                return false;
+            }
+            Properties props = loadProperties(clusterConfigFile, "/cluster.config", "/jettra.config");
+            List<ClusterNodeInfo> nodes = parseClusterNodes(props);
+            ClusterNodeInfo target = findNodeInCluster(nodes, nodeId);
+            if (target == null) {
+                return false;
+            }
+            String prefix = "cluster.node." + target.nodeNumber() + ".";
+            String headerMarker = "# NODO " + target.nodeNumber() + ":";
+            List<String> lines = Files.readAllLines(clusterConfigFile, StandardCharsets.UTF_8);
+            List<String> updated = new ArrayList<>(lines.size());
+            boolean removedAny = false;
+            for (int i = 0; i < lines.size(); i++) {
+                String trimmed = lines.get(i).trim();
+                if (trimmed.startsWith(prefix)) {
+                    removedAny = true;
+                    continue;
+                }
+                if (trimmed.startsWith(headerMarker)) {
+                    // Omitir también la línea separadora anterior y posterior si forman el bloque de cabecera
+                    if (!updated.isEmpty() && updated.get(updated.size() - 1).trim().startsWith("# =====")) {
+                        updated.remove(updated.size() - 1);
+                    }
+                    if (i + 1 < lines.size() && lines.get(i + 1).trim().startsWith("# =====")) {
+                        i++;
+                    }
+                    continue;
+                }
+                updated.add(lines.get(i));
+            }
+            if (removedAny) {
+                Files.write(clusterConfigFile, updated, StandardCharsets.UTF_8);
+            }
+            return removedAny;
+        } catch (IOException e) {
+            System.err.printf("[JettraStore] Error al eliminar nodo '%s' de '%s': %s%n",
+                nodeId, clusterConfigFile, e.getMessage());
+            return false;
+        }
+    }
+
+    /**
      * Carga propiedades buscando primero en el classpath y sobreescribiendo con el archivo en disco si existe.
      */
     public static Properties loadProperties(Path diskPath, String classpathResource) {

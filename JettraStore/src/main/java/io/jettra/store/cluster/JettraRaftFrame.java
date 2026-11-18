@@ -41,6 +41,7 @@ public record JettraRaftFrame(
     public static final byte TYPE_NEW_LEADER_PROMOTED = 0x14;
     public static final byte TYPE_CLUSTER_LIVE_EVENT = 0x15;
     public static final byte TYPE_CREATE_ENGINE    = 0x16;
+    public static final byte TYPE_SYNC_CLUSTER_CONFIG = 0x17;
 
     public static JettraRaftFrame heartbeat(long term, String senderNodeId) {
         return new JettraRaftFrame(TYPE_HEARTBEAT, term, 0, senderNodeId, "", "", "", new byte[0], System.currentTimeMillis());
@@ -144,6 +145,11 @@ public record JettraRaftFrame(
     public static JettraRaftFrame clusterLiveEvent(long term, String senderNodeId, String eventJson) {
         byte[] bytes = eventJson != null ? eventJson.getBytes(java.nio.charset.StandardCharsets.UTF_8) : new byte[0];
         return new JettraRaftFrame(TYPE_CLUSTER_LIVE_EVENT, term, 0, senderNodeId, "", "", "", bytes, System.currentTimeMillis());
+    }
+
+    public static JettraRaftFrame syncClusterConfig(long term, String senderNodeId, byte[] clusterConfigBytes) {
+        return new JettraRaftFrame(TYPE_SYNC_CLUSTER_CONFIG, term, 0, senderNodeId, "", "", "",
+            clusterConfigBytes != null ? clusterConfigBytes : new byte[0], System.currentTimeMillis());
     }
 
     public String getPayloadAsString() {

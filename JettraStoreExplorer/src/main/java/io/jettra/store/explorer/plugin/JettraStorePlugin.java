@@ -513,6 +513,9 @@ public class JettraStorePlugin {
         // Descubrir cualquier nodo adicional persistido en memory/cluster_nodes.json o propiedades
         autoDiscoverClusterNodes();
 
+        // Sincronizar cluster.node.<N>.storage.path desde cluster.config
+        syncStoragePathsFromClusterConfig();
+
         // Realizar comprobación TCP real de todos los nodos
         refreshAllNodeStatuses(true);
     }
@@ -837,6 +840,10 @@ public class JettraStorePlugin {
                             int port = ((Number) map.getOrDefault("port", 8770)).intValue();
                             long ram = ((Number) map.getOrDefault("heapMaxMb", 2048L)).longValue();
                             ServerNodeInfo n = new ServerNodeInfo(id, name, role, host, port, 15.0f, 300, ram, 800, 9000, 200, 9000, 0.0f, 8, false);
+                            Object sp = map.get("storagePath");
+                            if (sp instanceof String s && !s.isBlank()) {
+                                n.setStoragePath(s);
+                            }
                             serverNodes.add(n);
                             checkNodeRealReachability(n, this.healthCheckTimeoutMs);
                         }
@@ -945,6 +952,9 @@ public class JettraStorePlugin {
                     m.put("host", n.getHost());
                     m.put("port", n.getPort());
                     m.put("heapMaxMb", n.getHeapMaxMb());
+                    if (n.getStoragePath() != null && !n.getStoragePath().isBlank()) {
+                        m.put("storagePath", n.getStoragePath());
+                    }
                     list.add(m);
                 }
             }
@@ -1103,26 +1113,94 @@ public class JettraStorePlugin {
         return serverNodes.stream().filter(n -> n.getId().equalsIgnoreCase(id)).findFirst().orElse(null);
     }
 
+    public synchronized void syncStoragePathsFromClusterConfig() {
+        try {
+            Path clusterFile = io.jettra.store.core.JettraConfigValidator.locateClusterConfigFile();
+            Properties props = io.jettra.store.core.JettraConfigValidator.loadProperties(clusterFile, "/cluster.config", "/jettra.config");
+            List<io.jettra.store.core.JettraConfigValidator.ClusterNodeInfo> parsed =
+                io.jettra.store.core.JettraConfigValidator.parseClusterNodes(props);
+            for (io.jettra.store.core.JettraConfigValidator.ClusterNodeInfo cn : parsed) {
+                ServerNodeInfo existing = getNodeById(cn.id());
+                if (existing != null) {
+                    if (cn.storagePath() != null && !cn.storagePath().isBlank()) {
+                        existing.setStoragePath(cn.storagePath());
+                    }
+                    if (existing.getRestPort() <= 0 && cn.restPort() > 0) {
+                        existing.setRestPort(cn.restPort());
+                    }
+                }
+            }
+        } catch (Throwable ignored) {}
+    }
+
+    private void replicateClusterConfigToNodes() {
+        try {
+            Path clusterFile = io.jettra.store.core.JettraConfigValidator.locateClusterConfigFile();
+            if (clusterFile == null || !Files.exists(clusterFile)) {
+                return;
+            }
+            byte[] cfgBytes = Files.readAllBytes(clusterFile);
+            if (cfgBytes.length == 0) {
+                return;
+            }
+            io.jettra.store.cluster.JettraRaftFrame frame =
+                io.jettra.store.cluster.JettraRaftFrame.syncClusterConfig(1L, "jettra-explorer-config", cfgBytes);
+
+            List<ServerNodeInfo> targets = new ArrayList<>(serverNodes);
+            // Enviar primero al PRIMARY/master y luego al resto de nodos alcanzables
+            targets.sort((a, b) -> Boolean.compare(isPrimaryRole(b.getRole()), isPrimaryRole(a.getRole())));
+            for (ServerNodeInfo target : targets) {
+                if (target.getHost() == null || target.getHost().isBlank() || target.getPort() <= 0) continue;
+                try (java.net.Socket s = new java.net.Socket()) {
+                    s.setTcpNoDelay(true);
+                    s.connect(new java.net.InetSocketAddress(target.getHost(), target.getPort()), 1200);
+                    s.setSoTimeout(1500);
+                    try (java.io.BufferedOutputStream bos = new java.io.BufferedOutputStream(s.getOutputStream(), 8192);
+                         java.io.BufferedInputStream bis = new java.io.BufferedInputStream(s.getInputStream(), 8192)) {
+                        io.jettra.store.cluster.JettraClusterProtocol.writeFrame(bos, frame);
+                        io.jettra.store.cluster.JettraClusterProtocol.readFrame(bis);
+                    }
+                } catch (Exception ignored) {}
+            }
+        } catch (Throwable ignored) {}
+    }
+
     public synchronized boolean addNode(String id, String name, String role, String host, int port, long heapMaxMb) {
+        return addNode(id, name, role, host, port, heapMaxMb, null);
+    }
+
+    public synchronized boolean addNode(String id, String name, String role, String host, int port, long heapMaxMb, String storagePath) {
         if (id == null || id.isBlank()) return false;
+        String cleanId = id.trim();
         String r = (role != null && !role.isBlank()) ? role.toUpperCase() : "FOLLOWER";
         String h = (host != null && !host.isBlank()) ? host : "127.0.0.1";
         int p = port > 0 ? port : 8770;
         long maxM = heapMaxMb > 0 ? heapMaxMb : 2048;
-        ServerNodeInfo existing = getNodeById(id);
+        String effectiveStoragePath = (storagePath != null && !storagePath.isBlank())
+            ? storagePath.trim()
+            : "~/jettra/data-" + cleanId;
+        ServerNodeInfo existing = getNodeById(cleanId);
         if (existing != null) {
             existing.setOnline(true);
             existing.setRole(r);
             existing.setHost(h);
             existing.setPort(p);
+            existing.setStoragePath(effectiveStoragePath);
             existing.setLastError(null);
             saveClusterNodes();
+            io.jettra.store.core.JettraConfigValidator.registerDynamicNodeInClusterConfig(
+                cleanId, r, h, p, p > 1000 ? p - 1000 : 8082, effectiveStoragePath);
+            replicateClusterConfigToNodes();
             return true;
         }
-        ServerNodeInfo node = new ServerNodeInfo(id.trim(), (name != null && !name.isBlank()) ? name.trim() : id.trim(), r, h.trim(), p, 15.0f, 320, maxM, 850, 5000, 200, 10500, 0.65f, 8, true);
+        ServerNodeInfo node = new ServerNodeInfo(cleanId, (name != null && !name.isBlank()) ? name.trim() : cleanId, r, h.trim(), p, 15.0f, 320, maxM, 850, 5000, 200, 10500, 0.65f, 8, true);
+        node.setStoragePath(effectiveStoragePath);
         serverNodes.add(node);
         saveClusterNodes();
-        logPoliceIncident("Raft Quorum K9", "Nuevo nodo registrado en clúster: " + id + " (" + h + ":" + p + ") [" + node.getStatus() + "]", "OK", "Incorporado a quórum");
+        io.jettra.store.core.JettraConfigValidator.registerDynamicNodeInClusterConfig(
+            cleanId, r, h.trim(), p, p > 1000 ? p - 1000 : 8082, effectiveStoragePath);
+        replicateClusterConfigToNodes();
+        logPoliceIncident("Raft Quorum K9", "Nuevo nodo registrado en clúster: " + cleanId + " (" + h + ":" + p + ") [" + node.getStatus() + "]", "OK", "Incorporado a quórum");
         try {
             if (node.isActive()) {
                 io.jettra.store.cluster.JettraClusterEventBus.getInstance().publish(
@@ -1148,6 +1226,8 @@ public class JettraStorePlugin {
             lifecycleManager.clearStopped(id);
             reconcilePrimaryLeadership();
             saveClusterNodes();
+            io.jettra.store.core.JettraConfigValidator.removeDynamicNodeFromClusterConfig(id);
+            replicateClusterConfigToNodes();
             logPoliceIncident("Raft Quorum K9", "Nodo expulsado del clúster: " + id, "WARN", "Rebalanceo de réplicas Raft");
             try {
                 io.jettra.store.cluster.JettraClusterEventBus.getInstance().publish(
