@@ -55,7 +55,13 @@ setup_node() {
     cp microprofile-config.properties "$node_dir/config/"
 
     # 3. Copiar archivo start-node.sh
+    # cp start-node.sh "$node_dir/"
+
+   # 3. Copiar archivo start-node.sh y ajustar la ruta del jar eliminando target/
     cp start-node.sh "$node_dir/"
+    if [ -f "$start_node_file" ]; then
+        sed -i 's|-jar target/|-jar |g' "$start_node_file"
+    fi
 
     # 4. Copiar el archivo uber jar
     cp target/JettraStore-1.0-SNAPSHOT-uber.jar "$node_dir/"
