@@ -41,6 +41,7 @@ setup_node() {
     local node_num="$1"
     local node_role="$2"
     local node_dir="$HOME/jettra-$node_num"
+    # Nota: microprofile-config.properties se copia dentro de config/, por lo que la ruta relativa interna es config/microprofile-config.properties
     local config_file="$node_dir/config/microprofile-config.properties"
     local start_node_file="$node_dir/start-node.sh"
 
@@ -50,9 +51,9 @@ setup_node() {
     # 1. Crear directorios
     mkdir -p "$node_dir/config"
 
-    # 2. Copiar archivos base de configuración desde la carpeta config/
-    cp "$PROJECT_ROOT/config/cluster.config" "$node_dir/config/"
-    cp "$PROJECT_ROOT/config/microprofile-config.properties" "$node_dir/config/"
+    # 2. Copiar archivos base de configuración desde sus nuevas rutas en src/main/resources
+    cp "$PROJECT_ROOT/src/main/resources/cluster.config" "$node_dir/config/"
+    cp "$PROJECT_ROOT/src/main/resources/META-INF/microprofile-config.properties" "$node_dir/config/"
 
     # 3. Copiar archivo start-node.sh desde la carpeta script/ y ajustar la ruta del jar
     cp "$PROJECT_ROOT/script/start-node.sh" "$node_dir/"
@@ -63,7 +64,7 @@ setup_node() {
     # 4. Copiar el archivo uber jar desde la carpeta target/
     cp "$PROJECT_ROOT/target/JettraStore-1.0-SNAPSHOT-uber.jar" "$node_dir/"
 
-    # 5. Actualizar propiedades en microprofile-config.properties
+    # 5. Actualizar propiedades en microprofile-config.properties dentro del nodo
     update_property "$config_file" "cluster.node.id" "$node_num"
     update_property "$config_file" "cluster.node.role" "$node_role"
 
