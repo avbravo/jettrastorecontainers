@@ -372,7 +372,7 @@ public class App {
             String nodeName = form.get("nodeName");
             String nodeRole = form.get("nodeRole");
             String nodeHost = form.get("nodeHost");
-            int port = 8769;
+            int port = 50001;
             long ram = 2048;
             try { port = Integer.parseInt(form.get("nodePort")); } catch (Exception ignored) {}
             try { ram = Long.parseLong(form.get("nodeRam")); } catch (Exception ignored) {}

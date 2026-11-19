@@ -177,7 +177,7 @@ public class ClusterFluxView extends FluxView {
         Header header = Header.of(3, "➕ Registrar Nuevo Nodo en el Clúster");
         header.modifier(new Modifier().style("font-size: 1.1rem; color: var(--text-main); margin: 0 0 0.85rem 0;"));
 
-        Widget portInput = FluxUi.textInput("nodePort", "8769", "", true);
+        Widget portInput = FluxUi.textInput("nodePort", "50001", "", true);
         portInput.modifier(new Modifier().cssClass("app-input").attribute("type", "number").attribute("required", "required"));
         Widget ramInput = FluxUi.textInput("nodeRam", "2048", "", true);
         ramInput.modifier(new Modifier().cssClass("app-input").attribute("type", "number").attribute("required", "required"));

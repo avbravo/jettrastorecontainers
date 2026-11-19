@@ -746,5 +746,155 @@ public class JettraClusterReplicationTest extends JettraStoreBaseTest {
         }
     }
 
+    @Test
+    @DisplayName("Auto-join de nuevos nodos (node-04 y node-05): obtiene cluster.config del PRIMARY, fusiona sin sobrescribir y replica a todos los nodos")
+    public void testAutoJoinMergesAndConvergesClusterConfigAcrossAllNodesWithoutOverwrites() throws Exception {
+        Path root = Files.createTempDirectory("jettra_auto_join_test");
+        Path dir1 = root.resolve("n1");
+        Path dir2 = root.resolve("n2");
+        Path dir4 = root.resolve("n4");
+        Path dir5 = root.resolve("n5");
+        Files.createDirectories(dir1);
+        Files.createDirectories(dir2);
+        Files.createDirectories(dir4);
+        Files.createDirectories(dir5);
+
+        int p1 = 19371, p2 = 19372, p4 = 19374, p5 = 19375;
+
+        String initial12 =
+            "cluster.name = jettra-test\n" +
+            "cluster.node.1.id = node-01\n" +
+            "cluster.node.1.role = PRIMARY\n" +
+            "cluster.node.1.ip = 127.0.0.1\n" +
+            "cluster.node.1.grpc.port = " + p1 + "\n" +
+            "cluster.node.1.rest.port = 18371\n" +
+            "cluster.node.2.id = node-02\n" +
+            "cluster.node.2.role = SECONDARY\n" +
+            "cluster.node.2.ip = 127.0.0.1\n" +
+            "cluster.node.2.grpc.port = " + p2 + "\n" +
+            "cluster.node.2.rest.port = 18372\n";
+
+        Path cfg1 = dir1.resolve("cluster.config");
+        Path cfg2 = dir2.resolve("cluster.config");
+        Path cfg4 = dir4.resolve("cluster.config");
+        Path cfg5 = dir5.resolve("cluster.config");
+        Files.writeString(cfg1, initial12, java.nio.charset.StandardCharsets.UTF_8);
+        Files.writeString(cfg2, initial12, java.nio.charset.StandardCharsets.UTF_8);
+
+        String local4 =
+            "cluster.name = jettra-test\n" +
+            "cluster.node.1.id = node-01\n" +
+            "cluster.node.1.role = PRIMARY\n" +
+            "cluster.node.1.ip = 127.0.0.1\n" +
+            "cluster.node.1.grpc.port = " + p1 + "\n" +
+            "cluster.node.1.rest.port = 18371\n" +
+            "cluster.node.4.id = node-04\n" +
+            "cluster.node.4.role = SECONDARY\n" +
+            "cluster.node.4.ip = 127.0.0.1\n" +
+            "cluster.node.4.grpc.port = " + p4 + "\n" +
+            "cluster.node.4.rest.port = 18374\n";
+        Files.writeString(cfg4, local4, java.nio.charset.StandardCharsets.UTF_8);
+
+        String local5 =
+            "cluster.name = jettra-test\n" +
+            "cluster.node.1.id = node-01\n" +
+            "cluster.node.1.role = PRIMARY\n" +
+            "cluster.node.1.ip = 127.0.0.1\n" +
+            "cluster.node.1.grpc.port = " + p1 + "\n" +
+            "cluster.node.1.rest.port = 18371\n" +
+            "cluster.node.5.id = node-05\n" +
+            "cluster.node.5.role = SECONDARY\n" +
+            "cluster.node.5.ip = 127.0.0.1\n" +
+            "cluster.node.5.grpc.port = " + p5 + "\n" +
+            "cluster.node.5.rest.port = 18375\n";
+        Files.writeString(cfg5, local5, java.nio.charset.StandardCharsets.UTF_8);
+
+        Properties cProps12 = new Properties();
+        try (var in = Files.newInputStream(cfg1)) { cProps12.load(in); }
+        Properties cProps4 = new Properties();
+        try (var in = Files.newInputStream(cfg4)) { cProps4.load(in); }
+        Properties cProps5 = new Properties();
+        try (var in = Files.newInputStream(cfg5)) { cProps5.load(in); }
+
+        Properties mp1 = new Properties();
+        mp1.setProperty("cluster.node.id", "node-01");
+        mp1.setProperty("cluster.node.role", "PRIMARY");
+        mp1.setProperty("jettra.storage.path", dir1.toString());
+        mp1.setProperty("cluster.multinode.active", "on");
+        JettraStoreServer s1 = new JettraStoreServer(new JettraStoreConfig(mp1, cProps12));
+        s1.setClusterConfigFilePath(cfg1);
+
+        Properties mp2 = new Properties();
+        mp2.setProperty("cluster.node.id", "node-02");
+        mp2.setProperty("cluster.node.role", "SECONDARY");
+        mp2.setProperty("jettra.storage.path", dir2.toString());
+        mp2.setProperty("cluster.multinode.active", "on");
+        JettraStoreServer s2 = new JettraStoreServer(new JettraStoreConfig(mp2, cProps12));
+        s2.setClusterConfigFilePath(cfg2);
+
+        Properties mp4 = new Properties();
+        mp4.setProperty("cluster.node.id", "node-04");
+        mp4.setProperty("cluster.node.role", "SECONDARY");
+        mp4.setProperty("jettra.storage.path", dir4.toString());
+        mp4.setProperty("cluster.multinode.active", "on");
+        JettraStoreServer s4 = new JettraStoreServer(new JettraStoreConfig(mp4, cProps4));
+        s4.setClusterConfigFilePath(cfg4);
+
+        Properties mp5 = new Properties();
+        mp5.setProperty("cluster.node.id", "node-05");
+        mp5.setProperty("cluster.node.role", "SECONDARY");
+        mp5.setProperty("jettra.storage.path", dir5.toString());
+        mp5.setProperty("cluster.multinode.active", "on");
+        JettraStoreServer s5 = new JettraStoreServer(new JettraStoreConfig(mp5, cProps5));
+        s5.setClusterConfigFilePath(cfg5);
+
+        try (JettraClusterTransportServer t1 = new JettraClusterTransportServer(p1, s1);
+             JettraClusterTransportServer t2 = new JettraClusterTransportServer(p2, s2);
+             JettraClusterTransportServer t4 = new JettraClusterTransportServer(p4, s4);
+             JettraClusterTransportServer t5 = new JettraClusterTransportServer(p5, s5)) {
+            t1.start();
+            t2.start();
+            t4.start();
+            t5.start();
+            Thread.sleep(100);
+
+            // 1. node-04 se une automáticamente buscando al PRIMARY activo
+            assertTrue(s4.syncClusterConfigWithActivePrimary(), "node-04 debe sincronizar cluster.config con PRIMARY");
+            for (int i = 0; i < 20 && !java.util.Arrays.equals(Files.readAllBytes(cfg1), Files.readAllBytes(cfg2)); i++) {
+                Thread.sleep(100);
+            }
+
+            byte[] b1After4 = Files.readAllBytes(cfg1);
+            byte[] b2After4 = Files.readAllBytes(cfg2);
+            byte[] b4After4 = Files.readAllBytes(cfg4);
+            String txtAfter4 = new String(b1After4, java.nio.charset.StandardCharsets.UTF_8);
+            assertTrue(txtAfter4.contains("node-01") && txtAfter4.contains("node-02") && txtAfter4.contains("node-04"),
+                "PRIMARY debe conservar node-01, node-02 y anexar node-04 sin sobrescribir");
+            assertTrue(java.util.Arrays.equals(b1After4, b4After4), "cluster.config de node-04 debe ser idéntico al PRIMARY");
+            assertTrue(java.util.Arrays.equals(b1After4, b2After4), "PRIMARY debe replicar cluster.config a node-02");
+
+            // 2. node-05 se conecta después y todos los nodos convergen con los 4 nodos
+            assertTrue(s5.syncClusterConfigWithActivePrimary(), "node-05 debe sincronizar cluster.config con PRIMARY");
+            for (int i = 0; i < 20 && !(java.util.Arrays.equals(Files.readAllBytes(cfg1), Files.readAllBytes(cfg2))
+                    && java.util.Arrays.equals(Files.readAllBytes(cfg1), Files.readAllBytes(cfg4))); i++) {
+                Thread.sleep(100);
+            }
+
+            byte[] b1After5 = Files.readAllBytes(cfg1);
+            String txtAfter5 = new String(b1After5, java.nio.charset.StandardCharsets.UTF_8);
+            assertTrue(txtAfter5.contains("node-01") && txtAfter5.contains("node-02")
+                && txtAfter5.contains("node-04") && txtAfter5.contains("node-05"),
+                "cluster.config final debe contener todos los nodos sin pérdidas ni sobreescrituras");
+            assertTrue(java.util.Arrays.equals(b1After5, Files.readAllBytes(cfg2)), "node-02 debe tener cluster.config idéntico al PRIMARY");
+            assertTrue(java.util.Arrays.equals(b1After5, Files.readAllBytes(cfg4)), "node-04 debe tener cluster.config idéntico al PRIMARY");
+            assertTrue(java.util.Arrays.equals(b1After5, Files.readAllBytes(cfg5)), "node-05 debe tener cluster.config idéntico al PRIMARY");
+        } finally {
+            s1.stop();
+            s2.stop();
+            s4.stop();
+            s5.stop();
+        }
+    }
+
     public record TestRecord(String id, String name, int score) {}
 }

@@ -516,83 +516,49 @@ public final class JettraClusterTransportServer implements AutoCloseable {
                 byte[] cfgBytes = frame.payload();
                 if (cfgBytes != null && cfgBytes.length > 0) {
                     try {
-                        Path target = io.jettra.store.core.JettraConfigValidator.locateClusterConfigFile();
+                        Path target = server != null
+                            ? server.resolveClusterConfigFile()
+                            : io.jettra.store.core.JettraConfigValidator.locateClusterConfigFile();
                         if (target == null) {
                             target = Path.of(io.jettra.store.core.JettraConfigValidator.DEFAULT_CLUSTER_CONFIG_PATH);
                         }
-                        if (target.getParent() != null) {
-                            Files.createDirectories(target.getParent());
+                        java.util.Properties syncedProps = new java.util.Properties();
+                        try (var bais = new java.io.ByteArrayInputStream(cfgBytes)) {
+                            syncedProps.load(bais);
                         }
-                        Files.write(target, cfgBytes, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
-                        System.out.printf("[JettraClusterTransport] ✅ Archivo cluster.config sincronizado (%d bytes) en '%s' desde '%s'.%n",
-                            cfgBytes.length, target.toAbsolutePath().normalize(), frame.senderNodeId());
-                        if (server != null) {
-                            // Actualizar topología de peers en memoria desde el cluster.config recibido
-                            java.util.Properties syncedProps = new java.util.Properties();
-                            try (var bais = new java.io.ByteArrayInputStream(cfgBytes)) {
-                                syncedProps.load(bais);
+                        List<io.jettra.store.core.JettraConfigValidator.ClusterNodeInfo> parsedNodes =
+                            io.jettra.store.core.JettraConfigValidator.parseClusterNodes(syncedProps);
+                        if (!parsedNodes.isEmpty()) {
+                            boolean written = io.jettra.store.core.JettraConfigValidator.writeClusterConfigAtomically(target, cfgBytes);
+                            if (written) {
+                                System.out.printf("[JettraClusterTransport] ✅ Archivo cluster.config sincronizado atómicamente (%d bytes, %d nodos) en '%s' desde '%s'.%n",
+                                    cfgBytes.length, parsedNodes.size(), target.toAbsolutePath().normalize(), frame.senderNodeId());
                             }
-                            List<io.jettra.store.core.JettraConfigValidator.ClusterNodeInfo> parsedNodes =
-                                io.jettra.store.core.JettraConfigValidator.parseClusterNodes(syncedProps);
-                            String localId = server.getConfig().getNodeId();
-                            List<ClusterNode> updatedPeers = new java.util.ArrayList<>();
-                            List<ClusterNode> newlyAddedPeers = new java.util.ArrayList<>();
-                            java.util.Set<String> parsedIds = new java.util.HashSet<>();
-
-                            for (var cn : parsedNodes) {
-                                parsedIds.add(cn.id().toLowerCase(java.util.Locale.ROOT));
-                                if (!cn.id().equalsIgnoreCase(localId)) {
-                                    ClusterNode.Role r = "PRIMARY".equalsIgnoreCase(cn.role()) ? ClusterNode.Role.PRIMARY : ClusterNode.Role.SECONDARY;
-                                    ClusterNode existing = server.getRingEngine() != null ? server.getRingEngine().getPeer(cn.id()) : null;
-                                    ClusterNode peerNode = new ClusterNode(cn.id(), cn.ip(), cn.grpcPort(), r);
-                                    updatedPeers.add(peerNode);
-                                    if (existing == null) {
-                                        newlyAddedPeers.add(peerNode);
+                            if (server != null) {
+                                String localId = server.getConfig().getNodeId();
+                                List<ClusterNode> newlyAddedPeers = server.applySyncedPeersToRuntime(parsedNodes);
+                                JettraClusterEventBus.getInstance().publish(
+                                    ClusterLiveEvent.TYPE_DATA_TRANSFER,
+                                    frame.senderNodeId(),
+                                    localId,
+                                    String.format("Archivo cluster.config actualizado (%d nodos, %d bytes)", parsedNodes.size(), cfgBytes.length),
+                                    "cluster.config"
+                                );
+                                if (server.getConfig().getNodeRole() == ClusterNode.Role.PRIMARY
+                                        && !"cluster-master".equalsIgnoreCase(frame.senderNodeId())
+                                        && !localId.equalsIgnoreCase(frame.senderNodeId())) {
+                                    JettraClusterReplicationClient replClient = server.getOrCreateReplicationClient();
+                                    if (replClient != null) {
+                                        replClient.broadcastClusterConfigSync(cfgBytes);
                                     }
-                                }
-                            }
-
-                            if (server.getRingEngine() != null) {
-                                // Eliminar peers que ya no existen en cluster.config
-                                for (ClusterNode currentPeer : new java.util.ArrayList<>(server.getRingEngine().getPeers())) {
-                                    if (!parsedIds.contains(currentPeer.getId().toLowerCase(java.util.Locale.ROOT))) {
-                                        server.getRingEngine().removePeer(currentPeer.getId());
+                                    if (!newlyAddedPeers.isEmpty()) {
+                                        final List<ClusterNode> toSync = new java.util.ArrayList<>(newlyAddedPeers);
+                                        Thread.ofVirtual().name("jettra-new-node-full-sync").start(() -> {
+                                            for (ClusterNode newPeer : toSync) {
+                                                server.distributeAllDatabasesToPeer(newPeer);
+                                            }
+                                        });
                                     }
-                                }
-                                // Registrar nuevos peers
-                                for (ClusterNode peerNode : updatedPeers) {
-                                    if (server.getRingEngine().getPeer(peerNode.getId()) == null) {
-                                        server.getRingEngine().registerPeer(peerNode);
-                                    }
-                                }
-                            }
-
-                            // Actualizar dinámicamente el cliente de replicación Raft con los nuevos peers (ej. nodo-04)
-                            JettraClusterReplicationClient replClient = server.getOrCreateReplicationClient();
-                            if (replClient != null) {
-                                replClient.syncPeers(updatedPeers);
-                            }
-
-                            JettraClusterEventBus.getInstance().publish(
-                                ClusterLiveEvent.TYPE_DATA_TRANSFER,
-                                frame.senderNodeId(),
-                                localId,
-                                String.format("Archivo cluster.config actualizado (%d nodos, %d bytes)", parsedNodes.size(), cfgBytes.length),
-                                "cluster.config"
-                            );
-                            if (server.getConfig().getNodeRole() == ClusterNode.Role.PRIMARY
-                                    && !"cluster-master".equalsIgnoreCase(frame.senderNodeId())
-                                    && !localId.equalsIgnoreCase(frame.senderNodeId())) {
-                                if (replClient != null) {
-                                    replClient.broadcastClusterConfigSync(cfgBytes);
-                                }
-                                if (!newlyAddedPeers.isEmpty()) {
-                                    final List<ClusterNode> toSync = new java.util.ArrayList<>(newlyAddedPeers);
-                                    Thread.ofVirtual().name("jettra-new-node-full-sync").start(() -> {
-                                        for (ClusterNode newPeer : toSync) {
-                                            server.distributeAllDatabasesToPeer(newPeer);
-                                        }
-                                    });
                                 }
                             }
                         }
@@ -602,6 +568,34 @@ public final class JettraClusterTransportServer implements AutoCloseable {
                 }
                 return JettraRaftFrame.ack(frame.term(), frame.logIndex(),
                     server != null ? server.getConfig().getNodeId() : "local", "CLUSTER_CONFIG_SYNCED");
+            }
+
+            case JettraRaftFrame.TYPE_JOIN_CLUSTER_REQ -> {
+                if (server == null || server.getConfig().getNodeRole() != ClusterNode.Role.PRIMARY) {
+                    return JettraRaftFrame.nack(frame.term(), frame.logIndex(),
+                        server != null ? server.getConfig().getNodeId() : "local", "NOT_PRIMARY");
+                }
+                try {
+                    java.util.Properties joinProps = new java.util.Properties();
+                    if (frame.payload() != null && frame.payload().length > 0) {
+                        try (var bais = new java.io.ByteArrayInputStream(frame.payload())) {
+                            joinProps.load(bais);
+                        }
+                    }
+                    String jId = joinProps.getProperty("id", frame.senderNodeId());
+                    String jRole = joinProps.getProperty("role", "SECONDARY");
+                    String jIp = joinProps.getProperty("ip", "127.0.0.1");
+                    int jGrpc = Integer.parseInt(joinProps.getProperty("grpc.port", "9091"));
+                    int jRest = Integer.parseInt(joinProps.getProperty("rest.port", "8082"));
+
+                    byte[] canonicalCfg = server.handleJoinClusterRequest(jId, jRole, jIp, jGrpc, jRest);
+                    if (canonicalCfg != null && canonicalCfg.length > 0) {
+                        return JettraRaftFrame.joinClusterResp(frame.term(), server.getConfig().getNodeId(), canonicalCfg);
+                    }
+                    return JettraRaftFrame.nack(frame.term(), frame.logIndex(), server.getConfig().getNodeId(), "JOIN_FAILED");
+                } catch (Exception ex) {
+                    return JettraRaftFrame.nack(frame.term(), frame.logIndex(), server.getConfig().getNodeId(), ex.getMessage());
+                }
             }
 
             default -> {

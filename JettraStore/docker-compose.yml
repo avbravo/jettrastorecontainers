@@ -19,8 +19,8 @@ services:
     security_opt:
       - seccomp:unconfined
     ports:
-      - "8081:8080"   # API REST / Autenticación JettraJWT en Host
-      - "9091:9091"   # Protocolo de Clúster / Raft Sync
+      - "60001:60001"   # API REST / Autenticación JettraJWT en Host
+      - "50001:50001"   # Protocolo de Clúster / Raft Sync
     environment:
       - JETTRA_NODE_ID=node-01
       - JETTRA_NODE_ROLE=PRIMARY
@@ -28,11 +28,11 @@ services:
       - JETTRA_STORAGE_MODE=${JETTRA_STORAGE_MODE:-OFF_HEAP}
       - JETTRA_CRAC_CHECKPOINT_PATH=/jettra/checkpoint
       - JETTRA_CRAC_RESTORE=${JETTRA_CRAC_RESTORE:-false}
-      - JETTRA_REST_PORT=8080
-      - JETTRA_GRPC_PORT=9091
+      - JETTRA_REST_PORT=60001
+      - JETTRA_GRPC_PORT=50001
       - JETTRA_ADMIN_USERNAME=admin
       - JETTRA_ADMIN_PASSWORD=admin-jettra
-      - JETTRA_CLUSTER_PEERS=node-02:jettra-node-02:9091:SECONDARY,node-03:jettra-node-03:9091:SECONDARY
+      - JETTRA_CLUSTER_PEERS=node-02:jettra-node-02:50001:SECONDARY,node-03:jettra-node-03:50001:SECONDARY
       - JAVA_OPTS=--enable-preview --enable-native-access=ALL-UNNAMED -XX:+UnlockExperimentalVMOptions -XX:+UseCompactObjectHeaders -XX:+UseContainerSupport -XX:+UseZGC -Xms512m -Xmx2g -Djettra.storage.path=/jettra/data -Djettra.storage.mode=${JETTRA_STORAGE_MODE:-OFF_HEAP}
     mem_limit: 3g
     mem_reservation: 512m
@@ -42,7 +42,7 @@ services:
     networks:
       - jettra-cluster-net
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:8080/api/v1/health || exit 1"]
+      test: ["CMD-SHELL", "curl -f http://localhost:60001/api/v1/health || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -69,8 +69,8 @@ services:
       jettra-node-01:
         condition: service_healthy
     ports:
-      - "8082:8080"   # API REST Nodo 2
-      - "9092:9091"   # Protocolo de Clúster Nodo 2
+      - "60002:60002"   # API REST Nodo 2
+      - "50002:50002"   # Protocolo de Clúster Nodo 2
     environment:
       - JETTRA_NODE_ID=node-02
       - JETTRA_NODE_ROLE=SECONDARY
@@ -78,11 +78,11 @@ services:
       - JETTRA_STORAGE_MODE=${JETTRA_STORAGE_MODE:-OFF_HEAP}
       - JETTRA_CRAC_CHECKPOINT_PATH=/jettra/checkpoint
       - JETTRA_CRAC_RESTORE=${JETTRA_CRAC_RESTORE:-false}
-      - JETTRA_REST_PORT=8080
-      - JETTRA_GRPC_PORT=9091
+      - JETTRA_REST_PORT=60001
+      - JETTRA_GRPC_PORT=50001
       - JETTRA_ADMIN_USERNAME=admin
       - JETTRA_ADMIN_PASSWORD=admin-jettra
-      - JETTRA_CLUSTER_PEERS=node-01:jettra-node-01:9091:PRIMARY,node-03:jettra-node-03:9091:SECONDARY
+      - JETTRA_CLUSTER_PEERS=node-01:jettra-node-01:50001:PRIMARY,node-03:jettra-node-03:50001:SECONDARY
       - JAVA_OPTS=--enable-preview --enable-native-access=ALL-UNNAMED -XX:+UnlockExperimentalVMOptions -XX:+UseCompactObjectHeaders -XX:+UseContainerSupport -XX:+UseZGC -Xms512m -Xmx2g -Djettra.storage.path=/jettra/data -Djettra.storage.mode=${JETTRA_STORAGE_MODE:-OFF_HEAP}
     mem_limit: 3g
     mem_reservation: 512m
@@ -92,7 +92,7 @@ services:
     networks:
       - jettra-cluster-net
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:8080/api/v1/health || exit 1"]
+      test: ["CMD-SHELL", "curl -f http://localhost:60001/api/v1/health || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -119,8 +119,8 @@ services:
       jettra-node-01:
         condition: service_healthy
     ports:
-      - "8083:8080"   # API REST Nodo 3
-      - "9093:9091"   # Protocolo de Clúster Nodo 3
+      - "60001:60003"   # API REST Nodo 3
+      - "50003:50003"   # Protocolo de Clúster Nodo 3
     environment:
       - JETTRA_NODE_ID=node-03
       - JETTRA_NODE_ROLE=SECONDARY
@@ -128,11 +128,11 @@ services:
       - JETTRA_STORAGE_MODE=${JETTRA_STORAGE_MODE:-OFF_HEAP}
       - JETTRA_CRAC_CHECKPOINT_PATH=/jettra/checkpoint
       - JETTRA_CRAC_RESTORE=${JETTRA_CRAC_RESTORE:-false}
-      - JETTRA_REST_PORT=8080
-      - JETTRA_GRPC_PORT=9091
+      - JETTRA_REST_PORT=60001
+      - JETTRA_GRPC_PORT=50001
       - JETTRA_ADMIN_USERNAME=admin
       - JETTRA_ADMIN_PASSWORD=admin-jettra
-      - JETTRA_CLUSTER_PEERS=node-01:jettra-node-01:9091:PRIMARY,node-02:jettra-node-02:9091:SECONDARY
+      - JETTRA_CLUSTER_PEERS=node-01:jettra-node-01:50001:PRIMARY,node-02:jettra-node-02:50001:SECONDARY
       - JAVA_OPTS=--enable-preview --enable-native-access=ALL-UNNAMED -XX:+UnlockExperimentalVMOptions -XX:+UseCompactObjectHeaders -XX:+UseContainerSupport -XX:+UseZGC -Xms512m -Xmx2g -Djettra.storage.path=/jettra/data -Djettra.storage.mode=${JETTRA_STORAGE_MODE:-OFF_HEAP}
     mem_limit: 3g
     mem_reservation: 512m
@@ -142,7 +142,7 @@ services:
     networks:
       - jettra-cluster-net
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:8080/api/v1/health || exit 1"]
+      test: ["CMD-SHELL", "curl -f http://localhost:60001/api/v1/health || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 3

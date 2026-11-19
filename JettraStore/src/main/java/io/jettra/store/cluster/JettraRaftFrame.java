@@ -42,6 +42,8 @@ public record JettraRaftFrame(
     public static final byte TYPE_CLUSTER_LIVE_EVENT = 0x15;
     public static final byte TYPE_CREATE_ENGINE    = 0x16;
     public static final byte TYPE_SYNC_CLUSTER_CONFIG = 0x17;
+    public static final byte TYPE_JOIN_CLUSTER_REQ    = 0x18;
+    public static final byte TYPE_JOIN_CLUSTER_RESP   = 0x19;
 
     public static JettraRaftFrame heartbeat(long term, String senderNodeId) {
         return new JettraRaftFrame(TYPE_HEARTBEAT, term, 0, senderNodeId, "", "", "", new byte[0], System.currentTimeMillis());
@@ -150,6 +152,21 @@ public record JettraRaftFrame(
     public static JettraRaftFrame syncClusterConfig(long term, String senderNodeId, byte[] clusterConfigBytes) {
         return new JettraRaftFrame(TYPE_SYNC_CLUSTER_CONFIG, term, 0, senderNodeId, "", "", "",
             clusterConfigBytes != null ? clusterConfigBytes : new byte[0], System.currentTimeMillis());
+    }
+
+    public static JettraRaftFrame joinClusterReq(long term, String joiningNodeId, String role, String ip, int grpcPort, int restPort) {
+        String props = "id=" + (joiningNodeId != null ? joiningNodeId : "") + "\n"
+            + "role=" + (role != null ? role : "SECONDARY") + "\n"
+            + "ip=" + (ip != null ? ip : "127.0.0.1") + "\n"
+            + "grpc.port=" + grpcPort + "\n"
+            + "rest.port=" + restPort + "\n";
+        return new JettraRaftFrame(TYPE_JOIN_CLUSTER_REQ, term, 0, joiningNodeId, "", "", "",
+            props.getBytes(java.nio.charset.StandardCharsets.UTF_8), System.currentTimeMillis());
+    }
+
+    public static JettraRaftFrame joinClusterResp(long term, String primaryNodeId, byte[] canonicalClusterConfigBytes) {
+        return new JettraRaftFrame(TYPE_JOIN_CLUSTER_RESP, term, 0, primaryNodeId, "", "", "",
+            canonicalClusterConfigBytes != null ? canonicalClusterConfigBytes : new byte[0], System.currentTimeMillis());
     }
 
     public String getPayloadAsString() {

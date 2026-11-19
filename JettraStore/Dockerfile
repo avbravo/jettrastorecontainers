@@ -44,14 +44,14 @@ ENV JETTRA_NODE_ID=node-01 \
     JETTRA_STORAGE_MODE=OFF_HEAP \
     JETTRA_CRAC_CHECKPOINT_PATH=/jettra/checkpoint \
     JETTRA_CRAC_RESTORE=false \
-    JETTRA_GRPC_PORT=9091 \
-    JETTRA_REST_PORT=8080 \
+    JETTRA_GRPC_PORT=50001 \
+    JETTRA_REST_PORT=60001 \
     JETTRA_ADMIN_USERNAME=admin \
     JETTRA_ADMIN_PASSWORD=admin-jettra \
     JAVA_OPTS="--enable-preview --enable-native-access=ALL-UNNAMED -XX:+UnlockExperimentalVMOptions -XX:+UseCompactObjectHeaders -XX:+UseContainerSupport -XX:+UseZGC -Xms512m -Xmx2g"
 
-# Exponer puertos: REST HTTP (8080) y Puerto de Clúster / gRPC (9091)
-EXPOSE 8080 9091
+# Exponer puertos: REST HTTP (60001) y Puerto de Clúster / gRPC (50001)
+EXPOSE 60001 50001
 
 # Volúmenes para almacenamiento persistente y snapshots de memoria CRaC
 VOLUME ["/jettra/data", "/jettra/checkpoint"]

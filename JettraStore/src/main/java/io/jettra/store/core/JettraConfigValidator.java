@@ -1039,6 +1039,42 @@ cluster.index.max.inmemory.keys = 100000
     }
 
     /**
+     * Escribe de forma atómica y segura el archivo cluster.config solo si el contenido es válido
+     * y difiere del archivo actual en disco, evitando sobreescrituras accidentales o corrupción concurrente.
+     */
+    public static synchronized boolean writeClusterConfigAtomically(Path target, byte[] newBytes) throws IOException {
+        if (target == null || newBytes == null || newBytes.length == 0) {
+            return false;
+        }
+        // Validar que el contenido sea parseable y contenga al menos 1 nodo válido antes de escribir
+        Properties checkProps = new Properties();
+        try (var bais = new java.io.ByteArrayInputStream(newBytes)) {
+            checkProps.load(bais);
+        }
+        List<ClusterNodeInfo> parsed = parseClusterNodes(checkProps);
+        if (parsed.isEmpty()) {
+            return false;
+        }
+        if (Files.exists(target)) {
+            byte[] existing = Files.readAllBytes(target);
+            if (java.util.Arrays.equals(existing, newBytes)) {
+                return false; // Ya es idéntico; evitar escritura redundante
+            }
+        }
+        if (target.getParent() != null && !Files.exists(target.getParent())) {
+            Files.createDirectories(target.getParent());
+        }
+        Path tmp = target.resolveSibling(target.getFileName().toString() + ".tmp." + System.nanoTime());
+        Files.write(tmp, newBytes, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
+        try {
+            Files.move(tmp, target, java.nio.file.StandardCopyOption.ATOMIC_MOVE, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+        } catch (java.nio.file.AtomicMoveNotSupportedException ex) {
+            Files.move(tmp, target, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+        }
+        return true;
+    }
+
+    /**
      * Elimina dinámicamente un nodo del archivo cluster.config localizado por defecto.
      */
     public static synchronized boolean removeDynamicNodeFromClusterConfig(String nodeId) {
