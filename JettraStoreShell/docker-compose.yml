@@ -15,17 +15,22 @@ services:
     mem_limit: 512m
     mem_reservation: 64m
     environment:
+      - MICROPROFILE_CONFIG_FILE=/app/config/microprofile-config.properties
       - JETTRA_HOST=jettra-node-01
       - JETTRA_PORT=9091
-      - JAVA_OPTS=-Xms64m -Xmx512m -XX:+UseG1GC -XX:+UnlockExperimentalVMOptions -XX:+UseCompactObjectHeaders --enable-preview --enable-native-access=ALL-UNNAMED
+      - JAVA_OPTS=-Xms64m -Xmx512m -XX:+UseG1GC -XX:+UnlockExperimentalVMOptions -XX:+UseCompactObjectHeaders --enable-preview --enable-native-access=ALL-UNNAMED -Dcluster.nodes=node-01:jettra-node-01:9091,node-02:jettra-node-02:9091,node-03:jettra-node-03:9091
     volumes:
       - jettra_shell_data:/home/jettra/.jettra
+      - jettra_shell_config:/app/config
     networks:
       - jettra-cluster-net
 
 volumes:
   jettra_shell_data:
     name: jettra_shell_data
+    driver: local
+  jettra_shell_config:
+    name: jettra_shell_config
     driver: local
 
 networks:
