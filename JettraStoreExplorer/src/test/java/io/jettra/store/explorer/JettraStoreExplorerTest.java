@@ -60,6 +60,12 @@ public class JettraStoreExplorerTest {
     @BeforeAll
     public static void setUpSuite() throws Exception {
         ensureSharedServer();
+        JettraStorePlugin plugin = JettraStorePlugin.getInstance();
+        if (plugin.getDatabaseNames().isEmpty()) {
+            // Confirmado arranque limpio sin bases de datos de ejemplo precargadas;
+            // se instalan bajo demanda para los tests de exploración/consultas de esta suite.
+            plugin.installAllExampleDatabases();
+        }
     }
 
     @AfterAll
@@ -70,11 +76,20 @@ public class JettraStoreExplorerTest {
         }
     }
 
+    private static volatile boolean cleanStartVerified = false;
+
     private static synchronized void ensureSharedServer() throws Exception {
         if (sharedServer == null || !sharedServer.isRunning()) {
             sharedPort = BASE_TEST_PORT;
             sharedServer = App.startApplication(sharedPort, StorageMode.OFF_HEAP);
             sharedAuthCookie = null;
+            JettraStorePlugin plugin = JettraStorePlugin.getInstance();
+            if (!cleanStartVerified) {
+                cleanStartVerified = plugin.getDatabaseNames().isEmpty();
+            }
+            if (plugin.getDatabaseNames().isEmpty()) {
+                plugin.installAllExampleDatabases();
+            }
         }
     }
 
@@ -1352,6 +1367,71 @@ public class JettraStoreExplorerTest {
                     path + " debe incluir media query móvil para pantallas pequeñas (360x780)");
             JettraAssert.assertTrue(res.body().contains("initResponsiveDatatables()"),
                     path + " debe inicializar automáticamente las etiquetas data-label y el contenedor responsive");
+        }
+    }
+
+    @Test
+    @DisplayName("35. /cluster sin Storage Path de cluster.config y Nueva Página Gráfica /map de Transferencia en Tiempo Real")
+    public void testClusterWithoutStoragePathAndTransferMapPage() throws Exception {
+        // 1. Verificar que /cluster NO muestra Storage Path: de cluster.config
+        HttpResponse<String> clusterRes = get("/cluster");
+        JettraAssert.assertEquals(200, clusterRes.statusCode(), "/cluster debe responder HTTP 200");
+        JettraAssert.assertFalse(clusterRes.body().contains("Storage Path:"),
+                "/cluster no debe mostrar la propiedad Storage Path: de cluster.config");
+        JettraAssert.assertTrue(clusterRes.body().contains("/map"),
+                "La navegación debe incluir enlace a /map");
+
+        // 2. Verificar nueva página /map
+        HttpResponse<String> mapRes = get("/map");
+        JettraAssert.assertEquals(200, mapRes.statusCode(), "/map debe responder HTTP 200");
+        JettraAssert.assertTrue(mapRes.body().contains("Mapa de Transferencia"),
+                "/map debe mostrar título Mapa de Transferencia");
+        JettraAssert.assertTrue(mapRes.body().contains("transfer-map-canvas-host"),
+                "/map debe renderizar el lienzo gráfico interactivo transfer-map-canvas-host");
+        JettraAssert.assertTrue(mapRes.body().contains("map-transfer-feed"),
+                "/map debe incluir la bitácora de transmisiones en tiempo real");
+
+        // 3. Verificar que /api/cluster/status incluye recentTransfers para el mapa
+        HttpResponse<String> statusApi = get("/api/cluster/status");
+        JettraAssert.assertEquals(200, statusApi.statusCode(), "/api/cluster/status debe responder HTTP 200");
+        JettraAssert.assertTrue(statusApi.body().contains("\"recentTransfers\""),
+                "/api/cluster/status debe incluir recentTransfers para alimentar el mapa en tiempo real");
+    }
+
+    @Test
+    @DisplayName("36. Administración de Bases de Datos de Ejemplo en /examples (Listar, Instalar y Eliminar)")
+    public void testExamplesPageInstallAndUninstall() throws Exception {
+        JettraStorePlugin plugin = JettraStorePlugin.getInstance();
+        JettraAssert.assertTrue(cleanStartVerified,
+                "JettraStoreExplorer debe iniciar limpio sin bases de datos de ejemplo precargadas");
+        try {
+            // 1. Verificar listado en /examples
+            HttpResponse<String> listRes = get("/examples");
+            JettraAssert.assertEquals(200, listRes.statusCode(), "/examples debe responder HTTP 200");
+            JettraAssert.assertTrue(listRes.body().contains("Administración de Bases de Datos de Ejemplo"),
+                    "/examples debe mostrar el título de administración de ejemplos");
+            JettraAssert.assertTrue(listRes.body().contains("example_factura_db"),
+                    "/examples debe listar example_factura_db");
+            JettraAssert.assertTrue(listRes.body().contains("system_metadata_db"),
+                    "/examples debe listar system_metadata_db");
+
+            // 2. Eliminar una base de ejemplo específica desde /examples
+            HttpResponse<String> delOneRes = postForm("/examples", "action=delete_example&exampleId=system_metadata_db");
+            JettraAssert.assertEquals(302, delOneRes.statusCode(), "POST delete_example debe redirigir 302");
+            JettraAssert.assertFalse(plugin.getDatabaseNames().contains("system_metadata_db"),
+                    "system_metadata_db debe ser eliminada del catálogo");
+
+            HttpResponse<String> afterDelRes = get("/examples");
+            JettraAssert.assertTrue(afterDelRes.body().contains("NO INSTALADA"),
+                    "/examples debe indicar estado NO INSTALADA tras eliminar");
+
+            // 3. Reinstalar la base de ejemplo desde /examples
+            HttpResponse<String> instRes = postForm("/examples", "action=install_example&exampleId=system_metadata_db");
+            JettraAssert.assertEquals(302, instRes.statusCode(), "POST install_example debe redirigir 302");
+            JettraAssert.assertTrue(plugin.getDatabaseNames().contains("system_metadata_db"),
+                    "system_metadata_db debe quedar instalada en el catálogo");
+        } finally {
+            plugin.installExampleDatabase("system_metadata_db");
         }
     }
 }

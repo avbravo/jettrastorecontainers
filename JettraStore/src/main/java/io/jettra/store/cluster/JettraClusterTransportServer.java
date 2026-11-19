@@ -113,12 +113,12 @@ public final class JettraClusterTransportServer implements AutoCloseable {
                         if (payload != null && payload.length > 0) {
                             Files.write(targetMeta, payload, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
                         }
-                        JettraDatabase db = server.getOrCreateDatabaseInternal(dbName, false);
+                        boolean shouldBroadcast = "jettra-explorer".equalsIgnoreCase(frame.senderNodeId())
+                            && server.getConfig().getNodeRole() == ClusterNode.Role.PRIMARY;
+                        JettraDatabase db = server.getOrCreateDatabaseInternal(dbName, shouldBroadcast);
                         if (db != null) {
-                            if (Files.exists(targetMeta)) {
+                            if (Files.exists(targetMeta) && payload != null && payload.length > 0) {
                                 db.loadFromDisk(targetMeta);
-                            } else {
-                                db.loadFromDisk();
                             }
                             db.saveToDisk();
                         }
@@ -165,12 +165,12 @@ public final class JettraClusterTransportServer implements AutoCloseable {
                         if (payload != null && payload.length > 0) {
                             Files.write(targetMeta, payload, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
                         }
-                        JettraDatabase db = server.getOrCreateDatabaseInternal(dbName, false);
+                        boolean shouldBroadcast = "jettra-explorer".equalsIgnoreCase(frame.senderNodeId())
+                            && server.getConfig().getNodeRole() == ClusterNode.Role.PRIMARY;
+                        JettraDatabase db = server.getOrCreateDatabaseInternal(dbName, shouldBroadcast);
                         if (db != null) {
-                            if (Files.exists(targetMeta)) {
+                            if (Files.exists(targetMeta) && payload != null && payload.length > 0) {
                                 db.loadFromDisk(targetMeta);
-                            } else {
-                                db.loadFromDisk();
                             }
                             db.saveToDisk();
                         }
@@ -205,7 +205,9 @@ public final class JettraClusterTransportServer implements AutoCloseable {
                     dbName, frame.senderNodeId());
                 try {
                     if (server != null) {
-                        server.dropDatabaseInternal(dbName, false);
+                        boolean shouldBroadcast = "jettra-explorer".equalsIgnoreCase(frame.senderNodeId())
+                            && server.getConfig().getNodeRole() == ClusterNode.Role.PRIMARY;
+                        server.dropDatabaseInternal(dbName, shouldBroadcast);
                     }
                     return JettraRaftFrame.ack(frame.term(), frame.logIndex(), 
                         server != null ? server.getConfig().getNodeId() : "local", 
@@ -228,6 +230,10 @@ public final class JettraClusterTransportServer implements AutoCloseable {
                         if (db != null) {
                             db.ensureEngineInternal(engineType, engineName, frame.payload());
                             db.saveToDisk();
+                        }
+                        if ("jettra-explorer".equalsIgnoreCase(frame.senderNodeId())
+                                && server.getConfig().getNodeRole() == ClusterNode.Role.PRIMARY) {
+                            server.replicateCreateEngine(dbName, engineName, engineType, frame.payload());
                         }
                     }
                     JettraClusterEventBus.getInstance().publish(
@@ -323,6 +329,10 @@ public final class JettraClusterTransportServer implements AutoCloseable {
                             db.getIndexManager().onDocumentInsert(colName, id, doc);
                             db.saveToDisk();
                         }
+                        if ("jettra-explorer".equalsIgnoreCase(frame.senderNodeId())
+                                && server.getConfig().getNodeRole() == ClusterNode.Role.PRIMARY) {
+                            server.replicatePutDocument(dbName, colName, id, frame.payload());
+                        }
                     }
                     JettraClusterEventBus.getInstance().publish(
                         ClusterLiveEvent.TYPE_DOCUMENT_REPLICATED,
@@ -357,6 +367,10 @@ public final class JettraClusterTransportServer implements AutoCloseable {
                             db.getDocumentEngine(colName).applyReplicatedDelete(id);
                             db.getIndexManager().onDocumentDelete(colName, id, null);
                             db.saveToDisk();
+                        }
+                        if ("jettra-explorer".equalsIgnoreCase(frame.senderNodeId())
+                                && server.getConfig().getNodeRole() == ClusterNode.Role.PRIMARY) {
+                            server.replicateDeleteDocument(dbName, colName, id);
                         }
                     }
                     return JettraRaftFrame.ack(frame.term(), frame.logIndex(), 

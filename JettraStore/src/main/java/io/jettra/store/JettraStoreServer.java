@@ -623,13 +623,13 @@ public final class JettraStoreServer {
     public JettraDatabase getOrCreateDatabaseInternal(String name, boolean broadcast) {
         if (name == null || name.isBlank()) return null;
         JettraDatabase db = databases.computeIfAbsent(name, k -> new JettraDatabase(k, config, ringEngine));
+        if (db != null && !db.isReadOnlyNode()) {
+            try {
+                db.flushMemTable();
+            } catch (Exception ignored) {}
+            db.saveToDisk();
+        }
         if (broadcast && config.isClusterMultinodeActive() && config.getNodeRole() == ClusterNode.Role.PRIMARY) {
-            if (db != null) {
-                try {
-                    db.flushMemTable();
-                } catch (Exception ignored) {}
-                db.saveToDisk();
-            }
             byte[] payload = getDatabaseSnapshotBytes(name);
             JettraClusterReplicationClient client = getOrCreateReplicationClient();
             boolean replicated = false;

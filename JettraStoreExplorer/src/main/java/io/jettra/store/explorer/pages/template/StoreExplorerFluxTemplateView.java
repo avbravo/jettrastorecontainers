@@ -268,6 +268,7 @@ public class StoreExplorerFluxTemplateView extends FluxView {
         Widget headingCluster = Div.of(Text.of("🌐 Clúster y Telemetría")).modifier(new Modifier().cssClass("flux-menu-heading"));
         Div navCluster = Div.of(
                 createNavLink("/cluster", "🌐 Nodos del Clúster", isActive("cluster", "nodes")),
+                createNavLink("/map", "🗺️ Mapa de Transferencia", isActive("map", "transfer")),
                 createNavLink("/status", "🩺 Estatus y Telemetría", isActive("status", "telemetry")),
                 createNavLink("/police", "🚨 Centinelas Police", isActive("police", "sentinels"))
         );
@@ -277,6 +278,7 @@ public class StoreExplorerFluxTemplateView extends FluxView {
         Widget headingCatalog = Div.of(Text.of("🗄️ Catálogo y Motores")).modifier(new Modifier().cssClass("flux-menu-heading"));
         Div navCatalog = Div.of(
                 createNavLink("/databases", "🗄️ Bases de Datos y Motores", isActive("databases", "engines")),
+                createNavLink("/examples", "📚 Bases de Ejemplo", isActive("examples")),
                 createNavLink("/explorer", "📦 Explorador de Registros CRUD", isActive("explorer", "records")),
                 createNavLink("/query", "💻 Consola SQL / JQL", isActive("query", "console"))
         );
@@ -326,8 +328,10 @@ public class StoreExplorerFluxTemplateView extends FluxView {
         // Barra de pestañas superiores de acceso rápido
         Div tabs = Div.of(
                 createTabLink("/cluster", "🌐 Nodos", isActive("cluster", "nodes")),
+                createTabLink("/map", "🗺️ Mapa", isActive("map", "transfer")),
                 createTabLink("/status", "🩺 Estatus", isActive("status", "telemetry")),
                 createTabLink("/databases", "🗄️ Bases de Datos", isActive("databases", "engines")),
+                createTabLink("/examples", "📚 Ejemplos", isActive("examples")),
                 createTabLink("/explorer", "📦 Registros CRUD", isActive("explorer", "records")),
                 createTabLink("/query", "💻 Consola SQL", isActive("query")),
                 createTabLink("/connections", "🔌 Conexiones", isActive("connections")),

@@ -21,7 +21,7 @@ RUN mkdir -p /jettra/data /jettra/config /jettra/checkpoint && \
 
 # Copiar JAR autónomo optimizado y archivos de configuración base
 COPY target/JettraStore-*.jar /app/
-COPY src/main/resources/microprofile-config.properties /app/config/microprofile-config.properties
+COPY src/main/resources/META-INF/microprofile-config.properties /app/config/microprofile-config.properties
 COPY src/main/resources/cluster.config /app/config/cluster.config
 
 # Garantizar compatibilidad y el archivo /app/JettraStore.jar sin duplicar capas pesadas en la imagen
@@ -69,5 +69,10 @@ ENTRYPOINT ["sh", "-c", "if [ \"$JETTRA_CRAC_RESTORE\" = \"true\" ] && [ -d \"$J
         echo '[CRaC] Restaurando JettraStore instantáneamente desde checkpoint CRIU en '$JETTRA_CRAC_CHECKPOINT_PATH'...'; \
         exec java -XX:CRaCRestoreFrom=$JETTRA_CRAC_CHECKPOINT_PATH; \
     else \
-        exec java $JAVA_OPTS -Djettra.storage.mode=${JETTRA_STORAGE_MODE:-OFF_HEAP} -jar /app/JettraStore.jar; \
+        exec java $JAVA_OPTS \
+            -Djettra.storage.path=${JETTRA_STORAGE_PATH:-/jettra/data} \
+            -Djettra.storage.mode=${JETTRA_STORAGE_MODE:-OFF_HEAP} \
+            -Dmicroprofile.config.file=/app/config/microprofile-config.properties \
+            -Dcluster.config.path=/app/config/cluster.config \
+            -jar /app/JettraStore.jar; \
     fi"]

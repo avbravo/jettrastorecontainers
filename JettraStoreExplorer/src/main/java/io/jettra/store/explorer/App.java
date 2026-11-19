@@ -17,8 +17,10 @@ import io.jettra.store.explorer.pages.backup.BackupFluxView;
 import io.jettra.store.explorer.pages.cluster.ClusterFluxView;
 import io.jettra.store.explorer.pages.connections.ConnectionManagerFluxView;
 import io.jettra.store.explorer.pages.databases.DatabasesFluxView;
+import io.jettra.store.explorer.pages.examples.ExamplesFluxView;
 import io.jettra.store.explorer.pages.explorer.RecordExplorerFluxView;
 import io.jettra.store.explorer.pages.login.LoginFluxView;
+import io.jettra.store.explorer.pages.map.TransferMapFluxView;
 import io.jettra.store.explorer.pages.police.PoliceMonitorFluxView;
 import io.jettra.store.explorer.pages.query.QueryConsoleFluxView;
 import io.jettra.store.explorer.pages.security.UserManagerFluxView;
@@ -198,6 +200,9 @@ public class App {
         server.post("/cluster", (req, resp) -> handleClusterPost(req, resp));
         server.get("/clusters", (req, resp) -> handleClusterGet(req, resp, server));
         server.post("/clusters", (req, resp) -> handleClusterPost(req, resp));
+        server.get("/map", (req, resp) -> handleMapGet(req, resp, server));
+        server.get("/examples", (req, resp) -> handleExamplesGet(req, resp, server));
+        server.post("/examples", (req, resp) -> handleExamplesPost(req, resp));
         server.get("/dashboard", (req, resp) -> handleClusterGet(req, resp, server));
 
         // 3. Estatus y Telemetría del Servidor (/status y /telemetry)
@@ -367,17 +372,62 @@ public class App {
             String nodeName = form.get("nodeName");
             String nodeRole = form.get("nodeRole");
             String nodeHost = form.get("nodeHost");
-            String nodeStoragePath = form.get("nodeStoragePath");
             int port = 8769;
             long ram = 2048;
             try { port = Integer.parseInt(form.get("nodePort")); } catch (Exception ignored) {}
             try { ram = Long.parseLong(form.get("nodeRam")); } catch (Exception ignored) {}
 
-            JettraStorePlugin.getInstance().addNode(nodeId, nodeName, nodeRole, nodeHost, port, ram, nodeStoragePath);
+            JettraStorePlugin.getInstance().addNode(nodeId, nodeName, nodeRole, nodeHost, port, ram);
             redirect(resp, "/cluster?msg=node_added");
             return;
         }
         redirect(resp, "/cluster");
+    }
+
+    // --- Mapa de Transferencia en Tiempo Real (/map) ---
+    private static void handleMapGet(HttpRequest req, HttpResponse resp, JettraServer server) {
+        if (!requireAuth(req, resp)) return;
+        Widget content = new TransferMapFluxView();
+        renderTemplate(resp, server, getLoggedUser(req), "Mapa de Transferencia en Tiempo Real", "map", content);
+    }
+
+    // --- Administración de Bases de Datos de Ejemplo (/examples) ---
+    private static void handleExamplesGet(HttpRequest req, HttpResponse resp, JettraServer server) {
+        if (!requireAuth(req, resp)) return;
+        String msg = req.getQueryParam("msg");
+        String displayMsg = null;
+        if ("installed".equals(msg)) displayMsg = "Base de datos de ejemplo instalada correctamente.";
+        else if ("deleted".equals(msg)) displayMsg = "Base de datos de ejemplo eliminada correctamente.";
+        else if ("installed_all".equals(msg)) displayMsg = "Todas las bases de datos de ejemplo fueron instaladas.";
+        else if ("deleted_all".equals(msg)) displayMsg = "Todas las bases de datos de ejemplo fueron eliminadas.";
+        Widget content = new ExamplesFluxView(displayMsg);
+        renderTemplate(resp, server, getLoggedUser(req), "Administración de Bases de Datos de Ejemplo", "examples", content);
+    }
+
+    private static void handleExamplesPost(HttpRequest req, HttpResponse resp) {
+        if (!requireAuth(req, resp)) return;
+        Map<String, String> form = parseFormBody(req.getBodyAsString());
+        String action = form.get("action");
+        String exampleId = form.get("exampleId");
+        JettraStorePlugin plugin = JettraStorePlugin.getInstance();
+        if ("install_example".equalsIgnoreCase(action) && exampleId != null) {
+            plugin.installExampleDatabase(exampleId);
+            redirect(resp, "/examples?msg=installed");
+            return;
+        } else if ("delete_example".equalsIgnoreCase(action) && exampleId != null) {
+            plugin.uninstallExampleDatabase(exampleId);
+            redirect(resp, "/examples?msg=deleted");
+            return;
+        } else if ("install_all".equalsIgnoreCase(action)) {
+            plugin.installAllExampleDatabases();
+            redirect(resp, "/examples?msg=installed_all");
+            return;
+        } else if ("delete_all".equalsIgnoreCase(action)) {
+            plugin.uninstallAllExampleDatabases();
+            redirect(resp, "/examples?msg=deleted_all");
+            return;
+        }
+        redirect(resp, "/examples");
     }
 
     // --- Estatus y Telemetría ---
@@ -963,6 +1013,24 @@ public class App {
             json.append("\"lastError\":").append(n.getLastError() != null ? "\"" + escapeJson(n.getLastError()) + "\"" : "null");
             json.append("}");
         }
+        json.append("],\"recentTransfers\":[");
+        try {
+            List<io.jettra.store.cluster.ClusterLiveEvent> events =
+                io.jettra.store.cluster.JettraClusterEventBus.getInstance().getRecentEvents(20);
+            for (int i = 0; i < events.size(); i++) {
+                io.jettra.store.cluster.ClusterLiveEvent ev = events.get(i);
+                if (i > 0) json.append(",");
+                json.append("{");
+                json.append("\"timestamp\":").append(ev.timestamp()).append(",");
+                json.append("\"time\":\"").append(escapeJson(ev.formattedTimestamp())).append("\",");
+                json.append("\"type\":\"").append(escapeJson(ev.type())).append("\",");
+                json.append("\"source\":\"").append(escapeJson(ev.sourceNodeId())).append("\",");
+                json.append("\"target\":\"").append(escapeJson(ev.targetNodeId())).append("\",");
+                json.append("\"message\":\"").append(escapeJson(ev.message())).append("\",");
+                json.append("\"details\":\"").append(escapeJson(ev.details())).append("\"");
+                json.append("}");
+            }
+        } catch (Throwable ignored) {}
         json.append("]}");
         return json.toString();
     }

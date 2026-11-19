@@ -4,14 +4,12 @@
   "role" : "SECONDARY",
   "host" : "127.0.0.1",
   "port" : 9092,
-  "heapMaxMb" : 2048,
-  "storagePath" : "~/jettra/node-02/data"
+  "heapMaxMb" : 2048
 }, {
   "id" : "node-03",
   "name" : "node-03-replica",
   "role" : "SECONDARY",
   "host" : "127.0.0.1",
   "port" : 9093,
-  "heapMaxMb" : 2048,
-  "storagePath" : "~/jettra/node-03/data"
+  "heapMaxMb" : 2048
 } ]

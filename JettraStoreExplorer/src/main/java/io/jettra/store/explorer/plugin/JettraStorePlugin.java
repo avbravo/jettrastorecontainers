@@ -1121,13 +1121,8 @@ public class JettraStorePlugin {
                 io.jettra.store.core.JettraConfigValidator.parseClusterNodes(props);
             for (io.jettra.store.core.JettraConfigValidator.ClusterNodeInfo cn : parsed) {
                 ServerNodeInfo existing = getNodeById(cn.id());
-                if (existing != null) {
-                    if (cn.storagePath() != null && !cn.storagePath().isBlank()) {
-                        existing.setStoragePath(cn.storagePath());
-                    }
-                    if (existing.getRestPort() <= 0 && cn.restPort() > 0) {
-                        existing.setRestPort(cn.restPort());
-                    }
+                if (existing != null && existing.getRestPort() <= 0 && cn.restPort() > 0) {
+                    existing.setRestPort(cn.restPort());
                 }
             }
         } catch (Throwable ignored) {}
@@ -1289,10 +1284,123 @@ public class JettraStorePlugin {
         "GRAPH", "VECTOR", "JAVA_RECORD", "OBJECT"
     );
 
+    public record ExampleDatabaseInfo(
+            String id,
+            String title,
+            String description,
+            String enginesSummary,
+            boolean installed
+    ) {}
+
     // --- Catálogo Multimodelo y Buckets ---
     private void initDatabaseCatalog() {
+        // Iniciar limpio sin bases de datos de ejemplo preinstaladas.
+        // Las bases de ejemplo se administran bajo demanda desde /examples.
         databasesCatalog.clear();
+    }
 
+    public synchronized List<ExampleDatabaseInfo> getAvailableExampleDatabases() {
+        return List.of(
+            new ExampleDatabaseInfo(
+                "example_factura_db",
+                "Facturación Electrónica y Clientes",
+                "Comprobantes CFDI, catálogo de clientes, registros Java, objetos y sesiones clave-valor.",
+                "DOCUMENT, RELATIONAL, KEY_VALUE, OBJECT, JAVA_RECORD",
+                databasesCatalog.containsKey("example_factura_db")
+            ),
+            new ExampleDatabaseInfo(
+                "samples_hostipal_db",
+                "Hospital Clínico y Red Epidemiológica",
+                "Historias clínicas de pacientes, grafo epidemiológico y embeddings vectoriales diagnósticos.",
+                "DOCUMENT, GRAPH, VECTOR",
+                databasesCatalog.containsKey("samples_hostipal_db")
+            ),
+            new ExampleDatabaseInfo(
+                "samples_ambiental_db",
+                "Monitoreo Ambiental IoT y Geoespacial",
+                "Métricas IoT de sensores (CO2, PM2.5, temperatura) y estaciones geoespaciales.",
+                "TIMESERIES, GEOSPATIAL",
+                databasesCatalog.containsKey("samples_ambiental_db")
+            ),
+            new ExampleDatabaseInfo(
+                "system_metadata_db",
+                "Metadatos de Clúster y WAL Raft",
+                "Entradas de consenso Raft y transacciones WAL en almacenamiento columnar.",
+                "COLUMNAR",
+                databasesCatalog.containsKey("system_metadata_db")
+            )
+        );
+    }
+
+    public synchronized boolean installExampleDatabase(String exampleId) {
+        if (exampleId == null || exampleId.isBlank()) return false;
+        String cleanId = exampleId.trim();
+        Map<String, List<EngineBucketInfo>> templates = new LinkedHashMap<>();
+        populateExampleDatabases(templates);
+        List<EngineBucketInfo> buckets = templates.get(cleanId);
+        if (buckets == null) return false;
+        databasesCatalog.put(cleanId, buckets);
+        syncDatabaseCreationToPrimary(cleanId, buckets);
+        logPoliceIncident("Examples Manager", "Base de datos de ejemplo '" + cleanId + "' instalada correctamente", "OK", "Persistida y replicada en clúster");
+        return true;
+    }
+
+    public synchronized boolean uninstallExampleDatabase(String exampleId) {
+        if (exampleId == null || exampleId.isBlank()) return false;
+        String cleanId = exampleId.trim();
+        boolean removed = databasesCatalog.remove(cleanId) != null;
+        sendFrameToPrimaryNode(io.jettra.store.cluster.JettraRaftFrame.dropDatabase(1L, 0L, "jettra-explorer", cleanId));
+        if (removed) {
+            logPoliceIncident("Examples Manager", "Base de datos de ejemplo '" + cleanId + "' eliminada", "WARN", "Eliminada del catálogo y del clúster");
+        }
+        return removed;
+    }
+
+    public synchronized void installAllExampleDatabases() {
+        for (ExampleDatabaseInfo info : getAvailableExampleDatabases()) {
+            if (!info.installed()) {
+                installExampleDatabase(info.id());
+            }
+        }
+    }
+
+    public synchronized void uninstallAllExampleDatabases() {
+        for (ExampleDatabaseInfo info : getAvailableExampleDatabases()) {
+            if (info.installed()) {
+                uninstallExampleDatabase(info.id());
+            }
+        }
+    }
+
+    private void sendFrameToPrimaryNode(io.jettra.store.cluster.JettraRaftFrame frame) {
+        if (frame == null) return;
+        ServerNodeInfo primary = getPrimaryNode();
+        if (primary == null || !primary.isActive() || primary.getHost() == null || primary.getHost().isBlank() || primary.getPort() <= 0) {
+            return;
+        }
+        try (java.net.Socket s = new java.net.Socket()) {
+            s.setTcpNoDelay(true);
+            s.connect(new java.net.InetSocketAddress(primary.getHost(), primary.getPort()), 1200);
+            s.setSoTimeout(2000);
+            try (java.io.BufferedOutputStream bos = new java.io.BufferedOutputStream(s.getOutputStream(), 8192);
+                 java.io.BufferedInputStream bis = new java.io.BufferedInputStream(s.getInputStream(), 8192)) {
+                io.jettra.store.cluster.JettraClusterProtocol.writeFrame(bos, frame);
+                io.jettra.store.cluster.JettraClusterProtocol.readFrame(bis);
+            }
+        } catch (Exception ignored) {}
+    }
+
+    private void syncDatabaseCreationToPrimary(String dbName, List<EngineBucketInfo> buckets) {
+        sendFrameToPrimaryNode(io.jettra.store.cluster.JettraRaftFrame.createDatabase(1L, 0L, "jettra-explorer", dbName, new byte[0]));
+        if (buckets != null) {
+            for (EngineBucketInfo b : buckets) {
+                sendFrameToPrimaryNode(io.jettra.store.cluster.JettraRaftFrame.createEngine(
+                    1L, 0L, "jettra-explorer", dbName, b.getBucketName(), b.getEngineType(), new byte[0]));
+            }
+        }
+    }
+
+    private void populateExampleDatabases(Map<String, List<EngineBucketInfo>> targetCatalog) {
         // 1. example_factura_db
         List<EngineBucketInfo> facturaBuckets = new ArrayList<>();
         EngineBucketInfo facturas = new EngineBucketInfo("example_factura_db", "Facturas", "DOCUMENT", 1_000_025L, 420_000_000L, "CFDI y comprobantes fiscales electrónicos");
@@ -1388,7 +1496,7 @@ public class JettraStorePlugin {
 
         facturaBuckets.add(javaRecords);
         facturaBuckets.add(objectsBucket);
-        databasesCatalog.put("example_factura_db", facturaBuckets);
+        targetCatalog.put("example_factura_db", facturaBuckets);
 
         // 2. samples_hostipal_db
         List<EngineBucketInfo> hospBuckets = new ArrayList<>();
@@ -1440,7 +1548,7 @@ public class JettraStorePlugin {
         hospBuckets.add(pacientes);
         hospBuckets.add(contagios);
         hospBuckets.add(embeddings);
-        databasesCatalog.put("samples_hostipal_db", hospBuckets);
+        targetCatalog.put("samples_hostipal_db", hospBuckets);
 
         // 3. samples_ambiental_db
         List<EngineBucketInfo> ambBuckets = new ArrayList<>();
@@ -1477,7 +1585,7 @@ public class JettraStorePlugin {
 
         ambBuckets.add(sensores);
         ambBuckets.add(estaciones);
-        databasesCatalog.put("samples_ambiental_db", ambBuckets);
+        targetCatalog.put("samples_ambiental_db", ambBuckets);
 
         // 4. system_metadata_db
         List<EngineBucketInfo> metaBuckets = new ArrayList<>();
@@ -1496,7 +1604,7 @@ public class JettraStorePlugin {
         }
 
         metaBuckets.add(raft);
-        databasesCatalog.put("system_metadata_db", metaBuckets);
+        targetCatalog.put("system_metadata_db", metaBuckets);
     }
 
     public Map<String, List<EngineBucketInfo>> getDatabasesCatalog() {
@@ -1571,6 +1679,7 @@ public class JettraStorePlugin {
         }
 
         databasesCatalog.put(cleanName, buckets);
+        syncDatabaseCreationToPrimary(cleanName, buckets);
         logPoliceIncident("Catalog Patrol", "Base de datos '" + cleanName + "' creada con soporte nativo para los 9 motores de JettraStore", "OK", "9 engines multimodelo registrados en catálogo");
         return true;
     }
@@ -1579,6 +1688,7 @@ public class JettraStorePlugin {
         if (dbName == null || dbName.isBlank() || "system_metadata_db".equalsIgnoreCase(dbName)) return false;
         boolean removed = databasesCatalog.remove(dbName.trim()) != null;
         if (removed) {
+            sendFrameToPrimaryNode(io.jettra.store.cluster.JettraRaftFrame.dropDatabase(1L, 0L, "jettra-explorer", dbName.trim()));
             logPoliceIncident("Catalog Patrol", "Base de datos '" + dbName + "' eliminada del clúster", "WARN", "Recursos liberados en disco y memoria");
         }
         return removed;
@@ -1596,6 +1706,8 @@ public class JettraStorePlugin {
         EngineBucketInfo newB = new EngineBucketInfo(dbName, bucketName.trim(), eType, 0L, 0L, desc);
         newB.getIndexes().add(new EngineIndexInfo("idx_" + bucketName.toLowerCase().replaceAll("[^a-z0-9]", "_") + "_id", "id", "BTREE", true, "READY"));
         buckets.add(newB);
+        sendFrameToPrimaryNode(io.jettra.store.cluster.JettraRaftFrame.createEngine(
+            1L, 0L, "jettra-explorer", dbName.trim(), bucketName.trim(), eType, new byte[0]));
         logPoliceIncident("Catalog Patrol", "Nuevo Bucket/Motor '" + bucketName + "' [" + eType + "] añadido a " + dbName, "OK", "MemTable y Bloom Filters asignados");
         return true;
     }
@@ -1949,6 +2061,8 @@ public class JettraStorePlugin {
             EngineRecordInfo r = new EngineRecordInfo(id, bucket.getEngineType(), bucketName, summary, details, now, 1);
             bucket.getSampleRecords().add(0, r);
             bucket.setTotalObjects(bucket.getTotalObjects() + 1);
+            byte[] docBytes = (details != null && !details.isBlank() ? details : "{\"id\":\"" + id + "\"}").getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            sendFrameToPrimaryNode(io.jettra.store.cluster.JettraRaftFrame.putDocument(1L, 0L, "jettra-explorer", dbName, bucketName, id, docBytes));
             logPoliceIncident("MemTable Purge Dog", "Nuevo registro '" + id + "' insertado en " + bucketName, "OK", "Escritura en WAL y MemTable");
         }
     }
@@ -1962,6 +2076,8 @@ public class JettraStorePlugin {
                 if (bucket.getSampleRecords().stream().noneMatch(r -> r.getId().equalsIgnoreCase(id))) {
                     bucket.getRecordOverrides().put(target.getId().toUpperCase(Locale.ROOT), target);
                 }
+                byte[] docBytes = (details != null && !details.isBlank() ? details : "{\"id\":\"" + id + "\"}").getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                sendFrameToPrimaryNode(io.jettra.store.cluster.JettraRaftFrame.putDocument(1L, 0L, "jettra-explorer", dbName, bucketName, id, docBytes));
                 logPoliceIncident("MemTable Purge Dog", "Registro '" + id + "' actualizado a versión v" + target.getVersion(), "OK", "Mutación aplicada en Direct Memory");
             }
         }
@@ -1995,6 +2111,7 @@ public class JettraStorePlugin {
             if (removedSample || removedOverride || wasStreamed) {
                 bucket.getDeletedRecordIds().add(key);
                 bucket.setTotalObjects(Math.max(0, bucket.getTotalObjects() - 1));
+                sendFrameToPrimaryNode(io.jettra.store.cluster.JettraRaftFrame.deleteDocument(1L, 0L, "jettra-explorer", dbName, bucketName, id));
             }
             logPoliceIncident("MemTable Purge Dog", "Tombstone generado para registro '" + id + "' en " + bucketName, "WARN", "Marcado para compactación SSTable");
         }

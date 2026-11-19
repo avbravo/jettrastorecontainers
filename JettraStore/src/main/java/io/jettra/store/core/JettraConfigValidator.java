@@ -370,6 +370,7 @@ public final class JettraConfigValidator {
 
 # Perfil activo de configuración MicroProfile
 mp.config.profile=production
+jettra.storage.path=~/jettra-storage-01/data
 
 # Identificador y Rol del Nodo Local en el Clúster (enlaza con cluster.config)
 cluster.node.id=node-01
@@ -383,7 +384,7 @@ jettra.storage.mode=OFF_HEAP
 storage.mode=OFF_HEAP
 jettra.storage.file.extension=.jettra
 
-# Red y Virtual Threads (IP, puertos gRPC/REST y storage.path se obtienen de cluster.config)
+# Red y Virtual Threads (IP y puertos gRPC/REST se obtienen de cluster.config; almacenamiento definido en jettra.storage.path)
 contextpath=/
 server.contextpath=/
 jettra.network.virtualthreads.enabled=true
@@ -491,8 +492,7 @@ cluster.node.1.id = node-01
 cluster.node.1.role = PRIMARY
 cluster.node.1.ip = 127.0.0.1
 cluster.node.1.grpc.port = 9091
-cluster.node.1.rest.port = 8082
-cluster.node.1.storage.path = ~/jettra/data
+cluster.node.1.rest.port = 8081
 
 # ==============================================================================
 # NODO 2: NODO SECUNDARIO / SEGUIDOR 1 (Secondary)
@@ -501,8 +501,7 @@ cluster.node.2.id = node-02
 cluster.node.2.role = SECONDARY
 cluster.node.2.ip = 127.0.0.1
 cluster.node.2.grpc.port = 9092
-cluster.node.2.rest.port = 8083
-cluster.node.2.storage.path = ~/jettra/data
+cluster.node.2.rest.port = 8082
 
 # ==============================================================================
 # NODO 3: NODO SECUNDARIO / SEGUIDOR 2 (Secondary)
@@ -511,8 +510,7 @@ cluster.node.3.id = node-03
 cluster.node.3.role = SECONDARY
 cluster.node.3.ip = 127.0.0.1
 cluster.node.3.grpc.port = 9093
-cluster.node.3.rest.port = 8084
-cluster.node.3.storage.path = ~/jettra/data
+cluster.node.3.rest.port = 8083
 
 # Asignación de Capacidad de Índices y Buffers en Clúster
 cluster.index.initial.capacity = 65536
@@ -615,33 +613,28 @@ cluster.index.max.inmemory.keys = 100000
             : extractNodeNumber(configuredNodeId);
 
         String clusterNodeStoragePath = clusterProps != null
-            ? clusterProps.getProperty("cluster.node." + nodeIdxStr + ".storage.path",
-                targetNode != null ? targetNode.storagePath() : null)
-            : (targetNode != null ? targetNode.storagePath() : null);
+            ? clusterProps.getProperty("cluster.node." + nodeIdxStr + ".storage.path")
+            : null;
 
         String effectiveStoragePath = (explicitDbStoragePath != null && !explicitDbStoragePath.isBlank())
             ? explicitDbStoragePath
-            : (clusterNodeStoragePath != null ? clusterNodeStoragePath.trim() : "");
+            : (clusterNodeStoragePath != null && !clusterNodeStoragePath.isBlank() ? clusterNodeStoragePath.trim() : "~/jettra/data");
 
-        if (effectiveStoragePath.isEmpty()) {
-            errors.add("La propiedad 'cluster.node." + nodeIdxStr + ".storage.path' no está definida en cluster.config.");
-        } else {
-            if (explicitDbStoragePath != null && !explicitDbStoragePath.isBlank()
-                && clusterNodeStoragePath != null && !clusterNodeStoragePath.isBlank()
-                && !configuredNodeId.isEmpty()) {
-                if (!pathsMatch(explicitDbStoragePath, clusterNodeStoragePath.trim())) {
-                    String warnMsg = String.format(
-                        "ADVERTENCIA: La propiedad de almacenamiento 'storage.path' / 'jettra.storage.path' ('%s') de microprofile-config.properties no coincide con la propiedad 'cluster.node.%s.storage.path' ('%s') de cluster.config para el nodo %s ('%s').",
-                        explicitDbStoragePath, nodeIdxStr, clusterNodeStoragePath.trim(), nodeIdxStr, configuredNodeId
-                    );
-                    warnings.add(warnMsg);
-                    System.err.println("[JettraStore] " + warnMsg);
-                }
+        if (explicitDbStoragePath != null && !explicitDbStoragePath.isBlank()
+            && clusterNodeStoragePath != null && !clusterNodeStoragePath.isBlank()
+            && !configuredNodeId.isEmpty()) {
+            if (!pathsMatch(explicitDbStoragePath, clusterNodeStoragePath.trim())) {
+                String warnMsg = String.format(
+                    "ADVERTENCIA: La propiedad de almacenamiento 'storage.path' / 'jettra.storage.path' ('%s') de microprofile-config.properties no coincide con la propiedad 'cluster.node.%s.storage.path' ('%s') de cluster.config para el nodo %s ('%s').",
+                    explicitDbStoragePath, nodeIdxStr, clusterNodeStoragePath.trim(), nodeIdxStr, configuredNodeId
+                );
+                warnings.add(warnMsg);
+                System.err.println("[JettraStore] " + warnMsg);
             }
-            // Si el nodo es válido en cluster.config, verificar si existe el directorio cluster.node.<N>.storage.path y crearlo si no existe
-            if (errors.isEmpty()) {
-                ensureNodeStorageDirectoryExists(effectiveStoragePath);
-            }
+        }
+        // Si el nodo es válido en cluster.config, verificar si existe el directorio jettra.storage.path y crearlo si no existe
+        if (errors.isEmpty() && !effectiveStoragePath.isEmpty()) {
+            ensureNodeStorageDirectoryExists(effectiveStoragePath);
         }
 
         // 3. Resolver y verificar puerto gRPC:
@@ -1001,15 +994,13 @@ cluster.index.max.inmemory.keys = 100000
                         "cluster.node.%s.role = %s%n" +
                         "cluster.node.%s.ip = %s%n" +
                         "cluster.node.%s.grpc.port = %d%n" +
-                        "cluster.node.%s.rest.port = %d%n" +
-                        "cluster.node.%s.storage.path = %s%n",
+                        "cluster.node.%s.rest.port = %d%n",
                         registered.nodeNumber(), registered.role(),
                         registered.nodeNumber(), registered.id(),
                         registered.nodeNumber(), registered.role(),
                         registered.nodeNumber(), registered.ip(),
                         registered.nodeNumber(), registered.grpcPort(),
-                        registered.nodeNumber(), registered.restPort(),
-                        registered.nodeNumber(), registered.storagePath()
+                        registered.nodeNumber(), registered.restPort()
                     );
                     Files.writeString(clusterConfigFile, block, StandardCharsets.UTF_8,
                         StandardOpenOption.CREATE, StandardOpenOption.APPEND);

@@ -466,6 +466,7 @@ public class JettraConfigValidatorTest extends JettraStoreBaseTest {
         mpProps1.setProperty("cluster.node.id", "node-01");
         mpProps1.setProperty("cluster.node.role", "PRIMARY");
         mpProps1.setProperty("cluster.multinode.active", "on");
+        mpProps1.setProperty("jettra.storage.path", "~/jettra/data");
 
         JettraConfigValidator.ValidationResult val1 = JettraConfigValidator.validate(mpProps1, clusterProps);
         assertTrue(val1.isValid());
@@ -541,6 +542,7 @@ public class JettraConfigValidatorTest extends JettraStoreBaseTest {
             mpProps.setProperty("cluster.node.id", "node-04");
             mpProps.setProperty("cluster.node.role", "SECONDARY");
             mpProps.setProperty("cluster.multinode.active", "on");
+            mpProps.setProperty("jettra.storage.path", node4Storage.toAbsolutePath().toString());
 
             JettraConfigValidator.ValidationResult val = JettraConfigValidator.validate(mpProps, loadedCluster);
             assertTrue(val.isValid());
@@ -570,12 +572,12 @@ public class JettraConfigValidatorTest extends JettraStoreBaseTest {
             assertFalse(Files.exists(node1MissingDir), "El directorio no debe existir antes del arranque");
 
             Properties clusterProps = createValidClusterProperties();
-            clusterProps.setProperty("cluster.node.1.storage.path", node1MissingDir.toAbsolutePath().toString());
 
             Properties mpProps = new Properties();
             mpProps.setProperty("cluster.node.id", "node-01");
             mpProps.setProperty("cluster.node.role", "PRIMARY");
             mpProps.setProperty("cluster.multinode.active", "on");
+            mpProps.setProperty("jettra.storage.path", node1MissingDir.toAbsolutePath().toString());
             mpProps.setProperty("jettra.storage.mode", "JVM_RAM");
 
             // 1. Al validar durante el arranque se verifica y crea el directorio si no existe
@@ -608,7 +610,7 @@ public class JettraConfigValidatorTest extends JettraStoreBaseTest {
     }
 
     @Test
-    @DisplayName("Debe almacenar los datos en cluster.node.<N>.storage.path para node-01, node-02, node-03, node-04 y con -Djettra.node.id")
+    @DisplayName("Debe almacenar los datos en jettra.storage.path de microprofile-config.properties para node-01, node-02, node-03, node-04 y con -Djettra.node.id")
     public void testPerNodeClusterStoragePathResolutionAndPersistence() throws IOException {
         Path tempRoot = Files.createTempDirectory("jettra_per_node_storage_test");
         Path data1 = tempRoot.resolve("data-1");
@@ -620,18 +622,17 @@ public class JettraConfigValidatorTest extends JettraStoreBaseTest {
         String prevNodeRole = System.getProperty("jettra.node.role");
         try {
             Properties clusterProps = createValidClusterProperties();
-            clusterProps.setProperty("cluster.node.1.storage.path", data1.toAbsolutePath().toString());
-            clusterProps.setProperty("cluster.node.2.storage.path", data2.toAbsolutePath().toString());
-            clusterProps.setProperty("cluster.node.3.storage.path", data3.toAbsolutePath().toString());
+            clusterProps.remove("cluster.node.1.storage.path");
+            clusterProps.remove("cluster.node.2.storage.path");
+            clusterProps.remove("cluster.node.3.storage.path");
 
             clusterProps.setProperty("cluster.node.4.id", "node-04");
             clusterProps.setProperty("cluster.node.4.ip", "192.168.60.244");
             clusterProps.setProperty("cluster.node.4.rest.port", "8084");
             clusterProps.setProperty("cluster.node.4.grpc.port", "9094");
             clusterProps.setProperty("cluster.node.4.role", "SECONDARY");
-            clusterProps.setProperty("cluster.node.4.storage.path", data4.toAbsolutePath().toString());
 
-            // 1. Verificar resolución via cluster.node.id en microprofile-config.properties para 4 nodos
+            // 1. Verificar resolución via jettra.storage.path en microprofile-config.properties para 4 nodos
             String[] nodeIds = {"node-01", "node-02", "node-03", "node-04"};
             String[] roles = {"PRIMARY", "SECONDARY", "SECONDARY", "SECONDARY"};
             Path[] expectedPaths = {data1, data2, data3, data4};
@@ -641,11 +642,12 @@ public class JettraConfigValidatorTest extends JettraStoreBaseTest {
                 mpProps.setProperty("cluster.node.id", nodeIds[i]);
                 mpProps.setProperty("cluster.node.role", roles[i]);
                 mpProps.setProperty("cluster.multinode.active", "on");
+                mpProps.setProperty("jettra.storage.path", expectedPaths[i].toAbsolutePath().toString());
                 mpProps.setProperty("jettra.storage.mode", "JVM_RAM");
 
                 JettraStoreConfig cfg = new JettraStoreConfig(mpProps, clusterProps);
                 assertEquals(expectedPaths[i].toAbsolutePath().toString(), cfg.getStoragePath(),
-                    "El nodo " + nodeIds[i] + " debe resolver su propio storage.path");
+                    "El nodo " + nodeIds[i] + " debe resolver su jettra.storage.path desde microprofile-config.properties");
             }
 
             // 2. Verificar override estilo start-node.sh (-Djettra.node.id=node-03 -Djettra.node.role=SECONDARY)
@@ -653,6 +655,7 @@ public class JettraConfigValidatorTest extends JettraStoreBaseTest {
             baseMpProps.setProperty("cluster.node.id", "node-01");
             baseMpProps.setProperty("cluster.node.role", "PRIMARY");
             baseMpProps.setProperty("cluster.multinode.active", "on");
+            baseMpProps.setProperty("jettra.storage.path", data3.toAbsolutePath().toString());
             baseMpProps.setProperty("jettra.storage.mode", "JVM_RAM");
 
             System.setProperty("jettra.node.id", "node-03");
@@ -667,7 +670,7 @@ public class JettraConfigValidatorTest extends JettraStoreBaseTest {
                 db.saveToDisk();
 
                 assertTrue(Files.exists(data3.resolve("node3_persist_db_meta.json")),
-                    "Los datos deben guardarse en cluster.node.3.storage.path");
+                    "Los datos deben guardarse en jettra.storage.path configurado en microprofile-config.properties");
             }
         } finally {
             if (prevNodeId == null) {
