@@ -30,6 +30,49 @@ public final class JettraClusterReplicationClient implements AutoCloseable {
     }
 
     /**
+     * Sincroniza dinámicamente la lista de peers del cliente de replicación con una nueva topología
+     * (por ejemplo, tras agregar o expulsar un nodo en cluster.config).
+     */
+    public synchronized void syncPeers(List<ClusterNode> updatedPeers) {
+        if (updatedPeers == null) return;
+        this.peers.clear();
+        for (ClusterNode peer : updatedPeers) {
+            if (peer != null && !peer.getId().equalsIgnoreCase(localNodeId)) {
+                this.peers.add(peer);
+            }
+        }
+    }
+
+    /**
+     * Envía una base de datos completa (snapshot con registros/objetos) directamente a un peer específico
+     * (por ejemplo, un nodo recién incorporado al clúster en otra máquina).
+     */
+    public boolean sendDistributeDatabaseToPeer(ClusterNode peer, String dbName, byte[] payload) {
+        if (peer == null || dbName == null || dbName.isBlank()) return false;
+        long term = currentTerm.get();
+        long idx = logIndex.incrementAndGet();
+        JettraRaftFrame frame = JettraRaftFrame.distributeDatabase(term, idx, localNodeId, dbName, payload);
+        try (Socket s = new Socket()) {
+            s.setTcpNoDelay(true);
+            s.connect(new InetSocketAddress(peer.getIp(), peer.getPort()), 2000);
+            s.setSoTimeout(5000);
+            try (BufferedOutputStream bos = new BufferedOutputStream(s.getOutputStream(), 65536);
+                 BufferedInputStream bis = new BufferedInputStream(s.getInputStream(), 65536)) {
+                JettraClusterProtocol.writeFrame(bos, frame);
+                JettraRaftFrame resp = JettraClusterProtocol.readFrame(bis);
+                if (resp != null && resp.frameType() == JettraRaftFrame.TYPE_ACK) {
+                    peer.start();
+                    return true;
+                }
+            }
+        } catch (Exception e) {
+            System.err.printf("[JettraClusterReplicationClient] Error replicando base '%s' al nuevo nodo '%s' (%s:%d): %s%n",
+                dbName, peer.getId(), peer.getIp(), peer.getPort(), e.getMessage());
+        }
+        return false;
+    }
+
+    /**
      * Envía una trama de creación de base de datos a todos los nodos secundarios configurados
      * y espera quórum mayoritario (1 local + al menos 1 secundario = 2 de 3).
      */

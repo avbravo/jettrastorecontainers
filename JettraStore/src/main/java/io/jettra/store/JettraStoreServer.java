@@ -1112,6 +1112,37 @@ public final class JettraStoreServer {
         return results;
     }
 
+    /**
+     * Replica todas las bases de datos y objetos del nodo primario hacia un nodo específico recién añadido.
+     */
+    public Map<String, Boolean> distributeAllDatabasesToPeer(ClusterNode targetPeer) {
+        Map<String, Boolean> results = new LinkedHashMap<>();
+        if (targetPeer == null || config.getNodeRole() != ClusterNode.Role.PRIMARY) {
+            return results;
+        }
+        JettraClusterReplicationClient client = getOrCreateReplicationClient();
+        if (client == null) {
+            return results;
+        }
+        List<String> dbs = listDatabaseNames();
+        System.out.printf("[JettraStoreServer] 🔄 Replicando %d base(s) de datos y sus objetos al nuevo nodo '%s' (%s:%d)...%n",
+            dbs.size(), targetPeer.getId(), targetPeer.getIp(), targetPeer.getPort());
+        for (String db : dbs) {
+            byte[] payload = getDatabaseSnapshotBytes(db);
+            boolean ok = client.sendDistributeDatabaseToPeer(targetPeer, db, payload);
+            results.put(db, ok);
+            if (ok) {
+                JettraClusterEventBus.getInstance().publish(
+                    ClusterLiveEvent.TYPE_DATABASE_DISTRIBUTED,
+                    config.getNodeId(), targetPeer.getId(),
+                    String.format("Base de datos '%s' (%d bytes) replicada al nuevo nodo '%s'.", db, payload.length, targetPeer.getId()),
+                    "db=" + db + ",bytes=" + payload.length
+                );
+            }
+        }
+        return results;
+    }
+
     public List<String> listDatabaseNames() {
         Set<String> set = new TreeSet<>(databases.keySet());
         Path p = Path.of(config.getStoragePath());

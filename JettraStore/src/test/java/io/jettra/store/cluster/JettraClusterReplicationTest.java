@@ -623,5 +623,128 @@ public class JettraClusterReplicationTest extends JettraStoreBaseTest {
         }
     }
 
+    @Test
+    @DisplayName("Al añadir dinámicamente nodo-04 vía cluster.config, PRIMARY debe replicarle todas las bases de datos y futuros cambios")
+    public void testDynamicNode04JoinReplicatesClusterConfigAndAllDatabases() throws Exception {
+        Path tempPrim = Files.createTempDirectory("jettra_dyn_prim");
+        Path tempNode4 = Files.createTempDirectory("jettra_dyn_node04");
+        Path tempClusterCfg = tempPrim.resolve("cluster.config");
+        String prevClusterProp = System.getProperty("cluster.config.path");
+
+        int primPort = 19271;
+        int node4Port = 19274;
+
+        try {
+            System.setProperty("cluster.config.path", tempClusterCfg.toAbsolutePath().toString());
+
+            // 1. PRIMARY (node-01) inicialmente sin nodo-04 en su topología
+            Properties primDbProps = new Properties();
+            primDbProps.setProperty("cluster.node.id", "node-01");
+            primDbProps.setProperty("cluster.node.role", "PRIMARY");
+            primDbProps.setProperty("jettra.storage.path", tempPrim.toString());
+            primDbProps.setProperty("jettra.network.grpc.port", String.valueOf(primPort));
+            primDbProps.setProperty("jettra.network.rest.port", "18271");
+            primDbProps.setProperty("cluster.multinode.active", "on");
+
+            Properties primClusterProps = new Properties();
+            primClusterProps.setProperty("cluster.node.1.id", "node-01");
+            primClusterProps.setProperty("cluster.node.1.role", "PRIMARY");
+            primClusterProps.setProperty("cluster.node.1.ip", "127.0.0.1");
+            primClusterProps.setProperty("cluster.node.1.grpc.port", String.valueOf(primPort));
+            primClusterProps.setProperty("cluster.node.1.rest.port", "18271");
+
+            JettraStoreConfig primConfig = new JettraStoreConfig(primDbProps, primClusterProps);
+            JettraStoreServer primServer = new JettraStoreServer(primConfig);
+
+            // Crear base de datos y documento en PRIMARY ANTES de añadir nodo-04
+            var existingDb = primServer.getOrCreateDatabase("ventas_db");
+            existingDb.getDocumentEngine("facturas").insert("f1", java.util.Map.of("total", 999.50, "cliente", "Acme"));
+            existingDb.flushMemTable();
+            existingDb.saveToDisk();
+
+            // 2. Nuevo nodo-04 (SECONDARY) con su propio jettra.storage.path vacío
+            Properties n4DbProps = new Properties();
+            n4DbProps.setProperty("cluster.node.id", "nodo-04");
+            n4DbProps.setProperty("cluster.node.role", "SECONDARY");
+            n4DbProps.setProperty("jettra.storage.path", tempNode4.toString());
+            n4DbProps.setProperty("jettra.network.grpc.port", String.valueOf(node4Port));
+            n4DbProps.setProperty("jettra.network.rest.port", "18274");
+            n4DbProps.setProperty("cluster.multinode.active", "on");
+
+            Properties n4ClusterProps = new Properties();
+            n4ClusterProps.setProperty("cluster.node.1.id", "node-01");
+            n4ClusterProps.setProperty("cluster.node.1.role", "PRIMARY");
+            n4ClusterProps.setProperty("cluster.node.1.ip", "127.0.0.1");
+            n4ClusterProps.setProperty("cluster.node.1.grpc.port", String.valueOf(primPort));
+            n4ClusterProps.setProperty("cluster.node.1.rest.port", "18271");
+            n4ClusterProps.setProperty("cluster.node.4.id", "nodo-04");
+            n4ClusterProps.setProperty("cluster.node.4.role", "SECONDARY");
+            n4ClusterProps.setProperty("cluster.node.4.ip", "127.0.0.1");
+            n4ClusterProps.setProperty("cluster.node.4.grpc.port", String.valueOf(node4Port));
+            n4ClusterProps.setProperty("cluster.node.4.rest.port", "18274");
+
+            JettraStoreConfig n4Config = new JettraStoreConfig(n4DbProps, n4ClusterProps);
+            JettraStoreServer n4Server = new JettraStoreServer(n4Config);
+
+            try (JettraClusterTransportServer primTransport = new JettraClusterTransportServer(primPort, primServer);
+                 JettraClusterTransportServer n4Transport = new JettraClusterTransportServer(node4Port, n4Server)) {
+                primTransport.start();
+                n4Transport.start();
+                Thread.sleep(100);
+
+                // 3. Simular a JettraStoreExplorer enviando TYPE_SYNC_CLUSTER_CONFIG con nodo-04 al PRIMARY
+                String updatedCfg =
+                    "cluster.node.1.id = node-01\n" +
+                    "cluster.node.1.role = PRIMARY\n" +
+                    "cluster.node.1.ip = 127.0.0.1\n" +
+                    "cluster.node.1.grpc.port = " + primPort + "\n" +
+                    "cluster.node.1.rest.port = 18271\n" +
+                    "cluster.node.2.id = nodo-04\n" +
+                    "cluster.node.2.role = SECONDARY\n" +
+                    "cluster.node.2.ip = 127.0.0.1\n" +
+                    "cluster.node.2.grpc.port = " + node4Port + "\n" +
+                    "cluster.node.2.rest.port = 18274\n";
+
+                JettraRaftFrame syncFrame = JettraRaftFrame.syncClusterConfig(
+                    1L, "jettra-explorer-config", updatedCfg.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                try (java.net.Socket s = new java.net.Socket("127.0.0.1", primPort);
+                     var bos = new java.io.BufferedOutputStream(s.getOutputStream());
+                     var bis = new java.io.BufferedInputStream(s.getInputStream())) {
+                    JettraClusterProtocol.writeFrame(bos, syncFrame);
+                    JettraRaftFrame ack = JettraClusterProtocol.readFrame(bis);
+                    assertEquals(JettraRaftFrame.TYPE_ACK, ack.frameType());
+                }
+
+                // Esperar replicación asíncrona inicial de todas las bases de datos hacia nodo-04
+                for (int i = 0; i < 30 && !Files.exists(tempNode4.resolve("ventas_db_meta.json")); i++) {
+                    Thread.sleep(100);
+                }
+
+                // 4. Verificar que ventas_db y sus objetos se replicaron al storage path de nodo-04
+                assertTrue(Files.exists(tempNode4.resolve("ventas_db_meta.json")),
+                    "ventas_db_meta.json debe haberse replicado en el storage path de nodo-04");
+                var n4Db = n4Server.getOrCreateDatabaseInternal("ventas_db", false);
+                assertNotNull(n4Db);
+                var docN4 = n4Db.getDocumentEngine("facturas").findById("f1");
+                assertNotNull(docN4);
+                assertEquals("Acme", docN4.get("cliente"));
+
+                // 5. Verificar que futuras bases creadas en PRIMARY también se replican a nodo-04
+                primServer.getOrCreateDatabase("post_join_db");
+                assertTrue(Files.exists(tempNode4.resolve("post_join_db_meta.json")),
+                    "post_join_db creada tras el alta de nodo-04 debe replicarse automáticamente");
+            } finally {
+                primServer.stop();
+                n4Server.stop();
+            }
+        } finally {
+            if (prevClusterProp == null) {
+                System.clearProperty("cluster.config.path");
+            } else {
+                System.setProperty("cluster.config.path", prevClusterProp);
+            }
+        }
+    }
+
     public record TestRecord(String id, String name, int score) {}
 }
