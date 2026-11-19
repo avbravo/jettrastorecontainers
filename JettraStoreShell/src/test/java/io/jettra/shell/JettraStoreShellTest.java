@@ -843,5 +843,55 @@ public class JettraStoreShellTest {
         assertTrue(shell.getCommandHistory().isEmpty());
         assertEquals(0, lineReader.getHistory().size());
     }
+
+    @Test
+    @DisplayName("Debe cargar cluster.nodes desde microprofile-config.properties y actualizarlo al agregar o remover nodos/conexiones")
+    public void testMicroprofileClusterNodesLoadAndPersist() throws Exception {
+        java.nio.file.Path tempMp = java.nio.file.Files.createTempFile("jettra_shell_mp_", ".properties");
+        String prevCfg = System.getProperty("jettra.shell.config.file");
+        try {
+            java.nio.file.Files.writeString(tempMp,
+                "# JettraStore Shell Test Config\napp.title=JettraStore Shell\ncluster.nodes=node-01:127.0.0.1:9091,node-02:127.0.0.1:9092\n",
+                java.nio.charset.StandardCharsets.UTF_8);
+            System.setProperty("jettra.shell.config.file", tempMp.toAbsolutePath().toString());
+
+            try (JettraClient client = JettraClient.connect("127.0.0.1", 9091, "admin", "admin-jettra")) {
+                JettraStoreShellApp shell = new JettraStoreShellApp(client);
+
+                // 1. Verificar carga inicial desde microprofile-config.properties
+                String listBefore = shell.executeCommand("LIST CONNECTIONS");
+                assertTrue(listBefore.contains("node-01"));
+                assertTrue(listBefore.contains("node-02"));
+
+                // 2. Guardar nueva conexión y verificar actualización en microprofile-config.properties
+                String saveRes = shell.executeCommand("SAVE CONNECTION node-04 127.0.0.1 9094 admin");
+                assertTrue(saveRes.contains("[SUCCESS]"));
+                String mpAfterSave = java.nio.file.Files.readString(tempMp, java.nio.charset.StandardCharsets.UTF_8);
+                assertTrue(mpAfterSave.contains("node-04:127.0.0.1:9094"));
+
+                // 3. Agregar nodo con ADD NODE y verificar actualización en microprofile-config.properties
+                String addRes = shell.executeCommand("ADD NODE node-05 127.0.0.1 9095 SECONDARY");
+                assertTrue(addRes.contains("[SUCCESS]"));
+                String mpAfterAdd = java.nio.file.Files.readString(tempMp, java.nio.charset.StandardCharsets.UTF_8);
+                assertTrue(mpAfterAdd.contains("node-05:127.0.0.1:9095"));
+
+                // 4. Remover nodo con REMOVE NODE y verificar eliminación en microprofile-config.properties
+                String remRes = shell.executeCommand("REMOVE NODE node-05");
+                assertTrue(remRes.contains("[SUCCESS]"));
+                String mpAfterRem = java.nio.file.Files.readString(tempMp, java.nio.charset.StandardCharsets.UTF_8);
+                assertFalse(mpAfterRem.contains("node-05:127.0.0.1:9095"));
+
+                // Limpiar node-04
+                shell.executeCommand("REMOVE CONNECTION node-04");
+            }
+        } finally {
+            if (prevCfg == null) {
+                System.clearProperty("jettra.shell.config.file");
+            } else {
+                System.setProperty("jettra.shell.config.file", prevCfg);
+            }
+            java.nio.file.Files.deleteIfExists(tempMp);
+        }
+    }
 }
 

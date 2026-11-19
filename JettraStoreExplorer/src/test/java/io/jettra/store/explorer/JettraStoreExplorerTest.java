@@ -1434,4 +1434,52 @@ public class JettraStoreExplorerTest {
             plugin.installExampleDatabase("system_metadata_db");
         }
     }
+
+    @Test
+    @DisplayName("37. Actualización de cluster.nodes en microprofile-config.properties y cluster.config al añadir o expulsar nodos")
+    public void testClusterNodesPersistenceInMicroprofileAndClusterConfig() throws Exception {
+        JettraStorePlugin plugin = JettraStorePlugin.getInstance();
+        java.nio.file.Path tempMp = java.nio.file.Files.createTempFile("jettra_explorer_mp_", ".properties");
+        String prevCfg = System.getProperty("jettra.explorer.config.file");
+        try {
+            java.nio.file.Files.writeString(tempMp,
+                    "app.title=JettraStore Explorer\ncluster.nodes=node-01:127.0.0.1:9091,node-02:127.0.0.1:9092,node-03:127.0.0.1:9093\n",
+                    java.nio.charset.StandardCharsets.UTF_8);
+            System.setProperty("jettra.explorer.config.file", tempMp.toAbsolutePath().toString());
+
+            // 1. Añadir nodo-09 y verificar actualización en microprofile-config.properties y cluster.config generado
+            boolean added = plugin.addNode("node-09", "node-09-replica", "SECONDARY", "127.0.0.1", 9099, 2048);
+            JettraAssert.assertTrue(added, "Debe añadir node-09 correctamente");
+
+            String mpAfterAdd = java.nio.file.Files.readString(tempMp, java.nio.charset.StandardCharsets.UTF_8);
+            JettraAssert.assertTrue(mpAfterAdd.contains("node-09:127.0.0.1:9099"),
+                    "microprofile-config.properties debe contener node-09:127.0.0.1:9099 en cluster.nodes");
+
+            String clusterCfgAfterAdd = new String(plugin.buildClusterConfigBytesFromNodes(), java.nio.charset.StandardCharsets.UTF_8);
+            JettraAssert.assertTrue(clusterCfgAfterAdd.contains("node-09"),
+                    "cluster.config generado para replicación debe incluir node-09");
+            JettraAssert.assertFalse(clusterCfgAfterAdd.contains(".storage.path"),
+                    "cluster.config no debe contener propiedades storage.path");
+
+            // 2. Expulsar node-09 y verificar actualización en microprofile-config.properties y cluster.config generado
+            boolean removed = plugin.removeNode("node-09");
+            JettraAssert.assertTrue(removed, "Debe expulsar node-09 correctamente");
+
+            String mpAfterRemove = java.nio.file.Files.readString(tempMp, java.nio.charset.StandardCharsets.UTF_8);
+            JettraAssert.assertFalse(mpAfterRemove.contains("node-09:127.0.0.1:9099"),
+                    "microprofile-config.properties no debe contener node-09 tras expulsarlo");
+
+            String clusterCfgAfterRemove = new String(plugin.buildClusterConfigBytesFromNodes(), java.nio.charset.StandardCharsets.UTF_8);
+            JettraAssert.assertFalse(clusterCfgAfterRemove.contains("node-09"),
+                    "cluster.config generado para replicación no debe incluir node-09 tras expulsarlo");
+        } finally {
+            plugin.removeNode("node-09");
+            if (prevCfg == null) {
+                System.clearProperty("jettra.explorer.config.file");
+            } else {
+                System.setProperty("jettra.explorer.config.file", prevCfg);
+            }
+            java.nio.file.Files.deleteIfExists(tempMp);
+        }
+    }
 }

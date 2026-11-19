@@ -2800,3 +2800,27 @@ Los nodos secundarios operan con la política de **solo lectura (`assertWritable
 ]
 ```
 
+
+
+---
+
+## 20. Persistencia Garantizada en `jettra.storage.path`, Sincronización de `cluster.config` y Arranque Limpio
+
+### 20.1 Persistencia Directa en `jettra.storage.path` por Nodo
+Cada nodo de `JettraStore` define su propia ruta de almacenamiento en `microprofile-config.properties` mediante `jettra.storage.path` (o mediante `JETTRA_STORAGE_PATH` / `-Djettra.storage.path` en contenedores Docker y Docker Compose):
+
+```properties
+jettra.storage.path = ~/jettra-storage-01/data
+```
+
+* Las propiedades `cluster.node.<N>.storage.path` fueron eliminadas de `cluster.config` para evitar colisiones entre nodos.
+* Al crear una base de datos, un motor/bucket, un documento, un registro o un índice (ya sea vía API Java, REST, `JettraStoreShell` o `JettraStoreExplorer`), el nodo `PRIMARY` ejecuta inmediatamente `flushMemTable()` y `saveToDisk()` en su `jettra.storage.path` y replica la operación vía Raft hacia todos los nodos `SECONDARY`, que persisten los datos en su propio `jettra.storage.path`.
+
+### 20.2 Arranque Limpio sin Bases de Datos de Ejemplo Precargadas
+Por defecto, `JettraStore` inicia **sin instalar automáticamente** bases de datos de muestra (`sample_*`, `samples_*`, `example_factura_db`). Las bases de ejemplo pueden instalarse o eliminarse bajo demanda desde el formulario `/examples` de **JettraStoreExplorer**, o activando explícitamente `-Djettra.samples.autoload=true` si se requiere en un entorno de demostración.
+
+### 20.3 Replicación Dinámica de `cluster.config` (Trama Raft `0x17`)
+Cuando se añade o se expulsa un nodo desde **JettraStoreExplorer** o **JettraStoreShell**:
+1. Se actualiza automáticamente la propiedad `cluster.nodes` en el archivo `microprofile-config.properties` del cliente (`JettraStoreExplorer` / `JettraStoreShell`).
+2. Se transmite el nuevo archivo `cluster.config` mediante la trama binaria Raft `TYPE_SYNC_CLUSTER_CONFIG` (`0x17`) al nodo `PRIMARY` y a los nodos `SECONDARY`.
+3. Cada nodo actualiza su `cluster.config` local, refresca los *peers* en `DynamicRingEngine` y publica un evento en `JettraClusterEventBus` visible en tiempo real en `/map`.

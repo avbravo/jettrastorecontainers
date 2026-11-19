@@ -163,13 +163,26 @@ public class JettraStorePlugin {
         } catch (Exception ignored) {}
 
         // Sobreescrituras locales en disco si existen (solo si pertenecen a Explorer o especifican propiedades explícitas)
-        for (String localFile : new String[]{"./microprofile-config.properties", "./META-INF/microprofile-config.properties", "./config/microprofile-config.properties"}) {
+        List<String> localCandidates = new ArrayList<>(List.of(
+            "src/main/resources/META-INF/microprofile-config.properties",
+            "src/main/resources/microprofile-config.properties",
+            "./microprofile-config.properties",
+            "./META-INF/microprofile-config.properties",
+            "./config/microprofile-config.properties"
+        ));
+        String explicitMpFile = System.getProperty("jettra.explorer.config.file", System.getProperty("microprofile.config.file"));
+        if (explicitMpFile != null && !explicitMpFile.isBlank()) {
+            localCandidates.add(explicitMpFile.trim());
+        }
+        for (String localFile : localCandidates) {
             Path fp = Paths.get(localFile);
             if (Files.exists(fp)) {
                 try (var is = Files.newInputStream(fp)) {
                     Properties p = new Properties();
                     p.load(is);
-                    props.putAll(p);
+                    if ("JettraStore Explorer".equals(p.getProperty("app.title")) || p.containsKey("cluster.nodes")) {
+                        props.putAll(p);
+                    }
                 } catch (Exception ignored) {}
             }
         }
@@ -454,30 +467,11 @@ public class JettraStorePlugin {
             loadMicroprofileConfig();
         }
 
-        // 1. Nodo PRIMARY (Master) de la base de datos JettraStore (desacoplado del puerto Web UI 8085)
-        ServerNodeInfo primaryNode = new ServerNodeInfo(
-            "node-01",
-            "node-01-primary",
-            "PRIMARY",
-            "127.0.0.1",
-            9091,
-            24.5f,
-            480,
-            2048,
-            1280,
-            14200,
-            312,
-            18450,
-            0.0f,
-            8,
-            false // Inicia en false; se valida en tiempo real con checkNodeRealReachability
-        );
-        serverNodes.add(primaryNode);
-
-        // 2. Nodos configurados desde microprofile-config.properties (cluster.nodes) o propiedad de sistema
+        // 1. Conexión inicial al clúster tomada desde microprofile-config.properties (propiedad cluster.nodes)
         String nodesConfig = System.getProperty("cluster.nodes", loadedConfigProps.getProperty("cluster.nodes"));
         if (nodesConfig != null && !nodesConfig.isBlank()) {
             String[] entries = nodesConfig.split(",");
+            boolean primaryAssigned = false;
             for (String entry : entries) {
                 String[] parts = entry.trim().split(":");
                 if (parts.length >= 3) {
@@ -485,29 +479,30 @@ public class JettraStorePlugin {
                     String host = parts[1].trim();
                     int port = 9091;
                     try { port = Integer.parseInt(parts[2].trim()); } catch (Exception ignored) {}
+                    if (id.isBlank() || host.isBlank() || port <= 0) continue;
 
-                    if ("node-01".equalsIgnoreCase(id)) {
-                        if (host != null && !host.isBlank()) {
-                            primaryNode.setHost(host);
-                        }
-                        if (port > 0) {
-                            primaryNode.setPort(port);
-                        }
-                        if (parts.length >= 4 && !parts[3].isBlank()) {
-                            primaryNode.setRole(parts[3].trim().toUpperCase());
-                        }
+                    String role;
+                    if (parts.length >= 4 && !parts[3].isBlank()) {
+                        role = parts[3].trim().toUpperCase();
+                    } else if (!primaryAssigned && ("node-01".equalsIgnoreCase(id) || serverNodes.isEmpty())) {
+                        role = "PRIMARY";
                     } else {
-                        String role = (parts.length >= 4 && !parts[3].isBlank())
-                            ? parts[3].trim().toUpperCase()
-                            : (id.toLowerCase().contains("edge") ? "EDGE" : "SECONDARY");
-                        serverNodes.add(new ServerNodeInfo(id, id + "-replica", role, host, port, 18.0f, 380, 2048, 980, 12000, 240, 14000, 0.0f, 8, false));
+                        role = id.toLowerCase().contains("edge") ? "EDGE" : "SECONDARY";
                     }
+                    if (isPrimaryRole(role)) {
+                        primaryAssigned = true;
+                    }
+                    String displayName = isPrimaryRole(role) ? id + "-primary" : id + "-replica";
+                    serverNodes.add(new ServerNodeInfo(id, displayName, role, host, port, 18.0f, 380, 2048, 980, 12000, 240, 14000, 0.0f, 8, false));
                 }
             }
-        } else {
-            serverNodes.add(new ServerNodeInfo("node-02", "node-02-replica", "FOLLOWER", "192.168.1.102", 8766, 18.2f, 390, 2048, 980, 12800, 245, 14200, 0.0f, 8, false));
-            serverNodes.add(new ServerNodeInfo("node-03", "node-03-replica", "FOLLOWER", "192.168.1.103", 8767, 21.0f, 420, 2048, 1100, 13400, 280, 15600, 0.0f, 8, false));
-            serverNodes.add(new ServerNodeInfo("node-04", "node-04-edge", "EDGE", "10.0.4.15", 8768, 12.8f, 280, 1024, 650, 8900, 180, 8900, 0.0f, 8, false));
+        }
+
+        // Fallback únicamente si cluster.nodes no estaba definido en microprofile-config.properties
+        if (serverNodes.isEmpty()) {
+            serverNodes.add(new ServerNodeInfo("node-01", "node-01-primary", "PRIMARY", "127.0.0.1", 9091, 24.5f, 480, 2048, 1280, 14200, 312, 18450, 0.0f, 8, false));
+            serverNodes.add(new ServerNodeInfo("node-02", "node-02-replica", "SECONDARY", "127.0.0.1", 9092, 18.2f, 390, 2048, 980, 12800, 245, 14200, 0.0f, 8, false));
+            serverNodes.add(new ServerNodeInfo("node-03", "node-03-replica", "SECONDARY", "127.0.0.1", 9093, 21.0f, 420, 2048, 1100, 13400, 280, 15600, 0.0f, 8, false));
         }
 
         // Descubrir cualquier nodo adicional persistido en memory/cluster_nodes.json o propiedades
@@ -1128,21 +1123,127 @@ public class JettraStorePlugin {
         } catch (Throwable ignored) {}
     }
 
+    public synchronized String getClusterNodesPropertyValue() {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < serverNodes.size(); i++) {
+            ServerNodeInfo n = serverNodes.get(i);
+            if (i > 0) sb.append(",");
+            sb.append(n.getId()).append(":").append(n.getHost()).append(":").append(n.getPort());
+        }
+        return sb.toString();
+    }
+
+    /**
+     * Actualiza la propiedad cluster.nodes en los archivos microprofile-config.properties
+     * de JettraStoreExplorer manteniendo intactas el resto de propiedades y comentarios.
+     */
+    public synchronized void persistClusterNodesToMicroprofileConfig() {
+        String clusterNodesValue = getClusterNodesPropertyValue();
+        loadedConfigProps.setProperty("cluster.nodes", clusterNodesValue);
+        if (System.getProperty("cluster.nodes") != null) {
+            System.setProperty("cluster.nodes", clusterNodesValue);
+        }
+
+        List<Path> targets = new ArrayList<>();
+        String customFile = System.getProperty("jettra.explorer.config.file", System.getProperty("microprofile.config.file"));
+        if (customFile != null && !customFile.isBlank()) {
+            targets.add(Paths.get(customFile.trim()));
+        } else {
+            for (String candidate : new String[]{
+                    "src/main/resources/microprofile-config.properties",
+                    "src/main/resources/META-INF/microprofile-config.properties",
+                    "target/classes/microprofile-config.properties",
+                    "target/classes/META-INF/microprofile-config.properties",
+                    "./microprofile-config.properties",
+                    "./config/microprofile-config.properties"
+            }) {
+                Path p = Paths.get(candidate);
+                if (Files.exists(p)) {
+                    targets.add(p);
+                }
+            }
+        }
+
+        for (Path target : targets) {
+            try {
+                if (target.getParent() != null && !Files.exists(target.getParent())) {
+                    Files.createDirectories(target.getParent());
+                }
+                List<String> lines = Files.exists(target)
+                    ? new ArrayList<>(Files.readAllLines(target, java.nio.charset.StandardCharsets.UTF_8))
+                    : new ArrayList<>();
+                boolean replaced = false;
+                for (int i = 0; i < lines.size(); i++) {
+                    String trimmed = lines.get(i).trim();
+                    if (trimmed.startsWith("cluster.nodes=") || trimmed.startsWith("cluster.nodes =")) {
+                        lines.set(i, "cluster.nodes=" + clusterNodesValue);
+                        replaced = true;
+                        break;
+                    }
+                }
+                if (!replaced) {
+                    lines.add("cluster.nodes=" + clusterNodesValue);
+                }
+                Files.write(target, lines, java.nio.charset.StandardCharsets.UTF_8);
+            } catch (Exception ignored) {}
+        }
+    }
+
+    /**
+     * Genera el contenido actualizado del archivo cluster.config a partir de la topología actual de nodos
+     * (sin propiedades cluster.node.<N>.storage.path).
+     */
+    public synchronized byte[] buildClusterConfigBytesFromNodes() {
+        StringBuilder sb = new StringBuilder();
+        sb.append("################################################################################\n");
+        sb.append("# JettraStore Cluster Topology Configuration (cluster.config)\n");
+        sb.append("# Centralized Topology for Raft Consensus and Dynamic Ring Discovery\n");
+        sb.append("################################################################################\n\n");
+        sb.append("cluster.name = jettra-production-cluster\n");
+        sb.append("cluster.consensus.protocol = RAFT\n");
+        sb.append("cluster.ring.enabled = true\n");
+        sb.append("cluster.heartbeat.interval.ms = 150\n");
+        sb.append("cluster.election.timeout.ms = 300\n");
+
+        int idx = 1;
+        for (ServerNodeInfo n : serverNodes) {
+            String normalizedRole = isPrimaryRole(n.getRole()) ? "PRIMARY" : "SECONDARY";
+            int restPort = n.getRestPort() > 0 ? n.getRestPort() : (8080 + idx);
+            sb.append("\n# ==============================================================================\n");
+            sb.append("# NODO ").append(idx).append(": ").append(n.getId()).append(" (").append(normalizedRole).append(")\n");
+            sb.append("# ==============================================================================\n");
+            sb.append("cluster.node.").append(idx).append(".id = ").append(n.getId()).append("\n");
+            sb.append("cluster.node.").append(idx).append(".role = ").append(normalizedRole).append("\n");
+            sb.append("cluster.node.").append(idx).append(".ip = ").append(n.getHost()).append("\n");
+            sb.append("cluster.node.").append(idx).append(".grpc.port = ").append(n.getPort()).append("\n");
+            sb.append("cluster.node.").append(idx).append(".rest.port = ").append(restPort).append("\n");
+            idx++;
+        }
+
+        sb.append("\n# Asignación de Capacidad de Índices y Buffers en Clúster\n");
+        sb.append("cluster.index.initial.capacity = 65536\n");
+        sb.append("cluster.index.max.inmemory.keys = 100000\n");
+        return sb.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8);
+    }
+
     private void replicateClusterConfigToNodes() {
         try {
-            Path clusterFile = io.jettra.store.core.JettraConfigValidator.locateClusterConfigFile();
-            if (clusterFile == null || !Files.exists(clusterFile)) {
-                return;
-            }
-            byte[] cfgBytes = Files.readAllBytes(clusterFile);
+            byte[] cfgBytes = buildClusterConfigBytesFromNodes();
             if (cfgBytes.length == 0) {
                 return;
             }
+            Path clusterFile = io.jettra.store.core.JettraConfigValidator.locateClusterConfigFile();
+            if (clusterFile != null && Files.exists(clusterFile)) {
+                try {
+                    Files.write(clusterFile, cfgBytes);
+                } catch (Exception ignored) {}
+            }
+
             io.jettra.store.cluster.JettraRaftFrame frame =
                 io.jettra.store.cluster.JettraRaftFrame.syncClusterConfig(1L, "jettra-explorer-config", cfgBytes);
 
             List<ServerNodeInfo> targets = new ArrayList<>(serverNodes);
-            // Enviar primero al PRIMARY/master y luego al resto de nodos alcanzables
+            // Enviar primero al PRIMARY/master (que además replica por Raft) y también a cada SECONDARY alcanzable
             targets.sort((a, b) -> Boolean.compare(isPrimaryRole(b.getRole()), isPrimaryRole(a.getRole())));
             for (ServerNodeInfo target : targets) {
                 if (target.getHost() == null || target.getHost().isBlank() || target.getPort() <= 0) continue;
@@ -1171,31 +1272,24 @@ public class JettraStorePlugin {
         String h = (host != null && !host.isBlank()) ? host : "127.0.0.1";
         int p = port > 0 ? port : 8770;
         long maxM = heapMaxMb > 0 ? heapMaxMb : 2048;
-        String effectiveStoragePath = (storagePath != null && !storagePath.isBlank())
-            ? storagePath.trim()
-            : "~/jettra/data-" + cleanId;
         ServerNodeInfo existing = getNodeById(cleanId);
         if (existing != null) {
             existing.setOnline(true);
             existing.setRole(r);
             existing.setHost(h);
             existing.setPort(p);
-            existing.setStoragePath(effectiveStoragePath);
             existing.setLastError(null);
             saveClusterNodes();
-            io.jettra.store.core.JettraConfigValidator.registerDynamicNodeInClusterConfig(
-                cleanId, r, h, p, p > 1000 ? p - 1000 : 8082, effectiveStoragePath);
+            persistClusterNodesToMicroprofileConfig();
             replicateClusterConfigToNodes();
             return true;
         }
         ServerNodeInfo node = new ServerNodeInfo(cleanId, (name != null && !name.isBlank()) ? name.trim() : cleanId, r, h.trim(), p, 15.0f, 320, maxM, 850, 5000, 200, 10500, 0.65f, 8, true);
-        node.setStoragePath(effectiveStoragePath);
         serverNodes.add(node);
         saveClusterNodes();
-        io.jettra.store.core.JettraConfigValidator.registerDynamicNodeInClusterConfig(
-            cleanId, r, h.trim(), p, p > 1000 ? p - 1000 : 8082, effectiveStoragePath);
+        persistClusterNodesToMicroprofileConfig();
         replicateClusterConfigToNodes();
-        logPoliceIncident("Raft Quorum K9", "Nuevo nodo registrado en clúster: " + cleanId + " (" + h + ":" + p + ") [" + node.getStatus() + "]", "OK", "Incorporado a quórum");
+        logPoliceIncident("Raft Quorum K9", "Nuevo nodo registrado en clúster: " + cleanId + " (" + h + ":" + p + ") [" + node.getStatus() + "]", "OK", "microprofile-config.properties y cluster.config sincronizados en el clúster");
         try {
             if (node.isActive()) {
                 io.jettra.store.cluster.JettraClusterEventBus.getInstance().publish(
@@ -1221,9 +1315,9 @@ public class JettraStorePlugin {
             lifecycleManager.clearStopped(id);
             reconcilePrimaryLeadership();
             saveClusterNodes();
-            io.jettra.store.core.JettraConfigValidator.removeDynamicNodeFromClusterConfig(id);
+            persistClusterNodesToMicroprofileConfig();
             replicateClusterConfigToNodes();
-            logPoliceIncident("Raft Quorum K9", "Nodo expulsado del clúster: " + id, "WARN", "Rebalanceo de réplicas Raft");
+            logPoliceIncident("Raft Quorum K9", "Nodo expulsado del clúster: " + id, "WARN", "microprofile-config.properties y cluster.config replicados en el clúster");
             try {
                 io.jettra.store.cluster.JettraClusterEventBus.getInstance().publish(
                     io.jettra.store.cluster.ClusterLiveEvent.TYPE_NODE_OFFLINE,

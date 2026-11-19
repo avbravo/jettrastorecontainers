@@ -2486,3 +2486,30 @@ logout
 
 
 
+
+
+---
+
+## Configuración Inicial del Clúster mediante `microprofile-config.properties` (`cluster.nodes`)
+
+`JettraStoreShell` utiliza **Eclipse MicroProfile Config 3.1** a través de `src/main/resources/META-INF/microprofile-config.properties` (o `./microprofile-config.properties` / `./config/microprofile-config.properties` en disco) para cargar la topología inicial de conexiones del clúster:
+
+```properties
+# JettraStore Shell Configuration (Eclipse MicroProfile Config 3.1)
+app.title=JettraStore Shell
+cluster.multinode.active=on
+cluster.healthcheck.timeout.ms=1000
+cluster.nodes=node-01:127.0.0.1:9091,node-02:127.0.0.1:9092,node-03:127.0.0.1:9093
+```
+
+### Actualización Automática al Modificar Conexiones o Nodos
+Cada vez que el usuario ejecuta alguno de los siguientes comandos en `JettraStoreShell`, el archivo `microprofile-config.properties` se actualiza automáticamente reescribiendo la propiedad `cluster.nodes` (sin alterar comentarios ni otras propiedades):
+
+| Comando | Efecto en `microprofile-config.properties` |
+| :--- | :--- |
+| `SAVE CONNECTION <nombre> <host> <puerto> [user]` | Agrega o actualiza `<nombre>:<host>:<puerto>` en `cluster.nodes`. |
+| `REMOVE CONNECTION <nombre>` | Elimina `<nombre>` de `cluster.nodes`. |
+| `ADD NODE <nodeId> <host> <port> [PRIMARY\|SECONDARY]` | Registra el nodo en el clúster Raft y agrega `<nodeId>:<host>:<port>` en `cluster.nodes`. |
+| `REMOVE NODE <nodeId>` | Remueve el nodo del anillo Raft y lo elimina de `cluster.nodes`. |
+
+> También puede especificarse un archivo externo mediante la propiedad JVM `-Djettra.shell.config.file=/ruta/microprofile-config.properties` o `-Dmicroprofile.config.file=/ruta/microprofile-config.properties`.

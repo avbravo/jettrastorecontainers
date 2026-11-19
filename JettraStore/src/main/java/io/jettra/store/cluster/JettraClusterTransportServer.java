@@ -526,12 +526,36 @@ public final class JettraClusterTransportServer implements AutoCloseable {
                         Files.write(target, cfgBytes, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
                         System.out.printf("[JettraClusterTransport] ✅ Archivo cluster.config sincronizado (%d bytes) en '%s' desde '%s'.%n",
                             cfgBytes.length, target.toAbsolutePath().normalize(), frame.senderNodeId());
-                        if (server != null
-                                && server.getConfig().getNodeRole() == ClusterNode.Role.PRIMARY
-                                && !"cluster-master".equalsIgnoreCase(frame.senderNodeId())
-                                && !server.getConfig().getNodeId().equalsIgnoreCase(frame.senderNodeId())
-                                && server.getReplicationClient() != null) {
-                            server.getReplicationClient().broadcastClusterConfigSync(cfgBytes);
+                        if (server != null) {
+                            // Actualizar topología de peers en memoria desde el cluster.config recibido
+                            java.util.Properties syncedProps = new java.util.Properties();
+                            try (var bais = new java.io.ByteArrayInputStream(cfgBytes)) {
+                                syncedProps.load(bais);
+                            }
+                            List<io.jettra.store.core.JettraConfigValidator.ClusterNodeInfo> parsedNodes =
+                                io.jettra.store.core.JettraConfigValidator.parseClusterNodes(syncedProps);
+                            String localId = server.getConfig().getNodeId();
+                            if (server.getRingEngine() != null) {
+                                for (var cn : parsedNodes) {
+                                    if (!cn.id().equalsIgnoreCase(localId) && server.getRingEngine().getPeer(cn.id()) == null) {
+                                        ClusterNode.Role r = "PRIMARY".equalsIgnoreCase(cn.role()) ? ClusterNode.Role.PRIMARY : ClusterNode.Role.SECONDARY;
+                                        server.getRingEngine().registerPeer(new ClusterNode(cn.id(), cn.ip(), cn.grpcPort(), r));
+                                    }
+                                }
+                            }
+                            JettraClusterEventBus.getInstance().publish(
+                                ClusterLiveEvent.TYPE_DATA_TRANSFER,
+                                frame.senderNodeId(),
+                                localId,
+                                String.format("Archivo cluster.config actualizado (%d nodos, %d bytes)", parsedNodes.size(), cfgBytes.length),
+                                "cluster.config"
+                            );
+                            if (server.getConfig().getNodeRole() == ClusterNode.Role.PRIMARY
+                                    && !"cluster-master".equalsIgnoreCase(frame.senderNodeId())
+                                    && !localId.equalsIgnoreCase(frame.senderNodeId())
+                                    && server.getReplicationClient() != null) {
+                                server.getReplicationClient().broadcastClusterConfigSync(cfgBytes);
+                            }
                         }
                     } catch (Exception ex) {
                         System.err.printf("[JettraClusterTransport] Error sincronizando cluster.config: %s%n", ex.getMessage());

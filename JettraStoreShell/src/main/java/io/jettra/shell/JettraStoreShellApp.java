@@ -110,9 +110,129 @@ public final class JettraStoreShellApp implements AutoCloseable {
     private String defaultConnectionName = "node-01";
 
     private void initDefaultConnections() {
-        loadInitialConnectionsFromJettraConfig();
+        if (!loadInitialConnectionsFromMicroprofileConfig()) {
+            loadInitialConnectionsFromJettraConfig();
+        }
         loadSavedConnections();
         loadHistory();
+    }
+
+    private boolean loadInitialConnectionsFromMicroprofileConfig() {
+        Properties props = new Properties();
+        // 1. Classpath (/META-INF/microprofile-config.properties)
+        try (var is = getClass().getResourceAsStream("/META-INF/microprofile-config.properties")) {
+            if (is != null) {
+                Properties p = new Properties();
+                p.load(is);
+                if (p.containsKey("cluster.nodes")) {
+                    props.putAll(p);
+                }
+            }
+        } catch (Exception ignored) {}
+
+        // 2. Archivos en disco (prioridad sobre classpath)
+        List<String> candidates = new ArrayList<>(List.of(
+            "src/main/resources/META-INF/microprofile-config.properties",
+            "./microprofile-config.properties",
+            "./META-INF/microprofile-config.properties",
+            "./config/microprofile-config.properties"
+        ));
+        String explicitFile = System.getProperty("jettra.shell.config.file", System.getProperty("microprofile.config.file"));
+        if (explicitFile != null && !explicitFile.isBlank()) {
+            candidates.add(explicitFile.trim());
+        }
+        for (String c : candidates) {
+            Path p = Path.of(c);
+            if (Files.exists(p)) {
+                try (var is = Files.newInputStream(p)) {
+                    Properties diskProps = new Properties();
+                    diskProps.load(is);
+                    if (diskProps.containsKey("cluster.nodes")) {
+                        props.putAll(diskProps);
+                    }
+                } catch (Exception ignored) {}
+            }
+        }
+
+        String nodesConfig = System.getProperty("cluster.nodes", props.getProperty("cluster.nodes"));
+        if (nodesConfig == null || nodesConfig.isBlank()) {
+            return false;
+        }
+        boolean loadedAny = false;
+        for (String entry : nodesConfig.split(",")) {
+            String[] parts = entry.trim().split(":");
+            if (parts.length >= 3) {
+                String id = parts[0].trim();
+                String host = parts[1].trim();
+                int port = 9091;
+                try { port = Integer.parseInt(parts[2].trim()); } catch (Exception ignored) {}
+                if (!id.isBlank() && !host.isBlank() && port > 0) {
+                    savedConnections.put(id, new SavedConnection(id, host, port, "admin"));
+                    if (!loadedAny || "node-01".equalsIgnoreCase(id)) {
+                        defaultConnectionName = id;
+                    }
+                    loadedAny = true;
+                }
+            }
+        }
+        return loadedAny;
+    }
+
+    public String getClusterNodesPropertyValue() {
+        StringBuilder sb = new StringBuilder();
+        int i = 0;
+        for (SavedConnection sc : savedConnections.values()) {
+            if (i++ > 0) sb.append(",");
+            sb.append(sc.name()).append(":").append(sc.host()).append(":").append(sc.port());
+        }
+        return sb.toString();
+    }
+
+    public void persistClusterNodesToMicroprofileConfig() {
+        String clusterNodesValue = getClusterNodesPropertyValue();
+        if (clusterNodesValue.isBlank()) return;
+
+        List<Path> targets = new ArrayList<>();
+        String explicitFile = System.getProperty("jettra.shell.config.file", System.getProperty("microprofile.config.file"));
+        if (explicitFile != null && !explicitFile.isBlank()) {
+            targets.add(Path.of(explicitFile.trim()));
+        } else {
+            for (String candidate : new String[]{
+                    "src/main/resources/META-INF/microprofile-config.properties",
+                    "target/classes/META-INF/microprofile-config.properties",
+                    "./microprofile-config.properties",
+                    "./config/microprofile-config.properties"
+            }) {
+                Path p = Path.of(candidate);
+                if (Files.exists(p)) {
+                    targets.add(p);
+                }
+            }
+        }
+
+        for (Path target : targets) {
+            try {
+                if (target.getParent() != null && !Files.exists(target.getParent())) {
+                    Files.createDirectories(target.getParent());
+                }
+                List<String> lines = Files.exists(target)
+                    ? new ArrayList<>(Files.readAllLines(target, StandardCharsets.UTF_8))
+                    : new ArrayList<>();
+                boolean replaced = false;
+                for (int i = 0; i < lines.size(); i++) {
+                    String trimmed = lines.get(i).trim();
+                    if (trimmed.startsWith("cluster.nodes=") || trimmed.startsWith("cluster.nodes =")) {
+                        lines.set(i, "cluster.nodes=" + clusterNodesValue);
+                        replaced = true;
+                        break;
+                    }
+                }
+                if (!replaced) {
+                    lines.add("cluster.nodes=" + clusterNodesValue);
+                }
+                Files.write(target, lines, StandardCharsets.UTF_8);
+            } catch (Exception ignored) {}
+        }
     }
 
     private void loadInitialConnectionsFromJettraConfig() {
@@ -1157,6 +1277,7 @@ Seleccione una conexión para iniciar:
 
         savedConnections.put(name, new SavedConnection(name, host, port, user));
         persistSavedConnections();
+        persistClusterNodesToMicroprofileConfig();
         return String.format("[SUCCESS] Conexión '%s' guardada (%s:%d, usuario: %s).", name, host, port, user);
     }
 
@@ -1166,6 +1287,7 @@ Seleccione una conexión para iniciar:
         SavedConnection removed = savedConnections.remove(name);
         if (removed != null) {
             persistSavedConnections();
+            persistClusterNodesToMicroprofileConfig();
             return String.format("[SUCCESS] Conexión guardada '%s' eliminada correctamente.", name);
         } else {
             return String.format("[WARN] No existe una conexión guardada con el nombre '%s'.", name);
@@ -1443,6 +1565,9 @@ Seleccione una conexión para iniciar:
 
         ClusterNode newNode = new ClusterNode(id, host, port, role);
         client.getRingEngine().registerPeer(newNode);
+        savedConnections.put(id, new SavedConnection(id, host, port, authenticated ? currentUser : "admin"));
+        persistSavedConnections();
+        persistClusterNodesToMicroprofileConfig();
         return String.format("[SUCCESS] Nodo '%s' (%s:%d, %s) agregado exitosamente al clúster Raft.", id, host, port, role);
     }
 
@@ -1453,6 +1578,11 @@ Seleccione una conexión para iniciar:
             return "[ERROR] No se puede remover el nodo primario activo del clúster.";
         }
         boolean ok = client.getRingEngine().removePeer(id);
+        if (ok) {
+            savedConnections.remove(id);
+            persistSavedConnections();
+            persistClusterNodesToMicroprofileConfig();
+        }
         return ok ? "[SUCCESS] Nodo '" + id + "' removido del anillo de réplicas."
                   : "[WARN] El nodo '" + id + "' no existe en el registro del clúster.";
     }
