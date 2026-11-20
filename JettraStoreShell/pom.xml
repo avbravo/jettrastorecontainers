@@ -16,6 +16,7 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <mainClass>io.jettra.shell.JettraStoreShellLauncher</mainClass>
         <jettra.frameworks.version>1.0.0-SNAPSHOT</jettra.frameworks.version>
+        <skipTests>false</skipTests>
     </properties>
 
     <dependencyManagement>
@@ -142,32 +143,7 @@
                 </configuration>
             </plugin>
 
-            <!-- Ejecución del Test Runner de JettraTest -->
-<!--            <plugin>
-                <groupId>org.codehaus.mojo</groupId>
-                <artifactId>exec-maven-plugin</artifactId>
-                <version>3.5.0</version>
-                <executions>
-                    <execution>
-                        <id>jettra-test</id>
-                        <phase>test</phase>
-                        <goals>
-                            <goal>java</goal>
-                        </goals>
-                        <configuration>
-                            <mainClass>io.jettra.test.runner.JettraTestRunner</mainClass>
-                            <classpathScope>test</classpathScope>
-                            <cleanupDaemonThreads>false</cleanupDaemonThreads>
-                            <arguments>
-                                <argument>${project.build.testOutputDirectory}</argument>
-                                <argument>${project.build.outputDirectory}</argument>
-                            </arguments>
-                        </configuration>
-                    </execution>
-                </executions>
-            </plugin>-->
-            
-            <!-- Configuración de Ejecución Exec Maven Plugin (JVM 25 ZGC + Compact Object Headers + JettraTestRunner) -->
+            <!-- Configuración de Ejecución Exec Maven Plugin (JVM 25 + JettraTestRunner aislado en JVM acotada) -->
             <plugin>
                 <groupId>org.codehaus.mojo</groupId>
                 <artifactId>exec-maven-plugin</artifactId>
@@ -197,13 +173,24 @@
                         <id>jettra-test</id>
                         <phase>test</phase>
                         <goals>
-                            <goal>java</goal>
+                            <goal>exec</goal>
                         </goals>
                         <configuration>
-                            <mainClass>io.jettra.test.runner.JettraTestRunner</mainClass>
+                            <executable>java</executable>
                             <classpathScope>test</classpathScope>
-                            <cleanupDaemonThreads>false</cleanupDaemonThreads>
+                            <skip>${skipTests}</skip>
                             <arguments>
+                                <argument>-Xms64m</argument>
+                                <argument>-Xmx512m</argument>
+                                <argument>-XX:MaxMetaspaceSize=256m</argument>
+                                <argument>-XX:MaxDirectMemorySize=256m</argument>
+                                <argument>-XX:+UseG1GC</argument>
+                                <argument>-XX:CICompilerCount=2</argument>
+                                <argument>--enable-preview</argument>
+                                <argument>--enable-native-access=ALL-UNNAMED</argument>
+                                <argument>-classpath</argument>
+                                <classpath/>
+                                <argument>io.jettra.test.runner.JettraTestRunner</argument>
                                 <argument>${project.build.testOutputDirectory}</argument>
                                 <argument>${project.build.outputDirectory}</argument>
                             </arguments>

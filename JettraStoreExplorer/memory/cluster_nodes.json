@@ -3,13 +3,20 @@
   "name" : "node-02-replica",
   "role" : "SECONDARY",
   "host" : "127.0.0.1",
-  "port" : 9092,
+  "port" : 50002,
   "heapMaxMb" : 2048
 }, {
   "id" : "node-03",
   "name" : "node-03-replica",
   "role" : "SECONDARY",
   "host" : "127.0.0.1",
-  "port" : 9093,
+  "port" : 50003,
+  "heapMaxMb" : 2048
+}, {
+  "id" : "node-04",
+  "name" : "node-04",
+  "role" : "FOLLOWER",
+  "host" : "127.0.0.1",
+  "port" : 50004,
   "heapMaxMb" : 2048
 } ]

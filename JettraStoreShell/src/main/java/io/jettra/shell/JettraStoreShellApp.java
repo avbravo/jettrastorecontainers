@@ -38,7 +38,7 @@ public final class JettraStoreShellApp implements AutoCloseable {
     private String currentUser = "anonymous";
     private String currentRole = "NONE";
     private String currentHost = "127.0.0.1";
-    private int currentPort = 9091;
+    private int currentPort = 50001;
     private boolean lazyLoad = true;
     private boolean showReferences = true;
     private int pageSize = 20;
@@ -74,7 +74,7 @@ public final class JettraStoreShellApp implements AutoCloseable {
     public JettraStoreShellApp(boolean autoConnect) {
         initDefaultConnections();
         if (autoConnect) {
-            connectAndLogin("127.0.0.1", 9091, "admin", "admin-jettra");
+            connectAndLogin("127.0.0.1", 50001, "admin", "admin-jettra");
         }
     }
 
@@ -85,7 +85,7 @@ public final class JettraStoreShellApp implements AutoCloseable {
         this.currentUser = "admin";
         this.currentRole = "SUPER_ADMIN";
         this.currentHost = "127.0.0.1";
-        this.currentPort = 9091;
+        this.currentPort = 50001;
         if (this.client != null) {
             registerSentinelListener();
             this.client.getDatabase(currentDatabase);
@@ -110,10 +110,11 @@ public final class JettraStoreShellApp implements AutoCloseable {
     private String defaultConnectionName = "node-01";
 
     private void initDefaultConnections() {
+        savedConnections.clear();
         if (!loadInitialConnectionsFromMicroprofileConfig()) {
             loadInitialConnectionsFromJettraConfig();
+            loadSavedConnections();
         }
-        loadSavedConnections();
         loadHistory();
     }
 
@@ -158,16 +159,18 @@ public final class JettraStoreShellApp implements AutoCloseable {
         if (nodesConfig == null || nodesConfig.isBlank()) {
             return false;
         }
+        savedConnections.clear();
         boolean loadedAny = false;
         for (String entry : nodesConfig.split(",")) {
             String[] parts = entry.trim().split(":");
             if (parts.length >= 3) {
                 String id = parts[0].trim();
                 String host = parts[1].trim();
-                int port = 9091;
+                int port = 50001;
                 try { port = Integer.parseInt(parts[2].trim()); } catch (Exception ignored) {}
+                String user = (parts.length >= 4 && !parts[3].trim().isBlank()) ? parts[3].trim() : "admin";
                 if (!id.isBlank() && !host.isBlank() && port > 0) {
-                    savedConnections.put(id, new SavedConnection(id, host, port, "admin"));
+                    savedConnections.put(id, new SavedConnection(id, host, port, user));
                     if (!loadedAny || "node-01".equalsIgnoreCase(id)) {
                         defaultConnectionName = id;
                     }
@@ -245,7 +248,7 @@ public final class JettraStoreShellApp implements AutoCloseable {
                     for (JettraConfigValidator.ClusterNodeInfo node : nodes) {
                         String name = node.id();
                         String host = (node.ip() != null && !node.ip().isBlank()) ? node.ip() : "127.0.0.1";
-                        int port = node.grpcPort() > 0 ? node.grpcPort() : 9091;
+                        int port = node.grpcPort() > 0 ? node.grpcPort() : 50001;
                         savedConnections.put(name, new SavedConnection(name, host, port, "admin"));
                         if ("PRIMARY".equalsIgnoreCase(node.role())) {
                             defaultConnectionName = name;
@@ -260,9 +263,9 @@ public final class JettraStoreShellApp implements AutoCloseable {
         } catch (Exception ignored) {}
 
         // Fallback predeterminado según jettra.config estándar
-        savedConnections.put("node-01", new SavedConnection("node-01", "127.0.0.1", 9091, "admin"));
-        savedConnections.put("node-02", new SavedConnection("node-02", "127.0.0.1", 9092, "admin"));
-        savedConnections.put("node-03", new SavedConnection("node-03", "127.0.0.1", 9093, "admin"));
+        savedConnections.put("node-01", new SavedConnection("node-01", "127.0.0.1", 50001, "admin"));
+        savedConnections.put("node-02", new SavedConnection("node-02", "127.0.0.1", 50002, "admin"));
+        savedConnections.put("node-03", new SavedConnection("node-03", "127.0.0.1", 50003, "admin"));
         defaultConnectionName = "node-01";
     }
 
@@ -556,8 +559,8 @@ public final class JettraStoreShellApp implements AutoCloseable {
             String verb = lastSpace != -1 ? prefix.substring(0, lastSpace + 1) : prefix + " ";
             String sub = lastSpace != -1 ? prefix.substring(lastSpace + 1).trim().toLowerCase() : "";
             if (pUpper.startsWith("CONNECT ") || pTrimUpper.equals("CONNECT")) {
-                if (sub.isEmpty() || "127.0.0.1 9091".startsWith(sub)) {
-                    candidates.add(verb + "127.0.0.1 9091");
+                if (sub.isEmpty() || "127.0.0.1 50001".startsWith(sub)) {
+                    candidates.add(verb + "127.0.0.1 50001");
                 }
             }
             for (String connName : savedConnections.keySet()) {
@@ -1406,7 +1409,7 @@ Seleccione una conexión para iniciar:
                 List<JettraConfigValidator.ClusterNodeInfo> nodes = JettraConfigValidator.parseClusterNodes(clusterProps);
                 for (JettraConfigValidator.ClusterNodeInfo n : nodes) {
                     String host = (n.ip() != null && !n.ip().isBlank()) ? n.ip() : "127.0.0.1";
-                    int gPort = n.grpcPort() > 0 ? n.grpcPort() : 9091;
+                    int gPort = n.grpcPort() > 0 ? n.grpcPort() : 50001;
                     int rPort = n.restPort() > 0 ? n.restPort() : 8080;
                     topology.put(n.id(), new TargetNode(n.id(), host, gPort, rPort, n.role()));
                 }
@@ -1415,14 +1418,14 @@ Seleccione una conexión para iniciar:
 
         // Fallbacks conocidos si no se cargó jettra.config o para entornos con puertos mapeados (Docker Compose / Local)
         Map<String, TargetNode> standardDockerPorts = Map.of(
-            "node-01", new TargetNode("node-01", "127.0.0.1", 9091, 8081, "PRIMARY"),
-            "node-02", new TargetNode("node-02", "127.0.0.1", 9092, 8082, "SECONDARY"),
-            "node-03", new TargetNode("node-03", "127.0.0.1", 9093, 8083, "SECONDARY")
+            "node-01", new TargetNode("node-01", "127.0.0.1", 50001, 8081, "PRIMARY"),
+            "node-02", new TargetNode("node-02", "127.0.0.1", 50002, 8082, "SECONDARY"),
+            "node-03", new TargetNode("node-03", "127.0.0.1", 50003, 8083, "SECONDARY")
         );
         if (topology.isEmpty()) {
             topology.putAll(standardDockerPorts);
         } else {
-            // Si los puertos gRPC o REST en jettra.config coinciden todos en 9091/8080 (modelo contenedor puro),
+            // Si los puertos gRPC o REST en jettra.config coinciden todos en 50001/8080 (modelo contenedor puro),
             // ajustar a los puertos expuestos de mapeo de puertos estándar si los puertos mapeados responden
             for (Map.Entry<String, TargetNode> entry : standardDockerPorts.entrySet()) {
                 String id = entry.getKey();
@@ -3840,7 +3843,7 @@ return String.format("[NOT FOUND] No se encontró el bucket/unit '%s' en la base
         System.out.print(shell.getConnectionsMenuDisplay());
 
         String targetHost = "127.0.0.1";
-        int targetPort = 9091;
+        int targetPort = 50001;
         String suggestedUser = "admin";
 
         String option = "";
@@ -3875,8 +3878,8 @@ return String.format("[NOT FOUND] No se encontró el bucket/unit '%s' en la base
                     shell.executeCommand(String.format("CONNECT %s %d", targetHost, targetPort));
                     System.out.printf("[CONNECT] Conexión seleccionada: '%s' (%s:%d)%n", chosen.name(), targetHost, targetPort);
                 } else {
-                    System.out.println("[WARN] Opción fuera de rango. Usando conexión predeterminada: 127.0.0.1:9091");
-                    shell.executeCommand("CONNECT 127.0.0.1 9091");
+                    System.out.println("[WARN] Opción fuera de rango. Usando conexión predeterminada: 127.0.0.1:50001");
+                    shell.executeCommand("CONNECT 127.0.0.1 50001");
                 }
             } catch (NumberFormatException e) {
                 if (shell.getSavedConnections().containsKey(option)) {
@@ -3898,7 +3901,7 @@ return String.format("[NOT FOUND] No se encontró el bucket/unit '%s' en la base
 --------------------------------------------------------------------------------
                          OPCIÓN: CONEXIÓN NUEVA
 --------------------------------------------------------------------------------
-Ejecute el comando 'connect <host> <puerto>' (o presione Enter para [127.0.0.1 9091]):""");
+Ejecute el comando 'connect <host> <puerto>' (o presione Enter para [127.0.0.1 50001]):""");
             System.out.print(">> ");
             String connCmd = "";
             if (console != null) {
@@ -3907,7 +3910,7 @@ Ejecute el comando 'connect <host> <puerto>' (o presione Enter para [127.0.0.1 9
                 connCmd = scanner.nextLine();
             }
             if (connCmd == null || connCmd.isBlank()) {
-                connCmd = "connect 127.0.0.1 9091";
+                connCmd = "connect 127.0.0.1 50001";
             }
             connCmd = connCmd.trim();
             if (!connCmd.toUpperCase().startsWith("CONNECT ")) {

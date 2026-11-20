@@ -215,6 +215,16 @@
                 </executions>
             </plugin>
 
+            <!-- Desactivamos Surefire tradicional para delegar a JettraTestRunner (evita doble ejecución y consumo extra de RAM) -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <version>3.5.4</version>
+                <configuration>
+                    <skipTests>true</skipTests>
+                </configuration>
+            </plugin>
+
             <plugin>
                 <groupId>org.codehaus.mojo</groupId>
                 <artifactId>exec-maven-plugin</artifactId>
@@ -228,13 +238,24 @@
                         <id>jettra-test</id>
                         <phase>test</phase>
                         <goals>
-                            <goal>java</goal>
+                            <goal>exec</goal>
                         </goals>
                         <configuration>
-                            <mainClass>io.jettra.test.runner.JettraTestRunner</mainClass>
+                            <executable>java</executable>
                             <classpathScope>test</classpathScope>
-                            <cleanupDaemonThreads>false</cleanupDaemonThreads>
+                            <skip>${skipTests}</skip>
                             <arguments>
+                                <argument>-Xms64m</argument>
+                                <argument>-Xmx512m</argument>
+                                <argument>-XX:MaxMetaspaceSize=256m</argument>
+                                <argument>-XX:MaxDirectMemorySize=256m</argument>
+                                <argument>-XX:+UseG1GC</argument>
+                                <argument>-XX:CICompilerCount=2</argument>
+                                <argument>--enable-preview</argument>
+                                <argument>--enable-native-access=ALL-UNNAMED</argument>
+                                <argument>-classpath</argument>
+                                <classpath/>
+                                <argument>io.jettra.test.runner.JettraTestRunner</argument>
                                 <argument>${project.build.testOutputDirectory}</argument>
                                 <argument>${project.build.outputDirectory}</argument>
                             </arguments>

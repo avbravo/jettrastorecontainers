@@ -655,6 +655,7 @@ public class JettraClusterReplicationTest extends JettraStoreBaseTest {
 
             JettraStoreConfig primConfig = new JettraStoreConfig(primDbProps, primClusterProps);
             JettraStoreServer primServer = new JettraStoreServer(primConfig);
+            primServer.setClusterConfigFilePath(tempClusterCfg);
 
             // Crear base de datos y documento en PRIMARY ANTES de añadir nodo-04
             var existingDb = primServer.getOrCreateDatabase("ventas_db");
@@ -685,6 +686,7 @@ public class JettraClusterReplicationTest extends JettraStoreBaseTest {
 
             JettraStoreConfig n4Config = new JettraStoreConfig(n4DbProps, n4ClusterProps);
             JettraStoreServer n4Server = new JettraStoreServer(n4Config);
+            n4Server.setClusterConfigFilePath(tempNode4.resolve("cluster.config"));
 
             try (JettraClusterTransportServer primTransport = new JettraClusterTransportServer(primPort, primServer);
                  JettraClusterTransportServer n4Transport = new JettraClusterTransportServer(node4Port, n4Server)) {

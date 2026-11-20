@@ -858,10 +858,18 @@ public class JettraStoreShellTest {
             try (JettraClient client = JettraClient.connect("127.0.0.1", 9091, "admin", "admin-jettra")) {
                 JettraStoreShellApp shell = new JettraStoreShellApp(client);
 
-                // 1. Verificar carga inicial desde microprofile-config.properties
+                // 1. Verificar carga inicial desde microprofile-config.properties (y en el Menú de Conexiones)
                 String listBefore = shell.executeCommand("LIST CONNECTIONS");
                 assertTrue(listBefore.contains("node-01"));
                 assertTrue(listBefore.contains("node-02"));
+
+                String menuDisplay = shell.getConnectionsMenuDisplay();
+                assertTrue(menuDisplay.contains("MENÚ DE CONEXIONES"));
+                assertTrue(menuDisplay.contains("node-01"));
+                assertTrue(menuDisplay.contains("127.0.0.1:9091"));
+                assertTrue(menuDisplay.contains("node-02"));
+                assertTrue(menuDisplay.contains("127.0.0.1:9092"));
+                assertEquals(2, shell.getOrderedConnectionsList().size());
 
                 // 2. Guardar nueva conexión y verificar actualización en microprofile-config.properties
                 String saveRes = shell.executeCommand("SAVE CONNECTION node-04 127.0.0.1 9094 admin");
