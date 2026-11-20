@@ -248,15 +248,16 @@ public class StoreExplorerFluxTemplateView extends FluxView {
     }
 
     private Widget buildLayoutWrapper(JettraStorePlugin plugin) {
-        Widget sidebar = buildSidebar(plugin);
-        Widget center = buildCenter();
+        boolean clusterHasOnlineNodes = plugin != null && plugin.hasAnyOnlineNode();
+        Widget sidebar = buildSidebar(plugin, clusterHasOnlineNodes);
+        Widget center = buildCenter(clusterHasOnlineNodes);
 
         Div layoutWrapper = Div.of(sidebar, center);
         layoutWrapper.modifier(new Modifier().cssClass("ui-layout-wrapper flux-layout-wrapper"));
         return layoutWrapper;
     }
 
-    private Widget buildSidebar(JettraStorePlugin plugin) {
+    private Widget buildSidebar(JettraStorePlugin plugin, boolean clusterHasOnlineNodes) {
         // Banner introductorio
         Div banner = Div.of(
                 Div.of(Text.of("⚡ JettraStore Engine")).modifier(new Modifier().style("font-weight: 800; font-size: 0.88rem; color: #00d4ff; display: flex; align-items: center; gap: 0.4rem;")),
@@ -277,9 +278,9 @@ public class StoreExplorerFluxTemplateView extends FluxView {
         // Grupo 2: Catálogo y Motores de Datos
         Widget headingCatalog = Div.of(Text.of("🗄️ Catálogo y Motores")).modifier(new Modifier().cssClass("flux-menu-heading"));
         Div navCatalog = Div.of(
-                createNavLink("/databases", "🗄️ Bases de Datos y Motores", isActive("databases", "engines")),
-                createNavLink("/examples", "📚 Bases de Ejemplo", isActive("examples")),
-                createNavLink("/explorer", "📦 Explorador de Registros CRUD", isActive("explorer", "records")),
+                createClusterDependentNavLink("/databases", "🗄️ Bases de Datos y Motores", isActive("databases", "engines"), clusterHasOnlineNodes),
+                createClusterDependentNavLink("/examples", "📚 Bases de Ejemplo", isActive("examples"), clusterHasOnlineNodes),
+                createClusterDependentNavLink("/explorer", "📦 Explorador de Registros CRUD", isActive("explorer", "records"), clusterHasOnlineNodes),
                 createNavLink("/query", "💻 Consola SQL / JQL", isActive("query", "console"))
         );
         navCatalog.modifier(new Modifier().style("display: flex; flex-direction: column; gap: 0.28rem; margin-bottom: 1.4rem;"));
@@ -309,7 +310,7 @@ public class StoreExplorerFluxTemplateView extends FluxView {
         return sidebar;
     }
 
-    private Widget buildCenter() {
+    private Widget buildCenter(boolean clusterHasOnlineNodes) {
         // Cabecera de la barra de herramientas central
         Badge pillBadge = Badge.of("⚡ JETTRASTORE EXPLORER");
         pillBadge.modifier(new Modifier().cssClass("flux-pill-badge"));
@@ -330,9 +331,9 @@ public class StoreExplorerFluxTemplateView extends FluxView {
                 createTabLink("/cluster", "🌐 Nodos", isActive("cluster", "nodes")),
                 createTabLink("/map", "🗺️ Mapa", isActive("map", "transfer")),
                 createTabLink("/status", "🩺 Estatus", isActive("status", "telemetry")),
-                createTabLink("/databases", "🗄️ Bases de Datos", isActive("databases", "engines")),
-                createTabLink("/examples", "📚 Ejemplos", isActive("examples")),
-                createTabLink("/explorer", "📦 Registros CRUD", isActive("explorer", "records")),
+                createClusterDependentTabLink("/databases", "🗄️ Bases de Datos", isActive("databases", "engines"), clusterHasOnlineNodes),
+                createClusterDependentTabLink("/examples", "📚 Ejemplos", isActive("examples"), clusterHasOnlineNodes),
+                createClusterDependentTabLink("/explorer", "📦 Registros CRUD", isActive("explorer", "records"), clusterHasOnlineNodes),
                 createTabLink("/query", "💻 Consola SQL", isActive("query")),
                 createTabLink("/connections", "🔌 Conexiones", isActive("connections")),
                 createTabLink("/users", "👥 Usuarios", isActive("users")),
@@ -378,10 +379,29 @@ public class StoreExplorerFluxTemplateView extends FluxView {
         return footer;
     }
 
+    private static final String CLUSTER_OFFLINE_TOOLTIP =
+            "Todos los nodos del clúster están detenidos. Inicie el nodo PRIMARY para habilitar Bases de Datos, Ejemplos y Registros CRUD.";
+
     private Link createNavLink(String href, String label, boolean active) {
         Link link = Link.of(href, label);
         String classes = active ? "nav-link active" : "nav-link";
         link.modifier(new Modifier().cssClass(classes));
+        return link;
+    }
+
+    private Link createClusterDependentNavLink(String href, String label, boolean active, boolean clusterOnline) {
+        Link link = Link.of(clusterOnline ? href : "#", label);
+        String classes = (active ? "nav-link active" : "nav-link") + (clusterOnline ? "" : " flux-nav-disabled");
+        Modifier mod = new Modifier()
+                .cssClass(classes)
+                .attribute("data-requires-cluster-online", "true")
+                .attribute("data-href", href);
+        if (!clusterOnline) {
+            mod.attribute("aria-disabled", "true")
+               .attribute("tabindex", "-1")
+               .attribute("title", CLUSTER_OFFLINE_TOOLTIP);
+        }
+        link.modifier(mod);
         return link;
     }
 
@@ -396,6 +416,22 @@ public class StoreExplorerFluxTemplateView extends FluxView {
         Link link = Link.of(href, label);
         String classes = active ? "tab-pill active" : "tab-pill";
         link.modifier(new Modifier().cssClass(classes));
+        return link;
+    }
+
+    private Link createClusterDependentTabLink(String href, String label, boolean active, boolean clusterOnline) {
+        Link link = Link.of(clusterOnline ? href : "#", label);
+        String classes = (active ? "tab-pill active" : "tab-pill") + (clusterOnline ? "" : " flux-tab-disabled");
+        Modifier mod = new Modifier()
+                .cssClass(classes)
+                .attribute("data-requires-cluster-online", "true")
+                .attribute("data-href", href);
+        if (!clusterOnline) {
+            mod.attribute("aria-disabled", "true")
+               .attribute("tabindex", "-1")
+               .attribute("title", CLUSTER_OFFLINE_TOOLTIP);
+        }
+        link.modifier(mod);
         return link;
     }
 
@@ -692,6 +728,13 @@ public class StoreExplorerFluxTemplateView extends FluxView {
               color: #050b14;
               font-weight: 700;
               border-color: var(--primary);
+            }
+            .flux-nav-disabled,
+            .flux-tab-disabled {
+              opacity: 0.42;
+              pointer-events: none;
+              cursor: not-allowed;
+              filter: grayscale(0.45);
             }
 
             .flux-layout-footer {
@@ -1122,6 +1165,24 @@ public class StoreExplorerFluxTemplateView extends FluxView {
                 if (nodeChip && data.primaryNodeId) {
                   nodeChip.textContent = '[' + data.primaryNodeId + ']';
                 }
+                const anyOnline = Array.isArray(data.nodes) && data.nodes.some(n => Boolean(n.online || n.active));
+                document.querySelectorAll('[data-requires-cluster-online="true"]').forEach(function(el) {
+                  const origHref = el.getAttribute('data-href') || '#';
+                  if (anyOnline) {
+                    el.classList.remove('flux-nav-disabled', 'flux-tab-disabled');
+                    el.removeAttribute('aria-disabled');
+                    el.removeAttribute('tabindex');
+                    el.setAttribute('href', origHref);
+                    el.removeAttribute('title');
+                  } else {
+                    if (el.classList.contains('nav-link')) el.classList.add('flux-nav-disabled');
+                    if (el.classList.contains('tab-pill')) el.classList.add('flux-tab-disabled');
+                    el.setAttribute('aria-disabled', 'true');
+                    el.setAttribute('tabindex', '-1');
+                    el.setAttribute('href', '#');
+                    el.setAttribute('title', 'Todos los nodos del clúster están detenidos. Inicie el nodo PRIMARY para habilitar Bases de Datos, Ejemplos y Registros CRUD.');
+                  }
+                });
                 const sig = (data.primaryNodeId || '') + ':' + (data.nodes || []).map(n => n.id + ':' + n.role + ':' + n.online).join('|');
                 if (lastClusterSig !== sig) {
                   lastClusterSig = sig;

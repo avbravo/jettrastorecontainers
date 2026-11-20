@@ -1617,4 +1617,145 @@ public class JettraStoreExplorerTest {
             plugin.deleteDatabase("primary_erp_test_db");
         }
     }
+
+    @Test
+    @DisplayName("39. Diálogo de inserción en /explorer adaptado por tipo de engine (DOCUMENT JSON, JAVA_RECORD con tabla/SelectOne de reglas, KEY_VALUE)")
+    public void testExplorerInsertDialogPerEngineType() throws Exception {
+        JettraStorePlugin plugin = JettraStorePlugin.getInstance();
+        String db = "engine_insert_test_db";
+        try {
+            plugin.createDatabase(db, "Base temporal para validar diálogos de inserción por motor");
+            plugin.addBucket(db, "DocsBucket", "DOCUMENT", "Documentos");
+            plugin.addBucket(db, "RecordsBucket", "JAVA_RECORD", "Java Records");
+            plugin.addBucket(db, "KvBucket", "KEY_VALUE", "Clave Valor");
+
+            // 1. DOCUMENT: estilo JSON
+            HttpResponse<String> docForm = get("/explorer?db=" + db + "&bucket=DocsBucket&action=new");
+            JettraAssert.assertEquals(200, docForm.statusCode(), "Formulario DOCUMENT debe responder HTTP 200");
+            JettraAssert.assertTrue(docForm.body().contains("data-engine-creator=\"DOCUMENT\""),
+                    "El diálogo DOCUMENT debe identificar el creador DOCUMENT");
+            JettraAssert.assertTrue(docForm.body().contains("name=\"details\""),
+                    "El diálogo DOCUMENT debe mostrar editor JSON (textarea details)");
+
+            // 2. JAVA_RECORD: columnas Nombre del Campo, Tipo, Regla JettraStore (SelectOne) y Valor del Campo
+            HttpResponse<String> recForm = get("/explorer?db=" + db + "&bucket=RecordsBucket&action=new");
+            JettraAssert.assertEquals(200, recForm.statusCode(), "Formulario JAVA_RECORD debe responder HTTP 200");
+            JettraAssert.assertTrue(recForm.body().contains("data-engine-creator=\"JAVA_RECORD\""),
+                    "El diálogo JAVA_RECORD debe identificar el creador JAVA_RECORD");
+            JettraAssert.assertTrue(recForm.body().contains("Nombre del Campo")
+                    && recForm.body().contains("Tipo")
+                    && recForm.body().contains("Regla JettraStore")
+                    && recForm.body().contains("Valor del Campo"),
+                    "El diálogo JAVA_RECORD debe mostrar columnas de campo, tipo, regla JettraStore y valor");
+            JettraAssert.assertTrue(recForm.body().contains("name=\"rec_field_rule_0\"")
+                    && recForm.body().contains("@Id")
+                    && recForm.body().contains("@Required")
+                    && recForm.body().contains("@JettraRef"),
+                    "El diálogo JAVA_RECORD debe incluir SelectOne con las reglas JettraStore");
+
+            // Guardar nuevo JAVA_RECORD mediante el formulario estructurado
+            String saveRecBody = "action=save_new&db=" + db + "&bucket=RecordsBucket"
+                    + "&recordId=REC-JAVA-01&summary=Orden+Prueba"
+                    + "&engineEditorMode=JAVA_RECORD&rec_recordClass=io.jettra.store.domain.OrderTest"
+                    + "&rec_field_name_0=orderId&rec_field_type_0=Long&rec_field_rule_0=%40Id&rec_field_val_0=901"
+                    + "&rec_field_name_1=customer&rec_field_type_1=String&rec_field_rule_1=%40Required&rec_field_val_1=ACME";
+            HttpResponse<String> saveRes = postForm("/explorer", saveRecBody);
+            JettraAssert.assertEquals(302, saveRes.statusCode(), "Guardar JAVA_RECORD debe redirigir con 302");
+
+            EngineRecordInfo savedRec = plugin.getRecord(db, "RecordsBucket", "REC-JAVA-01");
+            JettraAssert.assertNotNull(savedRec, "El registro JAVA_RECORD debe haberse guardado");
+            JettraAssert.assertTrue(savedRec.getDetails().contains("\"orderId\" : 901") || savedRec.getDetails().contains("\"orderId\":901"),
+                    "El payload guardado debe contener orderId tipado como número");
+            JettraAssert.assertTrue(savedRec.getDetails().contains("@Id") && savedRec.getDetails().contains("@Required"),
+                    "El payload guardado debe conservar las reglas JettraStore seleccionadas");
+
+            // 3. KEY_VALUE: campos clave-valor dedicados
+            HttpResponse<String> kvForm = get("/explorer?db=" + db + "&bucket=KvBucket&action=new");
+            JettraAssert.assertEquals(200, kvForm.statusCode(), "Formulario KEY_VALUE debe responder HTTP 200");
+            JettraAssert.assertTrue(kvForm.body().contains("data-engine-creator=\"KEY_VALUE\"")
+                    && kvForm.body().contains("name=\"prop_key\"")
+                    && kvForm.body().contains("name=\"prop_value\""),
+                    "El diálogo KEY_VALUE debe mostrar campos específicos de clave y valor");
+        } finally {
+            plugin.deleteDatabase(db);
+        }
+    }
+
+    @Test
+    @DisplayName("40. Deshabilitar BASES DE DATOS, EJEMPLOS y REGISTROS CRUD cuando todos los nodos están detenidos")
+    public void testDisableDatabaseMenusWhenAllNodesStopped() throws Exception {
+        JettraStorePlugin plugin = JettraStorePlugin.getInstance();
+        java.util.List<ServerNodeInfo> nodes = plugin.getServerNodes();
+        java.util.Map<String, Boolean> prevStates = new java.util.LinkedHashMap<>();
+        for (ServerNodeInfo n : nodes) {
+            prevStates.put(n.getId(), n.isActive());
+            n.setActive(false);
+        }
+        try {
+            JettraAssert.assertFalse(plugin.hasAnyOnlineNode(), "Con todos los nodos detenidos hasAnyOnlineNode() debe ser false");
+            HttpResponse<String> offlinePage = get("/cluster");
+            JettraAssert.assertEquals(200, offlinePage.statusCode(), "/cluster debe responder HTTP 200");
+            String body = offlinePage.body();
+            JettraAssert.assertTrue(body.contains("data-requires-cluster-online=\"true\"")
+                    && body.contains("data-href=\"/databases\"")
+                    && body.contains("data-href=\"/examples\"")
+                    && body.contains("data-href=\"/explorer\""),
+                    "Las 3 opciones deben marcarse como dependientes de nodos activos");
+            JettraAssert.assertTrue(body.contains("flux-nav-disabled")
+                    && body.contains("flux-tab-disabled")
+                    && body.contains("aria-disabled=\"true\""),
+                    "Con todos los nodos detenidos deben renderizarse deshabilitadas");
+
+            // Al activar al menos un nodo real (con puerto TCP abierto), las opciones deben habilitarse
+            if (!nodes.isEmpty()) {
+                ServerNodeInfo first = nodes.get(0);
+                int origPort = first.getPort();
+                try (java.net.ServerSocket liveSocket = new java.net.ServerSocket(0)) {
+                    first.setPort(liveSocket.getLocalPort());
+                    first.setActive(true);
+                    plugin.refreshAllNodeStatuses(true);
+                    JettraAssert.assertTrue(plugin.hasAnyOnlineNode(), "Con un nodo activo hasAnyOnlineNode() debe ser true");
+                    HttpResponse<String> onlinePage = get("/cluster");
+                    JettraAssert.assertEquals(200, onlinePage.statusCode(), "/cluster online debe responder HTTP 200");
+                    JettraAssert.assertFalse(onlinePage.body().contains("aria-disabled=\"true\""),
+                            "Cuando hay un nodo activo no debe haber enlaces deshabilitados");
+                } finally {
+                    first.setPort(origPort);
+                }
+            }
+        } finally {
+            for (ServerNodeInfo n : nodes) {
+                n.setActive(prevStates.getOrDefault(n.getId(), false));
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("41. Limpieza automática de nodos de prueba del clúster al compilar/ejecutar tests")
+    public void testCleanupRemovesTestClusterNodesFromPluginAndJson() throws Exception {
+        java.nio.file.Path tmpNodesJson = java.nio.file.Files.createTempFile("cluster_nodes_cleanup_test_", ".json");
+        try {
+            String sample = """
+                [
+                  {"id":"node-02","name":"node-02-replica","role":"PRIMARY","host":"127.0.0.1","port":50002,"heapMaxMb":2048},
+                  {"id":"peer-dynamic-1","name":"peer-dynamic-1-replica","role":"SECONDARY","host":"127.0.0.1","port":50005,"heapMaxMb":2048},
+                  {"id":"node-lifecycle-test","name":"node-lifecycle-test-secondary","role":"SECONDARY","host":"127.0.0.1","port":40765,"heapMaxMb":2048},
+                  {"id":"node-heartbeat-live","name":"node-heartbeat-live-secondary","role":"SECONDARY","host":"127.0.0.1","port":9791,"heapMaxMb":2048},
+                  {"id":"node-test-dk","name":"node-test-dk-secondary","role":"SECONDARY","host":"127.0.0.1","port":35439,"heapMaxMb":2048}
+                ]
+                """;
+            java.nio.file.Files.writeString(tmpNodesJson, sample, java.nio.charset.StandardCharsets.UTF_8);
+
+            JettraExplorerTestCleanup.cleanClusterNodesJsonFile(tmpNodesJson);
+            String cleaned = java.nio.file.Files.readString(tmpNodesJson, java.nio.charset.StandardCharsets.UTF_8);
+
+            JettraAssert.assertTrue(cleaned.contains("node-02"), "Debe conservar nodos reales como node-02");
+            JettraAssert.assertFalse(cleaned.contains("peer-dynamic-1-replica"), "Debe eliminar peer-dynamic-1-replica");
+            JettraAssert.assertFalse(cleaned.contains("node-lifecycle-test-secondary"), "Debe eliminar node-lifecycle-test-secondary");
+            JettraAssert.assertFalse(cleaned.contains("node-heartbeat-live-secondary"), "Debe eliminar node-heartbeat-live-secondary");
+            JettraAssert.assertFalse(cleaned.contains("node-test-dk-secondary"), "Debe eliminar node-test-dk-secondary");
+        } finally {
+            java.nio.file.Files.deleteIfExists(tmpNodesJson);
+        }
+    }
 }

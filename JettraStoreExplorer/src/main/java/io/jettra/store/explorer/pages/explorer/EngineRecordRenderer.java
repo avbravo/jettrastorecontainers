@@ -134,6 +134,8 @@ public final class EngineRecordRenderer {
         String recordClass = strVal(data.get("recordClass"), "io.jettra.store.domain.Record");
         Map<String, Object> components = (data.get("components") instanceof Map<?, ?> m)
                 ? (Map<String, Object>) m : data;
+        Map<String, Object> schema = (data.get("schema") instanceof Map<?, ?> s)
+                ? (Map<String, Object>) s : Map.of();
 
         Widget title = FluxUi.coloredSpan("💎 Visualizador de Java Canonical Record (Inmutable)",
                 "font-size:0.8rem; font-weight:700; color:#3b82f6; display:block; margin-bottom:0.6rem;");
@@ -144,12 +146,23 @@ public final class EngineRecordRenderer {
                 FluxUi.coloredSpan(" (" + String.join(", ", components.keySet()) + ")", "font-family:monospace; font-size:0.85rem;")
         ).modifier(new Modifier().style("background:var(--bg-subtle); border:1px solid #3b82f6; border-radius:8px; padding:0.75rem 1rem; margin-bottom:0.85rem;"));
 
-        List<Widget> headers = List.of(Text.of("Componente Canónico"), Text.of("Tipo Inferido"), Text.of("Valor"));
+        List<Widget> headers = List.of(Text.of("Componente Canónico"), Text.of("Tipo"), Text.of("Regla JettraStore"), Text.of("Valor"));
         List<List<Widget>> rows = new ArrayList<>();
         for (Map.Entry<String, Object> e : components.entrySet()) {
+            String typeLabel = javaTypeName(e.getValue());
+            String ruleLabel = "NONE";
+            Object metaObj = schema.get(e.getKey());
+            if (metaObj instanceof Map<?, ?> meta) {
+                if (meta.get("type") != null) typeLabel = String.valueOf(meta.get("type"));
+                if (meta.get("rule") != null) ruleLabel = String.valueOf(meta.get("rule"));
+            }
+            Widget ruleWidget = "NONE".equalsIgnoreCase(ruleLabel)
+                    ? FluxUi.coloredSpan("—", "color:var(--text-muted); font-size:0.78rem;")
+                    : FluxUi.pillBadge(ruleLabel, "#3b82f6");
             rows.add(List.of(
                     FluxUi.coloredSpan(e.getKey(), "color:#3b82f6; font-weight:700; font-family:monospace;"),
-                    FluxUi.coloredSpan(javaTypeName(e.getValue()), "color:var(--text-muted); font-size:0.78rem;"),
+                    FluxUi.coloredSpan(typeLabel, "color:var(--text-muted); font-size:0.78rem;"),
+                    ruleWidget,
                     FluxUi.coloredSpan(String.valueOf(e.getValue()), "font-weight:700;")
             ));
         }
@@ -305,6 +318,208 @@ public final class EngineRecordRenderer {
 
         Widget box = Div.of(title, table);
         box.modifier(new Modifier().attribute("data-engine-viewer", engine).style("margin-bottom:1rem;"));
+        return box;
+    }
+
+    // =========================================================================
+    // CREADOR POR TIPO DE MOTOR (INSERTAR / CREATE)
+    // =========================================================================
+
+    private static final List<String> JAVA_RECORD_TYPES = List.of(
+            "String", "Long", "Integer", "Double", "BigDecimal", "Boolean", "LocalDate", "LocalDateTime", "UUID"
+    );
+
+    private static final List<String> JETTRA_STORE_RULES = List.of(
+            "NONE", "@Id", "@Required", "@Unique", "@Indexed", "@JettraRef", "@Version", "@Encrypted", "@NotNull", "@AutoIncrement"
+    );
+
+    public static Widget renderCreateFieldsWidget(String engineType) {
+        String engine = normalizeEngine(engineType);
+        return switch (engine) {
+            case "JAVA_RECORD" -> renderJavaRecordCreator();
+            case "OBJECT" -> renderObjectCreator();
+            case "KEY_VALUE" -> renderKeyValueCreator();
+            case "GRAPH" -> renderGraphCreator();
+            case "VECTOR" -> renderVectorCreator();
+            case "TIMESERIES" -> renderTimeseriesCreator();
+            case "GEOSPATIAL" -> renderGeospatialCreator();
+            case "COLUMNAR", "RELATIONAL" -> renderTabularCreator(engine);
+            default -> renderDocumentCreator();
+        };
+    }
+
+    private static Widget renderDocumentCreator() {
+        String sampleJson = "{\n  \"folio\": \"FAC-2026-004\",\n  \"emisor\": \"Servicios Digitales SA\",\n  \"receptor\": \"Cliente Ejemplo\",\n  \"total\": 1500.00,\n  \"estado\": \"PAGADO\"\n}";
+        Widget box = Div.of(
+                FluxUi.coloredSpan("📄 Nuevo Documento (Estilo JSON / BSON)",
+                        "font-size: 0.8rem; font-weight: 700; color: #00d4ff; display: block; margin-bottom: 0.45rem;"),
+                FluxUi.textArea("details", sampleJson, 8, true, null)
+        );
+        box.modifier(new Modifier()
+                .attribute("data-engine-creator", "DOCUMENT")
+                .attribute("data-engine-editor", "DOCUMENT")
+                .style("margin-bottom: 1rem; padding: 0.9rem; border: 1px solid #00d4ff; border-radius: 8px;"));
+        return box;
+    }
+
+    private static Widget renderJavaRecordCreator() {
+        List<String[]> defaults = List.of(
+                new String[]{"orderId", "Long", "@Id", "502"},
+                new String[]{"clientName", "String", "@Required", "Comercializadora"},
+                new String[]{"total", "BigDecimal", "@Indexed", "8500.00"},
+                new String[]{"status", "String", "NONE", "APPROVED"},
+                new String[]{"", "String", "NONE", ""}
+        );
+
+        List<Widget> headers = List.of(
+                Text.of("Nombre del Campo"),
+                Text.of("Tipo"),
+                Text.of("Regla JettraStore"),
+                Text.of("Valor del Campo")
+        );
+
+        List<List<Widget>> rows = new ArrayList<>();
+        for (int i = 0; i < defaults.size(); i++) {
+            String[] def = defaults.get(i);
+            rows.add(List.of(
+                    FluxUi.textInput("rec_field_name_" + i, def[0], "nombreCampo", false),
+                    FluxUi.dropdown("rec_field_type_" + i, JAVA_RECORD_TYPES, def[1]),
+                    FluxUi.dropdown("rec_field_rule_" + i, JETTRA_STORE_RULES, def[2]),
+                    FluxUi.textInput("rec_field_val_" + i, def[3], "valor", false)
+            ));
+        }
+
+        Datatable fieldsTable = Datatable.ofWidgets(headers, rows);
+        fieldsTable.modifier(new Modifier().cssClass("app-table").attribute("data-java-record-fields", "true"));
+
+        Widget classRow = Div.of(
+                FluxUi.fieldColumn("Clase Java Record (recordClass)",
+                        FluxUi.textInput("rec_recordClass", "io.jettra.store.domain.OrderSummary", "io.jettra.store.domain.MiRecord", true), null)
+        ).modifier(new Modifier().style("margin-bottom: 0.85rem;"));
+
+        Widget hint = FluxUi.coloredSpan(
+                "Defina cada componente del Java Record indicando nombre, tipo de dato, regla JettraStore (@Id, @Required, @Unique, @Indexed, @JettraRef, etc.) y valor.",
+                "font-size: 0.76rem; color: var(--text-muted); display: block; margin-bottom: 0.65rem;");
+
+        return creatorCard("JAVA_RECORD", "#3b82f6", "💎 Nuevo Java Canonical Record (Campos, Tipos y Reglas JettraStore)",
+                FluxUi.hidden("engineEditorMode", "JAVA_RECORD"),
+                classRow,
+                hint,
+                fieldsTable);
+    }
+
+    private static Widget renderObjectCreator() {
+        Widget topRow = Div.of(
+                FluxUi.fieldColumn("Clase Java (className)", FluxUi.textInput("obj_className", "io.jettra.model.FiscalEntity", "io.jettra.model.Entity", true), null),
+                FluxUi.fieldColumn("serialVersionUID", FluxUi.textInput("obj_serialVersion", "1", "1", false), null)
+        ).modifier(new Modifier().style("display: grid; grid-template-columns: 2fr 1fr; gap: 0.85rem; margin-bottom: 0.85rem;"));
+
+        Widget propsGrid = Div.of(
+                FluxUi.fieldColumn("entityId", FluxUi.textInput("prop_entityId", "ENT-202", "ENT-001", false), null),
+                FluxUi.fieldColumn("taxCategory", FluxUi.textInput("prop_taxCategory", "SPECIAL_REGIME", "GENERAL", false), null),
+                FluxUi.fieldColumn("auditState", FluxUi.textInput("prop_auditState", "SYNCHRONIZED", "ACTIVE", false), null)
+        ).modifier(new Modifier().style("display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 0.75rem;"));
+
+        return creatorCard("OBJECT", "#eab308", "🧩 Nuevo Objeto Java (POJO Serializado)",
+                FluxUi.hidden("engineEditorMode", "OBJECT"),
+                topRow,
+                FluxUi.coloredSpan("Propiedades de la instancia:", "font-size:0.75rem; font-weight:700; color:var(--text-muted); display:block; margin-bottom:0.45rem;"),
+                propsGrid);
+    }
+
+    private static Widget renderKeyValueCreator() {
+        Widget grid = Div.of(
+                FluxUi.fieldColumn("Clave (key)", FluxUi.textInput("prop_key", "BAL_ACC_4002", "KEY_001", true), null),
+                FluxUi.fieldColumn("Valor / Balance (value)", FluxUi.textInput("prop_value", "125000.50", "valor", true), null),
+                FluxUi.fieldColumn("Moneda / Categoría (currency)", FluxUi.textInput("prop_currency", "MXN", "USD / MXN", false), null),
+                FluxUi.fieldColumn("TTL Segundos (ttl_sec)", FluxUi.textInput("prop_ttl_sec", "3600", "0 = sin expiración", false), null)
+        ).modifier(new Modifier().style("display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 0.75rem;"));
+
+        return creatorCard("KEY_VALUE", "#f97316", "🔑 Nuevo Registro Clave-Valor (Key/Value Store)",
+                FluxUi.hidden("engineEditorMode", "KEY_VALUE"), grid);
+    }
+
+    private static Widget renderGraphCreator() {
+        Widget grid = Div.of(
+                FluxUi.fieldColumn("ID Arista (edge_id)", FluxUi.textInput("prop_edge_id", "EDGE-9901", "EDGE-001", true), null),
+                FluxUi.fieldColumn("Nodo Origen (source)", FluxUi.textInput("prop_source", "P-1001", "Nodo origen", true), null),
+                FluxUi.fieldColumn("Relación (rel)", FluxUi.textInput("prop_rel", "CONTACTO_FAMILIAR", "CONNECTED_TO", true), null),
+                FluxUi.fieldColumn("Nodo Destino (target)", FluxUi.textInput("prop_target", "P-1002", "Nodo destino", true), null),
+                FluxUi.fieldColumn("Peso (weight)", FluxUi.textInput("prop_weight", "1.0", "1.0", false), null)
+        ).modifier(new Modifier().style("display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 0.75rem;"));
+
+        return creatorCard("GRAPH", "#ec4899", "🕸️ Nueva Arista / Relación de Grafo",
+                FluxUi.hidden("engineEditorMode", "GRAPH"), grid);
+    }
+
+    private static Widget renderVectorCreator() {
+        Widget grid = Div.of(
+                FluxUi.fieldColumn("ID Vector (id)", FluxUi.textInput("prop_id", "VEC-02", "VEC-001", true), null),
+                FluxUi.fieldColumn("Modelo (model)", FluxUi.textInput("prop_model", "biomed-clip-v3", "embedding-model", true), null),
+                FluxUi.fieldColumn("Dimensiones (dims)", FluxUi.textInput("prop_dims", "1536", "1536", true), null),
+                FluxUi.fieldColumn("Etiqueta Semántica (etiqueta)", FluxUi.textInput("prop_etiqueta", "Muestra clínica", "Etiqueta", false), null)
+        ).modifier(new Modifier().style("display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 0.75rem; margin-bottom: 0.75rem;"));
+
+        return creatorCard("VECTOR", "#a855f7", "🧠 Nuevo Vector Embedding (HNSW)",
+                FluxUi.hidden("engineEditorMode", "VECTOR"),
+                grid,
+                FluxUi.fieldColumn("Vector Embedding (floats separados por coma)",
+                        FluxUi.textInput("vec_embedding", "0.012, -0.421, 0.881", "0.1, -0.2, 0.3", true), null));
+    }
+
+    private static Widget renderTimeseriesCreator() {
+        Widget grid = Div.of(
+                FluxUi.fieldColumn("Sensor ID (sensor_id)", FluxUi.textInput("prop_sensor_id", "SN-02-SUR", "SN-01", true), null),
+                FluxUi.fieldColumn("CO2 ppm (co2_ppm)", FluxUi.textInput("prop_co2_ppm", "415.2", "400.0", false), null),
+                FluxUi.fieldColumn("Temperatura °C (temp_c)", FluxUi.textInput("prop_temp_c", "23.8", "22.0", false), null),
+                FluxUi.fieldColumn("Humedad % (humidity_pct)", FluxUi.textInput("prop_humidity_pct", "54.0", "50.0", false), null)
+        ).modifier(new Modifier().style("display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 0.75rem;"));
+
+        return creatorCard("TIMESERIES", "#22c55e", "📈 Nuevo Punto de Serie Temporal (Telemetry / BRIN)",
+                FluxUi.hidden("engineEditorMode", "TIMESERIES"), grid);
+    }
+
+    private static Widget renderGeospatialCreator() {
+        Widget grid = Div.of(
+                FluxUi.fieldColumn("Estación (station_id)", FluxUi.textInput("prop_station_id", "GEO-CDMX-02", "GEO-001", true), null),
+                FluxUi.fieldColumn("Latitud WGS84 (lat)", FluxUi.textInput("prop_lat", "19.4326", "0.0", true), null),
+                FluxUi.fieldColumn("Longitud WGS84 (lng)", FluxUi.textInput("prop_lng", "-99.1332", "0.0", true), null),
+                FluxUi.fieldColumn("Altitud m (altitud_m)", FluxUi.textInput("prop_altitud_m", "2240", "0", false), null),
+                FluxUi.fieldColumn("Zona (zona)", FluxUi.textInput("prop_zona", "Metropolitana Central", "Zona", false), null)
+        ).modifier(new Modifier().style("display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 0.75rem;"));
+
+        return creatorCard("GEOSPATIAL", "#06b6d4", "🌍 Nuevo Punto Geoespacial (GeoJSON & R-Tree)",
+                FluxUi.hidden("engineEditorMode", "GEOSPATIAL"), grid);
+    }
+
+    private static Widget renderTabularCreator(String engine) {
+        String accent = "COLUMNAR".equals(engine) ? "#38bdf8" : "#ffd700";
+        String title = "COLUMNAR".equals(engine)
+                ? "📊 Nuevo Registro Columnar (Columnas / Campos)"
+                : "🗃️ Nuevo Registro Relacional (Columnas / Campos)";
+        Widget grid = Div.of(
+                FluxUi.fieldColumn("cliente_id", FluxUi.textInput("prop_cliente_id", "1002", "1001", false), null),
+                FluxUi.fieldColumn("razon_social", FluxUi.textInput("prop_razon_social", "Comercializadora Pacífico", "Razón social", false), null),
+                FluxUi.fieldColumn("rfc", FluxUi.textInput("prop_rfc", "CPA150202TT9", "RFC", false), null),
+                FluxUi.fieldColumn("ciudad", FluxUi.textInput("prop_ciudad", "Guadalajara", "Ciudad", false), null),
+                FluxUi.fieldColumn("limite_credito", FluxUi.textInput("prop_limite_credito", "350000.00", "0.00", false), null)
+        ).modifier(new Modifier().style("display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 0.75rem;"));
+
+        return creatorCard(engine, accent, title,
+                FluxUi.hidden("engineEditorMode", engine), grid);
+    }
+
+    private static Widget creatorCard(String engine, String accent, String title, Widget... children) {
+        List<Widget> all = new ArrayList<>();
+        all.add(FluxUi.coloredSpan(title, "font-size: 0.8rem; font-weight: 700; color: " + accent + "; display: block; margin-bottom: 0.75rem;"));
+        for (Widget w : children) {
+            all.add(w);
+        }
+        Widget box = Div.of(all.toArray(new Widget[0]));
+        box.modifier(new Modifier()
+                .attribute("data-engine-creator", engine)
+                .attribute("data-engine-editor", engine)
+                .style("margin-bottom: 1rem; padding: 0.9rem; border: 1px solid " + accent + "; border-radius: 8px;"));
         return box;
     }
 
@@ -515,8 +730,38 @@ public final class EngineRecordRenderer {
         } else if ("JAVA_RECORD".equalsIgnoreCase(mode)) {
             result.put("recordClass", form.getOrDefault("rec_recordClass", strVal(existingMap.get("recordClass"), "io.jettra.store.domain.Record")));
             Map<String, Object> comps = new LinkedHashMap<>();
-            collectPrefixed(form, "comp_", comps);
-            result.put("components", comps);
+            Map<String, Object> schema = new LinkedHashMap<>();
+            List<Integer> fieldIndices = new ArrayList<>();
+            for (String key : form.keySet()) {
+                if (key.startsWith("rec_field_name_")) {
+                    try {
+                        fieldIndices.add(Integer.parseInt(key.substring("rec_field_name_".length())));
+                    } catch (NumberFormatException ignored) {}
+                }
+            }
+            if (!fieldIndices.isEmpty()) {
+                fieldIndices.sort(Integer::compareTo);
+                for (int idx : fieldIndices) {
+                    String fName = form.get("rec_field_name_" + idx);
+                    if (fName == null || fName.isBlank()) continue;
+                    String cleanName = fName.trim();
+                    String fType = form.getOrDefault("rec_field_type_" + idx, "String").trim();
+                    String fRule = form.getOrDefault("rec_field_rule_" + idx, "NONE").trim();
+                    String fVal = form.getOrDefault("rec_field_val_" + idx, "");
+                    comps.put(cleanName, parseTypedScalar(fVal, fType));
+                    Map<String, Object> fieldMeta = new LinkedHashMap<>();
+                    fieldMeta.put("type", fType);
+                    fieldMeta.put("rule", fRule);
+                    schema.put(cleanName, fieldMeta);
+                }
+                result.put("components", comps);
+                if (!schema.isEmpty()) {
+                    result.put("schema", schema);
+                }
+            } else {
+                collectPrefixed(form, "comp_", comps);
+                result.put("components", comps);
+            }
         } else if ("VECTOR".equalsIgnoreCase(mode)) {
             collectPrefixed(form, "prop_", result);
             String embStr = form.get("vec_embedding");
@@ -551,6 +796,22 @@ public final class EngineRecordRenderer {
                 target.put(fieldName, parseScalar(entry.getValue()));
             }
         }
+    }
+
+    private static Object parseTypedScalar(String raw, String typeName) {
+        if (raw == null) return "";
+        String t = raw.trim();
+        if (typeName == null || typeName.isBlank()) return parseScalar(raw);
+        return switch (typeName.trim()) {
+            case "Long", "Integer" -> {
+                try { yield Long.parseLong(t); } catch (NumberFormatException e) { yield raw; }
+            }
+            case "Double", "BigDecimal" -> {
+                try { yield Double.parseDouble(t); } catch (NumberFormatException e) { yield raw; }
+            }
+            case "Boolean" -> Boolean.parseBoolean(t);
+            default -> raw;
+        };
     }
 
     private static Object parseScalar(String raw) {

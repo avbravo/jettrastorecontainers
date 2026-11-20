@@ -1160,6 +1160,13 @@ public class JettraStorePlugin {
         return Collections.unmodifiableList(serverNodes);
     }
 
+    /**
+     * Indica si al menos un nodo del clúster está activo/en línea.
+     */
+    public boolean hasAnyOnlineNode() {
+        return serverNodes.stream().anyMatch(ServerNodeInfo::isActive);
+    }
+
     public ServerNodeInfo getNodeById(String id) {
         return serverNodes.stream().filter(n -> n.getId().equalsIgnoreCase(id)).findFirst().orElse(null);
     }

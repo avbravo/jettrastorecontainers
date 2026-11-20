@@ -236,28 +236,16 @@ public class RecordExplorerFluxView extends FluxView {
     }
 
     private Widget buildCreateRecordForm(String currentDb, String currentBucket, String engineType) {
-        Header header = Header.of(3, "➕ Crear Nuevo Registro en [" + currentDb + " / " + currentBucket + "]");
+        String normalizedEngine = EngineRecordRenderer.normalizeEngine(engineType);
+        Header header = Header.of(3, "➕ Crear Nuevo Registro en [" + currentDb + " / " + currentBucket + "] • Motor: " + normalizedEngine);
         header.modifier(new Modifier().style("font-size: 1.15rem; color: #00d4ff; margin: 0 0 1rem 0;"));
-
-        String sampleJson = switch (engineType) {
-            case "RELATIONAL" -> "{\n  \"cliente_id\": 1002,\n  \"razon_social\": \"Comercializadora Pacífico\",\n  \"rfc\": \"CPA150202TT9\",\n  \"ciudad\": \"Guadalajara\",\n  \"limite_credito\": 350000.00\n}";
-            case "KEY_VALUE" -> "{\n  \"key\": \"BAL_ACC_4002\",\n  \"currency\": \"MXN\",\n  \"balance\": 125000.50\n}";
-            case "GRAPH" -> "{\n  \"edge_id\": \"EDGE-9901\",\n  \"source\": \"P-1001\",\n  \"target\": \"P-1002\",\n  \"rel\": \"CONTACTO_FAMILIAR\"\n}";
-            case "VECTOR" -> "{\n  \"id\": \"VEC-02\",\n  \"dims\": 1536,\n  \"embedding\": [0.012, -0.421, 0.881]\n}";
-            case "TIMESERIES" -> "{\n  \"sensor_id\": \"SN-02-SUR\",\n  \"co2_ppm\": 415.2,\n  \"temp_c\": 23.8\n}";
-            case "GEOSPATIAL" -> "{\n  \"station_id\": \"GEO-CDMX-02\",\n  \"lat\": 19.4326,\n  \"lng\": -99.1332,\n  \"altitud\": 2240,\n  \"zona\": \"Metropolitana Central\"\n}";
-            case "JAVA_RECORD" -> "{\n  \"recordClass\": \"io.jettra.store.domain.OrderSummary\",\n  \"components\": {\n    \"orderId\": 502,\n    \"clientName\": \"Comercializadora\",\n    \"total\": 8500.00,\n    \"status\": \"APPROVED\"\n  }\n}";
-            case "OBJECT" -> "{\n  \"className\": \"io.jettra.model.FiscalEntity\",\n  \"serialVersion\": 1,\n  \"properties\": {\n    \"entityId\": \"ENT-202\",\n    \"taxCategory\": \"SPECIAL_REGIME\",\n    \"auditState\": \"SYNCHRONIZED\"\n  }\n}";
-            default -> "{\n  \"folio\": \"FAC-2026-004\",\n  \"emisor\": \"Servicios Digitales SA\",\n  \"receptor\": \"Cliente Ejemplo\",\n  \"total\": 1500.00,\n  \"estado\": \"PAGADO\"\n}";
-        };
 
         Widget topGrid = Div.of(
                 FluxUi.fieldColumn("Identificador Único (ID / Clave Primaria)", FluxUi.textInput("recordId", "", "REG-2026-001", true), null),
                 FluxUi.fieldColumn("Descripción / Resumen Corto", FluxUi.textInput("summary", "", "Descripción breve del documento o entidad", true), null)
         ).modifier(new Modifier().style("display: grid; grid-template-columns: 1fr 2fr; gap: 1rem; margin-bottom: 1rem;"));
 
-        Div payloadGroup = FluxUi.fieldColumn("Contenido del Registro (Payload JSON / BSON Multimodelo)",
-                FluxUi.textArea("details", sampleJson, 8, true, null), "margin-bottom: 1rem;");
+        Widget engineCreatorWidget = EngineRecordRenderer.renderCreateFieldsWidget(normalizedEngine);
 
         Widget btns = Div.of(
                 FluxUi.linkButton("/explorer?db=" + currentDb + "&bucket=" + currentBucket, "Cancelar", "app-btn-secondary", null),
@@ -268,7 +256,7 @@ public class RecordExplorerFluxView extends FluxView {
                 FluxUi.hidden("action", "save_new"),
                 FluxUi.hidden("db", currentDb),
                 FluxUi.hidden("bucket", currentBucket),
-                topGrid, payloadGroup, btns
+                topGrid, engineCreatorWidget, btns
         ).action("/explorer").method("POST");
 
         Widget card = Div.of(header, form);

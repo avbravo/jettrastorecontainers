@@ -1,7 +1,7 @@
 [ {
   "id" : "node-02",
   "name" : "node-02-replica",
-  "role" : "PRIMARY",
+  "role" : "SECONDARY",
   "host" : "127.0.0.1",
   "port" : 50002,
   "heapMaxMb" : 2048
@@ -13,38 +13,10 @@
   "port" : 50003,
   "heapMaxMb" : 2048
 }, {
-  "id" : "node-05",
-  "name" : "node-05-replica",
-  "role" : "SECONDARY",
+  "id" : "node-04",
+  "name" : "node-04",
+  "role" : "FOLLOWER",
   "host" : "127.0.0.1",
   "port" : 50004,
-  "heapMaxMb" : 2048
-}, {
-  "id" : "peer-dynamic-1",
-  "name" : "peer-dynamic-1-replica",
-  "role" : "SECONDARY",
-  "host" : "127.0.0.1",
-  "port" : 50005,
-  "heapMaxMb" : 2048
-}, {
-  "id" : "node-lifecycle-test",
-  "name" : "node-lifecycle-test-secondary",
-  "role" : "SECONDARY",
-  "host" : "127.0.0.1",
-  "port" : 40765,
-  "heapMaxMb" : 2048
-}, {
-  "id" : "node-heartbeat-live",
-  "name" : "node-heartbeat-live-secondary",
-  "role" : "SECONDARY",
-  "host" : "127.0.0.1",
-  "port" : 9791,
-  "heapMaxMb" : 2048
-}, {
-  "id" : "node-test-dk",
-  "name" : "node-test-dk-secondary",
-  "role" : "SECONDARY",
-  "host" : "127.0.0.1",
-  "port" : 35439,
   "heapMaxMb" : 2048
 } ]

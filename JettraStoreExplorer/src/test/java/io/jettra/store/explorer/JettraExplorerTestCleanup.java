@@ -1,18 +1,37 @@
 package io.jettra.store.explorer;
 
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
 import io.jettra.store.core.JettraStoreConfig;
 import io.jettra.store.explorer.plugin.JettraStorePlugin;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 /**
- * Utilidad de limpieza para las bases de datos y archivos temporales de prueba de JettraStoreExplorer.
- * Elimina automáticamente todas las bases terminadas en _test_db y las muestras temporales al finalizar el test.
+ * Utilidad de limpieza para las bases de datos, nodos de prueba y archivos temporales de JettraStoreExplorer.
+ * Elimina automáticamente todas las bases terminadas en _test_db, muestras temporales y nodos de prueba al finalizar el test.
  */
 public final class JettraExplorerTestCleanup {
+
+    private static final ObjectMapper JSON = new ObjectMapper().enable(SerializationFeature.INDENT_OUTPUT);
+
+    public static final Set<String> KNOWN_TEST_CLUSTER_NODES = Set.of(
+        "peer-dynamic-1",
+        "peer-dynamic-1-replica",
+        "node-lifecycle-test",
+        "node-lifecycle-test-secondary",
+        "node-heartbeat-live",
+        "node-heartbeat-live-secondary",
+        "node-test-dk",
+        "node-test-dk-secondary"
+    );
 
     public static final List<String> KNOWN_TEST_DATABASES = List.of(
         "example_factura_db",
@@ -64,7 +83,45 @@ public final class JettraExplorerTestCleanup {
                 plugin.getDatabasesCatalog().clear();
             } catch (Exception ignored) {}
         }
+        cleanTestClusterNodes(plugin);
         cleanStorageDirectories();
+    }
+
+    public static void cleanTestClusterNodes(JettraStorePlugin plugin) {
+        if (plugin != null) {
+            for (String nodeId : List.of("peer-dynamic-1", "node-lifecycle-test", "node-heartbeat-live", "node-test-dk")) {
+                try {
+                    plugin.removeNode(nodeId);
+                } catch (Exception ignored) {}
+            }
+        }
+        cleanClusterNodesJsonFile(Path.of("memory/cluster_nodes.json"));
+        String customNodesFile = System.getProperty("cluster.nodes.file");
+        if (customNodesFile != null && !customNodesFile.isBlank()) {
+            cleanClusterNodesJsonFile(Path.of(customNodesFile));
+        }
+    }
+
+    public static void cleanClusterNodesJsonFile(Path jsonFile) {
+        if (jsonFile == null || !Files.exists(jsonFile)) return;
+        try {
+            List<Map<String, Object>> nodes = JSON.readValue(jsonFile.toFile(), new TypeReference<List<Map<String, Object>>>() {});
+            if (nodes == null) return;
+            List<Map<String, Object>> filtered = new ArrayList<>();
+            boolean changed = false;
+            for (Map<String, Object> node : nodes) {
+                String id = node.get("id") != null ? String.valueOf(node.get("id")).trim() : "";
+                String name = node.get("name") != null ? String.valueOf(node.get("name")).trim() : "";
+                if (KNOWN_TEST_CLUSTER_NODES.contains(id) || KNOWN_TEST_CLUSTER_NODES.contains(name)) {
+                    changed = true;
+                } else {
+                    filtered.add(node);
+                }
+            }
+            if (changed) {
+                JSON.writeValue(jsonFile.toFile(), filtered);
+            }
+        } catch (Exception ignored) {}
     }
 
     public static void cleanStorageDirectories() {

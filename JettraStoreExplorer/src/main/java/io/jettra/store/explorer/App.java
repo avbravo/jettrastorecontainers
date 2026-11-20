@@ -638,7 +638,7 @@ public class App {
         if ("save_new".equalsIgnoreCase(action)) {
             String recordId = form.get("recordId");
             String summary = form.get("summary");
-            String details = form.get("details");
+            String details = io.jettra.store.explorer.pages.explorer.EngineRecordRenderer.buildDetailsFromForm(form, "");
 
             plugin.addRecord(db, bucket, recordId, summary, details);
             redirect(resp, "/explorer?db=" + db + "&bucket=" + bucket + "&msg=record_created");
