@@ -284,7 +284,7 @@ public class ClusterFluxView extends FluxView {
         String jsSafeName = node.getName().replace("'", "\\'");
         JettraButton lifecycleBtn = isActive
             ? JettraButton.of("Apagar Nodo").severity(JettraButton.Severity.WARNING)
-            : JettraButton.of("Encender Nodo").severity(JettraButton.Severity.PRIMARY);
+            : JettraButton.of("Actualizar Nodo").severity(JettraButton.Severity.PRIMARY);
         lifecycleBtn.id("node-lifecycle-btn-" + node.getId());
         lifecycleBtn.modifier(new Modifier()
             .attribute("id", "node-lifecycle-btn-" + node.getId())
@@ -413,6 +413,43 @@ public class ClusterFluxView extends FluxView {
                 return document.getElementById(type + '-' + nodeId) || document.querySelector('[data-' + type + '="' + nodeId + '"]');
             }
 
+            function createDynamicNodeCard(node, isPrimary, isActive) {
+                const grid = document.getElementById('nodes-container-grid');
+                if (!grid) return;
+                const card = document.createElement('div');
+                card.id = 'node-card-' + node.id;
+                card.setAttribute('data-node-card', node.id);
+                card.className = 'ui-card';
+                card.style.cssText = 'border-top: 4px solid ' + (isActive ? (isPrimary ? '#ffd700' : '#10b981') : '#ef4444') + '; display: flex; flex-direction: column; justify-content: space-between; position: relative;';
+
+                const roleColor = isPrimary ? '#ffd700' : '#38bdf8';
+                const statusBg = isActive ? 'rgba(16, 185, 129, 0.2)' : 'rgba(239, 68, 68, 0.25)';
+                const statusColor = isActive ? '#10b981' : '#ef4444';
+                const latStr = (node.latencyMs > 0 ? Number(node.latencyMs).toFixed(1) : '0.5');
+
+                card.innerHTML = '<div'
+                    + '><div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">'
+                    + '<h4 style="margin: 0; font-size: 1.1rem; color: #ffffff;">🖥️ ' + (node.name || node.id) + '</h4>'
+                    + '<div style="display: flex; gap: 0.4rem; align-items: center;">'
+                    + '<span id="node-role-badge-' + node.id + '" data-node-role-badge="' + node.id + '" style="background: rgba(0, 212, 255, 0.15); border: 1px solid ' + roleColor + '; color: ' + roleColor + '; font-size: 0.72rem; padding: 0.15rem 0.5rem; border-radius: 9999px; font-weight: 700;">' + (isPrimary ? 'PRIMARY' : (node.role || 'SECONDARY')) + '</span>'
+                    + '<span id="node-badge-' + node.id + '" data-node-badge="' + node.id + '" style="background: ' + statusBg + '; border: 1px solid ' + statusColor + '; color: ' + statusColor + '; font-size: 0.72rem; padding: 0.15rem 0.5rem; border-radius: 9999px; font-weight: 700;">' + (isActive ? '● ACTIVE (' + latStr + ' ms)' : '○ INACTIVE') + '</span>'
+                    + '</div></div>'
+                    + '<p id="node-addr-' + node.id + '" data-node-addr="' + node.id + '" style="font-size: 0.8rem; color: var(--text-muted); margin: 0 0 0.75rem 0;">🌐 ' + node.host + ':' + node.port + ' | Raft Term: #' + (node.raftTerm || 0) + '</p>'
+                    + '<div id="node-status-box-' + node.id + '" data-node-status-box="' + node.id + '"></div>'
+                    + '<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.6rem; font-size: 0.82rem; margin-bottom: 1rem;">'
+                    + '<div style="background: var(--bg-subtle); padding: 0.5rem 0.65rem; border-radius: 6px; border: 1px solid var(--border-color);"><span style="display: block; font-size: 0.72rem; color: var(--text-muted);">Uso CPU</span><strong id="node-cpu-' + node.id + '" data-node-cpu="' + node.id + '" style="color: var(--text-main); font-size: 0.95rem;">' + (Number(node.cpuPercent) || 0).toFixed(1) + '%</strong></div>'
+                    + '<div style="background: var(--bg-subtle); padding: 0.5rem 0.65rem; border-radius: 6px; border: 1px solid var(--border-color);"><span style="display: block; font-size: 0.72rem; color: var(--text-muted);">RAM Heap JVM</span><strong id="node-heap-' + node.id + '" data-node-heap="' + node.id + '" style="color: var(--text-main); font-size: 0.95rem;">' + (node.heapUsedMb || 0) + ' MB / ' + (node.heapMaxMb || 2048) + ' MB</strong></div>'
+                    + '<div style="background: var(--bg-subtle); padding: 0.5rem 0.65rem; border-radius: 6px; border: 1px solid var(--border-color);"><span style="display: block; font-size: 0.72rem; color: var(--text-muted);">Direct Panama RAM</span><strong id="node-panama-' + node.id + '" data-node-panama="' + node.id + '" style="color: #00d4ff; font-size: 0.95rem;">' + (node.panamaDirectMb || 0) + ' MB</strong></div>'
+                    + '<div style="background: var(--bg-subtle); padding: 0.5rem 0.65rem; border-radius: 6px; border: 1px solid var(--border-color);"><span style="display: block; font-size: 0.72rem; color: var(--text-muted);">Disco LSM Utilizado</span><strong id="node-disk-' + node.id + '" data-node-disk="' + node.id + '" style="color: var(--text-main); font-size: 0.95rem;">' + (node.diskUsedMb || 0) + ' MB</strong></div>'
+                    + '<div style="background: var(--bg-subtle); padding: 0.5rem 0.65rem; border-radius: 6px; border: 1px solid var(--border-color);"><span style="display: block; font-size: 0.72rem; color: var(--text-muted);">Hilos Virtuales Loom</span><strong id="node-vthreads-' + node.id + '" data-node-vthreads="' + node.id + '" style="color: var(--text-main); font-size: 0.95rem;">' + (node.virtualThreads || 0) + ' vthreads</strong></div>'
+                    + '<div style="background: var(--bg-subtle); padding: 0.5rem 0.65rem; border-radius: 6px; border: 1px solid var(--border-color);"><span style="display: block; font-size: 0.72rem; color: var(--text-muted);">Operaciones (QPS / Ping)</span><strong id="node-qps-' + node.id + '" data-node-qps="' + node.id + '" style="color: var(--text-main); font-size: 0.95rem;">' + Number(node.qps || 0).toLocaleString() + ' ops/s</strong></div>'
+                    + '</div></div>'
+                    + '<div style="display: flex; gap: 0.5rem; align-items: center; border-top: 1px solid var(--border-color); padding-top: 0.85rem; justify-content: flex-end;">'
+                    + '<button type="button" id="node-lifecycle-btn-' + node.id + '" data-node-lifecycle-btn="' + node.id + '" data-node-name="' + (node.name || node.id) + '" class="' + (isActive ? 'app-btn-warning' : 'app-btn-primary') + '">' + (isActive ? 'Apagar Nodo' : 'Actualizar Nodo') + '</button>'
+                    + '</div>';
+                grid.appendChild(card);
+            }
+
             function updateNodeStatusUI(nodeId, role, isPrimary, isActive, latencyMs, raftTerm, errorReason, nodeStats) {
                 // 1. Tarjeta: Badge de Rol Raft
                 const roleBadge = getNodeElement('node-role-badge', nodeId);
@@ -455,7 +492,7 @@ public class ClusterFluxView extends FluxView {
                 // 5. Tarjeta: Botón de Ciclo de Vida (Apagar / Encender)
                 const btn = getNodeElement('node-lifecycle-btn', nodeId);
                 if (btn) {
-                    btn.textContent = isActive ? 'Apagar Nodo' : 'Encender Nodo';
+                    btn.textContent = isActive ? 'Apagar Nodo' : 'Actualizar Nodo';
                     btn.className = isActive ? 'app-btn-warning' : 'app-btn-primary';
                     btn.disabled = false;
                     const safeName = btn.getAttribute('data-node-name') || nodeId;
@@ -558,6 +595,9 @@ public class ClusterFluxView extends FluxView {
                 data.nodes.forEach(function(node) {
                     const isPrimary = (node.role === 'PRIMARY' || node.role === 'LEADER');
                     const isActive = (node.status === 'ACTIVE' || node.active === true || node.online === true);
+                    if (!getNodeElement('node-card', node.id)) {
+                        createDynamicNodeCard(node, isPrimary, isActive);
+                    }
                     if (!isActive) {
                         if (isPrimary) {
                             anyPrimaryInactive = true;
@@ -640,8 +680,8 @@ public class ClusterFluxView extends FluxView {
                 } catch (e) {}
             }
 
-            // 2. Sondeo periódico continuo de respaldo (cada 1500 ms) sincronizado con /api/cluster/status
-            setInterval(pollClusterLiveStatus, 1500);
+            // 2. Sondeo periódico continuo de respaldo (cada 1000 ms) sincronizado con /api/cluster/status
+            setInterval(pollClusterLiveStatus, 1000);
             window.pollClusterLiveStatus = pollClusterLiveStatus;
 
             // 3. Disparo de sincronización inmediata al renderizar la vista
@@ -697,7 +737,7 @@ public class ClusterFluxView extends FluxView {
                     showLifecycleToast((activeNow ? '🟢 ' : '🔴 ') + (data.message || 'Verificación completada'), activeNow ? '#10b981' : '#ef4444');
                     await pollClusterLiveStatus();
                 } catch (err) {
-                    if (btn) { btn.disabled = false; btn.textContent = 'Encender Nodo'; }
+                    if (btn) { btn.disabled = false; btn.textContent = 'Actualizar Nodo'; }
                     showLifecycleToast('❌ Error al verificar nodo: ' + err.message, '#ef4444');
                 }
             }

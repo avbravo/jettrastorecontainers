@@ -26,7 +26,7 @@ if [ -z "$JAR_SRC" ] || [ ! -f "$JAR_SRC" ]; then
     exit 1
 fi
 
-# 2. Crear estructura de directorios
+# 2. Crear estructura de directorios    
 mkdir -p "$INSTALL_DIR/config" "$INSTALL_DIR/memory"
 
 # 3. Copiar JAR ejecutable

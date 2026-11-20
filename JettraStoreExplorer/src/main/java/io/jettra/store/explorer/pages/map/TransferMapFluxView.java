@@ -448,16 +448,34 @@ public class TransferMapFluxView extends FluxView {
             }
           });
 
+          function applyMapData(data) {
+            if (!data) return;
+            clusterState = data;
+            computeLayout();
+            updateKpis(data);
+            updateFeed(data.recentTransfers || []);
+            updateInspector();
+          }
+
           async function fetchState() {
             try {
               const res = await fetch('/api/cluster/status', { cache: 'no-store' });
               if (!res.ok) return;
               const data = await res.json();
-              clusterState = data;
-              computeLayout();
-              updateKpis(data);
-              updateFeed(data.recentTransfers || []);
-              updateInspector();
+              applyMapData(data);
+            } catch (e) {}
+          }
+
+          // 1. Conexión reactiva en tiempo real mediante Server-Sent Events (SSE)
+          if (window.EventSource) {
+            try {
+              const sse = new EventSource('/api/cluster/events');
+              sse.addEventListener('cluster_status', function(e) {
+                try {
+                  const data = JSON.parse(e.data);
+                  applyMapData(data);
+                } catch (err) {}
+              });
             } catch (e) {}
           }
 
@@ -476,7 +494,7 @@ public class TransferMapFluxView extends FluxView {
           resizeCanvas();
           fetchState();
           requestAnimationFrame(draw);
-          setInterval(fetchState, 2000);
+          setInterval(fetchState, 1000);
         })();
         """;
     }

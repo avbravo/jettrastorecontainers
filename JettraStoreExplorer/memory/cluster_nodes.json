@@ -13,8 +13,8 @@
   "port" : 50003,
   "heapMaxMb" : 2048
 }, {
-  "id" : "node-04",
-  "name" : "node-04",
+  "id" : "node-05",
+  "name" : "node-05",
   "role" : "FOLLOWER",
   "host" : "127.0.0.1",
   "port" : 50004,

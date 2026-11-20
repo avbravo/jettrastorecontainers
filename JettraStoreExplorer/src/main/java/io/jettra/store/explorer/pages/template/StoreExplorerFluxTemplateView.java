@@ -1287,7 +1287,7 @@ public class StoreExplorerFluxTemplateView extends FluxView {
                 } catch (ignored) {}
               }
               pollClusterHealth();
-              setInterval(pollClusterHealth, 3000);
+              setInterval(pollClusterHealth, 1500);
             });
         """;
     }

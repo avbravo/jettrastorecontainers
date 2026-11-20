@@ -945,8 +945,8 @@ public class App {
             return;
         }
         JettraStorePlugin plugin = JettraStorePlugin.getInstance();
-        plugin.refreshAllNodeStatusesIfStale(600L);
-        String payload = "retry: 1500\nevent: cluster_status\ndata: " + buildClusterStatusJson(plugin) + "\n\n";
+        plugin.refreshAllNodeStatusesIfStale(300L);
+        String payload = "retry: 1000\nevent: cluster_status\ndata: " + buildClusterStatusJson(plugin) + "\n\n";
         resp.contentType("text/event-stream; charset=UTF-8")
             .header("Cache-Control", "no-store, no-cache, must-revalidate")
             .header("Connection", "keep-alive")

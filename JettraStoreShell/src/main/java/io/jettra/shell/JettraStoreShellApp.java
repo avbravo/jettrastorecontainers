@@ -8,6 +8,8 @@ import io.jettra.driver.config.JettraClientConfig;
 import io.jettra.store.backup.BackupManager;
 import io.jettra.store.cluster.ClusterNode;
 import io.jettra.store.cluster.DynamicRingEngine;
+import io.jettra.store.cluster.JettraClusterProtocol;
+import io.jettra.store.cluster.JettraRaftFrame;
 import io.jettra.store.core.JettraDatabase;
 import io.jettra.store.core.JettraStoreConfig;
 import io.jettra.store.core.JettraConfigValidator;
@@ -16,6 +18,8 @@ import io.jettra.store.engine.query.JettraQLProcessor;
 import io.jettra.store.engine.query.JettraSQLProcessor;
 import io.jettra.store.security.JettraSecurityManager;
 
+import java.io.BufferedInputStream;
+import java.io.BufferedOutputStream;
 import java.io.Console;
 import java.io.IOException;
 import java.net.InetSocketAddress;
@@ -69,7 +73,7 @@ public final class JettraStoreShellApp implements AutoCloseable {
 
     // Perfiles de Conexión Guardados
     public record SavedConnection(String name, String host, int port, String user) {}
-    private final Map<String, SavedConnection> savedConnections = new ConcurrentHashMap<>();
+    private final Map<String, SavedConnection> savedConnections = Collections.synchronizedMap(new LinkedHashMap<>());
 
     public JettraStoreShellApp(boolean autoConnect) {
         initDefaultConnections();
@@ -127,83 +131,140 @@ public final class JettraStoreShellApp implements AutoCloseable {
             loadInitialConnectionsFromJettraConfig();
             loadSavedConnections();
         }
+        SavedConnection def = getDefaultSavedConnection();
+        if (def != null) {
+            this.currentHost = def.host();
+            this.currentPort = def.port();
+        }
         loadHistory();
     }
 
     private boolean loadInitialConnectionsFromMicroprofileConfig() {
         Properties props = new Properties();
-        String explicitFile = System.getProperty("jettra.shell.config.file", System.getProperty("microprofile.config.file"));
+        String explicitFile = System.getProperty("jettra.shell.config.file", 
+            System.getProperty("microprofile.config.file",
+                System.getenv("JETTRA_SHELL_CONFIG_FILE") != null ? System.getenv("JETTRA_SHELL_CONFIG_FILE") : System.getenv("MICROPROFILE_CONFIG_FILE")));
+
         if (explicitFile != null && !explicitFile.isBlank()) {
             Path p = Path.of(explicitFile.trim());
             if (Files.exists(p)) {
                 try (var is = Files.newInputStream(p)) {
-                    Properties diskProps = new Properties();
-                    diskProps.load(is);
-                    if (diskProps.containsKey("cluster.nodes")) {
-                        props.putAll(diskProps);
-                    }
+                    props.load(is);
                 } catch (Exception ignored) {}
             }
         } else {
-            // 1. Classpath (/META-INF/microprofile-config.properties)
-            try (var is = getClass().getResourceAsStream("/META-INF/microprofile-config.properties")) {
-                if (is != null) {
-                    Properties p = new Properties();
-                    p.load(is);
-                    if (p.containsKey("cluster.nodes")) {
-                        props.putAll(p);
-                    }
+            // 1. Recursos en Classpath
+            try {
+                var resources = getClass().getClassLoader().getResources("META-INF/microprofile-config.properties");
+                while (resources.hasMoreElements()) {
+                    try (var is = resources.nextElement().openStream()) {
+                        props.load(is);
+                    } catch (Exception ignored) {}
                 }
+            } catch (Exception ignored) {}
+            try {
+                var resources = getClass().getClassLoader().getResources("microprofile-config.properties");
+                while (resources.hasMoreElements()) {
+                    try (var is = resources.nextElement().openStream()) {
+                        props.load(is);
+                    } catch (Exception ignored) {}
+                }
+            } catch (Exception ignored) {}
+            try (var is = getClass().getResourceAsStream("/META-INF/microprofile-config.properties")) {
+                if (is != null) props.load(is);
+            } catch (Exception ignored) {}
+            try (var is = getClass().getResourceAsStream("/microprofile-config.properties")) {
+                if (is != null) props.load(is);
             } catch (Exception ignored) {}
 
             // 2. Archivos en disco (prioridad sobre classpath)
-            List<String> candidates = List.of(
+            List<String> candidates = new ArrayList<>(List.of(
                 "JettraStoreShell/src/main/resources/META-INF/microprofile-config.properties",
                 "src/main/resources/META-INF/microprofile-config.properties",
                 "./META-INF/microprofile-config.properties",
                 "./config/microprofile-config.properties",
-                "./microprofile-config.properties"
-            );
+                "./microprofile-config.properties",
+                Path.of(System.getProperty("user.home"), "jettrastoreshell", "config", "microprofile-config.properties").toString(),
+                Path.of(System.getProperty("user.home"), ".jettra", "microprofile-config.properties").toString()
+            ));
+
+            try {
+                var codeSource = JettraStoreShellApp.class.getProtectionDomain().getCodeSource();
+                if (codeSource != null && codeSource.getLocation() != null) {
+                    Path jarParent = Path.of(codeSource.getLocation().toURI()).getParent();
+                    if (jarParent != null) {
+                        candidates.add(jarParent.resolve("config/microprofile-config.properties").toString());
+                        candidates.add(jarParent.resolve("microprofile-config.properties").toString());
+                    }
+                }
+            } catch (Exception ignored) {}
+
             for (String c : candidates) {
                 Path p = Path.of(c);
                 if (Files.exists(p)) {
                     try (var is = Files.newInputStream(p)) {
-                        Properties diskProps = new Properties();
-                        diskProps.load(is);
-                        if (diskProps.containsKey("cluster.nodes")) {
-                            props.putAll(diskProps);
-                        }
+                        props.load(is);
                     } catch (Exception ignored) {}
                 }
             }
         }
 
-        String nodesConfig = System.getProperty("cluster.nodes", props.getProperty("cluster.nodes"));
-        if (nodesConfig == null || nodesConfig.isBlank()) {
-            return false;
-        }
-        String defaultUser = props.getProperty("jettra.security.default.admin.username", "admin");
-        savedConnections.clear();
-        defaultConnectionName = null;
-        boolean loadedAny = false;
-        for (String entry : nodesConfig.split(",")) {
-            String[] parts = entry.trim().split(":");
-            if (parts.length >= 3) {
-                String id = parts[0].trim();
-                String host = parts[1].trim();
-                int port = 50001;
-                try { port = Integer.parseInt(parts[2].trim()); } catch (Exception ignored) {}
-                String user = (parts.length >= 4 && !parts[3].trim().isBlank()) ? parts[3].trim() : defaultUser;
-                if (!id.isBlank() && !host.isBlank() && port > 0) {
-                    savedConnections.put(id, new SavedConnection(id, host, port, user));
-                    if (!loadedAny || "node-01".equalsIgnoreCase(id)) {
-                        defaultConnectionName = id;
+        String nodesConfig = System.getProperty("cluster.nodes", 
+            props.getProperty("cluster.nodes", System.getenv("CLUSTER_NODES")));
+        String defaultNodeName = System.getProperty("cluster.default.node", 
+            props.getProperty("cluster.default.node", 
+                props.getProperty("cluster.node.default", System.getenv("CLUSTER_DEFAULT_NODE"))));
+
+        String defaultUser = props.getProperty("jettra.security.default.admin.username", 
+            props.getProperty("jettra.admin.username", "admin"));
+
+        if (nodesConfig != null && !nodesConfig.isBlank()) {
+            savedConnections.clear();
+            defaultConnectionName = null;
+            boolean loadedAny = false;
+            for (String entry : nodesConfig.split(",")) {
+                String[] parts = entry.trim().split(":");
+                if (parts.length >= 3) {
+                    String id = parts[0].trim();
+                    String host = parts[1].trim();
+                    int port = 50001;
+                    try { port = Integer.parseInt(parts[2].trim()); } catch (Exception ignored) {}
+                    String user = (parts.length >= 4 && !parts[3].trim().isBlank()) ? parts[3].trim() : defaultUser;
+                    if (!id.isBlank() && !host.isBlank() && port > 0) {
+                        savedConnections.put(id, new SavedConnection(id, host, port, user));
+                        if (defaultNodeName != null && defaultNodeName.equalsIgnoreCase(id)) {
+                            defaultConnectionName = id;
+                        } else if (defaultConnectionName == null && (!loadedAny || "node-01".equalsIgnoreCase(id))) {
+                            defaultConnectionName = id;
+                        }
+                        loadedAny = true;
                     }
-                    loadedAny = true;
                 }
             }
+            if (defaultConnectionName == null && !savedConnections.isEmpty()) {
+                defaultConnectionName = savedConnections.keySet().iterator().next();
+            }
+            return loadedAny;
         }
-        return loadedAny;
+
+        // Fallback a propiedades directas de conexión (jettra.host, jettra.port / JETTRA_HOST, JETTRA_PORT)
+        String fallbackHost = System.getProperty("jettra.host", 
+            props.getProperty("jettra.host", 
+                props.getProperty("server.host", System.getenv("JETTRA_HOST"))));
+        String fallbackPortStr = System.getProperty("jettra.port", 
+            props.getProperty("jettra.port", 
+                props.getProperty("server.port", System.getenv("JETTRA_PORT"))));
+
+        if (fallbackHost != null && !fallbackHost.isBlank()) {
+            int port = 50001;
+            try { if (fallbackPortStr != null) port = Integer.parseInt(fallbackPortStr.trim()); } catch (Exception ignored) {}
+            savedConnections.clear();
+            savedConnections.put("node-01", new SavedConnection("node-01", fallbackHost.trim(), port, defaultUser));
+            defaultConnectionName = "node-01";
+            return true;
+        }
+
+        return false;
     }
 
     public String getClusterNodesPropertyValue() {
@@ -453,6 +514,7 @@ public final class JettraStoreShellApp implements AutoCloseable {
             "INSERT REF ", "RESOLVE REF ", "SHOW REFS ",
             // Topología, Nodos & Cluster
             "SHOW NODES", "LIST NODES", "ADD NODE ", "REMOVE NODE ", "START NODE ", "STOP NODE ",
+            "CLUSTER ADD-NODE ", "CLUSTER ADD NODE ", "CLUSTER REMOVE-NODE ", "CLUSTER REMOVE NODE ",
             "MULTINODE", "MULTINODE ON", "MULTINODE OFF", "MULTINODE STATUS", "SHOW MULTINODE",
             "CLUSTER-DISTRIBUTED", "CLUSTER-DISTRIBUTED ALL", "CLUSTER-DISTRIBUTED <ALL>", "CLUSTER-DISTRIBUTED INFO", "CLUSTER-DISTRIBUTED ",
             "CLUSTER LIVE", "CLUSTER LIVE 10", "CLUSTER LIVE 30", "CLUSTER LIVE 60", "CLUSTER_LIVE",
@@ -897,14 +959,18 @@ public final class JettraStoreShellApp implements AutoCloseable {
     }
 
     public List<SavedConnection> getOrderedConnectionsList() {
-        List<SavedConnection> list = new ArrayList<>(savedConnections.values());
-        list.sort((c1, c2) -> {
-            boolean d1 = c1.name().equalsIgnoreCase(defaultConnectionName);
-            boolean d2 = c2.name().equalsIgnoreCase(defaultConnectionName);
-            if (d1 && !d2) return -1;
-            if (!d1 && d2) return 1;
-            return c1.name().compareToIgnoreCase(c2.name());
-        });
+        List<SavedConnection> list = new ArrayList<>();
+        SavedConnection def = defaultConnectionName != null ? savedConnections.get(defaultConnectionName) : null;
+        if (def != null) {
+            list.add(def);
+        }
+        synchronized (savedConnections) {
+            for (SavedConnection sc : savedConnections.values()) {
+                if (def == null || !sc.name().equalsIgnoreCase(def.name())) {
+                    list.add(sc);
+                }
+            }
+        }
         return list;
     }
 
@@ -1018,9 +1084,9 @@ Seleccione una conexión para iniciar:
             return handleSetMultinode(true);
         } else if (upper.equals("MULTINODE OFF") || upper.equals("SET MULTINODE OFF") || upper.equals("SET MULTINODE = OFF") || upper.equals("SET MULTINODE=OFF") || upper.equals("CLUSTER MULTINODE OFF")) {
             return handleSetMultinode(false);
-        } else if (upper.startsWith("ADD NODE ")) {
+        } else if (upper.startsWith("ADD NODE ") || upper.startsWith("CLUSTER ADD-NODE ") || upper.startsWith("CLUSTER ADD NODE ") || upper.startsWith("CLUSTER-ADD-NODE ")) {
             return handleAddNode(trimmed);
-        } else if (upper.startsWith("REMOVE NODE ")) {
+        } else if (upper.startsWith("REMOVE NODE ") || upper.startsWith("CLUSTER REMOVE-NODE ") || upper.startsWith("CLUSTER REMOVE NODE ") || upper.startsWith("CLUSTER-REMOVE-NODE ")) {
             return handleRemoveNode(trimmed);
         } else if (upper.startsWith("START NODE ")) {
             return handleStartNode(trimmed);
@@ -1574,11 +1640,19 @@ Seleccione una conexión para iniciar:
         return sb.toString();
     }
 
+    public record ShellClusterNode(String id, String role, String host, int grpcPort, int restPort) {}
+
+    private static boolean isPrimaryRole(String role) {
+        if (role == null) return false;
+        String r = role.trim().toUpperCase();
+        return "PRIMARY".equals(r) || "LEADER".equals(r);
+    }
+
     private String handleAddNode(String command) {
-        String clean = command.substring("ADD NODE ".length()).trim();
+        String clean = command.replaceAll("(?i)^(CLUSTER\\s+)?(ADD-NODE|ADD\\s+NODE|CLUSTER-ADD-NODE)\\s+", "").trim();
         String[] parts = clean.split("\\s+");
         if (parts.length < 3) {
-            return "[ERROR] Uso: ADD NODE <nodeId> <host> <port> [PRIMARY|SECONDARY]";
+            return "[ERROR] Uso: ADD NODE <nodeId> <host> <port> [PRIMARY|SECONDARY] o CLUSTER ADD-NODE <nodeId> <host> <port> [PRIMARY|SECONDARY]";
         }
         String id = parts[0].trim();
         String host = parts[1].trim();
@@ -1591,17 +1665,39 @@ Seleccione una conexión para iniciar:
         ClusterNode.Role role = (parts.length > 3 && "PRIMARY".equalsIgnoreCase(parts[3])) 
             ? ClusterNode.Role.PRIMARY : ClusterNode.Role.SECONDARY;
 
+        int restPort = 8080;
+        if (parts.length > 4) {
+            try { restPort = Integer.parseInt(parts[4].trim()); } catch (Exception ignored) {}
+        } else if (port >= 9091 && port <= 9099) {
+            restPort = port - 1010;
+        } else if (port >= 50001 && port <= 50009) {
+            restPort = 8080 + (port - 50000);
+        }
+
         ClusterNode newNode = new ClusterNode(id, host, port, role);
         client.getRingEngine().registerPeer(newNode);
         savedConnections.put(id, new SavedConnection(id, host, port, authenticated ? currentUser : "admin"));
         persistSavedConnections();
         persistClusterNodesToMicroprofileConfig();
-        return String.format("[SUCCESS] Nodo '%s' (%s:%d, %s) agregado exitosamente al clúster Raft.", id, host, port, role);
+
+        // Registrar dinámicamente en cluster.config local
+        try {
+            JettraConfigValidator.registerDynamicNodeInClusterConfig(
+                id, role.name(), host, port, restPort, "~/jettra/data"
+            );
+        } catch (Exception ignored) {}
+
+        // Replicar cluster.config a todos los nodos: PRIMARY primero, luego los SECONDARY
+        String replicationReport = replicateClusterConfigToQuorum(id, role.name(), host, port, restPort, false);
+
+        return String.format("[SUCCESS] Nodo '%s' (%s:%d, %s) agregado exitosamente al clúster Raft.%n%s",
+            id, host, port, role, replicationReport);
     }
 
     private String handleRemoveNode(String command) {
-        String id = cleanQuotes(command.substring("REMOVE NODE ".length()).trim());
-        if (id.isBlank()) return "[ERROR] Uso: REMOVE NODE <nodeId>";
+        String clean = cleanQuotes(command.replaceAll("(?i)^(CLUSTER\\s+)?(REMOVE-NODE|REMOVE\\s+NODE|CLUSTER-REMOVE-NODE)\\s+", "").trim());
+        if (clean.isBlank()) return "[ERROR] Uso: REMOVE NODE <nodeId> o CLUSTER REMOVE-NODE <nodeId>";
+        String id = clean;
         if ("node-01".equalsIgnoreCase(id) || client.getRingEngine().getNodeId().equalsIgnoreCase(id)) {
             return "[ERROR] No se puede remover el nodo primario activo del clúster.";
         }
@@ -1611,8 +1707,132 @@ Seleccione una conexión para iniciar:
             persistSavedConnections();
             persistClusterNodesToMicroprofileConfig();
         }
-        return ok ? "[SUCCESS] Nodo '" + id + "' removido del anillo de réplicas."
-                  : "[WARN] El nodo '" + id + "' no existe en el registro del clúster.";
+
+        // Remover de cluster.config local
+        try {
+            JettraConfigValidator.removeDynamicNodeFromClusterConfig(id);
+        } catch (Exception ignored) {}
+
+        // Replicar cluster.config actualizado a todos los nodos: PRIMARY primero, luego los SECONDARY
+        String replicationReport = replicateClusterConfigToQuorum(id, "SECONDARY", "", 0, 0, true);
+
+        return ok ? String.format("[SUCCESS] Nodo '%s' removido del anillo de réplicas.%n%s", id, replicationReport)
+                  : String.format("[WARN] El nodo '%s' no existe en el registro del clúster.%n%s", id, replicationReport);
+    }
+
+    private String replicateClusterConfigToQuorum(String targetNodeId, String role, String host, int grpcPort, int restPort, boolean isRemoval) {
+        Map<String, ShellClusterNode> clusterTopology = new LinkedHashMap<>();
+
+        // 1. Cargar nodos existentes desde cluster.config
+        Path clusterConfigFile = JettraConfigValidator.locateClusterConfigFile();
+        if (clusterConfigFile != null && Files.exists(clusterConfigFile)) {
+            try {
+                Properties props = JettraConfigValidator.loadProperties(clusterConfigFile, "/cluster.config", "/jettra.config");
+                List<JettraConfigValidator.ClusterNodeInfo> parsed = JettraConfigValidator.parseClusterNodes(props);
+                for (JettraConfigValidator.ClusterNodeInfo cn : parsed) {
+                    if (cn.id() == null || cn.id().isBlank()) continue;
+                    String h = (cn.ip() != null && !cn.ip().isBlank()) ? cn.ip().trim() : "127.0.0.1";
+                    int gp = cn.grpcPort() > 0 ? cn.grpcPort() : 50001;
+                    int rp = cn.restPort() > 0 ? cn.restPort() : 8080;
+                    String r = (cn.role() != null && !cn.role().isBlank()) ? cn.role().toUpperCase() : "SECONDARY";
+                    clusterTopology.put(cn.id().toLowerCase(), new ShellClusterNode(cn.id(), r, h, gp, rp));
+                }
+            } catch (Exception ignored) {}
+        }
+
+        // 2. Incorporar conexiones guardadas como fallback si no estuvieran en cluster.config
+        for (SavedConnection sc : savedConnections.values()) {
+            String key = sc.name().toLowerCase();
+            if (!clusterTopology.containsKey(key)) {
+                String r = key.contains("primary") || "node-01".equalsIgnoreCase(key) ? "PRIMARY" : "SECONDARY";
+                clusterTopology.put(key, new ShellClusterNode(sc.name(), r, sc.host(), sc.port(), 8080));
+            }
+        }
+
+        // 3. Ajustar topología según la operación
+        if (isRemoval) {
+            clusterTopology.remove(targetNodeId.toLowerCase());
+        } else {
+            clusterTopology.put(targetNodeId.toLowerCase(),
+                new ShellClusterNode(targetNodeId, role.toUpperCase(), host, grpcPort, restPort));
+        }
+
+        // 4. Generar bytes canónicos actualizados de cluster.config
+        StringBuilder sb = new StringBuilder();
+        sb.append("################################################################################\n");
+        sb.append("# JettraStore Cluster Topology Configuration (cluster.config)\n");
+        sb.append("# Generado dinámicamente por JettraStoreShell\n");
+        sb.append("################################################################################\n\n");
+        sb.append("cluster.name = jettra-production-cluster\n");
+        sb.append("cluster.consensus.protocol = RAFT\n");
+        sb.append("cluster.ring.enabled = true\n");
+        sb.append("cluster.heartbeat.interval.ms = 150\n");
+        sb.append("cluster.election.timeout.ms = 300\n");
+
+        int idx = 1;
+        for (ShellClusterNode n : clusterTopology.values()) {
+            String normRole = isPrimaryRole(n.role()) ? "PRIMARY" : "SECONDARY";
+            int rp = n.restPort() > 0 ? n.restPort() : (8080 + idx);
+            sb.append("\n# ==============================================================================\n");
+            sb.append("# NODO ").append(idx).append(": ").append(n.id()).append(" (").append(normRole).append(")\n");
+            sb.append("# ==============================================================================\n");
+            sb.append("cluster.node.").append(idx).append(".id = ").append(n.id()).append("\n");
+            sb.append("cluster.node.").append(idx).append(".role = ").append(normRole).append("\n");
+            sb.append("cluster.node.").append(idx).append(".ip = ").append(n.host()).append("\n");
+            sb.append("cluster.node.").append(idx).append(".grpc.port = ").append(n.grpcPort()).append("\n");
+            sb.append("cluster.node.").append(idx).append(".rest.port = ").append(rp).append("\n");
+            idx++;
+        }
+        sb.append("\n# Asignación de Capacidad de Índices y Buffers en Clúster\n");
+        sb.append("cluster.index.initial.capacity = 65536\n");
+        sb.append("cluster.index.max.inmemory.keys = 100000\n");
+        byte[] cfgBytes = sb.toString().getBytes(StandardCharsets.UTF_8);
+
+        // Guardar atómicamente en el archivo local cluster.config si existe
+        if (clusterConfigFile != null) {
+            try {
+                JettraConfigValidator.writeClusterConfigAtomically(clusterConfigFile, cfgBytes);
+            } catch (Exception ignored) {}
+        }
+
+        // 5. Replicar a todos los nodos del quórum ordenados: PRIMARY primero, luego SECONDARY
+        List<ShellClusterNode> targets = new ArrayList<>(clusterTopology.values());
+        targets.sort((a, b) -> Boolean.compare(isPrimaryRole(b.role()), isPrimaryRole(a.role())));
+
+        StringBuilder report = new StringBuilder();
+        report.append("[CLUSTER REPLICATION] Sincronizando cluster.config en todos los nodos (PRIMARY -> SECONDARY):\n");
+
+        JettraRaftFrame syncFrame = JettraRaftFrame.syncClusterConfig(1L, "jettra-shell", cfgBytes);
+
+        for (ShellClusterNode target : targets) {
+            boolean isPrim = isPrimaryRole(target.role());
+            String roleTag = isPrim ? "PRIMARY  " : "SECONDARY";
+            if (target.host() == null || target.host().isBlank() || target.grpcPort() <= 0) continue;
+
+            try (Socket s = new Socket()) {
+                s.setTcpNoDelay(true);
+                s.connect(new InetSocketAddress(target.host(), target.grpcPort()), 1000);
+                s.setSoTimeout(1500);
+                try (BufferedOutputStream bos = new BufferedOutputStream(s.getOutputStream(), 8192);
+                     BufferedInputStream bis = new BufferedInputStream(s.getInputStream(), 8192)) {
+                    JettraClusterProtocol.writeFrame(bos, syncFrame);
+                    bos.flush();
+                    try {
+                        JettraRaftFrame ack = JettraClusterProtocol.readFrame(bis);
+                        report.append(String.format("  ✓ [%s] %s (%s:%d): cluster.config replicado exitosamente.%n",
+                            roleTag, target.id(), target.host(), target.grpcPort()));
+                    } catch (Exception ex) {
+                        report.append(String.format("  ✓ [%s] %s (%s:%d): Trama cluster.config enviada al nodo.%n",
+                            roleTag, target.id(), target.host(), target.grpcPort()));
+                    }
+                }
+            } catch (Exception e) {
+                report.append(String.format("  ⚠ [%s] %s (%s:%d): No alcanzable (%s). Se sincronizará automáticamente al iniciar.%n",
+                    roleTag, target.id(), target.host(), target.grpcPort(), e.getMessage()));
+            }
+        }
+
+        return report.toString();
     }
 
     private String handleStartNode(String command) {
@@ -3638,8 +3858,10 @@ return String.format("[NOT FOUND] No se encontró el bucket/unit '%s' en la base
               cluster live [límite]                 Muestra trazas y eventos en tiempo real de lo que ocurre en el clúster.
               multinode / show multinode            Muestra el estado de cluster.multinode.active (ON/OFF).
               multinode on / multinode off          Activa o desactiva dinámicamente la distribución de datos.
-              add node <id> <host> <port> [ROLE]    Agrega un nuevo nodo secundario al clúster Raft.
-              remove node <id>                      Remueve un nodo réplica del anillo dinámico.
+              cluster add-node <id> <host> <port> [ROLE]  Agrega un nuevo nodo y replica cluster.config (PRIMARY -> SECONDARIES).
+              add node <id> <host> <port> [ROLE]    Agrega un nuevo nodo al clúster y replica cluster.config.
+              cluster remove-node <id>              Remueve un nodo y replica cluster.config (PRIMARY -> SECONDARIES).
+              remove node <id>                      Remueve un nodo réplica del anillo y replica cluster.config.
               start node <id>                       Inicia y activa el procesamiento para un nodo específico.
               stop node <id>                        Detiene un nodo réplica (pausa el tráfico de descarga).
 
@@ -3864,65 +4086,128 @@ return String.format("[NOT FOUND] No se encontró el bucket/unit '%s' en la base
 
         JettraStoreShellApp shell = new JettraStoreShellApp(false);
 
-        // 1. Mostrar menú de conexiones creadas al iniciar
-        System.out.print(shell.getConnectionsMenuDisplay());
+        String cliNode = null;
+        String cliHost = null;
+        Integer cliPort = null;
+        String cliUser = null;
+        String cliPass = null;
+        String cliExec = null;
+        boolean cliAuto = false;
 
-        SavedConnection defConn = shell.getDefaultSavedConnection();
-        String targetHost = defConn != null ? defConn.host() : "127.0.0.1";
-        int targetPort = defConn != null ? defConn.port() : 50001;
-        String suggestedUser = defConn != null ? defConn.user() : "admin";
-
-        String option = "";
-        System.out.print(">> Seleccione una opción [1]: ");
-        if (console != null) {
-            option = console.readLine();
-        } else if (scanner.hasNextLine()) {
-            option = scanner.nextLine();
-        }
-        if (option == null || option.isBlank()) {
-            option = "1";
-        }
-        option = option.trim();
-
-        if (option.equalsIgnoreCase("0") || option.equalsIgnoreCase("exit") || option.equalsIgnoreCase("quit")) {
-            System.out.println("Saliendo de JettraStore Shell...");
-            return;
-        }
-
-        List<SavedConnection> conns = shell.getOrderedConnectionsList();
-        boolean isNewConnection = option.equalsIgnoreCase("N") || option.equalsIgnoreCase("nueva") || 
-                                  option.toUpperCase().startsWith("CONNECT");
-
-        if (!isNewConnection) {
-            try {
-                int idx = Integer.parseInt(option) - 1;
-                if (idx >= 0 && idx < conns.size()) {
-                    SavedConnection chosen = conns.get(idx);
-                    targetHost = chosen.host();
-                    targetPort = chosen.port();
-                    suggestedUser = chosen.user();
-                    shell.executeCommand(String.format("CONNECT %s %d", targetHost, targetPort));
-                    System.out.printf("[CONNECT] Conexión seleccionada: '%s' (%s:%d)%n", chosen.name(), targetHost, targetPort);
-                } else {
-                    System.out.printf("[WARN] Opción fuera de rango. Usando conexión predeterminada: %s:%d%n", targetHost, targetPort);
-                    shell.executeCommand(String.format("CONNECT %s %d", targetHost, targetPort));
+        for (int i = 0; i < args.length; i++) {
+            String arg = args[i].trim();
+            if (arg.equals("--node") || arg.equals("-n")) {
+                if (i + 1 < args.length) cliNode = args[++i].trim();
+            } else if (arg.equals("--host") || arg.equals("-h")) {
+                if (i + 1 < args.length) cliHost = args[++i].trim();
+            } else if (arg.equals("--port") || arg.equals("-p")) {
+                if (i + 1 < args.length) {
+                    try { cliPort = Integer.parseInt(args[++i].trim()); } catch (Exception ignored) {}
                 }
-            } catch (NumberFormatException e) {
-                if (shell.getSavedConnections().containsKey(option)) {
-                    SavedConnection chosen = shell.getSavedConnections().get(option);
-                    targetHost = chosen.host();
-                    targetPort = chosen.port();
-                    suggestedUser = chosen.user();
-                    shell.executeCommand(String.format("CONNECT %s %d", targetHost, targetPort));
-                    System.out.printf("[CONNECT] Conexión seleccionada: '%s' (%s:%d)%n", chosen.name(), targetHost, targetPort);
-                } else {
-                    isNewConnection = true;
-                }
+            } else if (arg.equals("--user") || arg.equals("-u")) {
+                if (i + 1 < args.length) cliUser = args[++i].trim();
+            } else if (arg.equals("--password") || arg.equals("-P")) {
+                if (i + 1 < args.length) cliPass = args[++i].trim();
+            } else if (arg.equals("-e") || arg.equals("--exec")) {
+                if (i + 1 < args.length) cliExec = args[++i].trim();
+            } else if (arg.equals("--auto-connect") || arg.equals("-a")) {
+                cliAuto = true;
+            } else if (!arg.startsWith("-") && shell.getSavedConnections().containsKey(arg)) {
+                cliNode = arg;
             }
         }
 
-        // Si eligió 'Conexión nueva', el usuario ejecuta el connect
-        if (isNewConnection) {
+        SavedConnection defConn = shell.getDefaultSavedConnection();
+        String targetHost = defConn != null ? defConn.host() : shell.getCurrentHost();
+        int targetPort = defConn != null ? defConn.port() : shell.getCurrentPort();
+        String suggestedUser = defConn != null ? defConn.user() : "admin";
+
+        if (cliNode != null && shell.getSavedConnections().containsKey(cliNode)) {
+            SavedConnection sc = shell.getSavedConnections().get(cliNode);
+            targetHost = sc.host();
+            targetPort = sc.port();
+            suggestedUser = sc.user();
+            cliAuto = true;
+        }
+        if (cliHost != null) {
+            targetHost = cliHost;
+            cliAuto = true;
+        }
+        if (cliPort != null) {
+            targetPort = cliPort;
+            cliAuto = true;
+        }
+        if (cliUser != null) {
+            suggestedUser = cliUser;
+        }
+
+        // Si se especificó comando por CLI (-e), ejecución batch no interactiva
+        if (cliExec != null) {
+            shell.executeCommand(String.format("CONNECT %s %d", targetHost, targetPort));
+            String pass = cliPass != null ? cliPass : "admin-jettra";
+            shell.executeCommand(String.format("LOGIN %s %s", suggestedUser, pass));
+            String result = shell.executeCommand(cliExec);
+            System.out.println(result);
+            return;
+        }
+
+        if (!cliAuto) {
+            // 1. Mostrar menú de conexiones creadas al iniciar
+            System.out.print(shell.getConnectionsMenuDisplay());
+
+            String option = "";
+            System.out.print(">> Seleccione una opción [1]: ");
+            if (console != null) {
+                option = console.readLine();
+            } else if (scanner.hasNextLine()) {
+                option = scanner.nextLine();
+            } else {
+                option = "1";
+            }
+            if (option == null || option.isBlank()) {
+                option = "1";
+            }
+            option = option.trim();
+
+            if (option.equalsIgnoreCase("0") || option.equalsIgnoreCase("exit") || option.equalsIgnoreCase("quit")) {
+                System.out.println("Saliendo de JettraStore Shell...");
+                return;
+            }
+
+            List<SavedConnection> conns = shell.getOrderedConnectionsList();
+            boolean isNewConnection = option.equalsIgnoreCase("N") || option.equalsIgnoreCase("nueva") || 
+                                      option.toUpperCase().startsWith("CONNECT");
+
+            if (!isNewConnection) {
+                try {
+                    int idx = Integer.parseInt(option) - 1;
+                    if (idx >= 0 && idx < conns.size()) {
+                        SavedConnection chosen = conns.get(idx);
+                        targetHost = chosen.host();
+                        targetPort = chosen.port();
+                        suggestedUser = chosen.user();
+                        shell.executeCommand(String.format("CONNECT %s %d", targetHost, targetPort));
+                        System.out.printf("[CONNECT] Conexión seleccionada: '%s' (%s:%d)%n", chosen.name(), targetHost, targetPort);
+                    } else {
+                        System.out.printf("[WARN] Opción fuera de rango. Usando conexión predeterminada: %s:%d%n", targetHost, targetPort);
+                        shell.executeCommand(String.format("CONNECT %s %d", targetHost, targetPort));
+                    }
+                } catch (NumberFormatException e) {
+                    if (shell.getSavedConnections().containsKey(option)) {
+                        SavedConnection chosen = shell.getSavedConnections().get(option);
+                        targetHost = chosen.host();
+                        targetPort = chosen.port();
+                        suggestedUser = chosen.user();
+                        shell.executeCommand(String.format("CONNECT %s %d", targetHost, targetPort));
+                        System.out.printf("[CONNECT] Conexión seleccionada: '%s' (%s:%d)%n", chosen.name(), targetHost, targetPort);
+                    } else {
+                        isNewConnection = true;
+                    }
+                }
+            }
+
+            // Si eligió 'Conexión nueva', el usuario ejecuta el connect
+            if (isNewConnection) {
             System.out.println("""
 --------------------------------------------------------------------------------
                          OPCIÓN: CONEXIÓN NUEVA
@@ -3963,6 +4248,9 @@ Ejecute el comando 'connect <host> <puerto>' (o presione Enter para [127.0.0.1 5
                 }
             }
         }
+    } else {
+        shell.executeCommand(String.format("CONNECT %s %d", targetHost, targetPort));
+    }
 
         // 2. Solicitar la ejecución del login para autentificar el usuario
         System.out.println("""

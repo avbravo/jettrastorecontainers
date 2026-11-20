@@ -13,11 +13,11 @@ services:
     ports:
       - "8085:8085"
     environment:
-      - SERVER_HOST=0.0.0.0
-      - SERVER_PORT=8085
-      - STORAGE_MODE=OFF_HEAP
+      - SERVER_HOST=${SERVER_HOST:-0.0.0.0}
+      - SERVER_PORT=${SERVER_PORT:-8085}
+      - STORAGE_MODE=${STORAGE_MODE:-OFF_HEAP}
       - MICROPROFILE_CONFIG_FILE=/app/config/microprofile-config.properties
-      - JAVA_OPTS=-Xms256m -Xmx1g -XX:+UseContainerSupport -XX:+UseZGC -XX:+UnlockExperimentalVMOptions -XX:+UseCompactObjectHeaders --enable-preview --enable-native-access=ALL-UNNAMED -Dcluster.nodes=node-01:jettra-node-01:9091,node-02:jettra-node-02:9091,node-03:jettra-node-03:9091
+      - JAVA_OPTS=-Xms256m -Xmx1g -XX:+UseContainerSupport -XX:+UseZGC -XX:+UnlockExperimentalVMOptions -XX:+UseCompactObjectHeaders --enable-preview --enable-native-access=ALL-UNNAMED -Dcluster.nodes=${CLUSTER_NODES:-node-01:jettra-node-01:9091,node-02:jettra-node-02:9091,node-03:jettra-node-03:9091}
     mem_limit: 1536m
     mem_reservation: 256m
     volumes:

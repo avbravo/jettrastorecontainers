@@ -900,5 +900,55 @@ public class JettraStoreShellTest {
             java.nio.file.Files.deleteIfExists(tempMp);
         }
     }
+
+    @Test
+    public void testClusterAddNodeAndRemoveNodeCommands() throws Exception {
+        java.nio.file.Path tempMp = java.nio.file.Files.createTempFile("jettra_shell_cluster_", ".properties");
+        java.nio.file.Path tempCluster = java.nio.file.Files.createTempFile("cluster_", ".config");
+        String prevCfg = System.getProperty("jettra.shell.config.file");
+        String prevCluster = System.getProperty("cluster.config.path");
+        try {
+            java.nio.file.Files.writeString(tempMp,
+                "# Shell Test Config\napp.title=JettraStore Shell\ncluster.nodes=node-01:127.0.0.1:9091\n",
+                java.nio.charset.StandardCharsets.UTF_8);
+            java.nio.file.Files.writeString(tempCluster,
+                "cluster.name = test-cluster\ncluster.node.1.id = node-01\ncluster.node.1.role = PRIMARY\ncluster.node.1.ip = 127.0.0.1\ncluster.node.1.grpc.port = 9091\ncluster.node.1.rest.port = 8081\n",
+                java.nio.charset.StandardCharsets.UTF_8);
+            System.setProperty("jettra.shell.config.file", tempMp.toAbsolutePath().toString());
+            System.setProperty("cluster.config.path", tempCluster.toAbsolutePath().toString());
+
+            try (JettraClient client = JettraClient.connect("127.0.0.1", 9091, "admin", "admin-jettra")) {
+                JettraStoreShellApp shell = new JettraStoreShellApp(client);
+
+                // CLUSTER ADD-NODE
+                String addRes = shell.executeCommand("CLUSTER ADD-NODE node-06 127.0.0.1 9096 SECONDARY 8086");
+                assertTrue(addRes.contains("[SUCCESS]"));
+                assertTrue(addRes.contains("node-06"));
+
+                String clusterContentAfterAdd = java.nio.file.Files.readString(tempCluster, java.nio.charset.StandardCharsets.UTF_8);
+                assertTrue(clusterContentAfterAdd.contains("node-06"));
+
+                // CLUSTER REMOVE-NODE
+                String remRes = shell.executeCommand("CLUSTER REMOVE-NODE node-06");
+                assertTrue(remRes.contains("[SUCCESS]"));
+
+                String clusterContentAfterRem = java.nio.file.Files.readString(tempCluster, java.nio.charset.StandardCharsets.UTF_8);
+                assertFalse(clusterContentAfterRem.contains("node-06"));
+            }
+        } finally {
+            if (prevCfg == null) {
+                System.clearProperty("jettra.shell.config.file");
+            } else {
+                System.setProperty("jettra.shell.config.file", prevCfg);
+            }
+            if (prevCluster == null) {
+                System.clearProperty("cluster.config.path");
+            } else {
+                System.setProperty("cluster.config.path", prevCluster);
+            }
+            java.nio.file.Files.deleteIfExists(tempMp);
+            java.nio.file.Files.deleteIfExists(tempCluster);
+        }
+    }
 }
 

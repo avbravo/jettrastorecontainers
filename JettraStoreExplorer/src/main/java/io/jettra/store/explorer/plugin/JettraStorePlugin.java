@@ -88,7 +88,7 @@ public class JettraStorePlugin {
 
     private final AtomicBoolean heartbeatRunning = new AtomicBoolean(false);
     private volatile Thread heartbeatThread;
-    private volatile long heartbeatIntervalMs = 2000L;
+    private volatile long heartbeatIntervalMs = 1000L;
     private final String clusterNodesConfigPath = "memory/cluster_nodes.json";
 
     private JettraStorePlugin() {
@@ -228,12 +228,12 @@ public class JettraStorePlugin {
             this.healthCheckTimeoutMs = 1000;
         }
 
-        String hbIntervalStr = System.getProperty("cluster.heartbeat.interval.ms", props.getProperty("cluster.heartbeat.interval.ms", "2000"));
+        String hbIntervalStr = System.getProperty("cluster.heartbeat.interval.ms", props.getProperty("cluster.heartbeat.interval.ms", "1000"));
         try {
             long hi = Long.parseLong(hbIntervalStr.trim());
-            this.heartbeatIntervalMs = Math.max(500L, Math.min(60000L, hi));
+            this.heartbeatIntervalMs = Math.max(300L, Math.min(60000L, hi));
         } catch (Exception ignored) {
-            this.heartbeatIntervalMs = 2000L;
+            this.heartbeatIntervalMs = 1000L;
         }
     }
 
@@ -586,12 +586,28 @@ public class JettraStorePlugin {
         }
 
         if (lifecycleManager.isStopped(node.getId())) {
-            node.setOnline(false);
-            node.setLatencyMs(0.0f);
-            node.setRaftState("DISCONNECTED");
-            node.setLastError("Nodo detenido mediante LifecycleManager (OFFLINE)");
-            node.setLastCheckedEpochMs(now);
-            return false;
+            // Comprobar si el socket TCP volvió a responder (nodo iniciado/reiniciado)
+            int probeTimeout = Math.min(effectiveTimeout, 250);
+            boolean isLiveNow = false;
+            try (Socket probeSocket = new Socket()) {
+                probeSocket.connect(new InetSocketAddress(host, port), probeTimeout);
+                isLiveNow = true;
+            } catch (Exception ignored) {}
+
+            if (isLiveNow) {
+                lifecycleManager.clearStopped(node.getId());
+            } else {
+                node.setOnline(false);
+                node.setLatencyMs(0.0f);
+                node.setRaftState("DISCONNECTED");
+                node.setLastError("Nodo detenido mediante LifecycleManager (OFFLINE)");
+                node.setLastCheckedEpochMs(now);
+                if (wasOnline) {
+                    reconcilePrimaryLeadership();
+                    notifyClusterChanged();
+                }
+                return false;
+            }
         }
 
         long start = System.nanoTime();
@@ -627,6 +643,7 @@ public class JettraStorePlugin {
                             io.jettra.store.cluster.ClusterLiveEvent.TYPE_NODE_ONLINE,
                             node.getId(), "cluster", "Nodo en estado ACTIVE", host + ":" + port);
                     } catch (Throwable ignored) {}
+                    reconcilePrimaryLeadership();
                     notifyClusterChanged();
                 }
                 return true;
@@ -668,6 +685,7 @@ public class JettraStorePlugin {
                     io.jettra.store.cluster.ClusterLiveEvent.TYPE_NODE_OFFLINE,
                     node.getId(), "cluster", "Nodo en estado INACTIVE: " + node.getLastError(), host + ":" + port);
             } catch (Throwable ignored) {}
+            reconcilePrimaryLeadership();
             notifyClusterChanged();
         }
         return false;
@@ -846,6 +864,38 @@ public class JettraStorePlugin {
                 }
             } catch (Exception ignored) {}
         }
+
+        // 3. Revisar topología persistida en cluster.config en disco
+        try {
+            Path clusterFile = io.jettra.store.core.JettraConfigValidator.locateClusterConfigFile();
+            if (clusterFile != null && Files.exists(clusterFile)) {
+                Properties cProps = io.jettra.store.core.JettraConfigValidator.loadProperties(clusterFile, "/cluster.config", "/jettra.config");
+                List<io.jettra.store.core.JettraConfigValidator.ClusterNodeInfo> parsedNodes =
+                    io.jettra.store.core.JettraConfigValidator.parseClusterNodes(cProps);
+                boolean hasPrimary = serverNodes.stream().anyMatch(n -> isPrimaryRole(n.getRole()));
+                for (io.jettra.store.core.JettraConfigValidator.ClusterNodeInfo cn : parsedNodes) {
+                    if (cn.id() == null || cn.id().isBlank()) continue;
+                    ServerNodeInfo existing = getNodeById(cn.id());
+                    if (existing == null) {
+                        String r = (cn.role() != null && !cn.role().isBlank()) ? cn.role().toUpperCase() : "SECONDARY";
+                        if (hasPrimary && isPrimaryRole(r)) {
+                            r = "SECONDARY";
+                        }
+                        String h = (cn.ip() != null && !cn.ip().isBlank()) ? cn.ip().trim() : "127.0.0.1";
+                        int p = cn.grpcPort() > 0 ? cn.grpcPort() : 9091;
+                        ServerNodeInfo newNode = new ServerNodeInfo(cn.id(), cn.id() + "-" + r.toLowerCase(), r, h, p, 15.0f, 320, 2048, 850, 10000, 200, 10000, 0.0f, 8, false);
+                        if (cn.restPort() > 0) newNode.setRestPort(cn.restPort());
+                        serverNodes.add(newNode);
+                        checkNodeRealReachability(newNode, this.healthCheckTimeoutMs);
+                        saveClusterNodes();
+                    } else {
+                        if (cn.restPort() > 0 && existing.getRestPort() <= 0) {
+                            existing.setRestPort(cn.restPort());
+                        }
+                    }
+                }
+            }
+        } catch (Exception ignored) {}
     }
 
     public void addClusterListener(Runnable listener) {

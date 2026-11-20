@@ -46,4 +46,4 @@ HEALTHCHECK --interval=10s --timeout=5s --start-period=8s --retries=3 \
 
 USER 1000:1000
 
-ENTRYPOINT ["sh", "-c", "exec java $JAVA_OPTS -Dmicroprofile.config.file=${MICROPROFILE_CONFIG_FILE} -Djettra.explorer.config.file=${MICROPROFILE_CONFIG_FILE} -jar /app/JettraStoreExplorer.jar"]
+ENTRYPOINT ["sh", "-c", "exec java $JAVA_OPTS -Dmicroprofile.config.file=${MICROPROFILE_CONFIG_FILE} -Djettra.explorer.config.file=${MICROPROFILE_CONFIG_FILE} -jar /app/JettraStoreExplorer.jar \"$@\"", "--"]
