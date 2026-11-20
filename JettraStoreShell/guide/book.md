@@ -113,17 +113,17 @@ Al iniciar el shell interactivo, el sistema solicita de forma guiada el host/pue
                JETTRASTORE INTERACTIVE DISTRIBUTED SHELL (JAVA 25+)             
 ================================================================================
 >> JettraStore Host [127.0.0.1]: 127.0.0.1
->> JettraStore Port [9091]: 9091
+>> JettraStore Port [50001]: 50001
 >> Username [admin]: admin
 >> Password [hidden]: ********
-[AUTH OK] Autenticado exitosamente como 'admin' (127.0.0.1:9091)
-jettra-shell [admin@127.0.0.1:9091/default_db]>
+[AUTH OK] Autenticado exitosamente como 'admin' (127.0.0.1:50001)
+jettra-shell [admin@127.0.0.1:50001/default_db]>
 ```
 
 ### Comandos de Sesión:
 | Comando | Descripción | Ejemplo |
 | :--- | :--- | :--- |
-| `connect <host> <puerto>` | Configura el endpoint del servidor JettraStore. | `connect 127.0.0.1 9091` |
+| `connect <host> <puerto>` | Configura el endpoint del servidor JettraStore. | `connect 127.0.0.1 50001` |
 | `connect <nombre-perfil>` | Conecta usando un perfil previamente guardado. | `connect local_master` |
 | `login <user> <pass>` | Inicia sesión y genera token JettraJWT. | `login admin admin-jettra` |
 | `logout` | Cierra la sesión activa y bloquea operaciones de base de datos. | `logout` |
@@ -137,7 +137,7 @@ Permite guardar alias para alternar rápidamente entre nodos del clúster:
 ```sql
 -- Guardar la conexión actual con un alias
 save connection local_master
-save connection prod_replica 192.168.1.102 9091 admin
+save connection prod_replica 192.168.1.102 50002 admin
 
 -- Listar conexiones guardadas
 list connections
@@ -157,7 +157,7 @@ remove connection prod_replica
 El comando `status` presenta una radiografía en tiempo real del motor:
 
 ```text
-jettra-shell [admin@127.0.0.1:9091/default_db]> status
+jettra-shell [admin@127.0.0.1:50001/default_db]> status
 
 ==============================================================================================
                       JETTRASTORE RESOURCE MONITOR & TELEMETRY (JAVA 25+)
@@ -201,10 +201,11 @@ JettraStore opera sobre una topología distribuida basada en consenso Raft y un 
 | `multinode` / `show multinode` | Consulta el estado actual de `cluster.multinode.active` (ON / OFF). | `multinode` |
 | `multinode on` / `set multinode on` | Activa la distribución de datos con consenso integrado. | `multinode on` |
 | `multinode off` / `set multinode off` | Desactiva la distribución (modo servidor único standalone sin distribuir datos). | `multinode off` |
-| `add node <id> <ip> <port> [ROLE]`| Registra un nuevo nodo en el clúster. | `add node node-04 192.168.1.104 9091 SECONDARY` |
-| `stop node <id>` | Pausa el nodo réplica (detiene la descarga de memoria).| `stop node node-02` |
-| `start node <id>` | Reactiva el nodo para recibir transferencias del anillo.| `start node node-02` |
-| `remove node <id>` | Remueve un nodo secundario del clúster. | `remove node node-04` |
+| `add node <id> <ip> <port> [ROLE] [REST_PORT]`| Registra un nuevo nodo, replica cluster.config (PRIMARY -> SECONDARIES) y sincroniza datos desde PRIMARY. | `add node node-04 192.168.1.104 50001 SECONDARY 60001` |
+| `cluster add-node <id> <ip> <port> [ROLE]` | Sintaxis alternativa para incorporación de nodo al clúster. | `cluster add-node node-04 192.168.1.104 50001 SECONDARY` |
+| `remove node <id>` / `cluster remove-node <id>` | Remueve un nodo secundario del clúster y replica cluster.config. | `remove node node-04` |
+| `start node <id>` | Reactiva el nodo y sincroniza automáticamente datos y objetos desde PRIMARY. | `start node node-02` |
+| `stop node <id>` | Pausa el nodo réplica (detiene la descarga de memoria y tráfico).| `stop node node-02` |
 | `cluster distributed <db>` | Distribuye y replica la base de datos y sus registros hacia los secundarios. | `cluster distributed facturas_db` |
 | `cluster distributed all` | Distribuye y replica todas las bases de datos registradas hacia los secundarios. | `cluster distributed all` |
 | `cluster distributed info` | Muestra la matriz de topología y distribución de datos del clúster. | `cluster distributed info` |
@@ -212,7 +213,7 @@ JettraStore opera sobre una topología distribuida basada en consenso Raft y un 
 
 ### Visualización de la Topología:
 ```text
-jettra-shell [admin@127.0.0.1:9091/default_db]> show nodes
+jettra-shell [admin@127.0.0.1:50001/default_db]> show nodes
 
 ==============================================================================================
                           JETTRASTORE RAFT CLUSTER TOPOLOGY                                   
@@ -220,9 +221,9 @@ jettra-shell [admin@127.0.0.1:9091/default_db]> show nodes
 +----------+----------------------+-------+-----------+------------+----------+--------------+
 | Nodo ID  | Dirección IP         | Puerto| Rol       | Estado Raft| Estado   | Offload Bytes|
 +----------+----------------------+-------+-----------+------------+----------+--------------+
-| node-01  | 127.0.0.1            | 9091  | PRIMARY   | LEADER     | RUNNING  | 0            |
-| node-02  | 192.168.1.102        | 9091  | SECONDARY | FOLLOWER   | RUNNING  | 0            |
-| node-03  | 192.168.1.103        | 9091  | SECONDARY | FOLLOWER   | RUNNING  | 0            |
+| node-01  | 127.0.0.1            | 50001 | PRIMARY   | LEADER     | RUNNING  | 0            |
+| node-02  | 192.168.1.102        | 50002 | SECONDARY | FOLLOWER   | RUNNING  | 0            |
+| node-03  | 192.168.1.103        | 50003 | SECONDARY | FOLLOWER   | RUNNING  | 0            |
 +----------+----------------------+-------+-----------+------------+----------+--------------+
 Modo Multinodo (cluster.multinode.active): ON (Algoritmo de consenso y distribución de datos ACTIVO)
 Total: 3 nodo(s) registrados en el anillo dinámico. Quórum: Activo (Consenso distribuido).
@@ -258,7 +259,7 @@ El comando interactivo `cluster live [limit]` (o la opción `[9]` en el menú in
 
 #### 6.3.2 Ejemplo de Uso y Salida en Consola
 ```text
-jettra-shell [admin@127.0.0.1:9091/facturas_db]> cluster live 10
+jettra-shell [admin@127.0.0.1:50001/facturas_db]> cluster live 10
 
 ========================================================================================================================
                                         JETTRASTORE CLUSTER LIVE EVENT STREAM                                           
@@ -297,6 +298,58 @@ El Shell interactivo incorpora un receptor de eventos en segundo plano que detec
 - Si el nodo primario se detiene o pierde conexión (`NODE_STOPPED` / timeout de latidos), los nodos secundarios eligen un nuevo primario de forma determinista.
 - `JettraStoreShell` intercepta el cambio de topología, actualiza su enrutador interno hacia el nuevo primario y notifica al usuario mediante una alerta informativa en pantalla, permitiendo continuar operando de forma continua.
 
+### 6.5 Gestión Dinámica de Nodos y Replicación Ordenada (`ADD NODE`, `REMOVE NODE`, `START NODE`, `STOP NODE`)
+
+`JettraStoreShell` permite administrar el ciclo de vida de los nodos del clúster en tiempo de ejecución sin interrumpir el servicio ni requerir reinicios manuales.
+
+#### 6.5.1 Adición de Nodos (`ADD NODE` / `CLUSTER ADD-NODE`)
+* **Sintaxis:**
+  ```bash
+  add node <nodeId> <host> <port> [PRIMARY|SECONDARY] [restPort]
+  cluster add-node <nodeId> <host> <port> [PRIMARY|SECONDARY] [restPort]
+  ```
+* **Ejemplos:**
+  ```bash
+  add node node-04 192.168.1.104 50001 SECONDARY
+  cluster add-node node-04 192.168.1.104 50001 SECONDARY 60001
+  ```
+* **Replicación Ordenada de `cluster.config`:**
+  1. Actualiza primero la configuración canónica en el nodo **PRIMARY** mediante la trama binaria Raft `TYPE_SYNC_CLUSTER_CONFIG` (`0x17`).
+  2. Una vez aceptada por el PRIMARY, replica ordenadamente la configuración hacia todos los nodos **SECONDARY** activos.
+* **Sincronización Automática de Datos:**
+  **Cada vez que un nodo se añade al clúster**, `JettraStoreShell` notifica inmediatamente al nodo PRIMARY para que transmita la réplica completa de todas las bases de datos y objetos hacia el nuevo nodo, garantizando que quede sincronizado y listo para operar desde el primer instante.
+
+#### 6.5.2 Remoción de Nodos (`REMOVE NODE` / `CLUSTER REMOVE-NODE`)
+* **Sintaxis:**
+  ```bash
+  remove node <nodeId>
+  cluster remove-node <nodeId>
+  ```
+* **Ejemplo:**
+  ```bash
+  remove node node-04
+  ```
+* **Comportamiento:**
+  - Extrae el nodo del anillo dinámico y de `savedConnections`.
+  - Actualiza el archivo `cluster.config` físico local y replica la nueva topología al clúster (PRIMARY primero, luego SECONDARIES).
+  - Previene por seguridad la remoción del nodo primario activo.
+
+#### 6.5.3 Reactivación y Sincronización tras Reinicio (`START NODE`)
+* **Sintaxis:**
+  ```bash
+  start node <nodeId>
+  ```
+* **Sincronización Automática al Iniciar:**
+  **Cuando un nodo fue detenido y luego se reinicia** (o se invoca `start node`), el nodo se debe actualizar con el estado del nodo PRIMARY. `JettraStoreShell` solicita automáticamente al nodo PRIMARY el envío de la réplica completa de bases de datos y objetos hacia este nodo secundario, asegurando que cualquier cambio ocurrido durante el periodo fuera de línea sea transferido de inmediato.
+
+#### 6.5.4 Pausa Controlada de Nodos (`STOP NODE`)
+* **Sintaxis:**
+  ```bash
+  stop node <nodeId>
+  ```
+* **Comportamiento:**
+  - Marca el nodo en estado `STOPPED`, suspendiendo la descarga y derivación de datos de saturación hacia dicha réplica.
+
 ---
 
 ## 7. Administración de Bases de Datos y Muestras (`SHOW DBS` y `SHOW SAMPLES`)
@@ -305,7 +358,7 @@ El Shell interactivo incorpora un receptor de eventos en segundo plano que detec
 Detecta bases de datos en memoria y en almacenamiento físico, clasificándolas por tipo:
 
 ```text
-jettra-shell [admin@127.0.0.1:9091/default_db]> show dbs
+jettra-shell [admin@127.0.0.1:50001/default_db]> show dbs
 
 +------------------------------------+----------+-------------+----------------+
 | Base de Datos                      | Tipo     | Colecciones | Estado         |
@@ -323,7 +376,7 @@ Ruta física en database.properties: '/jettra/data' | Directorio de lectura/escr
 
 ### 7.2 Inspección Específica de Muestras (`SHOW SAMPLES`)
 ```text
-jettra-shell [admin@127.0.0.1:9091/default_db]> show samples
+jettra-shell [admin@127.0.0.1:50001/default_db]> show samples
 
 ==============================================================================================
                         BASES DE DATOS DE EJEMPLO (JettraStore Samples)                      
@@ -516,7 +569,7 @@ Permite crear índices secundarios dispersos (*Sparse Indexes*), árboles B-Tree
 
 **Ejemplo de Tabla de Índices**:
 ```text
-jettra-shell [admin@127.0.0.1:9091/sample_enterprise_db]> show indexes
+jettra-shell [admin@127.0.0.1:50001/sample_enterprise_db]> show indexes
 
 === ÍNDICES DE BASE DE DATOS: 'sample_enterprise_db' ===
 +----------------------+----------------------+----------------------+--------+--------+----------+
@@ -611,7 +664,7 @@ SHOW BUCKETS <DOCUMENT|VECTOR|GRAPH|TIMESERIES|KEYVALUE|COLUMNAR|GEOSPATIAL>
 
 #### Ejemplo de Salida:
 ```text
-jettra-shell [admin@127.0.0.1:9091/sample_enterprise_db]> SHOW BUCKETS
+jettra-shell [admin@127.0.0.1:50001/sample_enterprise_db]> SHOW BUCKETS
 ==============================================================================================
                 BUCKETS / UNITS EN BASE DE DATOS: 'sample_enterprise_db'                                        
 ==============================================================================================
@@ -632,7 +685,7 @@ Total: 8 bucket(s)/unit(s) registrados en la base de datos 'sample_enterprise_db
 
 #### Filtrado por Motor Específico:
 ```text
-jettra-shell [admin@127.0.0.1:9091/sample_enterprise_db]> SHOW BUCKETS DOCUMENT
+jettra-shell [admin@127.0.0.1:50001/sample_enterprise_db]> SHOW BUCKETS DOCUMENT
 ==============================================================================================
                 BUCKETS / UNITS EN BASE DE DATOS: 'sample_enterprise_db'                                        
 ==============================================================================================
@@ -661,7 +714,7 @@ SHOW RECORDS FROM <nombre_bucket> [LIMIT n]
 
 **1. Bucket de Documentos (`DOCUMENT`):**
 ```text
-jettra-shell [admin@127.0.0.1:9091/sample_enterprise_db]> SHOW RECORDS employees LIMIT 5
+jettra-shell [admin@127.0.0.1:50001/sample_enterprise_db]> SHOW RECORDS employees LIMIT 5
 === REGISTROS DE DOCUMENT BUCKET 'employees' (Mostrando 1 de 1) ===
   [01] _id: emp_01          -> {_ref_equipment=kv::inventory_cache#laptop_mac_m3, name=Ada Lovelace, _ref_vector=vector::employee_biometrics#bio_01, _ref_department=document::departments#dep_rd, _id=emp_01, salary=185000.0, title=Lead Architect}
        ↳ Ref [_ref_equipment]: KV Valor: MacBook Pro M3 Max 64GB
@@ -671,14 +724,14 @@ jettra-shell [admin@127.0.0.1:9091/sample_enterprise_db]> SHOW RECORDS employees
 
 **2. Bucket de Vectores (`VECTOR`):**
 ```text
-jettra-shell [admin@127.0.0.1:9091/sample_ai_graph_db]> SHOW RECORDS concept_embeddings LIMIT 3
+jettra-shell [admin@127.0.0.1:50001/sample_ai_graph_db]> SHOW RECORDS concept_embeddings LIMIT 3
 === REGISTROS DE VECTOR BUCKET 'concept_embeddings' (Dim: 3 | Mostrando 1 de 1) ===
   [01] Vector ID: vec_neural_net  -> [0.88, 0.14, -0.42]
 ```
 
 **3. Bucket de Grafos (`GRAPH`):**
 ```text
-jettra-shell [admin@127.0.0.1:9091/sample_ai_graph_db]> SHOW RECORDS knowledge_network LIMIT 5
+jettra-shell [admin@127.0.0.1:50001/sample_ai_graph_db]> SHOW RECORDS knowledge_network LIMIT 5
 === REGISTROS DE GRAPH BUCKET 'knowledge_network' (3 vértices) ===
   [01] Vértice: node_dl         (Aristas salientes: 1)
        ↳ (node_dl)-[SUBFIELD_OF, props={weight=0.95}]->(node_ai)
@@ -689,14 +742,14 @@ jettra-shell [admin@127.0.0.1:9091/sample_ai_graph_db]> SHOW RECORDS knowledge_n
 
 **4. Bucket de Series Temporales (`TIMESERIES`):**
 ```text
-jettra-shell [admin@127.0.0.1:9091/sample_enterprise_db]> SHOW RECORDS telemetry LIMIT 3
+jettra-shell [admin@127.0.0.1:50001/sample_enterprise_db]> SHOW RECORDS telemetry LIMIT 3
 === REGISTROS DE TIMESERIES BUCKET 'telemetry' (Mostrando 1 de 1) ===
   [01] Timestamp: 1759160500      -> Valor: 14.8000
 ```
 
 **5. Bucket Clave-Valor (`KEYVALUE`):**
 ```text
-jettra-shell [admin@127.0.0.1:9091/sample_enterprise_db]> SHOW RECORDS inventory_cache LIMIT 5
+jettra-shell [admin@127.0.0.1:50001/sample_enterprise_db]> SHOW RECORDS inventory_cache LIMIT 5
 === REGISTROS DE KEYVALUE BUCKET 'inventory_cache' (Mostrando 1 de 1) ===
   [01] Clave: laptop_mac_m3        -> Valor: MacBook Pro M3 Max 64GB
 ```
@@ -718,19 +771,19 @@ COUNT *
 
 **Conteo de una unidad específica:**
 ```text
-jettra-shell [admin@127.0.0.1:9091/sample_enterprise_db]> COUNT employees
+jettra-shell [admin@127.0.0.1:50001/sample_enterprise_db]> COUNT employees
 [COUNT] [DOCUMENT] 'employees': 1 registro(s).
 
-jettra-shell [admin@127.0.0.1:9091/sample_enterprise_db]> COUNT product_embeddings
+jettra-shell [admin@127.0.0.1:50001/sample_enterprise_db]> COUNT product_embeddings
 [COUNT] [VECTOR] 'product_embeddings': 1 vector(es).
 
-jettra-shell [admin@127.0.0.1:9091/sample_enterprise_db]> COUNT catalog_graph
+jettra-shell [admin@127.0.0.1:50001/sample_enterprise_db]> COUNT catalog_graph
 [COUNT] [GRAPH] 'catalog_graph': 2 vértice(s).
 ```
 
 **Conteo global de toda la base de datos:**
 ```text
-jettra-shell [admin@127.0.0.1:9091/sample_enterprise_db]> COUNT ALL
+jettra-shell [admin@127.0.0.1:50001/sample_enterprise_db]> COUNT ALL
 === CONTEO TOTAL DE REGISTROS EN BASE DE DATOS: 'sample_enterprise_db' ===
   * [DOCUMENT]   departments            : 1 registro(s)
   * [DOCUMENT]   employees              : 1 registro(s)
@@ -2199,7 +2252,7 @@ Al escribir un prefijo o comando parcial en el prompt y presionar la tecla **`[T
    * *Ejemplo:* Escribir `STATU` y presionar `[TAB]` $\rightarrow$ autocompleta a `STATUS `.
 2. **Múltiples Coincidencias:** Si existen múltiples comandos o argumentos que coincidan, el shell despliega una lista organizada por grupos temáticos (*Bases de Datos*, *Colecciones y Buckets*, *CRUD*, *Índices*, *Cluster*, etc.) junto a una descripción funcional:
    ```text
-   jettra-shell [admin@127.0.0.1:9091/default_db]> SH[TAB]
+   jettra-shell [admin@127.0.0.1:50001/default_db]> SH[TAB]
    === Bases de Datos ===
    SHOW DATABASES       -- Lista todas las bases de datos registradas
    SHOW SAMPLES         -- Muestra bases de datos de demostración predefinidas
@@ -2254,7 +2307,7 @@ El shell registra automáticamente cada comando ejecutado durante la sesión:
   *Salida de ejemplo:*
   ```text
   === HISTORIAL DE COMANDOS (3 registrados) ===
-    [   1] CONNECT 127.0.0.1 9091
+    [   1] CONNECT 127.0.0.1 50001
     [   2] USE orders_billing_db
     [   3] DB STATS
   --------------------------------------------------------------------------------
@@ -2284,7 +2337,7 @@ El comando `DB STATS` audita e inspecciona la totalidad de los 8 motores multimo
 Al invocar `db stats` sobre una base de datos multimodal (por ejemplo `example_factura_db` u `orders_billing_db`), el reporte muestra detalladamente las unidades de cada motor:
 
 ```text
-jettra-shell [admin@127.0.0.1:9091/example_factura_db]> db stats
+jettra-shell [admin@127.0.0.1:50001/example_factura_db]> db stats
 === ESTADÍSTICAS DE BASE DE DATOS: 'example_factura_db' ===
 - Colecciones Totales: 10
 - Documentos:          [detalles_factura, facturas, clientes]
@@ -2337,12 +2390,12 @@ cluster-distributed info
 La salida formatea una tabla ASCII con la topología, estado de conexión, roles y bases de datos replicadas:
 
 ```text
-jettra-shell [admin@127.0.0.1:9091]> cluster-distributed info
+jettra-shell [admin@127.0.0.1:50001]> cluster-distributed info
 +---------+----------------+------+-----------+--------+-------+--------------------------------------------------------------+
 | NODE ID | IP             | PORT | ROLE      | STATUS | DBS   | DATABASES                                                    |
 +---------+----------------+------+-----------+--------+-------+--------------------------------------------------------------+
-| node-01 | 192.168.60.243 | 9091 | PRIMARY   | ONLINE | 4     | orders_billing_db, example_factura_db, samples_hospital_db  |
-| node-02 | 192.168.60.246 | 9091 | SECONDARY | ONLINE | 4     | orders_billing_db, example_factura_db, samples_hospital_db  |
+| node-01 | 192.168.60.243 | 50001 | PRIMARY   | ONLINE | 4     | orders_billing_db, example_factura_db, samples_hospital_db  |
+| node-02 | 192.168.60.246 | 50002 | SECONDARY | ONLINE | 4     | orders_billing_db, example_factura_db, samples_hospital_db  |
 +---------+----------------+------+-----------+--------+-------+--------------------------------------------------------------+
 ```
 
@@ -2422,9 +2475,11 @@ logout
   cluster live [límite]                 Muestra trazas y eventos en tiempo real de lo que ocurre en el clúster.
   multinode / show multinode            Muestra el estado de cluster.multinode.active (ON/OFF).
   multinode on / multinode off          Activa o desactiva dinámicamente la distribución de datos.
-  add node <id> <host> <port> [ROLE]    Agrega un nuevo nodo secundario al clúster Raft.
-  remove node <id>                      Remueve un nodo réplica del anillo dinámico.
-  start node <id>                       Inicia y activa el procesamiento para un nodo específico.
+  cluster add-node <id> <host> <port> [ROLE] [REST_PORT]  Agrega un nuevo nodo; replica cluster.config (PRIMARY -> SECONDARIES) y sincroniza datos desde PRIMARY.
+  add node <id> <host> <port> [ROLE] [REST_PORT]    Agrega un nuevo nodo al clúster y replica cluster.config.
+  cluster remove-node <id>              Remueve un nodo y replica cluster.config (PRIMARY -> SECONDARIES).
+  remove node <id>                      Remueve un nodo réplica del anillo y replica cluster.config.
+  start node <id>                       Inicia/reactiva un nodo y sincroniza automáticamente bases de datos y objetos desde PRIMARY.
   stop node <id>                        Detiene un nodo réplica (pausa el tráfico de descarga).
 
 3. BASES DE DATOS Y PERSISTENCIA EN DISCO:
@@ -2499,7 +2554,7 @@ logout
 app.title=JettraStore Shell
 cluster.multinode.active=on
 cluster.healthcheck.timeout.ms=1000
-cluster.nodes=node-01:127.0.0.1:9091,node-02:127.0.0.1:9092,node-03:127.0.0.1:9093
+cluster.nodes=node-01:127.0.0.1:50001,node-02:127.0.0.1:50002,node-03:127.0.0.1:50003
 ```
 
 ### Actualización Automática al Modificar Conexiones o Nodos

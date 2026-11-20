@@ -288,15 +288,18 @@ public final class NodeLifecycleManager {
         if (node.getRestPort() > 0) candidatePorts.add(node.getRestPort());
         Integer hint = restPortHints.get(node.getId().trim().toLowerCase());
         if (hint != null && hint > 0 && !candidatePorts.contains(hint)) candidatePorts.add(hint);
-        if (nodePort >= 9091 && nodePort <= 9099) {
+        if (nodePort >= 50001 && nodePort <= 50009) {
+            int mapped = 60000 + (nodePort - 50000); // 50001->60001, 50002->60002, 50003->60003
+            if (!candidatePorts.contains(mapped)) candidatePorts.add(mapped);
+            if (!candidatePorts.contains(60001)) candidatePorts.add(60001);
+        } else if (nodePort >= 9091 && nodePort <= 9099) {
             int mapped = nodePort - 1010; // 9091->8081, 9092->8082, 9093->8083
             if (!candidatePorts.contains(mapped)) candidatePorts.add(mapped);
         }
-        if (host.toLowerCase(Locale.ROOT).startsWith("jettra-") && !candidatePorts.contains(8080)) {
-            candidatePorts.add(8080);
+        if (host.toLowerCase(Locale.ROOT).startsWith("jettra-") && !candidatePorts.contains(60001)) {
+            candidatePorts.add(60001);
         }
         if (!candidatePorts.contains(nodePort)) candidatePorts.add(nodePort);
-        if (nodePort == 9091 && !candidatePorts.contains(8080)) candidatePorts.add(8080);
 
         for (int candidate : candidatePorts) {
             if (candidate <= 0 || candidate > 65535) continue;
@@ -505,7 +508,7 @@ public final class NodeLifecycleManager {
                 String nodeIdLower = node.getId().trim().toLowerCase(Locale.ROOT);
                 String nodeHostLower = node.getHost() != null ? node.getHost().trim().toLowerCase(Locale.ROOT) : "";
                 int nodePort = node.getPort();
-                int nodeRestPort = node.getRestPort() > 0 ? node.getRestPort() : (nodePort >= 9091 && nodePort <= 9099 ? nodePort - 1010 : -1);
+                int nodeRestPort = node.getRestPort() > 0 ? node.getRestPort() : (nodePort >= 50001 && nodePort <= 50009 ? 60000 + (nodePort - 50000) : (nodePort >= 9091 && nodePort <= 9099 ? nodePort - 1010 : -1));
 
                 for (JsonNode c : array) {
                     String id = c.path("Id").asText("");

@@ -1,24 +1,35 @@
 package io.jettra.driver;
 
+import io.jettra.driver.admin.BackupOptions;
+import io.jettra.driver.admin.BackupResult;
+import io.jettra.driver.admin.RestoreResult;
 import io.jettra.driver.config.JettraClientConfig;
+import io.jettra.driver.listener.JettraPoliceEventListener;
+import io.jettra.driver.query.JettraResultSet;
+import io.jettra.driver.query.JettraResults;
 import io.jettra.store.core.JettraDatabase;
+import io.jettra.store.core.StreamResponse;
+import io.jettra.store.engine.index.JettraIndexManager;
+import io.jettra.store.engine.models.JettraRef;
+import io.jettra.store.police.JettraPoliceNotification;
 import io.jettra.test.annotation.DisplayName;
 import io.jettra.test.annotation.Test;
 
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
-import io.jettra.driver.listener.JettraPoliceEventListener;
-import io.jettra.store.core.StreamResponse;
-import io.jettra.store.police.JettraPoliceNotification;
 
 import static io.jettra.test.core.JettraAssert.*;
 
 public class JettraClientTest {
+
+    public record TestOrderRecord(long customerId, String product, double amount, boolean active) {}
+    public record TestAccountRecord(String accountId, String holder, double balance) {}
 
     @Test
     @DisplayName("Debe conectar cliente JettraClient y autenticar con JettraJWT")
@@ -56,6 +67,7 @@ public class JettraClientTest {
             Files.deleteIfExists(backupPath);
         }
     }
+
     @Test
     @DisplayName("Debe ejecutar cálculos, agregaciones, estadística, finanzas y vectores con JettraClient")
     public void testDriverCalcAndAggregations() {
@@ -149,7 +161,6 @@ public class JettraClientTest {
         }
     }
 
-
     @Test
     @DisplayName("Debe configurar modo multinodo (cluster.multinode.active) en JettraClient")
     public void testClusterMultinodeActiveDriverSupport() {
@@ -182,6 +193,209 @@ public class JettraClientTest {
             assertEquals("off", clientOff.getClusterMultinodeActive());
             assertTrue(clientOff.getRingEngine().getPeers().isEmpty());
             assertFalse(clientOff.getRingEngine().isMultinodeActive());
+        }
+    }
+
+    @Test
+    @DisplayName("Debe ejecutar consultas fluidas SQL con JettraSqlCommand y JettraResultSet en Virtual Threads")
+    public void testFluentSqlQueryExecution() {
+        try (JettraClient client = JettraClient.connect("127.0.0.1", 9091, "admin", "admin-jettra")) {
+            var docEng = client.getDocumentEngine("main_db", "employees");
+            docEng.insert("e1", Map.of("department", "Engineering", "salary", 80000.0, "active", true));
+            docEng.insert("e2", Map.of("department", "Engineering", "salary", 95000.0, "active", true));
+            docEng.insert("e3", Map.of("department", "Marketing", "salary", 60000.0, "active", true));
+
+            // Ejecución sincrónica con cursor
+            JettraResultSet rs = client.sql("SELECT department, salary, active FROM employees")
+                .onDatabase("main_db")
+                .execute();
+            assertNotNull(rs);
+            assertTrue(rs.size() >= 3);
+            assertTrue(rs.next());
+            assertNotNull(rs.getString("department"));
+            assertTrue(rs.getDouble("salary") > 0);
+            assertTrue(rs.getBoolean("active"));
+            assertNotNull(rs.getCurrentRowAsMap());
+            assertFalse(rs.asMaps().isEmpty());
+
+            // Navegación por cursor
+            rs.reset();
+            assertEquals(-1, rs.getCursor());
+            assertTrue(rs.next());
+            assertEquals(0, rs.getCursor());
+
+            // Ejecución asíncrona sobre Virtual Thread de Java 25
+            JettraResultSet rsAsync = client.sql("SELECT * FROM employees")
+                .onDatabase("main_db")
+                .executeAsync().join();
+            assertNotNull(rsAsync);
+            assertTrue(rsAsync.size() >= 3);
+        }
+    }
+
+    @Test
+    @DisplayName("Debe ejecutar consultas fluidas tipadas con JettraFluentQuery y JettraResults")
+    public void testFluentTypedLqlQuery() {
+        try (JettraClient client = JettraClient.connect("127.0.0.1", 9091, "admin", "admin-jettra")) {
+            var recEng = client.getRecordsEngine("main_db", "orders", TestOrderRecord.class);
+            recEng.persist("ord-1", new TestOrderRecord(5421L, "Laptop NVMe", 1499.99, true));
+            recEng.persist("ord-2", new TestOrderRecord(5421L, "4K Monitor", 499.50, true));
+            recEng.persist("ord-3", new TestOrderRecord(9999L, "Mouse USB", 25.00, false));
+
+            // Consulta tipada sincrónica
+            JettraResults<TestOrderRecord> orders = client.from("orders", TestOrderRecord.class)
+                .useIndex("idx_customer_sparse")
+                .filter(o -> o.customerId() == 5421L)
+                .fetchMode(JettraRef.FetchMode.LAZY)
+                .execute();
+
+            assertNotNull(orders);
+            assertEquals(2, orders.size());
+            assertFalse(orders.isEmpty());
+            assertNotNull(orders.firstOrNull());
+            assertEquals(5421L, orders.firstOrNull().customerId());
+            assertTrue(orders.durationMs() >= 0);
+            assertNotNull(orders.summary());
+
+            // Consulta tipada asíncrona sobre Virtual Thread
+            JettraResults<TestOrderRecord> ordersAsync = client.from("orders", TestOrderRecord.class)
+                .filter(o -> o.customerId() == 5421L)
+                .executeAsync().join();
+
+            assertEquals(2, ordersAsync.size());
+        }
+    }
+
+    @Test
+    @DisplayName("Debe ejecutar BackupOptions y RestoreResult avanzados en JettraAdminClient")
+    public void testAdminBackupOptionsAndResults() throws IOException {
+        try (JettraClient client = JettraClient.connect("127.0.0.1", 9091, "admin", "admin-jettra")) {
+            JettraDatabase db = client.getDatabase("corporate_db");
+            db.getDocumentEngine("contracts").insert("c1", Map.of("value", 500000.0, "status", "SIGNED"));
+
+            Path backupDir = Files.createTempDirectory("driver_backup_test");
+            BackupOptions options = BackupOptions.builder()
+                .targetDirectory(backupDir.toString())
+                .compress(false)
+                .includeSecondaryIndexes(true)
+                .build();
+
+            BackupResult backupRes = client.admin().backupDatabase("corporate_db", options);
+            assertTrue(backupRes.isSuccess());
+            assertTrue(backupRes.success());
+            assertNotNull(backupRes.snapshotPath());
+            assertTrue(backupRes.durationMs() >= 0);
+            assertTrue(Files.exists(Path.of(backupRes.snapshotPath())));
+
+            RestoreResult restoreRes = client.admin().restoreDatabase("corporate_db", backupRes.snapshotPath());
+            assertTrue(restoreRes.isSuccess());
+            assertTrue(restoreRes.success());
+            assertTrue(restoreRes.durationMs() >= 0);
+
+            Files.deleteIfExists(Path.of(backupRes.snapshotPath()));
+            Files.deleteIfExists(backupDir);
+        }
+    }
+
+    @Test
+    @DisplayName("Debe interactuar directamente con los 8 motores multimodelo y referencias JettraRef")
+    public void testMultiModelEnginesAndJettraRef() {
+        try (JettraClient client = JettraClient.connect("127.0.0.1", 9091, "admin", "admin-jettra")) {
+            // 1. DocumentEngine
+            var doc = client.getDocumentEngine("cat_docs");
+            doc.insert("d1", Map.of("title", "Doc 1"));
+            assertNotNull(doc.findById("d1"));
+
+            // 2. KeyValueEngine
+            var kv = client.getKeyValueEngine("sessions");
+            kv.put("sess-1", "user-admin".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            assertNotNull(kv.get("sess-1"));
+
+            // 3. VectorEngine
+            var vec = client.getVectorEngine("embeddings", 3);
+            vec.index("vec-1", new float[]{1.0f, 0.0f, 0.5f});
+            assertEquals(1, vec.size());
+
+            // 4. GraphEngine
+            var graph = client.getGraphEngine("network");
+            graph.addVertex("A");
+            graph.addVertex("B");
+            graph.addEdge("A", "B", "CONNECTS", Map.of("weight", 1.0));
+            assertTrue(graph.size() >= 2);
+
+            // 5. TimeSeriesEngine
+            var ts = client.getTimeSeriesEngine("metrics_ts");
+            ts.record(1700000000L, 42.5);
+            assertEquals(1, ts.size());
+
+            // 6. GeospatialEngine
+            var geo = client.getGeospatialEngine("pois");
+            geo.insertPoint("poi-1", 8.98, -79.52);
+            assertNotNull(geo.getAllPoints().get("poi-1"));
+
+            // 7. ColumnarEngine
+            var col = client.getColumnarEngine("metrics_col");
+            col.appendRow(Map.of("val", 10.5));
+            assertEquals(1, col.size());
+
+            // 8. RecordsEngine
+            var rec = client.getRecordsEngine("accounts", TestAccountRecord.class);
+            rec.persist("acc-1", new TestAccountRecord("acc-1", "John", 1500.0));
+            assertNotNull(rec.find("acc-1"));
+
+            // JettraRef (Lazy & Eager)
+            JettraRef<Map<String, Object>> refLazy = client.createLazyRef("cat_docs", "d1", () -> client.getDocumentEngine("cat_docs").findById("d1"));
+            assertFalse(refLazy.isResolved());
+            var resolved = refLazy.resolve();
+            assertTrue(refLazy.isResolved());
+            assertNotNull(resolved);
+            assertEquals("Doc 1", resolved.get("title"));
+
+            JettraRef<Map<String, Object>> refEager = client.createEagerRef("cat_docs", "d1", () -> client.getDocumentEngine("cat_docs").findById("d1"));
+            assertTrue(refEager.isResolved());
+            assertNotNull(refEager.resolve());
+        }
+    }
+
+    @Test
+    @DisplayName("Debe gestionar índices secundarios, registro dinámico de nodos y topología")
+    public void testIndexManagementAndClusterOperations() {
+        try (JettraClient client = JettraClient.connect("127.0.0.1", 9091, "admin", "admin-jettra")) {
+            var docEngine = client.getDocumentEngine("products_idx");
+            docEngine.insert("p1", Map.of("category", "Electronics", "price", 99.99));
+            docEngine.insert("p2", Map.of("category", "Electronics", "price", 149.99));
+            docEngine.insert("p3", Map.of("category", "Books", "price", 19.99));
+
+            // Crear índice secundario
+            JettraIndexManager.IndexInfo idxInfo = client.createIndex("products_idx", "idx_category", "category", "HASH", false);
+            assertNotNull(idxInfo);
+            assertEquals("idx_category", idxInfo.name());
+
+            // Listar índices
+            List<JettraIndexManager.IndexInfo> indexes = client.listIndexes();
+            assertNotNull(indexes);
+            assertTrue(indexes.stream().anyMatch(i -> i.name().equals("idx_category")));
+
+            // Eliminar índice
+            boolean dropped = client.dropIndex("idx_category");
+            assertTrue(dropped);
+
+            // Registro dinámico de nodo par en DynamicRingEngine
+            boolean reg = client.registerDynamicPeer("peer-dynamic-1", "127.0.0.1", 9095, "SECONDARY");
+            assertTrue(reg);
+            assertNotNull(client.getRingEngine().getPeer("peer-dynamic-1"));
+
+            // Eliminación de nodo par
+            boolean rem = client.removeClusterPeer("peer-dynamic-1");
+            assertTrue(rem);
+
+            // Replicación de creación de motor
+            boolean engRep = client.replicateCreateEngine("main_db", "replicated_docs", "DOCUMENT");
+            assertTrue(engRep);
+
+            // Verificación de salud del clúster
+            boolean health = client.checkClusterHealth();
+            assertTrue(health);
         }
     }
 }

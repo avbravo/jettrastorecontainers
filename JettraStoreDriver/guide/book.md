@@ -17,13 +17,21 @@
 
 ## 2. Configuración y Conexión Segura
 
-### 2.1 Dependencia Maven
+### 2.1 Dependencia Maven y Módulo JPMS (Java Platform Module System)
+
 ```xml
 <dependency>
     <groupId>io.jettra</groupId>
-    <artifactId>jettrastoredriver</artifactId>
+    <artifactId>JettraStoreDriver</artifactId>
     <version>1.0-SNAPSHOT</version>
 </dependency>
+```
+
+#### Declaración en `module-info.java`:
+```java
+module com.example.application {
+    requires io.jettra.driver;
+}
 ```
 
 ### 2.2 Inicialización del Cliente con `JettraClientConfig`
@@ -105,7 +113,9 @@ for (int i = 0; i < prices.size(); i++) {
 
 ## 4. Consultas con JettraSQL y JettraQueryLanguage (LQL)
 
-### 4.1 Ejecución de JettraSQL con Agrupaciones (`GROUP BY`) y Ordenación (`ORDER BY`)
+### 4.1 Ejecución Fluida de JettraSQL con `JettraSqlCommand` y `JettraResultSet`
+El cliente ofrece una API fluida que permite ejecutar sentencias SQL de forma síncrona o reactiva sobre Virtual Threads nativos de Java 25:
+
 ```java
 String sql = """
     SELECT department, COUNT(*) AS total_employees, AVG(salary) AS avg_salary
@@ -116,20 +126,51 @@ String sql = """
     ORDER BY avg_salary DESC
     """;
 
-JettraResultSet rs = client.sql(sql).execute();
+// 1. Ejecución sincrónica con navegación por cursor
+JettraResultSet rs = client.sql(sql)
+    .onDatabase("corporate_db") // Opcional (por defecto usa la base de datos predeterminada)
+    .execute();
+
 while (rs.next()) {
     System.out.printf("Dept: %s | Total: %d | Avg: %.2f%n",
         rs.getString("department"), rs.getLong("total_employees"), rs.getDouble("avg_salary"));
 }
+
+// Métodos disponibles en JettraResultSet:
+// - rs.next(), rs.previous(), rs.first(), rs.last(), rs.reset()
+// - rs.getString(col), rs.getLong(col), rs.getDouble(col), rs.getInt(col), rs.getBoolean(col), rs.getObject(col)
+// - rs.getCurrentRowAsMap(), rs.asMaps(), rs.size(), rs.summary()
+
+// 2. Ejecución asíncrona no bloqueante sobre Java 25 Virtual Threads
+CompletableFuture<JettraResultSet> futureRs = client.sql(sql).executeAsync();
+futureRs.thenAccept(results -> {
+    System.out.printf("Consulta asíncrona completada: %d filas retornadas.%n", results.size());
+});
 ```
 
-### 4.2 Fluent LQL con Índices Secundarios Dispersos
+### 4.2 Fluent LQL con Índices Secundarios y Java 25 Records
+Para consultas orientadas a entidades fuertemente tipadas y Java Records, `JettraFluentQuery` proporciona un constructor declarativo:
+
 ```java
+public record Order(long customerId, String product, double amount, boolean active) {}
+
+// Consulta tipada sincrónica
 JettraResults<Order> orders = client.from("orders", Order.class)
-    .useIndex("idx_customer_sparse") // Fuerza el uso del sparse index en .jettra
-    .filter(o -> o.customerId() == 5421L)
-    .fetchMode(FetchMode.LAZY)
+    .useIndex("idx_customer_sparse") // Fuerza el uso del índice secundario
+    .filter(o -> o.customerId() == 5421L && o.amount() > 100.0)
+    .limit(50)
+    .skip(0)
+    .fetchMode(JettraRef.FetchMode.LAZY)
     .execute();
+
+for (Order order : orders) {
+    System.out.printf("Orden: %s | Monto: $%.2f%n", order.product(), order.amount());
+}
+
+// Consulta tipada asíncrona sobre Virtual Threads
+CompletableFuture<JettraResults<Order>> futureOrders = client.from("orders", Order.class)
+    .filter(o -> o.active())
+    .executeAsync();
 ```
 
 ---
@@ -1079,10 +1120,22 @@ A partir de la versión 1.0, `JettraClient` incluye métodos nativos para orques
 boolean success = client.clusterDistributed("example_factura_db");
 
 // 2. Distribuir todas las bases de datos registradas y sus registros a todos los nodos
-boolean allSuccess = client.clusterDistributedAll();
+Map<String, Boolean> allSuccess = client.clusterDistributedAll();
 
-// 3. Consultar la tabla de información de distribución de nodos y bases de datos
-List<Map<String, Object>> nodes = client.getClusterDistributedInfo();
+// 3. Consultar la tabla tipada de información de distribución de nodos y bases de datos
+List<ClusterNodeDistributionInfo> nodes = client.getClusterDistributedInfo();
+
+// 4. Registro y remoción dinámica de nodos en el anillo de enrutamiento (Dynamic Ring Engine)
+boolean added = client.registerDynamicPeer("node-04", "192.168.1.104", 9091, "SECONDARY");
+boolean removed = client.removeClusterPeer("node-04");
+
+// 5. Replicación cluster-wide de motores multimodelo
+boolean engineReplicated = client.replicateCreateEngine("facturacion_db", "telemetria", "TIMESERIES");
+
+// 6. Diagnóstico y estado de salud del clúster
+boolean isHealthy = client.checkClusterHealth();
+String healthJson = client.admin().getClusterHealth("192.168.1.101", 9091);
+String statusJson = client.admin().getClusterStatus("192.168.1.101", 9091);
 ```
 
 ### 11.2 Ejemplo de Integración en Java 25
@@ -1091,32 +1144,31 @@ List<Map<String, Object>> nodes = client.getClusterDistributedInfo();
 package com.example;
 
 import io.jettra.driver.JettraClient;
+import io.jettra.store.cluster.ClusterNodeDistributionInfo;
 import java.util.List;
-import java.util.Map;
 
 public class ClusterDistributionDemo {
     public static void main(String[] args) {
-        try (JettraClient client = JettraClient.builder()
-                .host("192.168.60.243")
-                .port(9091)
-                .credentials("admin", "admin-jettra")
-                .build()) {
+        try (JettraClient client = JettraClient.connect("192.168.60.243", 9091, "admin", "admin-jettra")) {
 
             System.out.println("Distribuir base de datos 'example_factura_db'...");
             boolean ok = client.clusterDistributed("example_factura_db");
             System.out.println("Resultado de distribución: " + ok);
 
             System.out.println("\nConsultando estado de distribución en el clúster:");
-            List<Map<String, Object>> topology = client.getClusterDistributedInfo();
-            for (Map<String, Object> node : topology) {
-                System.out.printf("- Nodo [%s] en %s:%s | Rol: %s | Estado: %s | Bases de datos: %s%n",
-                        node.get("nodeId"),
-                        node.get("ip"),
-                        node.get("port"),
-                        node.get("role"),
-                        node.get("status"),
-                        node.get("databases"));
+            List<ClusterNodeDistributionInfo> topology = client.getClusterDistributedInfo();
+            for (ClusterNodeDistributionInfo node : topology) {
+                System.out.printf("- Nodo [%s] en %s:%d | Rol: %s | Estado: %s | Bases de datos: %s%n",
+                        node.nodeId(),
+                        node.ip(),
+                        node.port(),
+                        node.role(),
+                        node.status(),
+                        node.databases());
             }
+
+            // Monitoreo de salud
+            System.out.println("Estado de salud del clúster: " + client.checkClusterHealth());
         } catch (Exception e) {
             e.printStackTrace();
         }
@@ -1153,5 +1205,78 @@ client.subscribeClusterLive(event -> {
 Para evitar fallos en aplicaciones de misión crítica cuando un nodo primario cae o es detenido:
 * **`client.registerAutoFailoverHandler()`**: Activa un listener interno que monitoriza eventos `LEADER_PROMOTED`.
 * Cuando un nodo secundario toma el rol de líder `PRIMARY`, el driver actualiza de manera atómica su anillo de enrutamiento (*Dynamic Ring Engine*), redirigiendo todas las operaciones de escritura y consultas transaccionales hacia el nuevo primario sin requerir reiniciar la conexión ni relanzar la aplicación cliente.
+
+---
+
+## 12. Gestión de Índices Secundarios (`JettraIndexManager`)
+
+`JettraStoreDriver` incluye soporte nativo y sincronizado para la administración de índices secundarios en memoria (`HASH`, `BTREE`, `SPARSE`), permitiendo acelerar consultas de búsqueda O(1), optimizar el streaming lazy y replicar la creación/eliminación de índices a nivel de clúster Raft:
+
+### 12.1 Operaciones Soportadas:
+* **Creación de Índice:** `client.createIndex(collection, indexName, field, type, unique)`
+* **Listado de Índices:** `client.listIndexes()` o `client.listIndexes(databaseName, collection)`
+* **Eliminación de Índice:** `client.dropIndex(indexName)` o `client.dropIndex(databaseName, indexName)`
+
+### 12.2 Ejemplo en Java 25:
+```java
+package io.jettra.driver.example;
+
+import io.jettra.driver.JettraClient;
+import io.jettra.store.engine.index.JettraIndexManager.IndexInfo;
+import java.util.List;
+
+public class IndexManagementDemo {
+    public static void main(String[] args) {
+        try (JettraClient client = JettraClient.connect("127.0.0.1", 9091, "admin", "admin-jettra")) {
+
+            // 1. Crear índice secundario Hash sobre el campo "category"
+            IndexInfo index = client.createIndex(
+                "products",
+                "idx_product_category",
+                "category",
+                "HASH",
+                false // no único
+            );
+            System.out.printf("Índice creado: %s | Colección: %s | Campo: %s%n",
+                index.name(), index.collection(), index.field());
+
+            // 2. Listar todos los índices secundarios activos
+            List<IndexInfo> activeIndexes = client.listIndexes();
+            for (IndexInfo info : activeIndexes) {
+                System.out.printf(" - Índice: %s (%s) en campo '%s'%n",
+                    info.name(), info.type(), info.field());
+            }
+
+            // 3. Eliminar índice secundario y propagar al clúster
+            boolean dropped = client.dropIndex("idx_product_category");
+            System.out.println("Índice eliminado: " + dropped);
+        }
+    }
+}
 ```
+
+---
+
+## 13. Resumen de Referencia Rápida de Métodos de `JettraClient`
+
+| Categoría | Método en `JettraClient` | Descripción |
+| :--- | :--- | :--- |
+| **Conexión & Sesión** | `connect(host, port, user, pass)` | Inicializa conexión autenticada con token JWT. |
+| **SQL Fluido** | `sql(query)` | Retorna `JettraSqlCommand` para `.execute()` o `.executeAsync()`. |
+| **LQL Fluido** | `from(collection, Record.class)` | Retorna `JettraFluentQuery<T>` con filtros y tipado. |
+| **Documentos** | `getDocumentEngine(collection)` | Acceso directo a `DocumentEngine`. |
+| **Clave-Valor** | `getKeyValueEngine(collection)` | Acceso directo a `KeyValueEngine`. |
+| **Vectores** | `getVectorEngine(collection, dims)` | Acceso directo a `VectorEngine` con similitud coseno. |
+| **Grafos** | `getGraphEngine(graphName)` | Acceso directo a `GraphEngine` para nodos y aristas. |
+| **Series Temporales**| `getTimeSeriesEngine(seriesName)` | Acceso directo a `TimeSeriesEngine`. |
+| **Geoespacial** | `getGeospatialEngine(geoName)` | Acceso directo a `GeospatialEngine` y radio en km. |
+| **Columnar** | `getColumnarEngine(colName)` | Acceso directo a `ColumnarEngine` OLAP. |
+| **Registros Tipados**| `getRecordsEngine(entity, Class<T>)` | Acceso directo a `RecordsEngine<T>`. |
+| **Referencias** | `createLazyRef(...)` / `createEagerRef(...)` | Creación de referencias cruzadas `JettraRef`. |
+| **Índices** | `createIndex(...)`, `listIndexes()`, `dropIndex(...)` | Gestión de índices secundarios en memoria. |
+| **Administración** | `admin().backupDatabase(db, options)` | Disparo de hot backups con `BackupOptions`. |
+| **Restauración** | `admin().restoreDatabase(db, path)` | Restauración y sincronización en caliente. |
+| **Clúster Dinámico** | `registerDynamicPeer(...)`, `removeClusterPeer(...)` | Gestión de topología sin reinicio. |
+| **Distribución** | `clusterDistributed(db)`, `clusterDistributedAll()` | Sincronización Raft de bases de datos y registros. |
+| **Salud del Clúster**| `checkClusterHealth()` | Diagnóstico de disponibilidad de nodos. |
 

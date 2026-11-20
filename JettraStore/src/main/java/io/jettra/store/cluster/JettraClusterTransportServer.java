@@ -559,6 +559,12 @@ public final class JettraClusterTransportServer implements AutoCloseable {
                                             }
                                         });
                                     }
+                                } else if (server.getConfig().getNodeRole() == ClusterNode.Role.SECONDARY) {
+                                    // Sincronizar de inmediato el estado completo de bases de datos y objetos desde el PRIMARY
+                                    Thread.ofVirtual().name("jettra-secondary-sync-on-config").start(() -> {
+                                        try { Thread.sleep(200); } catch (InterruptedException ignored) {}
+                                        server.synchronizeFromPrimary();
+                                    });
                                 }
                             }
                         }

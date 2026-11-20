@@ -17,13 +17,17 @@ storage.mode=OFF_HEAP
 app.title=JettraStore Explorer
 cluster.multinode.active=on
 cluster.healthcheck.timeout.ms=1000
-cluster.nodes=node-01:127.0.0.1:9091,node-02:127.0.0.1:9092,node-03:127.0.0.1:9093
+cluster.nodes=node-01:127.0.0.1:50001,node-02:127.0.0.1:50002,node-03:127.0.0.1:50003
 ```
 
 ### Sincronización Bidireccional al Añadir o Expulsar Nodos
 Cuando desde `/cluster` se agrega un nuevo nodo o se expulsa un nodo secundario:
 1. **Actualización local en JettraStoreExplorer:** Se actualiza automáticamente la propiedad `cluster.nodes` en `microprofile-config.properties` preservando comentarios y demás parámetros.
-2. **Actualización y replicación de `cluster.config`:** Se genera el archivo `cluster.config` actualizado (con `id`, `role`, `ip`, `grpc.port` y `rest.port`, **sin** propiedades `cluster.node.<N>.storage.path`, ya que cada nodo define su propio `jettra.storage.path` en su `microprofile-config.properties`) y se envía mediante la trama Raft `TYPE_SYNC_CLUSTER_CONFIG` (`0x17`) al nodo `PRIMARY` y a los nodos `SECONDARY`, replicándose en todo el clúster.
+2. **Actualización y replicación de `cluster.config`:** Se genera el archivo `cluster.config` actualizado (con `id`, `role`, `ip`, `grpc.port` y `rest.port`, **sin** propiedades `cluster.node.<N>.storage.path`, ya que cada nodo define su propio `jettra.storage.path` en su `microprofile-config.properties`) y se envía mediante la trama Raft `TYPE_SYNC_CLUSTER_CONFIG` (`0x17`) primero al nodo `PRIMARY` y luego a los nodos `SECONDARY`, replicándose en todo el clúster.
+3. **Sincronización Automática de Datos desde el PRIMARY:**
+   Cada vez que un nodo se añade al clúster o cuando fue detenido y luego se reinicia (o se restablece su enlace de red), este nodo se actualiza automáticamente con el estado del nodo PRIMARY, obteniendo la réplica completa de la base de datos y objetos desde el nodo PRIMARY para que el clúster se mantenga permanentemente actualizado.
+4. **Reflejo Inmediato de Estatus en `/map` y `/cluster`:**
+   Al detenerse o reiniciarse cualquier nodo, el motor de telemetría y eventos Server-Sent Events (SSE) notifica en tiempo real a las vistas web, actualizando de inmediato los indicadores visuales de disponibilidad y latencia sin requerir recargar la página.
 
 ---
 

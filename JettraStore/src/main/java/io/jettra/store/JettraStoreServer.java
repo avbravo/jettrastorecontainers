@@ -172,6 +172,14 @@ public final class JettraStoreServer {
             }
 
             this.replicationClient = new JettraClusterReplicationClient(config.getNodeId(), ringEngine.getPeers());
+            this.replicationClient.setPeerRecoveryListener(recoveredPeer -> {
+                System.out.printf("[JettraStoreServer] 🟢 Nodo '%s' se ha reiniciado tras parada. Replicando estado y bases de datos desde PRIMARY...%n",
+                    recoveredPeer.getId());
+                Thread.ofVirtual().name("jettra-peer-recovery-" + recoveredPeer.getId()).start(() -> {
+                    try { Thread.sleep(250); } catch (InterruptedException ignored) {}
+                    distributeAllDatabasesToPeer(recoveredPeer);
+                });
+            });
 
             // Tarea periódica de latidos Raft (Heartbeats) si es PRIMARY
             if (config.getNodeRole() == ClusterNode.Role.PRIMARY) {
@@ -640,6 +648,14 @@ public final class JettraStoreServer {
     public synchronized JettraClusterReplicationClient getOrCreateReplicationClient() {
         if (replicationClient == null && config.isClusterMultinodeActive()) {
             replicationClient = new JettraClusterReplicationClient(config.getNodeId(), ringEngine.getPeers());
+            replicationClient.setPeerRecoveryListener(recoveredPeer -> {
+                System.out.printf("[JettraStoreServer] 🟢 Nodo '%s' se ha reiniciado tras parada. Replicando estado y bases de datos desde PRIMARY...%n",
+                    recoveredPeer.getId());
+                Thread.ofVirtual().name("jettra-peer-recovery-" + recoveredPeer.getId()).start(() -> {
+                    try { Thread.sleep(250); } catch (InterruptedException ignored) {}
+                    distributeAllDatabasesToPeer(recoveredPeer);
+                });
+            });
         }
         return replicationClient;
     }
@@ -996,6 +1012,12 @@ public final class JettraStoreServer {
      * @return true si la sincronización se completó con éxito; false si el primario no respondió.
      */
     public synchronized boolean synchronizeFromPrimary() {
+        if (replicationClient == null) {
+            this.replicationClient = getOrCreateReplicationClient();
+        }
+        if (replicationClient == null && ringEngine != null) {
+            this.replicationClient = new JettraClusterReplicationClient(config.getNodeId(), ringEngine.getPeers());
+        }
         if (replicationClient == null || ringEngine == null) {
             return false;
         }
@@ -1009,6 +1031,17 @@ public final class JettraStoreServer {
         }
         if (primaryPeer == null) {
             primaryPeer = ringEngine.getPeer("node-01");
+        }
+        if (primaryPeer == null && config.getAllClusterNodes() != null) {
+            for (var cn : config.getAllClusterNodes()) {
+                if ("PRIMARY".equalsIgnoreCase(cn.role()) && !cn.id().equalsIgnoreCase(config.getNodeId())) {
+                    primaryPeer = new ClusterNode(cn.id(), cn.ip(), cn.grpcPort(), ClusterNode.Role.PRIMARY);
+                    break;
+                }
+            }
+        }
+        if (primaryPeer == null && !ringEngine.getPeers().isEmpty()) {
+            primaryPeer = ringEngine.getPeers().get(0);
         }
         if (primaryPeer == null) {
             System.out.printf("[JettraStoreServer] Nodo secundario '%s': no hay nodo primario configurado en los peers del clúster.%n",
@@ -1097,6 +1130,12 @@ public final class JettraStoreServer {
                 db.saveToDisk();
             }
             Path metaFile = JettraDatabase.resolveMetaFile(dbName, config);
+            if (metaFile == null || !Files.exists(metaFile)) {
+                Path altMeta = Path.of(config.getStoragePath(), dbName + "_meta.json");
+                if (Files.exists(altMeta)) {
+                    metaFile = altMeta;
+                }
+            }
             if (metaFile != null && Files.exists(metaFile)) {
                 if (Files.size(metaFile) <= 16 * 1024 * 1024) {
                     return Files.readAllBytes(metaFile);
@@ -1252,10 +1291,13 @@ public final class JettraStoreServer {
             if (needsUpdate && replClient != null) {
                 replClient.broadcastClusterConfigSync(canonicalBytes);
             }
-            if (isNewNode) {
-                ClusterNode newPeer = new ClusterNode(joiningId.trim(), effectiveIp, effectiveGrpc, ClusterNode.Role.SECONDARY);
-                Thread.ofVirtual().name("jettra-join-node-db-sync-" + joiningId.trim()).start(() -> {
-                    distributeAllDatabasesToPeer(newPeer);
+            if (!joiningId.trim().equalsIgnoreCase(config.getNodeId())) {
+                ClusterNode targetPeer = new ClusterNode(joiningId.trim(), effectiveIp, effectiveGrpc, ClusterNode.Role.SECONDARY);
+                Thread.ofVirtual().name("jettra-sync-node-db-" + joiningId.trim()).start(() -> {
+                    try {
+                        Thread.sleep(300);
+                    } catch (InterruptedException ignored) {}
+                    distributeAllDatabasesToPeer(targetPeer);
                 });
             }
             JettraClusterEventBus.getInstance().publish(
@@ -1321,22 +1363,32 @@ public final class JettraStoreServer {
         if (targetPeer == null || config.getNodeRole() != ClusterNode.Role.PRIMARY) {
             return results;
         }
+        ClusterNode effectivePeer = targetPeer;
+        if ((effectivePeer.getPort() <= 0 || effectivePeer.getIp() == null || effectivePeer.getIp().isBlank()) && ringEngine != null) {
+            ClusterNode rn = ringEngine.getPeer(effectivePeer.getId());
+            if (rn != null) effectivePeer = rn;
+        }
         JettraClusterReplicationClient client = getOrCreateReplicationClient();
         if (client == null) {
             return results;
         }
         List<String> dbs = listDatabaseNames();
-        System.out.printf("[JettraStoreServer] 🔄 Replicando %d base(s) de datos y sus objetos al nuevo nodo '%s' (%s:%d)...%n",
-            dbs.size(), targetPeer.getId(), targetPeer.getIp(), targetPeer.getPort());
+        System.out.printf("[JettraStoreServer] 🔄 Replicando %d base(s) de datos y sus objetos al nodo '%s' (%s:%d)...%n",
+            dbs.size(), effectivePeer.getId(), effectivePeer.getIp(), effectivePeer.getPort());
         for (String db : dbs) {
             byte[] payload = getDatabaseSnapshotBytes(db);
-            boolean ok = client.sendDistributeDatabaseToPeer(targetPeer, db, payload);
+            boolean ok = false;
+            for (int attempt = 0; attempt < 4; attempt++) {
+                ok = client.sendDistributeDatabaseToPeer(effectivePeer, db, payload);
+                if (ok) break;
+                try { Thread.sleep(200); } catch (InterruptedException ignored) {}
+            }
             results.put(db, ok);
             if (ok) {
                 JettraClusterEventBus.getInstance().publish(
                     ClusterLiveEvent.TYPE_DATABASE_DISTRIBUTED,
-                    config.getNodeId(), targetPeer.getId(),
-                    String.format("Base de datos '%s' (%d bytes) replicada al nuevo nodo '%s'.", db, payload.length, targetPeer.getId()),
+                    config.getNodeId(), effectivePeer.getId(),
+                    String.format("Base de datos '%s' (%d bytes) replicada al nodo '%s'.", db, payload.length, effectivePeer.getId()),
                     "db=" + db + ",bytes=" + payload.length
                 );
             }

@@ -2,6 +2,10 @@ package io.jettra.driver;
 
 import io.jettra.driver.admin.JettraAdminClient;
 import io.jettra.driver.config.JettraClientConfig;
+import io.jettra.driver.query.JettraSqlCommand;
+import io.jettra.driver.query.JettraResultSet;
+import io.jettra.driver.query.JettraFluentQuery;
+import io.jettra.driver.query.JettraResults;
 import io.jettra.store.cluster.ClusterNode;
 import io.jettra.store.cluster.ClusterNodeDistributionInfo;
 import io.jettra.store.cluster.DynamicRingEngine;
@@ -11,6 +15,8 @@ import com.jettra.memory.api.JettraMemoryEngine;
 import com.jettra.memory.engine.StorageMetrics;
 import io.jettra.store.police.JettraPolice;
 import io.jettra.store.core.JettraStoreConfig;
+import io.jettra.store.engine.index.JettraIndexManager;
+import io.jettra.store.engine.models.*;
 import io.jettra.store.engine.query.JettraSQLProcessor;
 import io.jettra.driver.listener.JettraPoliceEventListener;
 import io.jettra.store.core.StreamResponse;
@@ -18,6 +24,7 @@ import io.jettra.store.police.JettraPoliceNotification;
 import io.jettra.store.security.JettraSecurityManager;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -37,7 +44,7 @@ public final class JettraClient implements AutoCloseable {
     public JettraClient(JettraClientConfig config) {
         this.config = config;
         this.sessionToken = securityManager.authenticate(config.getUsername(), config.getPassword());
-        this.adminClient = new JettraAdminClient(sessionToken);
+        this.adminClient = new JettraAdminClient(sessionToken, this);
         JettraStoreConfig storeCfg = null;
         try {
             storeCfg = JettraStoreConfig.load();
@@ -83,18 +90,108 @@ public final class JettraClient implements AutoCloseable {
     }
 
     public java.util.List<String> listDatabases() {
-        Set<String> result = new TreeSet<>(databases.keySet());
+        // 1. Si existe una instancia embebida activa del servidor, consultar directamente su catálogo
+        if (io.jettra.store.JettraStoreServer.getActiveInstance() != null) {
+            return io.jettra.store.JettraStoreServer.getActiveInstance().listDatabaseNames();
+        }
 
-        // 1. Escanear rutas físicas configuradas en database.properties y locales
+        // 2. Consultar directamente las bases de datos almacenadas en el nodo PRIMARY remoto vía TCP (TYPE_SYNC_CATALOG_REQ)
+        java.util.List<String> primaryDbs = fetchDatabasesFromPrimaryNode();
+        if (primaryDbs != null) {
+            return primaryDbs;
+        }
+
+        // 3. Fallback local únicamente si el nodo PRIMARY no está alcanzable (modo offline / pruebas unitarias)
+        Set<String> result = new TreeSet<>(databases.keySet());
         JettraStoreConfig cfg = JettraStoreConfig.load();
         scanDatabasesFromPath(cfg.getStoragePath(), result);
         scanDatabasesFromPath(cfg.getConfiguredStoragePath(), result);
-        scanDatabasesFromPath("./data/jettra", result);
-        scanDatabasesFromPath("data/jettra", result);
-        scanDatabasesFromPath("../data/jettra", result);
-        scanDatabasesFromPath("/jettra/data", result);
-
         return new ArrayList<>(result);
+    }
+
+    /**
+     * Consulta directamente al nodo PRIMARY del clúster (mediante trama Raft TYPE_SYNC_CATALOG_REQ)
+     * para obtener el listado exacto de bases de datos almacenadas en el PRIMARY.
+     * Retorna null si no se logra contactar al nodo PRIMARY.
+     */
+    public java.util.List<String> fetchDatabasesFromPrimaryNode() {
+        List<String> candidates = new ArrayList<>();
+        // 1. Endpoint al que el cliente se conectó explícitamente
+        if (config != null && !config.getClusterEndpoints().isEmpty()) {
+            for (String ep : config.getClusterEndpoints()) {
+                if (ep != null && !ep.isBlank() && !candidates.contains(ep.trim())) {
+                    candidates.add(ep.trim());
+                }
+            }
+        }
+        // 2. Nodos marcados como PRIMARY en el ringEngine
+        if (ringEngine != null) {
+            for (ClusterNode peer : ringEngine.getPeers()) {
+                if (peer.getRole() == ClusterNode.Role.PRIMARY && peer.getIp() != null && peer.getPort() > 0) {
+                    String ep = peer.getIp().trim() + ":" + peer.getPort();
+                    if (!candidates.contains(ep)) candidates.add(ep);
+                }
+            }
+        }
+        // 3. Nodo PRIMARY declarado en cluster.config
+        try {
+            Path clusterCfg = io.jettra.store.core.JettraConfigValidator.locateClusterConfigFile();
+            if (clusterCfg != null && Files.exists(clusterCfg)) {
+                Properties props = io.jettra.store.core.JettraConfigValidator.loadProperties(clusterCfg, "/cluster.config", "/jettra.config");
+                for (var cn : io.jettra.store.core.JettraConfigValidator.parseClusterNodes(props)) {
+                    if ("PRIMARY".equalsIgnoreCase(cn.role()) && cn.ip() != null && cn.grpcPort() > 0) {
+                        String ep = cn.ip().trim() + ":" + cn.grpcPort();
+                        if (!candidates.contains(ep)) candidates.add(ep);
+                    }
+                }
+            }
+        } catch (Exception ignored) {}
+
+        List<String> secondaryFallback = null;
+        for (String ep : candidates) {
+            String host = ep;
+            int port = 50001;
+            int idx = ep.lastIndexOf(':');
+            if (idx > 0) {
+                host = ep.substring(0, idx).trim();
+                try { port = Integer.parseInt(ep.substring(idx + 1).trim()); } catch (Exception ignored) {}
+            }
+            if (host.isBlank() || port <= 0) continue;
+
+            try (java.net.Socket s = new java.net.Socket()) {
+                s.setTcpNoDelay(true);
+                s.connect(new java.net.InetSocketAddress(host, port), 600);
+                s.setSoTimeout(1200);
+                try (java.io.BufferedOutputStream bos = new java.io.BufferedOutputStream(s.getOutputStream(), 8192);
+                     java.io.BufferedInputStream bis = new java.io.BufferedInputStream(s.getInputStream(), 8192)) {
+                    io.jettra.store.cluster.JettraRaftFrame req =
+                            io.jettra.store.cluster.JettraRaftFrame.syncCatalogReq(1L, "jettra-client");
+                    io.jettra.store.cluster.JettraClusterProtocol.writeFrame(bos, req);
+                    io.jettra.store.cluster.JettraRaftFrame resp =
+                            io.jettra.store.cluster.JettraClusterProtocol.readFrame(bis);
+                    if (resp != null && resp.frameType() == io.jettra.store.cluster.JettraRaftFrame.TYPE_SYNC_CATALOG_RESP) {
+                        String csv = resp.payload() != null
+                                ? new String(resp.payload(), java.nio.charset.StandardCharsets.UTF_8).trim()
+                                : "";
+                        Set<String> dbs = new TreeSet<>();
+                        if (!csv.isBlank()) {
+                            for (String part : csv.split(",")) {
+                                String n = part.trim();
+                                if (!n.isBlank()) dbs.add(n);
+                            }
+                        }
+                        String responderRole = resp.databaseName() != null ? resp.databaseName().trim() : "";
+                        if ("PRIMARY".equalsIgnoreCase(responderRole) || "LEADER".equalsIgnoreCase(responderRole)) {
+                            return new ArrayList<>(dbs);
+                        }
+                        if (secondaryFallback == null) {
+                            secondaryFallback = new ArrayList<>(dbs);
+                        }
+                    }
+                }
+            } catch (Exception ignored) {}
+        }
+        return secondaryFallback;
     }
 
     private void scanDatabasesFromPath(String pathStr, Set<String> target) {
@@ -233,9 +330,15 @@ public final class JettraClient implements AutoCloseable {
     }
 
     private boolean triggerServerDatabaseOp(String op, String databaseName) {
+        // 1. Enviar trama binaria Raft directamente al puerto gRPC/clúster del PRIMARY si es CREATE/DROP
+        if ("CREATE_DATABASE".equalsIgnoreCase(op) || "DROP_DATABASE".equalsIgnoreCase(op)) {
+            if (sendDatabaseFrameToPrimaryNode(op, databaseName)) {
+                return true;
+            }
+        }
         try {
             String host = "127.0.0.1";
-            int restPort = 8080;
+            int restPort = 60001;
             JettraStoreConfig scfg = JettraStoreConfig.load();
             if (scfg != null) {
                 if (scfg.getNodeIp() != null && !scfg.getNodeIp().isBlank()) {
@@ -269,6 +372,37 @@ public final class JettraClient implements AutoCloseable {
             java.net.http.HttpResponse<String> resp = httpClient.send(reqBuilder.build(), java.net.http.HttpResponse.BodyHandlers.ofString());
             return resp.statusCode() == 200;
         } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private boolean sendDatabaseFrameToPrimaryNode(String op, String databaseName) {
+        String host = "127.0.0.1";
+        int grpcPort = 50001;
+        if (config != null && !config.getClusterEndpoints().isEmpty()) {
+            String ep = config.getClusterEndpoints().get(0);
+            int idx = ep.lastIndexOf(':');
+            if (idx > 0) {
+                host = ep.substring(0, idx).trim();
+                try { grpcPort = Integer.parseInt(ep.substring(idx + 1).trim()); } catch (Exception ignored) {}
+            } else {
+                host = ep.trim();
+            }
+        }
+        try (java.net.Socket s = new java.net.Socket()) {
+            s.setTcpNoDelay(true);
+            s.connect(new java.net.InetSocketAddress(host, grpcPort), 600);
+            s.setSoTimeout(1500);
+            try (java.io.BufferedOutputStream bos = new java.io.BufferedOutputStream(s.getOutputStream(), 8192);
+                 java.io.BufferedInputStream bis = new java.io.BufferedInputStream(s.getInputStream(), 8192)) {
+                io.jettra.store.cluster.JettraRaftFrame frame = "DROP_DATABASE".equalsIgnoreCase(op)
+                        ? io.jettra.store.cluster.JettraRaftFrame.dropDatabase(1L, 0L, "jettra-client", databaseName)
+                        : io.jettra.store.cluster.JettraRaftFrame.createDatabase(1L, 0L, "jettra-client", databaseName, new byte[0]);
+                io.jettra.store.cluster.JettraClusterProtocol.writeFrame(bos, frame);
+                io.jettra.store.cluster.JettraRaftFrame ack = io.jettra.store.cluster.JettraClusterProtocol.readFrame(bis);
+                return ack != null && ack.frameType() == io.jettra.store.cluster.JettraRaftFrame.TYPE_ACK;
+            }
+        } catch (Exception ignored) {
             return false;
         }
     }
@@ -661,6 +795,40 @@ public final class JettraClient implements AutoCloseable {
         JettraDatabase db = getDatabase(databaseName);
         long count = db.getDocumentEngine(collection) != null ? db.getDocumentEngine(collection).count() : 0;
         return io.jettra.store.police.JettraPolice.getInstance().evaluateHeapSafety("DRIVER_EVALUATE", collection, count, requestedLimit, 512L);
+    }
+
+    public String getDefaultDatabase() {
+        if (config != null && config.getDefaultDatabase() != null && !config.getDefaultDatabase().isBlank() && !config.getDefaultDatabase().equals("default_db")) {
+            return config.getDefaultDatabase();
+        }
+        if (databases.containsKey("main_db")) {
+            return "main_db";
+        }
+        if (!databases.isEmpty()) {
+            return databases.keySet().iterator().next();
+        }
+        return (config != null && config.getDefaultDatabase() != null) ? config.getDefaultDatabase() : "main_db";
+    }
+
+    /**
+     * Inicia un comando fluido JettraSqlCommand para ejecutar consultas SQL sobre la base de datos predeterminada.
+     */
+    public JettraSqlCommand sql(String query) {
+        return new JettraSqlCommand(this, getDefaultDatabase(), query);
+    }
+
+    /**
+     * Inicia una consulta fluida y tipada JettraFluentQuery sobre una colección o entidad de la base de datos predeterminada.
+     */
+    public <T> JettraFluentQuery<T> from(String collection, Class<T> recordClass) {
+        return new JettraFluentQuery<>(this, getDefaultDatabase(), collection, recordClass);
+    }
+
+    /**
+     * Inicia una consulta fluida y tipada JettraFluentQuery sobre una base de datos y colección específicas.
+     */
+    public <T> JettraFluentQuery<T> from(String databaseName, String collection, Class<T> recordClass) {
+        return new JettraFluentQuery<>(this, databaseName, collection, recordClass);
     }
 
     public JettraSQLProcessor.QueryResult sql(String databaseName, String query) {
@@ -1177,4 +1345,170 @@ public final class JettraClient implements AutoCloseable {
         }
     }
 
+    // =========================================================================
+    // ACCESO DIRECTO CONVENIENTE A LOS 8 MOTORES MULTIMODELO
+    // =========================================================================
+
+    public DocumentEngine getDocumentEngine(String databaseName, String collectionName) {
+        return getDatabase(databaseName).getDocumentEngine(collectionName);
+    }
+
+    public DocumentEngine getDocumentEngine(String collectionName) {
+        return getDocumentEngine(getDefaultDatabase(), collectionName);
+    }
+
+    public KeyValueEngine getKeyValueEngine(String databaseName, String collectionName) {
+        return getDatabase(databaseName).getKeyValueEngine(collectionName);
+    }
+
+    public KeyValueEngine getKeyValueEngine(String collectionName) {
+        return getKeyValueEngine(getDefaultDatabase(), collectionName);
+    }
+
+    public VectorEngine getVectorEngine(String databaseName, String collectionName, int dimensions) {
+        return getDatabase(databaseName).getVectorEngine(collectionName, dimensions);
+    }
+
+    public VectorEngine getVectorEngine(String collectionName, int dimensions) {
+        return getVectorEngine(getDefaultDatabase(), collectionName, dimensions);
+    }
+
+    public GraphEngine getGraphEngine(String databaseName, String graphName) {
+        return getDatabase(databaseName).getGraphEngine(graphName);
+    }
+
+    public GraphEngine getGraphEngine(String graphName) {
+        return getGraphEngine(getDefaultDatabase(), graphName);
+    }
+
+    public TimeSeriesEngine getTimeSeriesEngine(String databaseName, String seriesName) {
+        return getDatabase(databaseName).getTimeSeriesEngine(seriesName);
+    }
+
+    public TimeSeriesEngine getTimeSeriesEngine(String seriesName) {
+        return getTimeSeriesEngine(getDefaultDatabase(), seriesName);
+    }
+
+    public GeospatialEngine getGeospatialEngine(String databaseName, String geoName) {
+        return getDatabase(databaseName).getGeospatialEngine(geoName);
+    }
+
+    public GeospatialEngine getGeospatialEngine(String geoName) {
+        return getGeospatialEngine(getDefaultDatabase(), geoName);
+    }
+
+    public ColumnarEngine getColumnarEngine(String databaseName, String columnName) {
+        return getDatabase(databaseName).getColumnarEngine(columnName);
+    }
+
+    public ColumnarEngine getColumnarEngine(String columnName) {
+        return getColumnarEngine(getDefaultDatabase(), columnName);
+    }
+
+    public <T extends Record> RecordsEngine<T> getRecordsEngine(String entityName, Class<T> recordClass) {
+        return getRecordsEngine(getDefaultDatabase(), entityName, recordClass);
+    }
+
+    // =========================================================================
+    // REFERENCIAS CRUZADAS ENTRE MOTORES (JettraRef)
+    // =========================================================================
+
+    public <T> JettraRef<T> createRef(String targetEngine, String targetId, JettraRef.FetchMode fetchMode, Supplier<T> resolver) {
+        return new JettraRef<>(targetEngine, targetId, fetchMode, resolver);
+    }
+
+    public <T> JettraRef<T> createLazyRef(String targetEngine, String targetId, Supplier<T> resolver) {
+        return new JettraRef<>(targetEngine, targetId, JettraRef.FetchMode.LAZY, resolver);
+    }
+
+    public <T> JettraRef<T> createEagerRef(String targetEngine, String targetId, Supplier<T> resolver) {
+        return new JettraRef<>(targetEngine, targetId, JettraRef.FetchMode.EAGER, resolver);
+    }
+
+    // =========================================================================
+    // GESTIÓN DE ÍNDICES SECUNDARIOS (JettraIndexManager)
+    // =========================================================================
+
+    public JettraIndexManager.IndexInfo createIndex(String databaseName, String collection, String indexName, String field, String type, boolean unique) {
+        JettraDatabase db = getDatabase(databaseName);
+        DocumentEngine docEngine = db.getDocumentEngine(collection);
+        return db.getIndexManager().createIndex(collection, indexName, field, type, unique, docEngine);
+    }
+
+    public JettraIndexManager.IndexInfo createIndex(String collection, String indexName, String field, String type, boolean unique) {
+        return createIndex(getDefaultDatabase(), collection, indexName, field, type, unique);
+    }
+
+    public boolean dropIndex(String databaseName, String indexName) {
+        return getDatabase(databaseName).getIndexManager().dropIndex(indexName);
+    }
+
+    public boolean dropIndex(String indexName) {
+        return dropIndex(getDefaultDatabase(), indexName);
+    }
+
+    public List<JettraIndexManager.IndexInfo> listIndexes(String databaseName) {
+        return getDatabase(databaseName).getIndexManager().listIndexes(null);
+    }
+
+    public List<JettraIndexManager.IndexInfo> listIndexes(String databaseName, String collection) {
+        return getDatabase(databaseName).getIndexManager().listIndexes(collection);
+    }
+
+    public List<JettraIndexManager.IndexInfo> listIndexes() {
+        return listIndexes(getDefaultDatabase());
+    }
+
+    // =========================================================================
+    // REPLICACIÓN DE MOTORES Y REGISTRO DINÁMICO DE NODOS EN CLÚSTER
+    // =========================================================================
+
+    public boolean replicateCreateEngine(String databaseName, String engineName, String engineType) {
+        JettraDatabase db = getDatabase(databaseName);
+        switch (engineType.toUpperCase()) {
+            case "DOCUMENT" -> db.getDocumentEngine(engineName);
+            case "KEYVALUE" -> db.getKeyValueEngine(engineName);
+            case "VECTOR" -> db.getVectorEngine(engineName, 128);
+            case "GRAPH" -> db.getGraphEngine(engineName);
+            case "TIMESERIES" -> db.getTimeSeriesEngine(engineName);
+            case "GEOSPATIAL" -> db.getGeospatialEngine(engineName);
+            case "COLUMNAR" -> db.getColumnarEngine(engineName);
+            default -> db.getDocumentEngine(engineName);
+        }
+
+        var peers = ringEngine.getPeers();
+        if (!peers.isEmpty()) {
+            try (var replClient = new io.jettra.store.cluster.JettraClusterReplicationClient(ringEngine.getNodeId(), peers)) {
+                return replClient.broadcastCreateEngine(databaseName, engineName, engineType.toUpperCase(), new byte[0]);
+            } catch (Exception ignored) {}
+        }
+        return true;
+    }
+
+    public boolean registerDynamicPeer(String peerId, String ip, int port, String role) {
+        ClusterNode.Role nodeRole = ClusterNode.Role.SECONDARY;
+        try {
+            nodeRole = ClusterNode.Role.valueOf(role.toUpperCase());
+        } catch (Exception ignored) {}
+        ClusterNode node = new ClusterNode(peerId, ip, port, nodeRole);
+        ringEngine.registerDynamicPeer(node, port, null);
+        return true;
+    }
+
+    public boolean removeClusterPeer(String peerId) {
+        return ringEngine.removePeer(peerId);
+    }
+
+    public boolean checkClusterHealth() {
+        for (String ep : config.getClusterEndpoints()) {
+            String[] parts = ep.split(":");
+            String host = parts[0];
+            int port = (parts.length > 1) ? Integer.parseInt(parts[1]) : 9091;
+            String health = adminClient.getClusterHealth(host, port);
+            if (health != null && (health.contains("UP") || health.contains("RUNNING"))) {
+                return true;
+            }
+        }
+        return true;
+    }
 }

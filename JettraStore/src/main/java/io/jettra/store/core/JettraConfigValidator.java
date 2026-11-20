@@ -985,7 +985,16 @@ cluster.index.max.inmemory.keys = 100000
                 if (!Files.exists(clusterConfigFile)) {
                     generateDefaultClusterConfig(clusterConfigFile);
                 }
-                if (!alreadyExistedById) {
+                boolean existsInDiskLines = false;
+                List<String> lines = Files.readAllLines(clusterConfigFile, StandardCharsets.UTF_8);
+                String prefix = "cluster.node." + registered.nodeNumber() + ".";
+                for (String l : lines) {
+                    if (l.trim().startsWith(prefix)) {
+                        existsInDiskLines = true;
+                        break;
+                    }
+                }
+                if (!alreadyExistedById || !existsInDiskLines) {
                     String block = String.format(
                         "%n# ==============================================================================%n" +
                         "# NODO %s: NODO AGREGADO DINÁMICAMENTE (%s)%n" +
@@ -1006,8 +1015,6 @@ cluster.index.max.inmemory.keys = 100000
                         StandardOpenOption.CREATE, StandardOpenOption.APPEND);
                 } else {
                     // Actualizar propiedades existentes en el archivo cluster.config
-                    List<String> lines = Files.readAllLines(clusterConfigFile, StandardCharsets.UTF_8);
-                    String prefix = "cluster.node." + registered.nodeNumber() + ".";
                     List<String> updatedLines = new ArrayList<>(lines.size());
                     for (String line : lines) {
                         String trimmed = line.trim();
@@ -1145,20 +1152,32 @@ cluster.index.max.inmemory.keys = 100000
 
     public static Properties loadProperties(Path diskPath, String... classpathResources) {
         Properties props = new Properties();
-        if (classpathResources != null) {
-            for (String cpRes : classpathResources) {
-                if (cpRes == null) continue;
-                try (InputStream is = JettraConfigValidator.class.getResourceAsStream(cpRes)) {
-                    if (is != null) {
-                        props.load(is);
-                    }
-                } catch (IOException ignored) {}
-            }
-        }
         if (diskPath != null && Files.exists(diskPath)) {
             try (InputStream is = Files.newInputStream(diskPath)) {
                 props.load(is);
             } catch (IOException ignored) {}
+            // Si el archivo en disco ya define explícitamente nodos del clúster (cluster.node.*),
+            // no mezclar nodos del classpath para evitar nodos plantilla fantasma
+            boolean hasDiskClusterNodes = props.stringPropertyNames().stream().anyMatch(k -> k.startsWith("cluster.node."));
+            if (hasDiskClusterNodes) {
+                return props;
+            }
+        }
+        if (classpathResources != null) {
+            Properties cpProps = new Properties();
+            for (String cpRes : classpathResources) {
+                if (cpRes == null) continue;
+                try (InputStream is = JettraConfigValidator.class.getResourceAsStream(cpRes)) {
+                    if (is != null) {
+                        cpProps.load(is);
+                    }
+                } catch (IOException ignored) {}
+            }
+            for (String name : cpProps.stringPropertyNames()) {
+                if (!props.containsKey(name)) {
+                    props.setProperty(name, cpProps.getProperty(name));
+                }
+            }
         }
         return props;
     }

@@ -264,7 +264,7 @@ java --enable-preview \
      -jar target/JettraStore-1.0-SNAPSHOT.jar
 ```
 
-El servidor iniciará normalmente, precargará las bases de datos de muestra (`example_factura_db`), inicializará los puertos gRPC (50001) y REST (60000), y quedará a la espera del comando de congelamiento.
+El servidor iniciará normalmente, precargará las bases de datos de muestra (`example_factura_db`), inicializará los puertos gRPC (50001) y REST (60001), y quedará a la espera del comando de congelamiento.
 
 ##### Paso 3: Disparar el Checkpoint con `jcmd`
 Desde otra consola o terminal, una vez verificado que el nodo está listo y caliente:
@@ -354,7 +354,7 @@ En los logs de Docker (`docker compose logs -f jettra-node-01`) se observará la
 ```text
 [CRaC] Restaurando JettraStore instantáneamente desde checkpoint CRIU en /jettra/checkpoint...
 Restored in 18.42 ms.
-REST Service running with Virtual Threads on http://0.0.0.0:60000/
+REST Service running with Virtual Threads on http://0.0.0.0:60001/
 ```
 
 ### 3.5 Manipulación de Colecciones con `JettraCollection` y Prevención Rigurosa de `OutOfMemoryError`
@@ -1451,7 +1451,7 @@ Cuando JettraStore se despliega en contenedores (por ejemplo, mediante `docker c
   * Inyección de variables de orquestación de Docker Compose (`JETTRA_CLUSTER_PEERS` junto con volumen `/jettra/data`).
 * **Gobernanza por `docker-compose.yml`:** En contenedores, cada nodo corre en un espacio de nombres y sistema de archivos aislado con volúmenes montados (ej. `jettra_data_node01:/jettra/data`). Por ende:
   * El motor **omite la detención preventiva por discrepancias de rutas locales del host**.
-  * Los parámetros son provistos directamente por el bloque `environment:` de `docker-compose.yml` (`JETTRA_NODE_ID`, `JETTRA_NODE_ROLE`, `JETTRA_STORAGE_PATH=/jettra/data`, `JETTRA_REST_PORT=60000`, `JETTRA_GRPC_PORT=50001`).
+  * Los parámetros son provistos directamente por el bloque `environment:` de `docker-compose.yml` (`JETTRA_NODE_ID`, `JETTRA_NODE_ROLE`, `JETTRA_STORAGE_PATH=/jettra/data`, `JETTRA_REST_PORT=60001`, `JETTRA_GRPC_PORT=50001`).
   * JettraStore emite un mensaje informativo de confirmación:
     ```text
     [JettraStore] INFO: Entorno Docker detectado. La configuración está gestionada mediante docker-compose / variables de entorno.
@@ -1545,13 +1545,13 @@ ENV JETTRA_NODE_ID=node-01 \
     JETTRA_CRAC_CHECKPOINT_PATH=/jettra/checkpoint \
     JETTRA_CRAC_RESTORE=false \
     JETTRA_GRPC_PORT=50001 \
-    JETTRA_REST_PORT=60000 \
+    JETTRA_REST_PORT=60001 \
     JETTRA_ADMIN_USERNAME=admin \
     JETTRA_ADMIN_PASSWORD=admin-jettra \
     JAVA_OPTS="--enable-preview --enable-native-access=ALL-UNNAMED -XX:+UnlockExperimentalVMOptions -XX:+UseCompactObjectHeaders -XX:+UseContainerSupport -XX:+UseZGC -Xms512m -Xmx2g"
 
-# Exponer puertos: REST HTTP (60000) y Puerto de Clúster / gRPC (50001)
-EXPOSE 60000 50001
+# Exponer puertos: REST HTTP (60001) y Puerto de Clúster / gRPC (50001)
+EXPOSE 60001 50001
 
 # Volúmenes para almacenamiento persistente y snapshots de memoria CRaC
 VOLUME ["/jettra/data", "/jettra/checkpoint"]
@@ -1605,7 +1605,7 @@ services:
     security_opt:
       - seccomp:unconfined
     ports:
-      - "60001:60000"   # API REST / Autenticación JettraJWT en Host
+      - "60001:60001"   # API REST / Autenticación JettraJWT en Host
       - "50001:50001"   # Protocolo de Clúster / Raft Sync
     environment:
       - JETTRA_NODE_ID=node-01
@@ -1614,11 +1614,11 @@ services:
       - JETTRA_STORAGE_MODE=${JETTRA_STORAGE_MODE:-OFF_HEAP}
       - JETTRA_CRAC_CHECKPOINT_PATH=/jettra/checkpoint
       - JETTRA_CRAC_RESTORE=${JETTRA_CRAC_RESTORE:-false}
-      - JETTRA_REST_PORT=60000
+      - JETTRA_REST_PORT=60001
       - JETTRA_GRPC_PORT=50001
       - JETTRA_ADMIN_USERNAME=admin
       - JETTRA_ADMIN_PASSWORD=admin-jettra
-      - JETTRA_CLUSTER_PEERS=node-02:jettra-node-02:50001:SECONDARY,node-03:jettra-node-03:50001:SECONDARY
+      - JETTRA_CLUSTER_PEERS=node-02:jettra-node-02:50002:SECONDARY,node-03:jettra-node-03:50003:SECONDARY
       - JAVA_OPTS=--enable-preview --enable-native-access=ALL-UNNAMED -XX:+UnlockExperimentalVMOptions -XX:+UseCompactObjectHeaders -XX:+UseContainerSupport -XX:+UseZGC -Xms512m -Xmx2g -Djettra.storage.mode=${JETTRA_STORAGE_MODE:-OFF_HEAP}
     mem_limit: 3g
     mem_reservation: 512m
@@ -1628,7 +1628,7 @@ services:
     networks:
       - jettra-cluster-net
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:60000/api/v1/health || exit 1"]
+      test: ["CMD-SHELL", "curl -f http://localhost:60001/api/v1/health || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -1655,8 +1655,8 @@ services:
       jettra-node-01:
         condition: service_healthy
     ports:
-      - "60002:60000"   # API REST Nodo 2
-      - "50002:50001"   # Protocolo de Clúster Nodo 2
+      - "60002:60002"   # API REST Nodo 2
+      - "50002:50002"   # Protocolo de Clúster Nodo 2
     environment:
       - JETTRA_NODE_ID=node-02
       - JETTRA_NODE_ROLE=SECONDARY
@@ -1664,11 +1664,11 @@ services:
       - JETTRA_STORAGE_MODE=${JETTRA_STORAGE_MODE:-OFF_HEAP}
       - JETTRA_CRAC_CHECKPOINT_PATH=/jettra/checkpoint
       - JETTRA_CRAC_RESTORE=${JETTRA_CRAC_RESTORE:-false}
-      - JETTRA_REST_PORT=60000
-      - JETTRA_GRPC_PORT=50001
+      - JETTRA_REST_PORT=60002
+      - JETTRA_GRPC_PORT=50002
       - JETTRA_ADMIN_USERNAME=admin
       - JETTRA_ADMIN_PASSWORD=admin-jettra
-      - JETTRA_CLUSTER_PEERS=node-01:jettra-node-01:50001:PRIMARY,node-03:jettra-node-03:50001:SECONDARY
+      - JETTRA_CLUSTER_PEERS=node-01:jettra-node-01:50001:PRIMARY,node-03:jettra-node-03:50003:SECONDARY
       - JAVA_OPTS=--enable-preview --enable-native-access=ALL-UNNAMED -XX:+UnlockExperimentalVMOptions -XX:+UseCompactObjectHeaders -XX:+UseContainerSupport -XX:+UseZGC -Xms512m -Xmx2g -Djettra.storage.mode=${JETTRA_STORAGE_MODE:-OFF_HEAP}
     mem_limit: 3g
     mem_reservation: 512m
@@ -1678,7 +1678,7 @@ services:
     networks:
       - jettra-cluster-net
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:60000/api/v1/health || exit 1"]
+      test: ["CMD-SHELL", "curl -f http://localhost:60002/api/v1/health || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -1705,8 +1705,8 @@ services:
       jettra-node-01:
         condition: service_healthy
     ports:
-      - "60003:60000"   # API REST Nodo 3
-      - "50003:50001"   # Protocolo de Clúster Nodo 3
+      - "60003:60003"   # API REST Nodo 3
+      - "50003:50003"   # Protocolo de Clúster Nodo 3
     environment:
       - JETTRA_NODE_ID=node-03
       - JETTRA_NODE_ROLE=SECONDARY
@@ -1714,11 +1714,11 @@ services:
       - JETTRA_STORAGE_MODE=${JETTRA_STORAGE_MODE:-OFF_HEAP}
       - JETTRA_CRAC_CHECKPOINT_PATH=/jettra/checkpoint
       - JETTRA_CRAC_RESTORE=${JETTRA_CRAC_RESTORE:-false}
-      - JETTRA_REST_PORT=60000
-      - JETTRA_GRPC_PORT=50001
+      - JETTRA_REST_PORT=60003
+      - JETTRA_GRPC_PORT=50003
       - JETTRA_ADMIN_USERNAME=admin
       - JETTRA_ADMIN_PASSWORD=admin-jettra
-      - JETTRA_CLUSTER_PEERS=node-01:jettra-node-01:50001:PRIMARY,node-02:jettra-node-02:50001:SECONDARY
+      - JETTRA_CLUSTER_PEERS=node-01:jettra-node-01:50001:PRIMARY,node-02:jettra-node-02:50002:SECONDARY
       - JAVA_OPTS=--enable-preview --enable-native-access=ALL-UNNAMED -XX:+UnlockExperimentalVMOptions -XX:+UseCompactObjectHeaders -XX:+UseContainerSupport -XX:+UseZGC -Xms512m -Xmx2g -Djettra.storage.mode=${JETTRA_STORAGE_MODE:-OFF_HEAP}
     mem_limit: 3g
     mem_reservation: 512m
@@ -1728,7 +1728,7 @@ services:
     networks:
       - jettra-cluster-net
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:60000/api/v1/health || exit 1"]
+      test: ["CMD-SHELL", "curl -f http://localhost:60003/api/v1/health || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -2111,7 +2111,7 @@ cluster.node.1.id = node-01
 cluster.node.1.role = PRIMARY
 cluster.node.1.ip = 192.168.1.101
 cluster.node.1.grpc.port = 50001
-cluster.node.1.rest.port = 60000
+cluster.node.1.rest.port = 60001
 
 # ==============================================================================
 # NODO 2: NODO SECUNDARIO / SEGUIDOR 1 (Secondary)
@@ -2120,7 +2120,7 @@ cluster.node.2.id = node-02
 cluster.node.2.role = SECONDARY
 cluster.node.2.ip = 192.168.1.102
 cluster.node.2.grpc.port = 50001
-cluster.node.2.rest.port = 60000
+cluster.node.2.rest.port = 60001
 
 # ==============================================================================
 # NODO 3: NODO SECUNDARIO / SEGUIDOR 2 (Secondary)
@@ -2129,7 +2129,7 @@ cluster.node.3.id = node-03
 cluster.node.3.role = SECONDARY
 cluster.node.3.ip = 192.168.1.103
 cluster.node.3.grpc.port = 50001
-cluster.node.3.rest.port = 60000
+cluster.node.3.rest.port = 60001
 
 # Asignación de Capacidad de Índices y Buffers en Clúster
 cluster.index.initial.capacity = 65536
@@ -2315,22 +2315,29 @@ java --enable-preview \
 2. Iniciar los Servidores 2 y 3 (Seguidores).
 3. Verificar en cualquier nodo:
    ```bash
-   curl http://192.168.1.101:60000/api/v1/health
-   curl http://192.168.1.102:60000/api/v1/health
-   curl http://192.168.1.103:60000/api/v1/health
+   curl http://192.168.1.101:60001/api/v1/health
+   curl http://192.168.1.102:60001/api/v1/health
+   curl http://192.168.1.103:60001/api/v1/health
    ```
-
-
 
 #### Alternativa ejecutando start-node.sh
 
+El script `start-node.sh` automatiza la configuración de banderas de la máquina virtual Java 25, la detección inteligente del artefacto JAR y la resolución de las rutas de configuración:
+
 ```bash
+# Otorgar permisos de ejecución al script si es necesario
+chmod +x start-node.sh
 
-# Ejemplos:
-#   ./start-node.sh node-01 PRIMARY
-#   ./start-node.sh node-02 SECONDARY
-#   ./start-node.sh node-03 SECONDARY
+# Sintaxis de ejecución:
+#   ./start-node.sh [NODE_ID] [NODE_ROLE] [CLUSTER_CONFIG] [MICROPROFILE_CONFIG]
 
+# Ejemplos de uso:
+./start-node.sh node-01 PRIMARY
+./start-node.sh node-02 SECONDARY
+./start-node.sh node-03 SECONDARY
+
+# Ejemplo especificando archivos de configuración personalizados:
+./start-node.sh node-04 SECONDARY config/cluster.config config/microprofile-config.properties
 ```
 
 ---
@@ -2345,23 +2352,24 @@ En el nuevo host o máquina donde operará el nodo, cree un directorio exclusivo
 
 ```text
 /opt/jettra-nuevo-nodo/
-├── JettraStore-1.0-SNAPSHOT-uber.jar    # Binario ejecutable autónomo (Fat JAR con dependencias)
-├── start.sh                             # Script de inicio con flags de ejecución Java 25
+├── JettraStore-1.0-SNAPSHOT-uber.jar    # Binario ejecutable autónomo (Fat JAR con todas las dependencias)
+├── start-node.sh                        # Script de inicio con flags de ejecución Java 25 y detección inteligente
 └── config/
-    ├── cluster.config                   # Configuración de red local inicial del nuevo nodo
+    ├── cluster.config                   # Configuración inicial del nuevo nodo (o cluster.info)
     └── microprofile-config.properties   # Parámetros del motor, almacenamiento local y enlace de identidad
 ```
 
 > [!IMPORTANT]
-> **Configuración Simplificada de `cluster.config` en el Nuevo Nodo:**
-> El archivo `config/cluster.config` en este nuevo directorio **únicamente necesita indicar la información propia de este nuevo nodo**. No es necesario registrar manualmente los otros nodos del clúster ni copiar la topología previa en este archivo, ya que el proceso formal de adhesión al clúster y la replicación canónica de la topología hacia todos los nodos se realiza dinámicamente desde **JettraStoreExplorer** o desde **JettraStoreShell**.
+> **Configuración Simplificada de `cluster.config` / `cluster.info` en el Nuevo Nodo:**
+> Para que un nuevo nodo se conecte al clúster, **únicamente necesita definirse en el archivo `cluster.config` (o `cluster.info`) de ese nodo**.
+> No es necesario registrar manualmente los otros nodos del clúster ni copiar la topología previa en este archivo, ya que el proceso formal de agregarlo al clúster o removerlo de él se realizará dinámicamente desde **JettraStoreExplorer** o desde **JettraStoreShell**.
 
-##### 2. Contenido de `config/cluster.config` del Nuevo Nodo
+##### 2. Contenido de `config/cluster.config` (o `cluster.info`) del Nuevo Nodo
 
-En el archivo `cluster.config` del nuevo nodo sólo se declaran los datos de su propio endpoint:
+En el archivo de topología local del nuevo nodo sólo se declaran los datos de su propio endpoint:
 
 ```properties
-# config/cluster.config en el nuevo nodo
+# config/cluster.config (o cluster.info) en el nuevo nodo
 cluster.name = jettra-production-cluster
 cluster.consensus.protocol = RAFT
 cluster.ring.enabled = true
@@ -2375,7 +2383,7 @@ cluster.node.1.id = node-04
 cluster.node.1.role = SECONDARY
 cluster.node.1.ip = 192.168.1.104
 cluster.node.1.grpc.port = 50001
-cluster.node.1.rest.port = 60000
+cluster.node.1.rest.port = 60001
 
 cluster.index.initial.capacity = 65536
 cluster.index.max.inmemory.keys = 100000
@@ -2383,12 +2391,14 @@ cluster.index.max.inmemory.keys = 100000
 
 ##### 3. Contenido de `config/microprofile-config.properties` del Nuevo Nodo
 
+Revise el archivo `microprofile-config.properties` del nuevo nodo para asegurar que la identidad del nodo y su almacenamiento exclusivo en disco coincidan:
+
 ```properties
 # config/microprofile-config.properties en el nuevo nodo
 # Ruta de almacenamiento local exclusiva de este nodo
 jettra.storage.path = /opt/jettra-nuevo-nodo/data
 
-# Identidad del nodo local (debe coincidir con el ID declarado en cluster.config)
+# Identidad del nodo local (debe coincidir con el ID declarado en cluster.config / cluster.info)
 cluster.node.id = node-04
 cluster.node.role = SECONDARY
 cluster.multinode.active = on
@@ -2402,53 +2412,73 @@ jettra.network.virtualthreads.enabled = true
 jettrapolice.active = true
 ```
 
-##### 4. Contenido del Script de Arranque `start.sh`
+##### 4. Contenido y Ajuste del Script de Arranque `start-node.sh`
+
+Ajuste o ejecute el script `start-node.sh` indicando el nodo y su rol correspondiente:
 
 ```bash
-#!/bin/bash
-# Script de inicio para el nuevo nodo secundario en Java 25 LTS
+# Iniciar nodo especificando su identificador y rol
+./start-node.sh node-04 SECONDARY
+```
+
+El script configurará automáticamente las banderas de JVM para Java 25 LTS:
+```bash
 java --enable-preview \
      --enable-native-access=ALL-UNNAMED \
      -XX:+UnlockExperimentalVMOptions \
      -XX:+UseCompactObjectHeaders \
      -XX:+UseZGC \
      -Xms2g -Xmx6g \
+     -Dcluster.node.id=node-04 \
+     -Dcluster.node.role=SECONDARY \
+     -Djettra.node.id=node-04 \
+     -Djettra.node.role=SECONDARY \
      -Dcluster.config.path=config/cluster.config \
      -Dmicroprofile.config.file=config/microprofile-config.properties \
      -jar JettraStore-1.0-SNAPSHOT-uber.jar
 ```
 
-Otorgue permisos de ejecución al script:
-```bash
-chmod +x start.sh
-```
+El proceso Java iniciará sus endpoints gRPC (puerto `50001`) y REST (puerto `60001`) quedando en estado de escucha a la espera de unirse al quórum distribuido.
 
-##### 5. Secuencia de Incorporación en Caliente y Replicación al Quórum
+##### 5. Incorporación Formal desde JettraStoreExplorer o JettraStoreShell
 
-1. **Iniciar el nuevo nodo:**
-   Ejecute `./start.sh` en la máquina del nuevo nodo. El proceso Java iniciará sus endpoints gRPC y REST quedando a la escucha y a la espera de unirse al quórum distribuido.
+Una vez iniciado el nodo secundario con `start-node.sh`, se procede a añadirlo formalmente al clúster mediante cualquiera de las herramientas administrativas:
 
-2. **Registrar el nodo en el clúster:**
-   El registro y propagación se puede realizar mediante cualquiera de las dos herramientas administrativas del ecosistema:
+* **Opción A: Desde JettraStoreExplorer (Consola Web):**
+  Acceda a la consola web en la ruta `/cluster`, haga clic en el botón **"Añadir Nodo"** e introduzca el ID (`node-04`), IP (`192.168.1.104`), puerto gRPC (`50001`), puerto REST (`60001`) y rol (`SECONDARY`).
+  Asimismo, para dar de baja un nodo, simplemente presione el botón **"Expulsar"** junto al nodo deseado.
 
-   * **Opción A: Desde JettraStoreShell:**
-     Conéctese a cualquier nodo activo del clúster (o directamente al nodo primario) y ejecute el comando de incorporación:
-     ```bash
-     CLUSTER ADD-NODE node-04 192.168.1.104 50001 SECONDARY 60000
-     ```
-     O con la sintaxis simplificada:
-     ```bash
-     ADD NODE node-04 192.168.1.104 50001 SECONDARY
-     ```
+* **Opción B: Desde JettraStoreShell (Consola CLI):**
+  Conéctese a cualquier nodo activo del clúster (o directamente al primario) y ejecute:
+  ```bash
+  CLUSTER ADD-NODE node-04 192.168.1.104 50001 SECONDARY 60001
+  ```
+  O con la sintaxis simplificada:
+  ```bash
+  ADD NODE node-04 192.168.1.104 50001 SECONDARY
+  ```
+  Para remover un nodo secundario:
+  ```bash
+  REMOVE NODE node-04
+  # O bien:
+  CLUSTER REMOVE-NODE node-04
+  ```
 
-   * **Opción B: Desde JettraStoreExplorer:**
-     Acceda a la consola web en la ruta `/cluster`, haga clic en el botón **"Añadir Nodo"** e introduzca el ID (`node-04`), IP (`192.168.1.104`), puerto gRPC (`50001`), puerto REST (`60000`) y rol (`SECONDARY`).
+##### 6. Replicación Canónica de Configuración (PRIMARY Primero, luego SECONDARY)
 
-3. **Replicación Canónica Automática (PRIMARY Primero, luego SECONDARY):**
-   Tanto JettraStoreShell como JettraStoreExplorer replican inmediatamente el archivo `cluster.config` consolidado a todos los nodos:
-   * **Actualización prioritaria al nodo PRIMARY:** Se envía el paquete binario de sincronización de configuración primero al nodo líder (**PRIMARY**), permitiendo que actualice el quórum Raft y comience la sincronización de datos con el nuevo miembro.
-   * **Propagación a los nodos SECONDARY:** Acto seguido, la configuración unificada se transmite a todos los nodos secundarios existentes y al nuevo nodo recién añadido.
-   * La interfaz de **JettraStoreExplorer** en las páginas `/map` y `/cluster` refleja instantáneamente el nuevo nodo y su estado operativo en tiempo real mediante el canal de eventos Server-Sent Events (SSE).
+Tanto JettraStoreExplorer como JettraStoreShell replican la configuración consolidada `cluster.config` siguiendo un estricto orden jerárquico:
+1. **Actualización prioritaria al nodo PRIMARY:** Se envía la trama de actualización de topología (`TYPE_SYNC_CLUSTER_CONFIG`) primero al nodo líder (**PRIMARY**), permitiendo que actualice el quórum Raft inmediatamente.
+2. **Propagación a los nodos SECONDARY:** Acto seguido, la configuración unificada se transmite a todos los nodos secundarios existentes y al nuevo nodo recién añadido.
+
+##### 7. Sincronización Automática Integral de Bases de Datos y Objetos desde el PRIMARY
+
+> [!IMPORTANT]
+> **Consistencia Total y Sincronización Automática:**
+> **Cada vez que un nodo se añade al clúster o cuando fue detenido y luego se reinicia, este nodo se debe actualizar con el estado del nodo PRIMARY, es decir debe obtener la réplica completa de la base de datos y objetos desde el nodo PRIMARY para que el clúster se mantenga actualizado siempre.**
+>
+> * **Al añadirse un nuevo nodo:** Tanto desde JettraStoreExplorer como desde JettraStoreShell se dispara automáticamente la notificación hacia el PRIMARY, el cual consolida la instantánea de todas las bases de datos y la transmite de inmediato al nuevo nodo.
+> * **Al reiniciarse o reconectarse un nodo:** Cuando un nodo que estaba detenido vuelve a estar en línea (o tras ejecutarse `start node` o recuperarse el latido de red), el clúster detecta el restablecimiento y el nodo PRIMARY le transmite automáticamente la instantánea con el estado más reciente de todas las colecciones, documentos, grafos, series temporales, vectores y objetos multimodelo.
+> * **Actualización Inmediata de Estatus en JettraStoreExplorer:** Al detenerse o iniciarse un nodo registrado, las páginas `/map` y `/cluster` reflejan enseguida el cambio de estado (`RUNNING`, `STOPPED`, `OFFLINE`) en tiempo real mediante el canal Server-Sent Events (SSE).
 
 ---
 
@@ -2490,7 +2520,7 @@ services:
     security_opt:
       - seccomp:unconfined
     ports:
-      - "60001:60000"   # API REST / Autenticación JettraJWT en Host
+      - "60001:60001"   # API REST / Autenticación JettraJWT en Host
       - "50001:50001"   # Protocolo de Clúster / Raft Sync
     environment:
       - JETTRA_NODE_ID=node-01
@@ -2499,11 +2529,11 @@ services:
       - JETTRA_STORAGE_MODE=${JETTRA_STORAGE_MODE:-OFF_HEAP}
       - JETTRA_CRAC_CHECKPOINT_PATH=/jettra/checkpoint
       - JETTRA_CRAC_RESTORE=${JETTRA_CRAC_RESTORE:-false}
-      - JETTRA_REST_PORT=60000
+      - JETTRA_REST_PORT=60001
       - JETTRA_GRPC_PORT=50001
       - JETTRA_ADMIN_USERNAME=admin
       - JETTRA_ADMIN_PASSWORD=admin-jettra
-      - JETTRA_CLUSTER_PEERS=node-02:jettra-node-02:50001:SECONDARY,node-03:jettra-node-03:50001:SECONDARY
+      - JETTRA_CLUSTER_PEERS=node-02:jettra-node-02:50002:SECONDARY,node-03:jettra-node-03:50003:SECONDARY
       - JAVA_OPTS=--enable-preview --enable-native-access=ALL-UNNAMED -XX:+UnlockExperimentalVMOptions -XX:+UseCompactObjectHeaders -XX:+UseContainerSupport -XX:+UseZGC -Xms512m -Xmx2g -Djettra.storage.mode=${JETTRA_STORAGE_MODE:-OFF_HEAP}
     mem_limit: 3g
     mem_reservation: 512m
@@ -2513,7 +2543,7 @@ services:
     networks:
       - jettra-cluster-net
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:60000/api/v1/health || exit 1"]
+      test: ["CMD-SHELL", "curl -f http://localhost:60001/api/v1/health || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -2540,8 +2570,8 @@ services:
       jettra-node-01:
         condition: service_healthy
     ports:
-      - "60002:60000"   # API REST Nodo 2
-      - "50002:50001"   # Protocolo de Clúster Nodo 2
+      - "60002:60002"   # API REST Nodo 2
+      - "50002:50002"   # Protocolo de Clúster Nodo 2
     environment:
       - JETTRA_NODE_ID=node-02
       - JETTRA_NODE_ROLE=SECONDARY
@@ -2549,11 +2579,11 @@ services:
       - JETTRA_STORAGE_MODE=${JETTRA_STORAGE_MODE:-OFF_HEAP}
       - JETTRA_CRAC_CHECKPOINT_PATH=/jettra/checkpoint
       - JETTRA_CRAC_RESTORE=${JETTRA_CRAC_RESTORE:-false}
-      - JETTRA_REST_PORT=60000
-      - JETTRA_GRPC_PORT=50001
+      - JETTRA_REST_PORT=60002
+      - JETTRA_GRPC_PORT=50002
       - JETTRA_ADMIN_USERNAME=admin
       - JETTRA_ADMIN_PASSWORD=admin-jettra
-      - JETTRA_CLUSTER_PEERS=node-01:jettra-node-01:50001:PRIMARY,node-03:jettra-node-03:50001:SECONDARY
+      - JETTRA_CLUSTER_PEERS=node-01:jettra-node-01:50001:PRIMARY,node-03:jettra-node-03:50003:SECONDARY
       - JAVA_OPTS=--enable-preview --enable-native-access=ALL-UNNAMED -XX:+UnlockExperimentalVMOptions -XX:+UseCompactObjectHeaders -XX:+UseContainerSupport -XX:+UseZGC -Xms512m -Xmx2g -Djettra.storage.mode=${JETTRA_STORAGE_MODE:-OFF_HEAP}
     mem_limit: 3g
     mem_reservation: 512m
@@ -2563,7 +2593,7 @@ services:
     networks:
       - jettra-cluster-net
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:60000/api/v1/health || exit 1"]
+      test: ["CMD-SHELL", "curl -f http://localhost:60002/api/v1/health || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -2590,8 +2620,8 @@ services:
       jettra-node-01:
         condition: service_healthy
     ports:
-      - "60003:60000"   # API REST Nodo 3
-      - "50003:50001"   # Protocolo de Clúster Nodo 3
+      - "60003:60003"   # API REST Nodo 3
+      - "50003:50003"   # Protocolo de Clúster Nodo 3
     environment:
       - JETTRA_NODE_ID=node-03
       - JETTRA_NODE_ROLE=SECONDARY
@@ -2599,11 +2629,11 @@ services:
       - JETTRA_STORAGE_MODE=${JETTRA_STORAGE_MODE:-OFF_HEAP}
       - JETTRA_CRAC_CHECKPOINT_PATH=/jettra/checkpoint
       - JETTRA_CRAC_RESTORE=${JETTRA_CRAC_RESTORE:-false}
-      - JETTRA_REST_PORT=60000
-      - JETTRA_GRPC_PORT=50001
+      - JETTRA_REST_PORT=60003
+      - JETTRA_GRPC_PORT=50003
       - JETTRA_ADMIN_USERNAME=admin
       - JETTRA_ADMIN_PASSWORD=admin-jettra
-      - JETTRA_CLUSTER_PEERS=node-01:jettra-node-01:50001:PRIMARY,node-02:jettra-node-02:50001:SECONDARY
+      - JETTRA_CLUSTER_PEERS=node-01:jettra-node-01:50001:PRIMARY,node-02:jettra-node-02:50002:SECONDARY
       - JAVA_OPTS=--enable-preview --enable-native-access=ALL-UNNAMED -XX:+UnlockExperimentalVMOptions -XX:+UseCompactObjectHeaders -XX:+UseContainerSupport -XX:+UseZGC -Xms512m -Xmx2g -Djettra.storage.mode=${JETTRA_STORAGE_MODE:-OFF_HEAP}
     mem_limit: 3g
     mem_reservation: 512m
@@ -2613,7 +2643,7 @@ services:
     networks:
       - jettra-cluster-net
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:60000/api/v1/health || exit 1"]
+      test: ["CMD-SHELL", "curl -f http://localhost:60003/api/v1/health || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -2691,12 +2721,12 @@ Cuando `docker-compose.yml` corre en una máquina de desarrollo local y `JettraS
 
 | Contenedor Docker | Rol Raft | Puerto Interno Contenedor | Puerto Mapeado al Host | Entrada en `cluster.nodes` |
 |:---|:---:|:---:|:---:|:---|
-| `jettra-node-01` | **PRIMARY** | `50001` (gRPC), `60000` (REST) | **`50001`** (gRPC), `60001` (REST) | `node-01:127.0.0.1:50001` (o `:PRIMARY`) |
-| `jettra-node-02` | **SECONDARY** | `50001` (gRPC), `60000` (REST) | **`50002`** (gRPC), `60002` (REST) | `node-02:127.0.0.1:50002` (o `:SECONDARY`) |
-| `jettra-node-03` | **SECONDARY** | `50001` (gRPC), `60000` (REST) | **`50003`** (gRPC), `60003` (REST) | `node-03:127.0.0.1:50003` (o `:SECONDARY`) |
+| `jettra-node-01` | **PRIMARY** | `50001` (gRPC), `60001` (REST) | **`50001`** (gRPC), `60001` (REST) | `node-01:127.0.0.1:50001` (o `:PRIMARY`) |
+| `jettra-node-02` | **SECONDARY** | `50002` (gRPC), `60002` (REST) | **`50002`** (gRPC), `60002` (REST) | `node-02:127.0.0.1:50002` (o `:SECONDARY`) |
+| `jettra-node-03` | **SECONDARY** | `50003` (gRPC), `60003` (REST) | **`50003`** (gRPC), `60003` (REST) | `node-03:127.0.0.1:50003` (o `:SECONDARY`) |
 
-> **¿Por qué los puertos cambian a `50001`, `50002` y `50003` en el host?**  
-> Para evitar colisiones en la interfaz `127.0.0.1` del sistema anfitrión, Docker Compose mapea el puerto interno `50001` de `jettra-node-02` hacia el puerto externo `50002`, y el de `jettra-node-03` hacia el puerto externo `50003`. Por tanto, cualquier cliente externo en el host debe comunicarse usando dichos puertos redirigidos.
+> **¿Por qué los puertos se incrementan a `50001`, `50002`, `50003` y `60001`, `60002`, `60003` en el host?**  
+> Para evitar colisiones en la interfaz `127.0.0.1` del sistema anfitrión, cada contenedor expone y mapea su propio rango unívoco de puertos TCP (`50001+` para Raft/gRPC y `60001+` para REST). Por tanto, cualquier cliente externo en el host se comunica usando dichos puertos.
 
 **Configuración recomendada en `JettraStoreExplorer/src/main/resources/microprofile-config.properties`:**
 ```properties
@@ -2728,12 +2758,12 @@ En entornos de producción reales distribuidos, cada máquina física o VM ejecu
 #### 18.3.1 Configuración de Red y Puertos en Servidores Físicos
 
 Asegúrese de que los siguientes puertos estén permitidos en los firewalls de cada servidor (`ufw` o `firewalld`):
-* **Puerto TCP `60000`:** Servicio REST público y health-check.
+* **Puerto TCP `60001`:** Servicio REST público y health-check.
 * **Puerto TCP `50001`:** Canales Raft y sincronización de anillo `jettraGRPC`.
 
 ```bash
 # En sistemas Ubuntu / Debian
-sudo ufw allow 60000/tcp
+sudo ufw allow 60001/tcp
 sudo ufw allow 50001/tcp
 sudo ufw reload
 ```
@@ -2756,7 +2786,7 @@ services:
       - JETTRA_NODE_ID=node-01
       - JETTRA_NODE_ROLE=PRIMARY
       - JETTRA_STORAGE_PATH=/jettra/data
-      - JETTRA_REST_PORT=60000
+      - JETTRA_REST_PORT=60001
       - JETTRA_GRPC_PORT=50001
       - JETTRA_ADMIN_USERNAME=admin
       - JETTRA_ADMIN_PASSWORD=admin-jettra
@@ -2766,7 +2796,7 @@ services:
     volumes:
       - /var/jettra/data:/jettra/data
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:60000/api/v1/health || exit 1"]
+      test: ["CMD-SHELL", "curl -f http://localhost:60001/api/v1/health || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -2790,7 +2820,7 @@ services:
       - JETTRA_NODE_ID=node-02
       - JETTRA_NODE_ROLE=SECONDARY
       - JETTRA_STORAGE_PATH=/jettra/data
-      - JETTRA_REST_PORT=60000
+      - JETTRA_REST_PORT=60001
       - JETTRA_GRPC_PORT=50001
       - JETTRA_ADMIN_USERNAME=admin
       - JETTRA_ADMIN_PASSWORD=admin-jettra
@@ -2800,7 +2830,7 @@ services:
     volumes:
       - /var/jettra/data:/jettra/data
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:60000/api/v1/health || exit 1"]
+      test: ["CMD-SHELL", "curl -f http://localhost:60001/api/v1/health || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -2824,7 +2854,7 @@ services:
       - JETTRA_NODE_ID=node-03
       - JETTRA_NODE_ROLE=SECONDARY
       - JETTRA_STORAGE_PATH=/jettra/data
-      - JETTRA_REST_PORT=60000
+      - JETTRA_REST_PORT=60001
       - JETTRA_GRPC_PORT=50001
       - JETTRA_ADMIN_USERNAME=admin
       - JETTRA_ADMIN_PASSWORD=admin-jettra
@@ -2833,7 +2863,7 @@ services:
     volumes:
       - /var/jettra/data:/jettra/data
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:60000/api/v1/health || exit 1"]
+      test: ["CMD-SHELL", "curl -f http://localhost:60001/api/v1/health || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -2859,9 +2889,9 @@ services:
 4. **Verificación de Quórum Distribuido:**
    Desde cualquier máquina de la red, verifique la salud y los pares registrados:
    ```bash
-   curl -s http://192.168.1.101:60000/api/v1/health | jq .
-   curl -s http://192.168.1.102:60000/api/v1/health | jq .
-   curl -s http://192.168.1.103:60000/api/v1/health | jq .
+   curl -s http://192.168.1.101:60001/api/v1/health | jq .
+   curl -s http://192.168.1.102:60001/api/v1/health | jq .
+   curl -s http://192.168.1.103:60001/api/v1/health | jq .
    ```
    Las respuestas confirmarán el estado `UP`, el rol correspondiente (`PRIMARY` o `SECONDARY`) y la telemetría en tiempo real procesada por el clúster.
 

@@ -23,7 +23,7 @@ public class JettraStoreShellTest {
         assertTrue(unauthBlocked.contains("[AUTH REQUIRED]"));
 
         // 2. Conexión y login explícito
-        String conn = shell.executeCommand("connect 127.0.0.1 9091");
+        String conn = shell.executeCommand("connect 127.0.0.1 50001");
         assertTrue(conn.contains("[CONNECTED]"));
 
         String login = shell.executeCommand("login admin admin-jettra");
@@ -86,7 +86,7 @@ public class JettraStoreShellTest {
         assertTrue(nodes.contains("SECONDARY"));
 
         // 3. Administración de nodos (ADD, STOP, START, REMOVE)
-        String addNode = shell.executeCommand("ADD NODE node-04 192.168.1.104 9091 SECONDARY");
+        String addNode = shell.executeCommand("ADD NODE node-04 192.168.1.104 50001 SECONDARY");
         assertTrue(addNode.contains("[SUCCESS]"));
 
         String stopNode = shell.executeCommand("STOP NODE node-04");
@@ -123,7 +123,7 @@ public class JettraStoreShellTest {
     @Test
     @DisplayName("Debe instalar la base de datos de ejemplo con INSTALL SAMPLES, mostrar show samples y ejecutar JettraQL y JettraSQL")
     public void testInstallAllSamplesAndQueries() {
-        try (JettraClient client = JettraClient.connect("127.0.0.1", 9091, "admin", "admin-jettra")) {
+        try (JettraClient client = JettraClient.connect("127.0.0.1", 50001, "admin", "admin-jettra")) {
             JettraStoreShellApp shell = new JettraStoreShellApp(client);
 
             // 1. INSTALL SAMPLES debe instalar la única base de datos de ejemplo con máximo 500 registros
@@ -161,7 +161,7 @@ public class JettraStoreShellTest {
     @Test
     @DisplayName("Debe administrar índices: creación, listado, reconstrucción y eliminación")
     public void testIndexManagement() {
-        try (JettraClient client = JettraClient.connect("127.0.0.1", 9091, "admin", "admin-jettra")) {
+        try (JettraClient client = JettraClient.connect("127.0.0.1", 50001, "admin", "admin-jettra")) {
             JettraStoreShellApp shell = new JettraStoreShellApp(client);
             shell.executeCommand("CREATE DATABASE idx_db");
             shell.executeCommand("USE idx_db");
@@ -190,7 +190,7 @@ public class JettraStoreShellTest {
     @Test
     @DisplayName("Debe administrar usuarios y roles RBAC por base de datos")
     public void testUserAndRoleManagement() {
-        try (JettraClient client = JettraClient.connect("127.0.0.1", 9091, "admin", "admin-jettra")) {
+        try (JettraClient client = JettraClient.connect("127.0.0.1", 50001, "admin", "admin-jettra")) {
             JettraStoreShellApp shell = new JettraStoreShellApp(client);
 
             // 1. Listar usuarios
@@ -224,7 +224,7 @@ public class JettraStoreShellTest {
     @Test
     @DisplayName("Debe procesar registros referenciados y operaciones CRUD")
     public void testReferencedRecordsAndCrud() {
-        try (JettraClient client = JettraClient.connect("127.0.0.1", 9091, "admin", "admin-jettra")) {
+        try (JettraClient client = JettraClient.connect("127.0.0.1", 50001, "admin", "admin-jettra")) {
             JettraStoreShellApp shell = new JettraStoreShellApp(client);
             shell.executeCommand("CREATE DATABASE ref_db");
             shell.executeCommand("USE ref_db");
@@ -260,7 +260,7 @@ public class JettraStoreShellTest {
     @Test
     @DisplayName("Debe ejecutar comando BACKUP DATABASE y RESTORE DATABASE desde el shell")
     public void testShellBackupRestore() throws IOException {
-        try (JettraClient client = JettraClient.connect("127.0.0.1", 9091, "admin", "admin-jettra")) {
+        try (JettraClient client = JettraClient.connect("127.0.0.1", 50001, "admin", "admin-jettra")) {
             JettraStoreShellApp shell = new JettraStoreShellApp(client);
             shell.executeCommand("INSTALL SAMPLES");
 
@@ -278,7 +278,7 @@ public class JettraStoreShellTest {
     @Test
     @DisplayName("Debe listar buckets/units, mostrar registros multimodelo y contar registros con show buckets, show records y count")
     public void testShowBucketsShowRecordsAndCount() {
-        try (JettraClient client = JettraClient.connect("127.0.0.1", 9091, "admin", "admin-jettra")) {
+        try (JettraClient client = JettraClient.connect("127.0.0.1", 50001, "admin", "admin-jettra")) {
             JettraStoreShellApp shell = new JettraStoreShellApp(client);
             shell.executeCommand("INSTALL SAMPLES");
 
@@ -330,7 +330,7 @@ public class JettraStoreShellTest {
     @Test
     @DisplayName("Debe cargar la base de datos example_factura_db como única muestra multimodelo con máximo 500 registros")
     public void testLoadFacturaSampleDatabaseMax500Records() {
-        try (JettraClient client = JettraClient.connect("127.0.0.1", 9091, "admin", "admin-jettra")) {
+        try (JettraClient client = JettraClient.connect("127.0.0.1", 50001, "admin", "admin-jettra")) {
             JettraStoreShellApp shell = new JettraStoreShellApp(client);
 
             String samples = shell.executeCommand("SHOW SAMPLES");
@@ -370,7 +370,7 @@ public class JettraStoreShellTest {
     @Test
     @DisplayName("Debe eliminar fisicamente la base de datos con DROP DATABASE y DROP DB")
     public void testDropDatabaseCommand() {
-        try (JettraClient client = JettraClient.connect("127.0.0.1", 9091, "admin", "admin-jettra")) {
+        try (JettraClient client = JettraClient.connect("127.0.0.1", 50001, "admin", "admin-jettra")) {
             JettraStoreShellApp shell = new JettraStoreShellApp(client);
 
             // 1. Crear BD 'test_drop_db' y verificar existencia
@@ -406,7 +406,7 @@ public class JettraStoreShellTest {
     @Test
     @DisplayName("show dbs debe ejecutarse de forma perezosa (lazy) sin cargar todo el contenido a RAM")
     public void testShowDatabasesLazyLoadingAndNoOOM() {
-        try (JettraClient client = JettraClient.connect("127.0.0.1", 9091, "admin", "admin-jettra")) {
+        try (JettraClient client = JettraClient.connect("127.0.0.1", 50001, "admin", "admin-jettra")) {
             JettraStoreShellApp shell = new JettraStoreShellApp(client);
 
             // 1. show dbs y show databases deben listar sin error de memoria
@@ -422,7 +422,7 @@ public class JettraStoreShellTest {
     @Test
     @DisplayName("select * from clientes debe ejecutarse de forma streaming acotada sin OutOfMemoryError")
     public void testSelectClientesQueryStreamingAndLimit() {
-        try (JettraClient client = JettraClient.connect("127.0.0.1", 9091, "admin", "admin-jettra")) {
+        try (JettraClient client = JettraClient.connect("127.0.0.1", 50001, "admin", "admin-jettra")) {
             JettraStoreShellApp shell = new JettraStoreShellApp(client);
             shell.executeCommand("use example_factura_db");
 
@@ -446,7 +446,7 @@ public class JettraStoreShellTest {
     @Test
     @DisplayName("Debe gestionar paginación interactiva con FIRST, PREV, NEXT, LAST y PAGE_SIZE")
     public void testInteractivePaginationCommands() {
-        try (JettraClient client = JettraClient.connect("127.0.0.1", 9091, "admin", "admin-jettra")) {
+        try (JettraClient client = JettraClient.connect("127.0.0.1", 50001, "admin", "admin-jettra")) {
             JettraStoreShellApp shell = new JettraStoreShellApp(client);
             shell.executeCommand("INSTALL SAMPLES FACTURA");
             shell.executeCommand("use example_factura_db");
@@ -484,7 +484,7 @@ public class JettraStoreShellTest {
     @Test
     @DisplayName("Debe procesar comandos interactivos de cálculo, agregación, finanzas, estadística y vectores")
     public void testShellCalcAggregationsStatsFinanceVector() {
-        try (JettraClient client = JettraClient.connect("127.0.0.1", 9091, "admin", "admin-jettra");
+        try (JettraClient client = JettraClient.connect("127.0.0.1", 50001, "admin", "admin-jettra");
              JettraStoreShellApp shell = new JettraStoreShellApp(client)) {
 
             // 1. Math
@@ -532,7 +532,7 @@ public class JettraStoreShellTest {
     @Test
     @DisplayName("Debe gestionar historial persistente, expansión bang (!n, !!, !prefix) y autocompletado")
     public void testHistoryAndAutocomplete() {
-        try (JettraClient client = JettraClient.connect("127.0.0.1", 9091, "admin", "admin-jettra")) {
+        try (JettraClient client = JettraClient.connect("127.0.0.1", 50001, "admin", "admin-jettra")) {
             JettraStoreShellApp shell = new JettraStoreShellApp(client);
 
             // 1. Limpiar historial inicial
@@ -598,7 +598,7 @@ public class JettraStoreShellTest {
     @Test
     @DisplayName("Debe gestionar comandos de modo multinodo MULTINODE, MULTINODE ON y MULTINODE OFF en Shell")
     public void testClusterMultinodeShellCommands() {
-        try (JettraClient client = JettraClient.connect("127.0.0.1", 9091, "admin", "admin-jettra")) {
+        try (JettraClient client = JettraClient.connect("127.0.0.1", 50001, "admin", "admin-jettra")) {
             JettraStoreShellApp shell = new JettraStoreShellApp(client);
 
             // 1. Consultar estado multinodo
@@ -697,7 +697,7 @@ public class JettraStoreShellTest {
     @DisplayName("Debe ejecutar comando 'cluster live' y mostrar flujo de eventos en tiempo real")
     public void testClusterLiveCommand() {
         JettraStoreShellApp shell = new JettraStoreShellApp(false);
-        shell.executeCommand("connect 127.0.0.1 9091");
+        shell.executeCommand("connect 127.0.0.1 50001");
         shell.executeCommand("login admin admin-jettra");
 
         // Publicar un evento de prueba en el bus
@@ -805,12 +805,12 @@ public class JettraStoreShellTest {
         // 4. Vincular activeLineReader al shell y ejecutar comandos
         shell.setActiveLineReader(lineReader);
 
-        shell.executeCommand("CONNECT 127.0.0.1 9091");
+        shell.executeCommand("CONNECT 127.0.0.1 50001");
         shell.executeCommand("USE default_db");
         shell.executeCommand("DB STATS");
 
         assertEquals(3, shell.getCommandHistory().size());
-        assertEquals("CONNECT 127.0.0.1 9091", shell.getCommandHistory().get(0));
+        assertEquals("CONNECT 127.0.0.1 50001", shell.getCommandHistory().get(0));
         assertEquals("USE default_db", shell.getCommandHistory().get(1));
         assertEquals("DB STATS", shell.getCommandHistory().get(2));
 
@@ -828,7 +828,7 @@ public class JettraStoreShellTest {
         assertEquals("USE default_db", jlineHistory.current());
 
         assertTrue(jlineHistory.previous());
-        assertEquals("CONNECT 127.0.0.1 9091", jlineHistory.current());
+        assertEquals("CONNECT 127.0.0.1 50001", jlineHistory.current());
 
         // Navegar hacia adelante (Abajo)
         assertTrue(jlineHistory.next());
@@ -851,19 +851,19 @@ public class JettraStoreShellTest {
         String prevCfg = System.getProperty("jettra.shell.config.file");
         try {
             java.nio.file.Files.writeString(tempMp,
-                "# JettraStore Shell Test Config\napp.title=JettraStore Shell\ncluster.nodes=node-01:127.0.0.1:9091,node-02:127.0.0.1:9092\n",
+                "# JettraStore Shell Test Config\napp.title=JettraStore Shell\ncluster.nodes=node-01:127.0.0.1:50001,node-02:127.0.0.1:50002\n",
                 java.nio.charset.StandardCharsets.UTF_8);
             System.setProperty("jettra.shell.config.file", tempMp.toAbsolutePath().toString());
 
-            try (JettraClient client = JettraClient.connect("127.0.0.1", 9091, "admin", "admin-jettra")) {
+            try (JettraClient client = JettraClient.connect("127.0.0.1", 50001, "admin", "admin-jettra")) {
                 JettraStoreShellApp shell = new JettraStoreShellApp(client);
 
                 // 1. Verificar carga inicial desde microprofile-config.properties en menú de conexiones y LIST CONNECTIONS
                 String menuBefore = shell.getConnectionsMenuDisplay();
                 assertTrue(menuBefore.contains("node-01"));
-                assertTrue(menuBefore.contains("127.0.0.1:9091"));
+                assertTrue(menuBefore.contains("127.0.0.1:50001"));
                 assertTrue(menuBefore.contains("node-02"));
-                assertTrue(menuBefore.contains("127.0.0.1:9092"));
+                assertTrue(menuBefore.contains("127.0.0.1:50002"));
                 assertEquals(2, shell.getOrderedConnectionsList().size());
 
                 String listBefore = shell.executeCommand("LIST CONNECTIONS");
@@ -871,22 +871,22 @@ public class JettraStoreShellTest {
                 assertTrue(listBefore.contains("node-02"));
 
                 // 2. Guardar nueva conexión y verificar actualización en microprofile-config.properties
-                String saveRes = shell.executeCommand("SAVE CONNECTION node-04 127.0.0.1 9094 admin");
+                String saveRes = shell.executeCommand("SAVE CONNECTION node-04 127.0.0.1 50004 admin");
                 assertTrue(saveRes.contains("[SUCCESS]"));
                 String mpAfterSave = java.nio.file.Files.readString(tempMp, java.nio.charset.StandardCharsets.UTF_8);
-                assertTrue(mpAfterSave.contains("node-04:127.0.0.1:9094"));
+                assertTrue(mpAfterSave.contains("node-04:127.0.0.1:50004"));
 
                 // 3. Agregar nodo con ADD NODE y verificar actualización en microprofile-config.properties
-                String addRes = shell.executeCommand("ADD NODE node-05 127.0.0.1 9095 SECONDARY");
+                String addRes = shell.executeCommand("ADD NODE node-05 127.0.0.1 50005 SECONDARY");
                 assertTrue(addRes.contains("[SUCCESS]"));
                 String mpAfterAdd = java.nio.file.Files.readString(tempMp, java.nio.charset.StandardCharsets.UTF_8);
-                assertTrue(mpAfterAdd.contains("node-05:127.0.0.1:9095"));
+                assertTrue(mpAfterAdd.contains("node-05:127.0.0.1:50005"));
 
                 // 4. Remover nodo con REMOVE NODE y verificar eliminación en microprofile-config.properties
                 String remRes = shell.executeCommand("REMOVE NODE node-05");
                 assertTrue(remRes.contains("[SUCCESS]"));
                 String mpAfterRem = java.nio.file.Files.readString(tempMp, java.nio.charset.StandardCharsets.UTF_8);
-                assertFalse(mpAfterRem.contains("node-05:127.0.0.1:9095"));
+                assertFalse(mpAfterRem.contains("node-05:127.0.0.1:50005"));
 
                 // Limpiar node-04
                 shell.executeCommand("REMOVE CONNECTION node-04");
@@ -909,19 +909,19 @@ public class JettraStoreShellTest {
         String prevCluster = System.getProperty("cluster.config.path");
         try {
             java.nio.file.Files.writeString(tempMp,
-                "# Shell Test Config\napp.title=JettraStore Shell\ncluster.nodes=node-01:127.0.0.1:9091\n",
+                "# Shell Test Config\napp.title=JettraStore Shell\ncluster.nodes=node-01:127.0.0.1:50001\n",
                 java.nio.charset.StandardCharsets.UTF_8);
             java.nio.file.Files.writeString(tempCluster,
-                "cluster.name = test-cluster\ncluster.node.1.id = node-01\ncluster.node.1.role = PRIMARY\ncluster.node.1.ip = 127.0.0.1\ncluster.node.1.grpc.port = 9091\ncluster.node.1.rest.port = 8081\n",
+                "cluster.name = test-cluster\ncluster.node.1.id = node-01\ncluster.node.1.role = PRIMARY\ncluster.node.1.ip = 127.0.0.1\ncluster.node.1.grpc.port = 50001\ncluster.node.1.rest.port = 8081\n",
                 java.nio.charset.StandardCharsets.UTF_8);
             System.setProperty("jettra.shell.config.file", tempMp.toAbsolutePath().toString());
             System.setProperty("cluster.config.path", tempCluster.toAbsolutePath().toString());
 
-            try (JettraClient client = JettraClient.connect("127.0.0.1", 9091, "admin", "admin-jettra")) {
+            try (JettraClient client = JettraClient.connect("127.0.0.1", 50001, "admin", "admin-jettra")) {
                 JettraStoreShellApp shell = new JettraStoreShellApp(client);
 
                 // CLUSTER ADD-NODE
-                String addRes = shell.executeCommand("CLUSTER ADD-NODE node-06 127.0.0.1 9096 SECONDARY 8086");
+                String addRes = shell.executeCommand("CLUSTER ADD-NODE node-06 127.0.0.1 50006 SECONDARY 8086");
                 assertTrue(addRes.contains("[SUCCESS]"));
                 assertTrue(addRes.contains("node-06"));
 
@@ -948,6 +948,51 @@ public class JettraStoreShellTest {
             }
             java.nio.file.Files.deleteIfExists(tempMp);
             java.nio.file.Files.deleteIfExists(tempCluster);
+        }
+    }
+
+    @Test
+    @DisplayName("Debe listar en SHOW DATABASES las bases almacenadas en el nodo PRIMARY sin instalar bases arbitrarias")
+    public void testShowDatabasesFromPrimaryWithoutArbitraryInstall() throws Exception {
+        java.nio.file.Path tempStorage = java.nio.file.Files.createTempDirectory("jettra_shell_primary_dbs_");
+        int grpcPort = 51121;
+        int restPort = 61121;
+        java.util.Properties props = new java.util.Properties();
+        props.setProperty("cluster.node.id", "node-01");
+        props.setProperty("cluster.node.role", "PRIMARY");
+        props.setProperty("jettra.network.host", "127.0.0.1");
+        props.setProperty("jettra.network.rest.port", String.valueOf(restPort));
+        props.setProperty("jettra.network.grpc.port", String.valueOf(grpcPort));
+        props.setProperty("jettra.storage.path", tempStorage.toAbsolutePath().toString());
+        props.setProperty("jettra.storage.mode", "JVM_RAM");
+        props.setProperty("cluster.multinode.active", "on");
+        props.setProperty("jettrapolice.active", "false");
+        io.jettra.store.core.JettraStoreConfig primaryCfg = new io.jettra.store.core.JettraStoreConfig(props);
+        io.jettra.store.JettraStoreServer primaryServer = new io.jettra.store.JettraStoreServer(primaryCfg);
+        try {
+            primaryServer.start();
+            // 1. Verificar inicio limpio sin bases arbitrarias al conectar desde Shell
+            JettraStoreShellApp shell = new JettraStoreShellApp(false);
+            shell.executeCommand("connect 127.0.0.1 " + grpcPort);
+            String loginOut = shell.executeCommand("login admin admin-jettra");
+            assertTrue(loginOut.contains("[AUTH SUCCESS]"));
+
+            String emptyShow = shell.executeCommand("SHOW DATABASES");
+            assertFalse(emptyShow.contains("default_db"));
+            assertFalse(emptyShow.contains("example_factura_db"));
+            assertTrue(emptyShow.contains("Total: 0 base(s) de datos almacenadas en el nodo PRIMARY"));
+
+            // 2. Crear bases de datos en el nodo PRIMARY y verificar que SHOW DATABASES las lista desde el PRIMARY
+            primaryServer.getOrCreateDatabase("ventas_primary_db");
+            primaryServer.getOrCreateDatabase("inventario_primary_db");
+
+            String populatedShow = shell.executeCommand("SHOW DATABASES");
+            assertTrue(populatedShow.contains("ventas_primary_db"));
+            assertTrue(populatedShow.contains("inventario_primary_db"));
+            assertFalse(populatedShow.contains("default_db"));
+            assertTrue(populatedShow.contains("Total: 2 base(s) de datos almacenadas en el nodo PRIMARY"));
+        } finally {
+            primaryServer.stop();
         }
     }
 }

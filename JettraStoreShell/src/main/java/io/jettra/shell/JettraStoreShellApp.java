@@ -37,7 +37,7 @@ import java.util.concurrent.TimeUnit;
 
 public final class JettraStoreShellApp implements AutoCloseable {
     private JettraClient client;
-    private String currentDatabase = "default_db";
+    private String currentDatabase = null;
     private boolean authenticated = false;
     private String currentUser = "anonymous";
     private String currentRole = "NONE";
@@ -56,9 +56,12 @@ public final class JettraStoreShellApp implements AutoCloseable {
                 System.out.println("╔══════════════════════════════════════════════════════════════════════════════╗");
                 System.out.println("║ 🛡️  [JETTRAPOLICE SENTINEL - PROTECCIÓN PREVENTIVA DE MEMORIA HEAP]         ║");
                 System.out.println("╠══════════════════════════════════════════════════════════════════════════════╣");
-                System.out.printf("║  Operación: %-15s | Colección: %-32s║%n", notification.operation(), notification.targetCollection());
-                System.out.printf("║  Total Estimado: %-10d | Lote Seguro (Batch): %-23d║%n", notification.estimatedTotalRecords(), notification.safeBatchSize());
-                System.out.printf("║  Saturación Heap: %5.1f%%        | RAM Disponible: %-19s║%n", notification.heapUsagePercent(), notification.availableMemoryMb() + " MB");
+                System.out.printf("║  Operación: %-15s | Colección: %-32s║%n", notification.operation(),
+                        notification.targetCollection());
+                System.out.printf("║  Total Estimado: %-10d | Lote Seguro (Batch): %-23d║%n",
+                        notification.estimatedTotalRecords(), notification.safeBatchSize());
+                System.out.printf("║  Saturación Heap: %5.1f%%        | RAM Disponible: %-19s║%n",
+                        notification.heapUsagePercent(), notification.availableMemoryMb() + " MB");
                 System.out.println("║  Estrategia: Streaming por chunks activado para prevenir OutOfMemory.        ║");
                 System.out.println("╚══════════════════════════════════════════════════════════════════════════════╝");
             });
@@ -72,7 +75,9 @@ public final class JettraStoreShellApp implements AutoCloseable {
     private int totalQueryPages = 1;
 
     // Perfiles de Conexión Guardados
-    public record SavedConnection(String name, String host, int port, String user) {}
+    public record SavedConnection(String name, String host, int port, String user) {
+    }
+
     private final Map<String, SavedConnection> savedConnections = Collections.synchronizedMap(new LinkedHashMap<>());
 
     public JettraStoreShellApp(boolean autoConnect) {
@@ -104,7 +109,6 @@ public final class JettraStoreShellApp implements AutoCloseable {
         this.currentPort = 50001;
         if (this.client != null) {
             registerSentinelListener();
-            this.client.getDatabase(currentDatabase);
         }
     }
 
@@ -141,16 +145,18 @@ public final class JettraStoreShellApp implements AutoCloseable {
 
     private boolean loadInitialConnectionsFromMicroprofileConfig() {
         Properties props = new Properties();
-        String explicitFile = System.getProperty("jettra.shell.config.file", 
-            System.getProperty("microprofile.config.file",
-                System.getenv("JETTRA_SHELL_CONFIG_FILE") != null ? System.getenv("JETTRA_SHELL_CONFIG_FILE") : System.getenv("MICROPROFILE_CONFIG_FILE")));
+        String explicitFile = System.getProperty("jettra.shell.config.file",
+                System.getProperty("microprofile.config.file",
+                        System.getenv("JETTRA_SHELL_CONFIG_FILE") != null ? System.getenv("JETTRA_SHELL_CONFIG_FILE")
+                                : System.getenv("MICROPROFILE_CONFIG_FILE")));
 
         if (explicitFile != null && !explicitFile.isBlank()) {
             Path p = Path.of(explicitFile.trim());
             if (Files.exists(p)) {
                 try (var is = Files.newInputStream(p)) {
                     props.load(is);
-                } catch (Exception ignored) {}
+                } catch (Exception ignored) {
+                }
             }
         } else {
             // 1. Recursos en Classpath
@@ -159,34 +165,42 @@ public final class JettraStoreShellApp implements AutoCloseable {
                 while (resources.hasMoreElements()) {
                     try (var is = resources.nextElement().openStream()) {
                         props.load(is);
-                    } catch (Exception ignored) {}
+                    } catch (Exception ignored) {
+                    }
                 }
-            } catch (Exception ignored) {}
+            } catch (Exception ignored) {
+            }
             try {
                 var resources = getClass().getClassLoader().getResources("microprofile-config.properties");
                 while (resources.hasMoreElements()) {
                     try (var is = resources.nextElement().openStream()) {
                         props.load(is);
-                    } catch (Exception ignored) {}
+                    } catch (Exception ignored) {
+                    }
                 }
-            } catch (Exception ignored) {}
+            } catch (Exception ignored) {
+            }
             try (var is = getClass().getResourceAsStream("/META-INF/microprofile-config.properties")) {
-                if (is != null) props.load(is);
-            } catch (Exception ignored) {}
+                if (is != null)
+                    props.load(is);
+            } catch (Exception ignored) {
+            }
             try (var is = getClass().getResourceAsStream("/microprofile-config.properties")) {
-                if (is != null) props.load(is);
-            } catch (Exception ignored) {}
+                if (is != null)
+                    props.load(is);
+            } catch (Exception ignored) {
+            }
 
             // 2. Archivos en disco (prioridad sobre classpath)
             List<String> candidates = new ArrayList<>(List.of(
-                "JettraStoreShell/src/main/resources/META-INF/microprofile-config.properties",
-                "src/main/resources/META-INF/microprofile-config.properties",
-                "./META-INF/microprofile-config.properties",
-                "./config/microprofile-config.properties",
-                "./microprofile-config.properties",
-                Path.of(System.getProperty("user.home"), "jettrastoreshell", "config", "microprofile-config.properties").toString(),
-                Path.of(System.getProperty("user.home"), ".jettra", "microprofile-config.properties").toString()
-            ));
+                    "JettraStoreShell/src/main/resources/META-INF/microprofile-config.properties",
+                    "src/main/resources/META-INF/microprofile-config.properties",
+                    "./META-INF/microprofile-config.properties",
+                    "./config/microprofile-config.properties",
+                    "./microprofile-config.properties",
+                    Path.of(System.getProperty("user.home"), "jettrastoreshell", "config",
+                            "microprofile-config.properties").toString(),
+                    Path.of(System.getProperty("user.home"), ".jettra", "microprofile-config.properties").toString()));
 
             try {
                 var codeSource = JettraStoreShellApp.class.getProtectionDomain().getCodeSource();
@@ -197,26 +211,28 @@ public final class JettraStoreShellApp implements AutoCloseable {
                         candidates.add(jarParent.resolve("microprofile-config.properties").toString());
                     }
                 }
-            } catch (Exception ignored) {}
+            } catch (Exception ignored) {
+            }
 
             for (String c : candidates) {
                 Path p = Path.of(c);
                 if (Files.exists(p)) {
                     try (var is = Files.newInputStream(p)) {
                         props.load(is);
-                    } catch (Exception ignored) {}
+                    } catch (Exception ignored) {
+                    }
                 }
             }
         }
 
-        String nodesConfig = System.getProperty("cluster.nodes", 
-            props.getProperty("cluster.nodes", System.getenv("CLUSTER_NODES")));
-        String defaultNodeName = System.getProperty("cluster.default.node", 
-            props.getProperty("cluster.default.node", 
-                props.getProperty("cluster.node.default", System.getenv("CLUSTER_DEFAULT_NODE"))));
+        String nodesConfig = System.getProperty("cluster.nodes",
+                props.getProperty("cluster.nodes", System.getenv("CLUSTER_NODES")));
+        String defaultNodeName = System.getProperty("cluster.default.node",
+                props.getProperty("cluster.default.node",
+                        props.getProperty("cluster.node.default", System.getenv("CLUSTER_DEFAULT_NODE"))));
 
-        String defaultUser = props.getProperty("jettra.security.default.admin.username", 
-            props.getProperty("jettra.admin.username", "admin"));
+        String defaultUser = props.getProperty("jettra.security.default.admin.username",
+                props.getProperty("jettra.admin.username", "admin"));
 
         if (nodesConfig != null && !nodesConfig.isBlank()) {
             savedConnections.clear();
@@ -228,7 +244,10 @@ public final class JettraStoreShellApp implements AutoCloseable {
                     String id = parts[0].trim();
                     String host = parts[1].trim();
                     int port = 50001;
-                    try { port = Integer.parseInt(parts[2].trim()); } catch (Exception ignored) {}
+                    try {
+                        port = Integer.parseInt(parts[2].trim());
+                    } catch (Exception ignored) {
+                    }
                     String user = (parts.length >= 4 && !parts[3].trim().isBlank()) ? parts[3].trim() : defaultUser;
                     if (!id.isBlank() && !host.isBlank() && port > 0) {
                         savedConnections.put(id, new SavedConnection(id, host, port, user));
@@ -247,17 +266,22 @@ public final class JettraStoreShellApp implements AutoCloseable {
             return loadedAny;
         }
 
-        // Fallback a propiedades directas de conexión (jettra.host, jettra.port / JETTRA_HOST, JETTRA_PORT)
-        String fallbackHost = System.getProperty("jettra.host", 
-            props.getProperty("jettra.host", 
-                props.getProperty("server.host", System.getenv("JETTRA_HOST"))));
-        String fallbackPortStr = System.getProperty("jettra.port", 
-            props.getProperty("jettra.port", 
-                props.getProperty("server.port", System.getenv("JETTRA_PORT"))));
+        // Fallback a propiedades directas de conexión (jettra.host, jettra.port /
+        // JETTRA_HOST, JETTRA_PORT)
+        String fallbackHost = System.getProperty("jettra.host",
+                props.getProperty("jettra.host",
+                        props.getProperty("server.host", System.getenv("JETTRA_HOST"))));
+        String fallbackPortStr = System.getProperty("jettra.port",
+                props.getProperty("jettra.port",
+                        props.getProperty("server.port", System.getenv("JETTRA_PORT"))));
 
         if (fallbackHost != null && !fallbackHost.isBlank()) {
             int port = 50001;
-            try { if (fallbackPortStr != null) port = Integer.parseInt(fallbackPortStr.trim()); } catch (Exception ignored) {}
+            try {
+                if (fallbackPortStr != null)
+                    port = Integer.parseInt(fallbackPortStr.trim());
+            } catch (Exception ignored) {
+            }
             savedConnections.clear();
             savedConnections.put("node-01", new SavedConnection("node-01", fallbackHost.trim(), port, defaultUser));
             defaultConnectionName = "node-01";
@@ -271,7 +295,8 @@ public final class JettraStoreShellApp implements AutoCloseable {
         StringBuilder sb = new StringBuilder();
         int i = 0;
         for (SavedConnection sc : savedConnections.values()) {
-            if (i++ > 0) sb.append(",");
+            if (i++ > 0)
+                sb.append(",");
             sb.append(sc.name()).append(":").append(sc.host()).append(":").append(sc.port());
         }
         return sb.toString();
@@ -279,14 +304,16 @@ public final class JettraStoreShellApp implements AutoCloseable {
 
     public void persistClusterNodesToMicroprofileConfig() {
         String clusterNodesValue = getClusterNodesPropertyValue();
-        if (clusterNodesValue.isBlank()) return;
+        if (clusterNodesValue.isBlank())
+            return;
 
         List<Path> targets = new ArrayList<>();
-        String explicitFile = System.getProperty("jettra.shell.config.file", System.getProperty("microprofile.config.file"));
+        String explicitFile = System.getProperty("jettra.shell.config.file",
+                System.getProperty("microprofile.config.file"));
         if (explicitFile != null && !explicitFile.isBlank()) {
             targets.add(Path.of(explicitFile.trim()));
         } else {
-            for (String candidate : new String[]{
+            for (String candidate : new String[] {
                     "src/main/resources/META-INF/microprofile-config.properties",
                     "target/classes/META-INF/microprofile-config.properties",
                     "./microprofile-config.properties",
@@ -305,8 +332,8 @@ public final class JettraStoreShellApp implements AutoCloseable {
                     Files.createDirectories(target.getParent());
                 }
                 List<String> lines = Files.exists(target)
-                    ? new ArrayList<>(Files.readAllLines(target, StandardCharsets.UTF_8))
-                    : new ArrayList<>();
+                        ? new ArrayList<>(Files.readAllLines(target, StandardCharsets.UTF_8))
+                        : new ArrayList<>();
                 boolean replaced = false;
                 for (int i = 0; i < lines.size(); i++) {
                     String trimmed = lines.get(i).trim();
@@ -320,7 +347,8 @@ public final class JettraStoreShellApp implements AutoCloseable {
                     lines.add("cluster.nodes=" + clusterNodesValue);
                 }
                 Files.write(target, lines, StandardCharsets.UTF_8);
-            } catch (Exception ignored) {}
+            } catch (Exception ignored) {
+            }
         }
     }
 
@@ -329,7 +357,8 @@ public final class JettraStoreShellApp implements AutoCloseable {
             Path clusterPath = JettraConfigValidator.locateJettraConfigFile();
             if (clusterPath != null && Files.exists(clusterPath)) {
                 Properties clusterProps = JettraConfigValidator.loadProperties(clusterPath, "/jettra.config");
-                List<JettraConfigValidator.ClusterNodeInfo> nodes = JettraConfigValidator.parseClusterNodes(clusterProps);
+                List<JettraConfigValidator.ClusterNodeInfo> nodes = JettraConfigValidator
+                        .parseClusterNodes(clusterProps);
                 if (nodes != null && !nodes.isEmpty()) {
                     for (JettraConfigValidator.ClusterNodeInfo node : nodes) {
                         String name = node.id();
@@ -346,7 +375,8 @@ public final class JettraStoreShellApp implements AutoCloseable {
                     return;
                 }
             }
-        } catch (Exception ignored) {}
+        } catch (Exception ignored) {
+        }
 
         // Fallback predeterminado según jettra.config estándar
         savedConnections.put("node-01", new SavedConnection("node-01", "127.0.0.1", 50001, "admin"));
@@ -368,13 +398,16 @@ public final class JettraStoreShellApp implements AutoCloseable {
                     }
                 }
             }
-        } catch (Exception ignored) {}
+        } catch (Exception ignored) {
+        }
     }
 
     public void recordHistory(String command) {
-        if (command == null || command.isBlank()) return;
+        if (command == null || command.isBlank())
+            return;
         String trimmed = command.trim();
-        if (trimmed.startsWith("!") || trimmed.equalsIgnoreCase("HISTORY") || trimmed.equalsIgnoreCase("HISTORY CLEAR")) {
+        if (trimmed.startsWith("!") || trimmed.equalsIgnoreCase("HISTORY")
+                || trimmed.equalsIgnoreCase("HISTORY CLEAR")) {
             return;
         }
         commandHistory.add(trimmed);
@@ -383,12 +416,14 @@ public final class JettraStoreShellApp implements AutoCloseable {
                 Files.createDirectories(CONFIG_DIR);
             }
             Files.writeString(HISTORY_FILE, trimmed + System.lineSeparator(),
-                StandardCharsets.UTF_8, StandardOpenOption.CREATE, StandardOpenOption.APPEND);
-        } catch (Exception ignored) {}
+                    StandardCharsets.UTF_8, StandardOpenOption.CREATE, StandardOpenOption.APPEND);
+        } catch (Exception ignored) {
+        }
         if (activeLineReader != null) {
             try {
                 activeLineReader.getHistory().add(trimmed);
-            } catch (Exception ignored) {}
+            } catch (Exception ignored) {
+            }
         }
     }
 
@@ -403,16 +438,19 @@ public final class JettraStoreShellApp implements AutoCloseable {
             if (activeLineReader != null) {
                 try {
                     activeLineReader.getHistory().purge();
-                } catch (Exception ignored) {}
+                } catch (Exception ignored) {
+                }
             }
             try {
                 if (Files.exists(HISTORY_FILE)) {
                     Files.writeString(HISTORY_FILE, "", StandardCharsets.UTF_8, StandardOpenOption.TRUNCATE_EXISTING);
                 }
                 if (Files.exists(JLINE_HISTORY_FILE)) {
-                    Files.writeString(JLINE_HISTORY_FILE, "", StandardCharsets.UTF_8, StandardOpenOption.TRUNCATE_EXISTING);
+                    Files.writeString(JLINE_HISTORY_FILE, "", StandardCharsets.UTF_8,
+                            StandardOpenOption.TRUNCATE_EXISTING);
                 }
-            } catch (Exception ignored) {}
+            } catch (Exception ignored) {
+            }
             return "[OK] Historial de comandos limpiado exitosamente.";
         }
 
@@ -438,7 +476,8 @@ public final class JettraStoreShellApp implements AutoCloseable {
         if (upper.startsWith("HISTORY ")) {
             try {
                 count = Integer.parseInt(command.substring("HISTORY ".length()).trim());
-            } catch (NumberFormatException ignored) {}
+            } catch (NumberFormatException ignored) {
+            }
         }
 
         if (commandHistory.isEmpty()) {
@@ -452,7 +491,8 @@ public final class JettraStoreShellApp implements AutoCloseable {
             sb.append(String.format("  [%4d] %s%n", (i + 1), commandHistory.get(i)));
         }
         sb.append("--------------------------------------------------------------------------------\n");
-        sb.append("Uso: !<num> ejecuta comando por número | !! ejecuta el último | !<prefijo> ejecuta por coincidencia\n");
+        sb.append(
+                "Uso: !<num> ejecuta comando por número | !! ejecuta el último | !<prefijo> ejecuta por coincidencia\n");
         return sb.toString();
     }
 
@@ -467,7 +507,8 @@ public final class JettraStoreShellApp implements AutoCloseable {
         if (trimmed.matches("^!\\d+$")) {
             int idx = Integer.parseInt(trimmed.substring(1));
             if (idx < 1 || idx > commandHistory.size()) {
-                throw new IllegalArgumentException("[ERROR] Índice de historial fuera de rango: " + idx + " (Total: " + commandHistory.size() + ")");
+                throw new IllegalArgumentException("[ERROR] Índice de historial fuera de rango: " + idx + " (Total: "
+                        + commandHistory.size() + ")");
             }
             return commandHistory.get(idx - 1);
         }
@@ -479,13 +520,15 @@ public final class JettraStoreShellApp implements AutoCloseable {
                     return h;
                 }
             }
-            throw new IllegalArgumentException("[ERROR] No se encontró ningún comando en el historial que comience con '" + prefix + "'.");
+            throw new IllegalArgumentException(
+                    "[ERROR] No se encontró ningún comando en el historial que comience con '" + prefix + "'.");
         }
         return cmd;
     }
 
     public List<String> autocomplete(String prefix) {
-        if (prefix == null) prefix = "";
+        if (prefix == null)
+            prefix = "";
         String pTrim = prefix.trim();
         String pUpper = prefix.toUpperCase();
         String pTrimUpper = pTrim.toUpperCase();
@@ -493,54 +536,59 @@ public final class JettraStoreShellApp implements AutoCloseable {
         Set<String> candidates = new LinkedHashSet<>();
 
         List<String> baseKeywords = List.of(
-            // Sistema & Ayuda
-            "HELP", "HELP STORAGE_MODE", "HELP CLUSTER-DISTRIBUTED", "HELP CLUSTER LIVE", "MENU", "MENU CONNECTIONS", "STATUS",
-            "HISTORY", "HISTORY CLEAR", "HISTORY SEARCH ", "COMPLETE ", "TAB ", "EXIT", "QUIT",
-            // Conexión & Autenticación
-            "CONNECT ", "LOGIN ", "LOGOUT", "SAVE CONNECTION ", "REMOVE CONNECTION ", "LIST CONNECTIONS",
-            // Bases de Datos
-            "SHOW DATABASES", "SHOW SAMPLES", "SHOW SAMPLE DATABASES", "CREATE DATABASE ", "DROP DATABASE ", "USE ", "DB STATS", "DB INFO",
-            // Colecciones, Buckets & Índices
-            "SHOW BUCKETS", "SHOW COLLECTIONS", "SHOW TABLES", "SHOW UNITS", "SHOW RECORDS ", "COUNT ",
-            "CREATE COLLECTION ", "DROP COLLECTION ", "CREATE BUCKET ", "DROP BUCKET ",
-            "CREATE INDEX ", "CREATE INDEX ON ", "DROP INDEX ", "SHOW INDEXES", "SHOW INDEXES ON ", "LIST INDEXES", "REINDEX ",
-            // Usuarios & Seguridad
-            "SHOW USERS", "LIST USERS", "CREATE USER ", "DROP USER ", "ALTER USER ",
-            "GRANT ", "GRANT READ ON ", "GRANT WRITE ON ", "GRANT ADMIN ON ",
-            "REVOKE ", "REVOKE READ ON ", "REVOKE WRITE ON ", "SHOW GRANTS FOR ",
-            // CRUD & Referencias
-            "SELECT ", "SELECT * FROM ", "INSERT INTO ", "UPDATE ", "DELETE FROM ", "GET ",
-            "FIND ONE ", "FIND ALL ", "FIND BY ID ", "SCAN ",
-            "INSERT REF ", "RESOLVE REF ", "SHOW REFS ",
-            // Topología, Nodos & Cluster
-            "SHOW NODES", "LIST NODES", "ADD NODE ", "REMOVE NODE ", "START NODE ", "STOP NODE ",
-            "CLUSTER ADD-NODE ", "CLUSTER ADD NODE ", "CLUSTER REMOVE-NODE ", "CLUSTER REMOVE NODE ",
-            "MULTINODE", "MULTINODE ON", "MULTINODE OFF", "MULTINODE STATUS", "SHOW MULTINODE",
-            "CLUSTER-DISTRIBUTED", "CLUSTER-DISTRIBUTED ALL", "CLUSTER-DISTRIBUTED <ALL>", "CLUSTER-DISTRIBUTED INFO", "CLUSTER-DISTRIBUTED ",
-            "CLUSTER LIVE", "CLUSTER LIVE 10", "CLUSTER LIVE 30", "CLUSTER LIVE 60", "CLUSTER_LIVE",
-            // Modos de Almacenamiento & Lazy Reference
-            "STORAGE_MODE", "SHOW STORAGE_MODE", "STORAGE_MODE JVM-RAM", "STORAGE_MODE DISK-MEMORY", "STORAGE_MODE OFF-HEAP",
-            "SET STORAGE_MODE JVM-RAM", "SET STORAGE_MODE DISK-MEMORY", "SET STORAGE_MODE OFF-HEAP",
-            "LAZY REFERENCE ON", "LAZY REFERENCE OFF", "LAZY REFERENCE STATUS",
-            // Motores Multimodelo
-            "KV PUT ", "KV GET ", "KV DELETE ", "KV SCAN ",
-            "VEC INDEX ", "VEC SEARCH ", "VECTOR INDEX ", "VECTOR SEARCH ",
-            "GRAPH ADD VERTEX ", "GRAPH ADD EDGE ", "GRAPH GET EDGES ", "GRAPH TRAVERSE ", "GRAPH BFS ", "GRAPH SHORTEST ",
-            "TS RECORD ", "TS RANGE ", "TS QUERY ", "SERIES ADD ", "SERIES RANGE ", "SERIES STATS ",
-            "GEO INSERT ", "GEO RADIUS ", "GEO BBOX ",
-            "COL INSERT ", "COL SCAN ",
-            "JQL ", "JETTRAQL ", "MATCH ", "FETCH ",
-            "SQL ", "JETTRASQL ",
-            "AGGREGATE ", "AGG SUM ", "AGG AVG ", "AGG MIN ", "AGG MAX ", "AGG COUNT ", "AGG GROUP ",
-            "MATH ", "FINANCE ", "STATS ", "VECTOR ",
-            // Muestras & Respaldo
-            "INSTALL SAMPLES", "INSTALL SAMPLES FACTURA", "INSTALL SAMPLES HOSPITAL", "INSTALL SAMPLES AMBIENTAL",
-            "LOAD SAMPLE example_factura_db", "LOAD SAMPLE samples_hostipal_db", "LOAD SAMPLE samples_ambiental_db",
-            "BACKUP DATABASE", "BACKUP DATABASE ", "RESTORE DATABASE", "RESTORE DATABASE ",
-            // Paginación
-            "PAGE NEXT", "PAGE PREV", "PAGE FIRST", "PAGE LAST", "PAGE SIZE ",
-            "FIRST", "PREV", "NEXT", "LAST"
-        );
+                // Sistema & Ayuda
+                "HELP", "HELP STORAGE_MODE", "HELP CLUSTER-DISTRIBUTED", "HELP CLUSTER LIVE", "MENU",
+                "MENU CONNECTIONS", "STATUS",
+                "HISTORY", "HISTORY CLEAR", "HISTORY SEARCH ", "COMPLETE ", "TAB ", "EXIT", "QUIT",
+                // Conexión & Autenticación
+                "CONNECT ", "LOGIN ", "LOGOUT", "SAVE CONNECTION ", "REMOVE CONNECTION ", "LIST CONNECTIONS",
+                // Bases de Datos
+                "SHOW DATABASES", "SHOW SAMPLES", "SHOW SAMPLE DATABASES", "CREATE DATABASE ", "DROP DATABASE ", "USE ",
+                "DB STATS", "DB INFO",
+                // Colecciones, Buckets & Índices
+                "SHOW BUCKETS", "SHOW COLLECTIONS", "SHOW TABLES", "SHOW UNITS", "SHOW RECORDS ", "COUNT ",
+                "CREATE COLLECTION ", "DROP COLLECTION ", "CREATE BUCKET ", "DROP BUCKET ",
+                "CREATE INDEX ", "CREATE INDEX ON ", "DROP INDEX ", "SHOW INDEXES", "SHOW INDEXES ON ", "LIST INDEXES",
+                "REINDEX ",
+                // Usuarios & Seguridad
+                "SHOW USERS", "LIST USERS", "CREATE USER ", "DROP USER ", "ALTER USER ",
+                "GRANT ", "GRANT READ ON ", "GRANT WRITE ON ", "GRANT ADMIN ON ",
+                "REVOKE ", "REVOKE READ ON ", "REVOKE WRITE ON ", "SHOW GRANTS FOR ",
+                // CRUD & Referencias
+                "SELECT ", "SELECT * FROM ", "INSERT INTO ", "UPDATE ", "DELETE FROM ", "GET ",
+                "FIND ONE ", "FIND ALL ", "FIND BY ID ", "SCAN ",
+                "INSERT REF ", "RESOLVE REF ", "SHOW REFS ",
+                // Topología, Nodos & Cluster
+                "SHOW NODES", "LIST NODES", "ADD NODE ", "REMOVE NODE ", "START NODE ", "STOP NODE ",
+                "CLUSTER ADD-NODE ", "CLUSTER ADD NODE ", "CLUSTER REMOVE-NODE ", "CLUSTER REMOVE NODE ",
+                "MULTINODE", "MULTINODE ON", "MULTINODE OFF", "MULTINODE STATUS", "SHOW MULTINODE",
+                "CLUSTER-DISTRIBUTED", "CLUSTER-DISTRIBUTED ALL", "CLUSTER-DISTRIBUTED <ALL>",
+                "CLUSTER-DISTRIBUTED INFO", "CLUSTER-DISTRIBUTED ",
+                "CLUSTER LIVE", "CLUSTER LIVE 10", "CLUSTER LIVE 30", "CLUSTER LIVE 60", "CLUSTER_LIVE",
+                // Modos de Almacenamiento & Lazy Reference
+                "STORAGE_MODE", "SHOW STORAGE_MODE", "STORAGE_MODE JVM-RAM", "STORAGE_MODE DISK-MEMORY",
+                "STORAGE_MODE OFF-HEAP",
+                "SET STORAGE_MODE JVM-RAM", "SET STORAGE_MODE DISK-MEMORY", "SET STORAGE_MODE OFF-HEAP",
+                "LAZY REFERENCE ON", "LAZY REFERENCE OFF", "LAZY REFERENCE STATUS",
+                // Motores Multimodelo
+                "KV PUT ", "KV GET ", "KV DELETE ", "KV SCAN ",
+                "VEC INDEX ", "VEC SEARCH ", "VECTOR INDEX ", "VECTOR SEARCH ",
+                "GRAPH ADD VERTEX ", "GRAPH ADD EDGE ", "GRAPH GET EDGES ", "GRAPH TRAVERSE ", "GRAPH BFS ",
+                "GRAPH SHORTEST ",
+                "TS RECORD ", "TS RANGE ", "TS QUERY ", "SERIES ADD ", "SERIES RANGE ", "SERIES STATS ",
+                "GEO INSERT ", "GEO RADIUS ", "GEO BBOX ",
+                "COL INSERT ", "COL SCAN ",
+                "JQL ", "JETTRAQL ", "MATCH ", "FETCH ",
+                "SQL ", "JETTRASQL ",
+                "AGGREGATE ", "AGG SUM ", "AGG AVG ", "AGG MIN ", "AGG MAX ", "AGG COUNT ", "AGG GROUP ",
+                "MATH ", "FINANCE ", "STATS ", "VECTOR ",
+                // Muestras & Respaldo
+                "INSTALL SAMPLES", "INSTALL SAMPLES FACTURA", "INSTALL SAMPLES HOSPITAL", "INSTALL SAMPLES AMBIENTAL",
+                "LOAD SAMPLE example_factura_db", "LOAD SAMPLE samples_hostipal_db", "LOAD SAMPLE samples_ambiental_db",
+                "BACKUP DATABASE", "BACKUP DATABASE ", "RESTORE DATABASE", "RESTORE DATABASE ",
+                // Paginación
+                "PAGE NEXT", "PAGE PREV", "PAGE FIRST", "PAGE LAST", "PAGE SIZE ",
+                "FIRST", "PREV", "NEXT", "LAST");
 
         // 1. Sugerencias contextuales para Bases de Datos
         if (pUpper.startsWith("USE ") || pTrimUpper.equals("USE")
@@ -560,16 +608,17 @@ public final class JettraStoreShellApp implements AutoCloseable {
             }
 
             List<String> dbs = new ArrayList<>(List.of(
-                "default_db", "sample_enterprise_db", "sample_ecommerce_db", "sample_ai_graph_db",
-                "sample_iot_telemetry_db", "sample_financial_db", "example_factura_db",
-                "samples_hostipal_db", "samples_ambiental_db"
-            ));
+                    "default_db", "sample_enterprise_db", "sample_ecommerce_db", "sample_ai_graph_db",
+                    "sample_iot_telemetry_db", "sample_financial_db", "example_factura_db",
+                    "samples_hostipal_db", "samples_ambiental_db"));
             if (client != null) {
                 try {
                     for (String d : client.listDatabases()) {
-                        if (!dbs.contains(d)) dbs.add(d);
+                        if (!dbs.contains(d))
+                            dbs.add(d);
                     }
-                } catch (Exception ignored) {}
+                } catch (Exception ignored) {
+                }
             }
             for (String d : dbs) {
                 if (dbPrefix.isEmpty() || d.toLowerCase().startsWith(dbPrefix)) {
@@ -586,7 +635,8 @@ public final class JettraStoreShellApp implements AutoCloseable {
             if (client != null) {
                 try {
                     options.addAll(client.listDatabases());
-                } catch (Exception ignored) {}
+                } catch (Exception ignored) {
+                }
             } else {
                 options.addAll(List.of("default_db", "sample_enterprise_db", "sample_ecommerce_db"));
             }
@@ -603,7 +653,8 @@ public final class JettraStoreShellApp implements AutoCloseable {
             int lastSpace = prefix.lastIndexOf(' ');
             String verb = lastSpace != -1 ? prefix.substring(0, lastSpace + 1) : prefix + " ";
             String sub = lastSpace != -1 ? prefix.substring(lastSpace + 1).trim().toLowerCase() : "";
-            List<String> samples = List.of("example_factura_db", "samples_hostipal_db", "samples_ambiental_db", "FACTURA", "HOSPITAL", "AMBIENTAL");
+            List<String> samples = List.of("example_factura_db", "samples_hostipal_db", "samples_ambiental_db",
+                    "FACTURA", "HOSPITAL", "AMBIENTAL");
             for (String s : samples) {
                 if (sub.isEmpty() || s.toLowerCase().startsWith(sub)) {
                     candidates.add(verb + s);
@@ -626,7 +677,7 @@ public final class JettraStoreShellApp implements AutoCloseable {
             if (pTrimUpper.equals("COUNT") && (bucketPrefix.isEmpty() || "*".startsWith(bucketPrefix))) {
                 candidates.add(verb + "*");
             }
-            if (client != null) {
+            if (client != null && currentDatabase != null && !currentDatabase.isBlank() && client.isDatabaseLoaded(currentDatabase)) {
                 try {
                     JettraDatabase db = client.getDatabase(currentDatabase);
                     if (db != null) {
@@ -636,10 +687,12 @@ public final class JettraStoreShellApp implements AutoCloseable {
                             }
                         }
                     }
-                } catch (Exception ignored) {}
+                } catch (Exception ignored) {
+                }
             }
         }
-        // 5. Sugerencias contextuales para Conexiones Guardadas (CONNECT / REMOVE CONNECTION)
+        // 5. Sugerencias contextuales para Conexiones Guardadas (CONNECT / REMOVE
+        // CONNECTION)
         else if (pUpper.startsWith("CONNECT ") || pTrimUpper.equals("CONNECT")
                 || pUpper.startsWith("REMOVE CONNECTION ") || pTrimUpper.equals("REMOVE CONNECTION")) {
             int lastSpace = prefix.lastIndexOf(' ');
@@ -707,9 +760,8 @@ public final class JettraStoreShellApp implements AutoCloseable {
             String verb = lastSpace != -1 ? prefix.substring(0, lastSpace + 1) : prefix + " ";
             String sub = lastSpace != -1 ? prefix.substring(lastSpace + 1).trim().toUpperCase() : "";
             List<String> showOptions = List.of(
-                "DATABASES", "BUCKETS", "COLLECTIONS", "TABLES", "INDEXES",
-                "USERS", "NODES", "SAMPLES", "STORAGE_MODE", "MULTINODE", "RECORDS "
-            );
+                    "DATABASES", "BUCKETS", "COLLECTIONS", "TABLES", "INDEXES",
+                    "USERS", "NODES", "SAMPLES", "STORAGE_MODE", "MULTINODE", "RECORDS ");
             for (String opt : showOptions) {
                 if (sub.isEmpty() || opt.startsWith(sub)) {
                     candidates.add(verb + opt);
@@ -776,7 +828,8 @@ public final class JettraStoreShellApp implements AutoCloseable {
             }
         }
 
-        // Búsqueda en historial de comandos ejecutados (sin duplicar ignorando mayúsculas/minúsculas)
+        // Búsqueda en historial de comandos ejecutados (sin duplicar ignorando
+        // mayúsculas/minúsculas)
         for (int i = commandHistory.size() - 1; i >= 0; i--) {
             String h = commandHistory.get(i);
             if (h.toUpperCase().startsWith(pUpper) || h.toUpperCase().startsWith(pTrimUpper)) {
@@ -789,7 +842,8 @@ public final class JettraStoreShellApp implements AutoCloseable {
                 }
                 if (!exists) {
                     candidates.add(h);
-                    if (candidates.size() >= 40) break;
+                    if (candidates.size() >= 40)
+                        break;
                 }
             }
         }
@@ -798,36 +852,55 @@ public final class JettraStoreShellApp implements AutoCloseable {
     }
 
     public String resolveCandidateGroup(String command) {
-        if (command == null) return "Comandos";
+        if (command == null)
+            return "Comandos";
         String u = command.toUpperCase().trim();
-        if (u.startsWith("SHOW DATA") || u.startsWith("SHOW DB") || u.startsWith("USE ") || u.startsWith("CREATE DATA") || u.startsWith("CREATE DB") || u.startsWith("DROP DATA") || u.startsWith("DROP DB") || u.startsWith("DB ") || u.startsWith("LIST DATA") || u.startsWith("LIST DB") || u.startsWith("SHOW SAMPLE")) {
+        if (u.startsWith("SHOW DATA") || u.startsWith("SHOW DB") || u.startsWith("USE ") || u.startsWith("CREATE DATA")
+                || u.startsWith("CREATE DB") || u.startsWith("DROP DATA") || u.startsWith("DROP DB")
+                || u.startsWith("DB ") || u.startsWith("LIST DATA") || u.startsWith("LIST DB")
+                || u.startsWith("SHOW SAMPLE")) {
             return "Bases de Datos";
         }
-        if (u.startsWith("SHOW BUCKET") || u.startsWith("SHOW UNIT") || u.startsWith("SHOW COLL") || u.startsWith("SHOW TAB") || u.startsWith("CREATE COLL") || u.startsWith("DROP COLL") || u.startsWith("CREATE BUCKET") || u.startsWith("DROP BUCKET") || u.startsWith("COUNT") || u.startsWith("SHOW RECORDS")) {
+        if (u.startsWith("SHOW BUCKET") || u.startsWith("SHOW UNIT") || u.startsWith("SHOW COLL")
+                || u.startsWith("SHOW TAB") || u.startsWith("CREATE COLL") || u.startsWith("DROP COLL")
+                || u.startsWith("CREATE BUCKET") || u.startsWith("DROP BUCKET") || u.startsWith("COUNT")
+                || u.startsWith("SHOW RECORDS")) {
             return "Colecciones y Buckets";
         }
-        if (u.startsWith("CREATE INDEX") || u.startsWith("DROP INDEX") || u.startsWith("SHOW INDEX") || u.startsWith("LIST INDEX") || u.startsWith("REINDEX") || u.startsWith("ALTER INDEX")) {
+        if (u.startsWith("CREATE INDEX") || u.startsWith("DROP INDEX") || u.startsWith("SHOW INDEX")
+                || u.startsWith("LIST INDEX") || u.startsWith("REINDEX") || u.startsWith("ALTER INDEX")) {
             return "Índices";
         }
-        if (u.startsWith("SHOW USER") || u.startsWith("LIST USER") || u.startsWith("CREATE USER") || u.startsWith("DROP USER") || u.startsWith("ALTER USER") || u.startsWith("GRANT") || u.startsWith("REVOKE") || u.startsWith("SHOW GRANTS")) {
+        if (u.startsWith("SHOW USER") || u.startsWith("LIST USER") || u.startsWith("CREATE USER")
+                || u.startsWith("DROP USER") || u.startsWith("ALTER USER") || u.startsWith("GRANT")
+                || u.startsWith("REVOKE") || u.startsWith("SHOW GRANTS")) {
             return "Seguridad y Usuarios";
         }
-        if (u.startsWith("CLUSTER") || u.startsWith("MULTINODE") || u.startsWith("SHOW NODE") || u.startsWith("LIST NODE") || u.startsWith("ADD NODE") || u.startsWith("REMOVE NODE") || u.startsWith("START NODE") || u.startsWith("STOP NODE")) {
+        if (u.startsWith("CLUSTER") || u.startsWith("MULTINODE") || u.startsWith("SHOW NODE")
+                || u.startsWith("LIST NODE") || u.startsWith("ADD NODE") || u.startsWith("REMOVE NODE")
+                || u.startsWith("START NODE") || u.startsWith("STOP NODE")) {
             return "Cluster y Nodos";
         }
-        if (u.startsWith("SELECT") || u.startsWith("INSERT") || u.startsWith("UPDATE") || u.startsWith("DELETE") || u.startsWith("GET ") || u.startsWith("FIND") || u.startsWith("SCAN") || u.startsWith("RESOLVE") || u.startsWith("SHOW REFS")) {
+        if (u.startsWith("SELECT") || u.startsWith("INSERT") || u.startsWith("UPDATE") || u.startsWith("DELETE")
+                || u.startsWith("GET ") || u.startsWith("FIND") || u.startsWith("SCAN") || u.startsWith("RESOLVE")
+                || u.startsWith("SHOW REFS")) {
             return "CRUD y Consultas";
         }
-        if (u.startsWith("KV ") || u.startsWith("VEC ") || u.startsWith("VECTOR ") || u.startsWith("GRAPH ") || u.startsWith("TS ") || u.startsWith("SERIES ") || u.startsWith("GEO ") || u.startsWith("COL ") || u.startsWith("JQL ") || u.startsWith("JETTRAQL ") || u.startsWith("SQL ") || u.startsWith("AGG") || u.startsWith("MATH") || u.startsWith("FINANCE") || u.startsWith("STATS")) {
+        if (u.startsWith("KV ") || u.startsWith("VEC ") || u.startsWith("VECTOR ") || u.startsWith("GRAPH ")
+                || u.startsWith("TS ") || u.startsWith("SERIES ") || u.startsWith("GEO ") || u.startsWith("COL ")
+                || u.startsWith("JQL ") || u.startsWith("JETTRAQL ") || u.startsWith("SQL ") || u.startsWith("AGG")
+                || u.startsWith("MATH") || u.startsWith("FINANCE") || u.startsWith("STATS")) {
             return "Motores Multimodelo";
         }
-        if (u.startsWith("CONNECT") || u.startsWith("LOGIN") || u.startsWith("LOGOUT") || u.startsWith("SAVE CONN") || u.startsWith("REMOVE CONN") || u.startsWith("LIST CONN")) {
+        if (u.startsWith("CONNECT") || u.startsWith("LOGIN") || u.startsWith("LOGOUT") || u.startsWith("SAVE CONN")
+                || u.startsWith("REMOVE CONN") || u.startsWith("LIST CONN")) {
             return "Conexiones y Perfiles";
         }
         if (u.startsWith("STORAGE_MODE") || u.startsWith("SET STORAGE_MODE") || u.startsWith("LAZY REFERENCE")) {
             return "Almacenamiento y Memoria";
         }
-        if (u.startsWith("INSTALL SAMPLE") || u.startsWith("LOAD SAMPLE") || u.startsWith("BACKUP") || u.startsWith("RESTORE")) {
+        if (u.startsWith("INSTALL SAMPLE") || u.startsWith("LOAD SAMPLE") || u.startsWith("BACKUP")
+                || u.startsWith("RESTORE")) {
             return "Muestras y Respaldo";
         }
         if (u.startsWith("PAGE") || u.equals("FIRST") || u.equals("PREV") || u.equals("NEXT") || u.equals("LAST")) {
@@ -840,59 +913,111 @@ public final class JettraStoreShellApp implements AutoCloseable {
     }
 
     public String resolveCandidateDescription(String command) {
-        if (command == null) return null;
+        if (command == null)
+            return null;
         String u = command.toUpperCase().trim();
-        if (u.equals("HELP") || u.equals("?")) return "Guía completa de comandos disponibles";
-        if (u.equals("MENU")) return "Abre el menú interactivo guiado";
-        if (u.equals("STATUS")) return "Muestra telemetría de Panama FFM y estado del motor";
-        if (u.equals("SHOW DATABASES") || u.equals("SHOW DBS")) return "Lista todas las bases de datos registradas";
-        if (u.startsWith("USE ")) return "Conmuta la base de datos activa para la sesión";
-        if (u.startsWith("CREATE DATABASE ") || u.startsWith("CREATE DB ")) return "Crea una nueva base de datos distribuida";
-        if (u.startsWith("DROP DATABASE ") || u.startsWith("DROP DB ")) return "Elimina permanentemente una base de datos";
-        if (u.equals("SHOW BUCKETS") || u.equals("SHOW UNITS")) return "Lista colecciones/buckets de la base de datos activa";
-        if (u.equals("SHOW COLLECTIONS") || u.equals("SHOW TABLES")) return "Lista colecciones o tablas de la base de datos activa";
-        if (u.startsWith("SHOW RECORDS ")) return "Muestra registros de una colección o bucket";
-        if (u.startsWith("COUNT ")) return "Retorna la cantidad total de registros";
-        if (u.equals("SHOW INDEXES") || u.equals("LIST INDEXES")) return "Lista índices secundarios y vectoriales creados";
-        if (u.startsWith("CREATE INDEX ")) return "Crea un índice secundario sobre una colección";
-        if (u.startsWith("DROP INDEX ")) return "Elimina un índice secundario existente";
-        if (u.equals("SHOW USERS") || u.equals("LIST USERS")) return "Lista cuentas de usuario del sistema";
-        if (u.startsWith("CREATE USER ")) return "Crea un nuevo usuario en JettraStore";
-        if (u.startsWith("DROP USER ")) return "Elimina una cuenta de usuario";
-        if (u.equals("SHOW NODES") || u.equals("LIST NODES")) return "Lista la topología de nodos del clúster";
-        if (u.startsWith("MULTINODE ON")) return "Habilita replicación distribuida con consenso Raft";
-        if (u.startsWith("MULTINODE OFF")) return "Establece el nodo en modo autónomo independiente";
-        if (u.startsWith("MULTINODE")) return "Consulta el estado actual de sincronización multinodo";
-        if (u.startsWith("CLUSTER-DISTRIBUTED ALL")) return "Distribuye todas las bases de datos a nodos secundarios";
-        if (u.startsWith("CLUSTER-DISTRIBUTED INFO")) return "Muestra la matriz de distribución del clúster";
-        if (u.startsWith("CLUSTER LIVE")) return "Monitorea eventos de replicación en vivo por SSE";
-        if (u.startsWith("SHOW STORAGE_MODE") || u.equals("STORAGE_MODE")) return "Muestra el modo de almacenamiento activo";
-        if (u.startsWith("STORAGE_MODE JVM-RAM") || u.startsWith("SET STORAGE_MODE JVM-RAM")) return "Establece almacenamiento en Heap estándar de JVM";
-        if (u.startsWith("STORAGE_MODE DISK-MEMORY") || u.startsWith("SET STORAGE_MODE DISK-MEMORY")) return "Establece almacenamiento Off-Heap directo LSM (JettraMemory)";
-        if (u.startsWith("STORAGE_MODE OFF-HEAP") || u.startsWith("SET STORAGE_MODE OFF-HEAP")) return "Establece almacenamiento Off-Heap Slotted-Page FFM (JettraStore-OffHeap)";
-        if (u.equals("SHOW SAMPLES") || u.equals("SHOW SAMPLE DATABASES")) return "Muestra bases de datos de demostración predefinidas";
-        if (u.startsWith("INSTALL SAMPLES")) return "Inicializa bases de datos de prueba predefinidas";
-        if (u.startsWith("LOAD SAMPLE ")) return "Carga una muestra específica (factura, hospital, ambiental)";
-        if (u.startsWith("BACKUP DATABASE")) return "Genera copia de respaldo física de la base de datos";
-        if (u.startsWith("RESTORE DATABASE")) return "Restaura base de datos a partir de respaldo";
-        if (u.startsWith("CONNECT ")) return "Configura endpoint de nodo o carga perfil guardado";
-        if (u.startsWith("LOGIN ")) return "Autentica credenciales y genera token JettraJWT";
-        if (u.equals("LOGOUT")) return "Cierra la sesión autenticada actual";
-        if (u.equals("LIST CONNECTIONS")) return "Lista perfiles guardados en jettra.config";
-        if (u.startsWith("SAVE CONNECTION ")) return "Guarda perfil de conexión en configuración";
-        if (u.startsWith("REMOVE CONNECTION ")) return "Elimina perfil de conexión guardado";
-        if (u.startsWith("SELECT ")) return "Ejecuta consulta SQL/JQL sobre una colección";
-        if (u.startsWith("INSERT INTO ")) return "Inserta documento en la colección especificada";
-        if (u.startsWith("DELETE FROM ")) return "Elimina documentos de la colección especificada";
-        if (u.startsWith("KV PUT ")) return "Guarda par clave-valor en motor Key-Value";
-        if (u.startsWith("KV GET ")) return "Recupera valor por clave del motor Key-Value";
-        if (u.startsWith("VEC SEARCH ") || u.startsWith("VECTOR SEARCH ")) return "Búsqueda vectorial por similitud de coseno";
-        if (u.startsWith("GRAPH ")) return "Operaciones sobre motor de grafos topológicos";
-        if (u.startsWith("TS ")) return "Operaciones sobre motor de series de tiempo";
-        if (u.startsWith("PAGE NEXT")) return "Navega a la página siguiente de resultados";
-        if (u.startsWith("PAGE PREV")) return "Navega a la página anterior de resultados";
-        if (u.startsWith("HISTORY CLEAR")) return "Limpia historial de comandos ejecutados";
-        if (u.equals("HISTORY")) return "Muestra historial reciente de comandos";
+        if (u.equals("HELP") || u.equals("?"))
+            return "Guía completa de comandos disponibles";
+        if (u.equals("MENU"))
+            return "Abre el menú interactivo guiado";
+        if (u.equals("STATUS"))
+            return "Muestra telemetría de Panama FFM y estado del motor";
+        if (u.equals("SHOW DATABASES") || u.equals("SHOW DBS"))
+            return "Lista todas las bases de datos registradas";
+        if (u.startsWith("USE "))
+            return "Conmuta la base de datos activa para la sesión";
+        if (u.startsWith("CREATE DATABASE ") || u.startsWith("CREATE DB "))
+            return "Crea una nueva base de datos distribuida";
+        if (u.startsWith("DROP DATABASE ") || u.startsWith("DROP DB "))
+            return "Elimina permanentemente una base de datos";
+        if (u.equals("SHOW BUCKETS") || u.equals("SHOW UNITS"))
+            return "Lista colecciones/buckets de la base de datos activa";
+        if (u.equals("SHOW COLLECTIONS") || u.equals("SHOW TABLES"))
+            return "Lista colecciones o tablas de la base de datos activa";
+        if (u.startsWith("SHOW RECORDS "))
+            return "Muestra registros de una colección o bucket";
+        if (u.startsWith("COUNT "))
+            return "Retorna la cantidad total de registros";
+        if (u.equals("SHOW INDEXES") || u.equals("LIST INDEXES"))
+            return "Lista índices secundarios y vectoriales creados";
+        if (u.startsWith("CREATE INDEX "))
+            return "Crea un índice secundario sobre una colección";
+        if (u.startsWith("DROP INDEX "))
+            return "Elimina un índice secundario existente";
+        if (u.equals("SHOW USERS") || u.equals("LIST USERS"))
+            return "Lista cuentas de usuario del sistema";
+        if (u.startsWith("CREATE USER "))
+            return "Crea un nuevo usuario en JettraStore";
+        if (u.startsWith("DROP USER "))
+            return "Elimina una cuenta de usuario";
+        if (u.equals("SHOW NODES") || u.equals("LIST NODES"))
+            return "Lista la topología de nodos del clúster";
+        if (u.startsWith("MULTINODE ON"))
+            return "Habilita replicación distribuida con consenso Raft";
+        if (u.startsWith("MULTINODE OFF"))
+            return "Establece el nodo en modo autónomo independiente";
+        if (u.startsWith("MULTINODE"))
+            return "Consulta el estado actual de sincronización multinodo";
+        if (u.startsWith("CLUSTER-DISTRIBUTED ALL"))
+            return "Distribuye todas las bases de datos a nodos secundarios";
+        if (u.startsWith("CLUSTER-DISTRIBUTED INFO"))
+            return "Muestra la matriz de distribución del clúster";
+        if (u.startsWith("CLUSTER LIVE"))
+            return "Monitorea eventos de replicación en vivo por SSE";
+        if (u.startsWith("SHOW STORAGE_MODE") || u.equals("STORAGE_MODE"))
+            return "Muestra el modo de almacenamiento activo";
+        if (u.startsWith("STORAGE_MODE JVM-RAM") || u.startsWith("SET STORAGE_MODE JVM-RAM"))
+            return "Establece almacenamiento en Heap estándar de JVM";
+        if (u.startsWith("STORAGE_MODE DISK-MEMORY") || u.startsWith("SET STORAGE_MODE DISK-MEMORY"))
+            return "Establece almacenamiento Off-Heap directo LSM (JettraMemory)";
+        if (u.startsWith("STORAGE_MODE OFF-HEAP") || u.startsWith("SET STORAGE_MODE OFF-HEAP"))
+            return "Establece almacenamiento Off-Heap Slotted-Page FFM (JettraStore-OffHeap)";
+        if (u.equals("SHOW SAMPLES") || u.equals("SHOW SAMPLE DATABASES"))
+            return "Muestra bases de datos de demostración predefinidas";
+        if (u.startsWith("INSTALL SAMPLES"))
+            return "Inicializa bases de datos de prueba predefinidas";
+        if (u.startsWith("LOAD SAMPLE "))
+            return "Carga una muestra específica (factura, hospital, ambiental)";
+        if (u.startsWith("BACKUP DATABASE"))
+            return "Genera copia de respaldo física de la base de datos";
+        if (u.startsWith("RESTORE DATABASE"))
+            return "Restaura base de datos a partir de respaldo";
+        if (u.startsWith("CONNECT "))
+            return "Configura endpoint de nodo o carga perfil guardado";
+        if (u.startsWith("LOGIN "))
+            return "Autentica credenciales y genera token JettraJWT";
+        if (u.equals("LOGOUT"))
+            return "Cierra la sesión autenticada actual";
+        if (u.equals("LIST CONNECTIONS"))
+            return "Lista perfiles guardados en jettra.config";
+        if (u.startsWith("SAVE CONNECTION "))
+            return "Guarda perfil de conexión en configuración";
+        if (u.startsWith("REMOVE CONNECTION "))
+            return "Elimina perfil de conexión guardado";
+        if (u.startsWith("SELECT "))
+            return "Ejecuta consulta SQL/JQL sobre una colección";
+        if (u.startsWith("INSERT INTO "))
+            return "Inserta documento en la colección especificada";
+        if (u.startsWith("DELETE FROM "))
+            return "Elimina documentos de la colección especificada";
+        if (u.startsWith("KV PUT "))
+            return "Guarda par clave-valor en motor Key-Value";
+        if (u.startsWith("KV GET "))
+            return "Recupera valor por clave del motor Key-Value";
+        if (u.startsWith("VEC SEARCH ") || u.startsWith("VECTOR SEARCH "))
+            return "Búsqueda vectorial por similitud de coseno";
+        if (u.startsWith("GRAPH "))
+            return "Operaciones sobre motor de grafos topológicos";
+        if (u.startsWith("TS "))
+            return "Operaciones sobre motor de series de tiempo";
+        if (u.startsWith("PAGE NEXT"))
+            return "Navega a la página siguiente de resultados";
+        if (u.startsWith("PAGE PREV"))
+            return "Navega a la página anterior de resultados";
+        if (u.startsWith("HISTORY CLEAR"))
+            return "Limpia historial de comandos ejecutados";
+        if (u.equals("HISTORY"))
+            return "Muestra historial reciente de comandos";
         return null;
     }
 
@@ -923,9 +1048,8 @@ public final class JettraStoreShellApp implements AutoCloseable {
                 }
                 // Purge legacy obsolete placeholder names in favor of jettra.config
                 Set<String> legacyNames = Set.of(
-                    "local_master", "node-02-replica", "node-03-replica",
-                    "node-1", "node-2", "node-3"
-                );
+                        "local_master", "node-02-replica", "node-03-replica",
+                        "node-1", "node-2", "node-3");
                 for (String name : props.stringPropertyNames()) {
                     if (legacyNames.contains(name.toLowerCase())) {
                         continue;
@@ -940,7 +1064,8 @@ public final class JettraStoreShellApp implements AutoCloseable {
                     }
                 }
             }
-        } catch (Exception ignored) {}
+        } catch (Exception ignored) {
+        }
     }
 
     public void persistSavedConnections() {
@@ -955,7 +1080,8 @@ public final class JettraStoreShellApp implements AutoCloseable {
             try (var out = Files.newOutputStream(CONFIG_FILE)) {
                 props.store(out, "JettraStore Shell Saved Connections");
             }
-        } catch (Exception ignored) {}
+        } catch (Exception ignored) {
+        }
     }
 
     public List<SavedConnection> getOrderedConnectionsList() {
@@ -977,25 +1103,27 @@ public final class JettraStoreShellApp implements AutoCloseable {
     public String getConnectionsMenuDisplay() {
         StringBuilder sb = new StringBuilder();
         sb.append("""
-================================================================================
-               JETTRASTORE INTERACTIVE DISTRIBUTED SHELL (JAVA 25+)             
-================================================================================
-=========================== MENÚ DE CONEXIONES =================================
-Seleccione una conexión para iniciar:
-""");
+                ================================================================================
+                               JETTRASTORE INTERACTIVE DISTRIBUTED SHELL (JAVA 25+)
+                ================================================================================
+                =========================== MENÚ DE CONEXIONES =================================
+                Seleccione una conexión para iniciar:
+                """);
         List<SavedConnection> list = getOrderedConnectionsList();
         for (int i = 0; i < list.size(); i++) {
             SavedConnection sc = list.get(i);
-            String defMarker = (sc.name().equalsIgnoreCase(defaultConnectionName) || (defaultConnectionName == null && i == 0)) 
-                ? "  [Predeterminado]" : "";
-            sb.append(String.format("  [%d] %-20s (%s:%d - Usuario: %s)%s%n", 
-                (i + 1), sc.name(), sc.host(), sc.port(), sc.user(), defMarker));
+            String defMarker = (sc.name().equalsIgnoreCase(defaultConnectionName)
+                    || (defaultConnectionName == null && i == 0))
+                            ? "  [Predeterminado]"
+                            : "";
+            sb.append(String.format("  [%d] %-20s (%s:%d - Usuario: %s)%s%n",
+                    (i + 1), sc.name(), sc.host(), sc.port(), sc.user(), defMarker));
         }
         sb.append("""
-  [N] Conexión nueva (donde el usuario ejecuta el connect)
-  [0] Salir del Shell
-================================================================================
-""");
+                  [N] Conexión nueva (donde el usuario ejecuta el connect)
+                  [0] Salir del Shell
+                ================================================================================
+                """);
         return sb.toString();
     }
 
@@ -1040,7 +1168,8 @@ Seleccione una conexión para iniciar:
             if (topic.contains("CLUSTER") || topic.contains("DISTRIBUTED") || topic.contains("LIVE")) {
                 return getClusterDistributedHelpText();
             }
-            if (topic.contains("STORAGE") || topic.contains("MODO") || topic.contains("ALMACEN") || topic.contains("OFF_HEAP") || topic.contains("OFF-HEAP") || topic.contains("MEMORY")) {
+            if (topic.contains("STORAGE") || topic.contains("MODO") || topic.contains("ALMACEN")
+                    || topic.contains("OFF_HEAP") || topic.contains("OFF-HEAP") || topic.contains("MEMORY")) {
                 return getStorageModeHelpText();
             }
             return getHelpText();
@@ -1078,15 +1207,22 @@ Seleccione una conexión para iniciar:
             return handleStatus();
         } else if (upper.equals("SHOW NODES") || upper.equals("NODES") || upper.equals("LIST NODES")) {
             return handleShowNodes();
-        } else if (upper.equals("MULTINODE") || upper.equals("SHOW MULTINODE") || upper.equals("MULTINODE STATUS") || upper.equals("CLUSTER MULTINODE") || upper.equals("SHOW CLUSTER MULTINODE")) {
+        } else if (upper.equals("MULTINODE") || upper.equals("SHOW MULTINODE") || upper.equals("MULTINODE STATUS")
+                || upper.equals("CLUSTER MULTINODE") || upper.equals("SHOW CLUSTER MULTINODE")) {
             return handleMultinodeStatus();
-        } else if (upper.equals("MULTINODE ON") || upper.equals("SET MULTINODE ON") || upper.equals("SET MULTINODE = ON") || upper.equals("SET MULTINODE=ON") || upper.equals("CLUSTER MULTINODE ON")) {
+        } else if (upper.equals("MULTINODE ON") || upper.equals("SET MULTINODE ON")
+                || upper.equals("SET MULTINODE = ON") || upper.equals("SET MULTINODE=ON")
+                || upper.equals("CLUSTER MULTINODE ON")) {
             return handleSetMultinode(true);
-        } else if (upper.equals("MULTINODE OFF") || upper.equals("SET MULTINODE OFF") || upper.equals("SET MULTINODE = OFF") || upper.equals("SET MULTINODE=OFF") || upper.equals("CLUSTER MULTINODE OFF")) {
+        } else if (upper.equals("MULTINODE OFF") || upper.equals("SET MULTINODE OFF")
+                || upper.equals("SET MULTINODE = OFF") || upper.equals("SET MULTINODE=OFF")
+                || upper.equals("CLUSTER MULTINODE OFF")) {
             return handleSetMultinode(false);
-        } else if (upper.startsWith("ADD NODE ") || upper.startsWith("CLUSTER ADD-NODE ") || upper.startsWith("CLUSTER ADD NODE ") || upper.startsWith("CLUSTER-ADD-NODE ")) {
+        } else if (upper.startsWith("ADD NODE ") || upper.startsWith("CLUSTER ADD-NODE ")
+                || upper.startsWith("CLUSTER ADD NODE ") || upper.startsWith("CLUSTER-ADD-NODE ")) {
             return handleAddNode(trimmed);
-        } else if (upper.startsWith("REMOVE NODE ") || upper.startsWith("CLUSTER REMOVE-NODE ") || upper.startsWith("CLUSTER REMOVE NODE ") || upper.startsWith("CLUSTER-REMOVE-NODE ")) {
+        } else if (upper.startsWith("REMOVE NODE ") || upper.startsWith("CLUSTER REMOVE-NODE ")
+                || upper.startsWith("CLUSTER REMOVE NODE ") || upper.startsWith("CLUSTER-REMOVE-NODE ")) {
             return handleRemoveNode(trimmed);
         } else if (upper.startsWith("START NODE ")) {
             return handleStartNode(trimmed);
@@ -1094,7 +1230,9 @@ Seleccione una conexión para iniciar:
             return handleStopNode(trimmed);
         } else if (upper.startsWith("CLUSTER-DISTRIBUTED") || upper.startsWith("CLUSTER_DISTRIBUTED")) {
             return handleClusterDistributed(trimmed);
-        } else if (upper.equals("CLUSTER LIVE") || upper.startsWith("CLUSTER LIVE ") || upper.equals("CLUSTER-LIVE") || upper.startsWith("CLUSTER-LIVE ") || upper.equals("CLUSTER_LIVE") || upper.startsWith("CLUSTER_LIVE ")) {
+        } else if (upper.equals("CLUSTER LIVE") || upper.startsWith("CLUSTER LIVE ") || upper.equals("CLUSTER-LIVE")
+                || upper.startsWith("CLUSTER-LIVE ") || upper.equals("CLUSTER_LIVE")
+                || upper.startsWith("CLUSTER_LIVE ")) {
             return handleClusterLive(trimmed);
         } else if (upper.equals("8")) {
             return handleClusterDistributedInfo();
@@ -1103,29 +1241,38 @@ Seleccione una conexión para iniciar:
         }
 
         // Configuración de Storage Mode (JVM-RAM vs DISK-MEMORY / JettraMemory)
-        if (upper.equals("STORAGE_MODE") || upper.equals("STORAGE MODE") || upper.equals("SHOW STORAGE_MODE") || upper.equals("SHOW STORAGE MODE")) {
+        if (upper.equals("STORAGE_MODE") || upper.equals("STORAGE MODE") || upper.equals("SHOW STORAGE_MODE")
+                || upper.equals("SHOW STORAGE MODE")) {
             return handleShowStorageMode();
-        } else if (upper.startsWith("STORAGE_MODE ") || upper.startsWith("STORAGE MODE ") || upper.startsWith("SET STORAGE_MODE ") || upper.startsWith("SET STORAGE_MODE=") || upper.startsWith("SET STORAGE_MODE =")) {
+        } else if (upper.startsWith("STORAGE_MODE ") || upper.startsWith("STORAGE MODE ")
+                || upper.startsWith("SET STORAGE_MODE ") || upper.startsWith("SET STORAGE_MODE=")
+                || upper.startsWith("SET STORAGE_MODE =")) {
             return handleSetStorageMode(trimmed);
         }
 
-        // 6. Configuración Lazy Reference (lazy reference on / off (lazy reference on / lazy reference off))
-        if (upper.equals("LAZY REFERENCE ON") || upper.equals("SET LAZY_REFERENCE ON") || upper.equals("SET LAZY_REFERENCE = TRUE")) {
+        // 6. Configuración Lazy Reference (lazy reference on / off (lazy reference on /
+        // lazy reference off))
+        if (upper.equals("LAZY REFERENCE ON") || upper.equals("SET LAZY_REFERENCE ON")
+                || upper.equals("SET LAZY_REFERENCE = TRUE")) {
             this.lazyLoad = true;
             this.showReferences = true;
             return "[CONFIG] Lazy Reference ACTIVADO (ON). Las referencias JettraRef se resolverán bajo demanda (Proxy).";
-        } else if (upper.equals("LAZY REFERENCE OFF") || upper.equals("SET LAZY_REFERENCE OFF") || upper.equals("SET LAZY_REFERENCE = FALSE")) {
+        } else if (upper.equals("LAZY REFERENCE OFF") || upper.equals("SET LAZY_REFERENCE OFF")
+                || upper.equals("SET LAZY_REFERENCE = FALSE")) {
             this.lazyLoad = false;
             this.showReferences = true;
             return "[CONFIG] Lazy Reference DESACTIVADO (OFF). Las referencias JettraRef se cargarán inmediatamente en memoria (Eager).";
         } else if (upper.equals("LAZY REFERENCE STATUS") || upper.equals("LAZY REFERENCE")) {
-            return String.format("[CONFIG] Estado de Lazy Reference: %s (showReferences: %s)", lazyLoad ? "ON (Lazy)" : "OFF (Eager)", showReferences);
+            return String.format("[CONFIG] Estado de Lazy Reference: %s (showReferences: %s)",
+                    lazyLoad ? "ON (Lazy)" : "OFF (Eager)", showReferences);
         }
 
         // 7. Control de Bases de Datos
-        if (upper.equals("SHOW DATABASES") || upper.equals("SHOW DBS") || upper.equals("LIST DATABASES") || upper.equals("LIST DBS")) {
+        if (upper.equals("SHOW DATABASES") || upper.equals("SHOW DBS") || upper.equals("LIST DATABASES")
+                || upper.equals("LIST DBS")) {
             return handleShowDatabases();
-        } else if (upper.equals("SHOW SAMPLES") || upper.equals("SHOW SAMPLE DBS") || upper.equals("SHOW SAMPLE DATABASES") || upper.equals("SHOW DBS SAMPLES")) {
+        } else if (upper.equals("SHOW SAMPLES") || upper.equals("SHOW SAMPLE DBS")
+                || upper.equals("SHOW SAMPLE DATABASES") || upper.equals("SHOW DBS SAMPLES")) {
             return handleShowSampleDatabases();
         } else if (upper.startsWith("CREATE DATABASE ") || upper.startsWith("CREATE DB ")) {
             return handleCreateDatabase(trimmed);
@@ -1138,14 +1285,15 @@ Seleccione una conexión para iniciar:
         }
 
         // 8. Control de Buckets / Units y Colecciones
-        if (upper.equals("SHOW BUCKETS") || upper.equals("SHOW BUCKET") 
-                || upper.equals("SHOW UNIT") || upper.equals("SHOW UNITS") 
+        if (upper.equals("SHOW BUCKETS") || upper.equals("SHOW BUCKET")
+                || upper.equals("SHOW UNIT") || upper.equals("SHOW UNITS")
                 || upper.startsWith("SHOW BUCKETS ") || upper.startsWith("SHOW BUCKET ")
                 || upper.startsWith("SHOW UNIT ") || upper.startsWith("SHOW UNITS ")) {
             return handleShowBuckets(trimmed);
         } else if (upper.equals("SHOW RECORDS") || upper.startsWith("SHOW RECORDS ")) {
             return handleShowRecords(trimmed);
-        } else if (upper.equals("COUNT") || upper.startsWith("COUNT ") || upper.equals("COUNT *") || upper.equals("COUNT ALL")) {
+        } else if (upper.equals("COUNT") || upper.startsWith("COUNT ") || upper.equals("COUNT *")
+                || upper.equals("COUNT ALL")) {
             return handleCount(trimmed);
         } else if (upper.equals("SHOW COLLECTIONS") || upper.equals("SHOW TABLES")) {
             return handleShowCollections();
@@ -1164,7 +1312,8 @@ Seleccione una conexión para iniciar:
             return handleDropIndex(trimmed);
         } else if (upper.startsWith("ALTER INDEX ") && upper.contains("REBUILD") || upper.startsWith("REINDEX ")) {
             return handleRebuildIndex(trimmed);
-        } else if (upper.equals("SHOW INDEXES") || upper.startsWith("SHOW INDEXES ON ") || upper.equals("LIST INDEXES")) {
+        } else if (upper.equals("SHOW INDEXES") || upper.startsWith("SHOW INDEXES ON ")
+                || upper.equals("LIST INDEXES")) {
             return handleShowIndexes(trimmed);
         }
 
@@ -1204,24 +1353,32 @@ Seleccione una conexión para iniciar:
             return handleDeleteRecord(trimmed);
         }
 
-        // Paginación y Desplazamiento de Consultas (Primero, Anterior, Siguiente, Última)
-        if (upper.startsWith("SET PAGE_SIZE ") || upper.startsWith("PAGE_SIZE ") || upper.startsWith("PAGESIZE ") || upper.startsWith("SET PAGESIZE ") || upper.startsWith("SIZE ")) {
+        // Paginación y Desplazamiento de Consultas (Primero, Anterior, Siguiente,
+        // Última)
+        if (upper.startsWith("SET PAGE_SIZE ") || upper.startsWith("PAGE_SIZE ") || upper.startsWith("PAGESIZE ")
+                || upper.startsWith("SET PAGESIZE ") || upper.startsWith("SIZE ")) {
             return handleSetPageSize(trimmed);
-        } else if (upper.equals("FIRST") || upper.equals("PRIMERO") || upper.equals("PRI") || upper.equals("PAGE FIRST") || upper.equals("|<<") || (upper.equals("F") && lastPagedBaseQuery != null)) {
+        } else if (upper.equals("FIRST") || upper.equals("PRIMERO") || upper.equals("PRI") || upper.equals("PAGE FIRST")
+                || upper.equals("|<<") || (upper.equals("F") && lastPagedBaseQuery != null)) {
             return handleNavigatePage("FIRST");
-        } else if (upper.equals("PREV") || upper.equals("ANTERIOR") || upper.equals("PREVIOUS") || upper.equals("ANT") || upper.equals("PAGE PREV") || upper.equals("<") || ((upper.equals("A") || upper.equals("P")) && lastPagedBaseQuery != null)) {
+        } else if (upper.equals("PREV") || upper.equals("ANTERIOR") || upper.equals("PREVIOUS") || upper.equals("ANT")
+                || upper.equals("PAGE PREV") || upper.equals("<")
+                || ((upper.equals("A") || upper.equals("P")) && lastPagedBaseQuery != null)) {
             return handleNavigatePage("PREV");
-        } else if (upper.equals("NEXT") || upper.equals("SIGUIENTE") || upper.equals("SIG") || upper.equals("PAGE NEXT") || upper.equals(">") || ((upper.equals("S") || upper.equals("N")) && lastPagedBaseQuery != null)) {
+        } else if (upper.equals("NEXT") || upper.equals("SIGUIENTE") || upper.equals("SIG") || upper.equals("PAGE NEXT")
+                || upper.equals(">") || ((upper.equals("S") || upper.equals("N")) && lastPagedBaseQuery != null)) {
             return handleNavigatePage("NEXT");
-        } else if (upper.equals("LAST") || upper.equals("ULTIMO") || upper.equals("ULTIMA") || upper.equals("ULT") || upper.equals("PAGE LAST") || upper.equals(">>|") || ((upper.equals("U") || upper.equals("L")) && lastPagedBaseQuery != null)) {
+        } else if (upper.equals("LAST") || upper.equals("ULTIMO") || upper.equals("ULTIMA") || upper.equals("ULT")
+                || upper.equals("PAGE LAST") || upper.equals(">>|")
+                || ((upper.equals("U") || upper.equals("L")) && lastPagedBaseQuery != null)) {
             return handleNavigatePage("LAST");
         } else if (upper.startsWith("PAGE ") || upper.startsWith("PAGINA ") || upper.startsWith("GOTO ")) {
             return handleNavigatePage(trimmed);
         }
 
         // 12. Soporte Políglota: JettraQL y JettraSQL
-        if (upper.startsWith("JQL ") || upper.startsWith("JETTRAQL ") || upper.startsWith("FROM ") 
-                || upper.startsWith("MATCH ") || upper.startsWith("VECTOR SIMILARITY ") 
+        if (upper.startsWith("JQL ") || upper.startsWith("JETTRAQL ") || upper.startsWith("FROM ")
+                || upper.startsWith("MATCH ") || upper.startsWith("VECTOR SIMILARITY ")
                 || upper.startsWith("VECTOR MATCH ") || upper.startsWith("FETCH ")) {
             return handleJettraQL(trimmed);
         } else if (upper.startsWith("SQL ") || upper.startsWith("JETTRASQL ") || upper.startsWith("SELECT ")
@@ -1261,12 +1418,15 @@ Seleccione una conexión para iniciar:
             return installFacturaSampleDatabase();
         } else if (upper.equals("INSTALL SAMPLES HOSPITAL") || upper.equals("INSTALL SAMPLE HOSPITAL")
                 || upper.equals("LOAD SAMPLE SAMPLES_HOSTIPAL_DB") || upper.equals("LOAD SAMPLE SAMPLES_HOSPITAL_DB")
-                || upper.equals("INSTALL SAMPLE SAMPLES_HOSTIPAL_DB") || upper.equals("INSTALL SAMPLE SAMPLES_HOSPITAL_DB")
+                || upper.equals("INSTALL SAMPLE SAMPLES_HOSTIPAL_DB")
+                || upper.equals("INSTALL SAMPLE SAMPLES_HOSPITAL_DB")
                 || upper.equals("LOAD SAMPLE HOSPITAL") || upper.equals("INSTALL HOSPITAL")) {
             return installHospitalSampleDatabase();
         } else if (upper.equals("INSTALL SAMPLES AMBIENTAL") || upper.equals("INSTALL SAMPLE AMBIENTAL")
-                || upper.equals("LOAD SAMPLE SAMPLES_AMBIENTAL_DB") || upper.equals("LOAD SAMPLE SAMPLES_ENVIRONMENTAL_DB")
-                || upper.equals("INSTALL SAMPLE SAMPLES_AMBIENTAL_DB") || upper.equals("INSTALL SAMPLE SAMPLES_ENVIRONMENTAL_DB")
+                || upper.equals("LOAD SAMPLE SAMPLES_AMBIENTAL_DB")
+                || upper.equals("LOAD SAMPLE SAMPLES_ENVIRONMENTAL_DB")
+                || upper.equals("INSTALL SAMPLE SAMPLES_AMBIENTAL_DB")
+                || upper.equals("INSTALL SAMPLE SAMPLES_ENVIRONMENTAL_DB")
                 || upper.equals("LOAD SAMPLE AMBIENTAL") || upper.equals("INSTALL AMBIENTAL")) {
             return installAmbientalSampleDatabase();
         } else if (upper.startsWith("INSTALL SAMPLES") || upper.equals("1")) {
@@ -1277,7 +1437,8 @@ Seleccione una conexión para iniciar:
             return handleRestore(trimmed);
         }
 
-        return "[ERROR] Comando desconocido: '" + trimmed + "'. Escriba 'help' o 'menu' para ver los comandos disponibles.";
+        return "[ERROR] Comando desconocido: '" + trimmed
+                + "'. Escriba 'help' o 'menu' para ver los comandos disponibles.";
     }
 
     // --- 1. Conexión y Autenticación ---
@@ -1291,7 +1452,6 @@ Seleccione una conexión para iniciar:
             registerSentinelListener();
             var claims = client.getSecurityManager().validateToken(client.getSessionToken());
             this.currentRole = claims.role();
-            this.client.getDatabase(currentDatabase);
             return true;
         } catch (Exception e) {
             this.authenticated = false;
@@ -1307,8 +1467,9 @@ Seleccione una conexión para iniciar:
             SavedConnection sc = savedConnections.get(clean);
             this.currentHost = sc.host();
             this.currentPort = sc.port();
-            return String.format("[CONNECTED] Servidor configurado a '%s:%d' desde perfil '%s'. Inicie sesión con: login %s <password>",
-                currentHost, currentPort, sc.name(), sc.user());
+            return String.format(
+                    "[CONNECTED] Servidor configurado a '%s:%d' desde perfil '%s'. Inicie sesión con: login %s <password>",
+                    currentHost, currentPort, sc.name(), sc.user());
         }
 
         String[] parts = clean.split("\\s+");
@@ -1319,10 +1480,13 @@ Seleccione una conexión para iniciar:
             } catch (Exception e) {
                 return "[ERROR] Puerto numérico inválido: " + parts[1];
             }
-            return String.format("[CONNECTED] Servidor JettraStore configurado a %s:%d. Proceda con 'login <username> <password>'.", currentHost, currentPort);
+            return String.format(
+                    "[CONNECTED] Servidor JettraStore configurado a %s:%d. Proceda con 'login <username> <password>'.",
+                    currentHost, currentPort);
         } else if (parts.length == 1 && !parts[0].isBlank()) {
             this.currentHost = parts[0].trim();
-            return String.format("[CONNECTED] Host configurado a %s:%d. Proceda con 'login <username> <password>'.", currentHost, currentPort);
+            return String.format("[CONNECTED] Host configurado a %s:%d. Proceda con 'login <username> <password>'.",
+                    currentHost, currentPort);
         }
         return "[ERROR] Uso: connect <host> <puerto> o connect <nombre-conexion>";
     }
@@ -1337,7 +1501,8 @@ Seleccione una conexión para iniciar:
 
         boolean ok = connectAndLogin(currentHost, currentPort, user, pass);
         if (ok) {
-            return String.format("[AUTH SUCCESS] Sesión iniciada como '%s' (Rol Global: %s) en %s:%d.", currentUser, currentRole, currentHost, currentPort);
+            return String.format("[AUTH SUCCESS] Sesión iniciada como '%s' (Rol Global: %s) en %s:%d.", currentUser,
+                    currentRole, currentHost, currentPort);
         } else {
             return "[AUTH ERROR] Credenciales inválidas para el usuario: " + user;
         }
@@ -1354,7 +1519,9 @@ Seleccione una conexión para iniciar:
         if (this.client != null) {
             this.client.close();
         }
-        return String.format("[LOGOUT] Sesión del usuario '%s' finalizada exitosamente. Inicie sesión nuevamente con 'login <username> <password>'.", oldUser);
+        return String.format(
+                "[LOGOUT] Sesión del usuario '%s' finalizada exitosamente. Inicie sesión nuevamente con 'login <username> <password>'.",
+                oldUser);
     }
 
     // --- 2. Gestión de Perfiles de Conexión ---
@@ -1377,7 +1544,8 @@ Seleccione una conexión para iniciar:
 
     private String handleRemoveConnection(String command) {
         String name = cleanQuotes(command.substring("REMOVE CONNECTION ".length()).trim());
-        if (name.isBlank()) return "[ERROR] Uso: remove connection <nombre-conexion>";
+        if (name.isBlank())
+            return "[ERROR] Uso: remove connection <nombre-conexion>";
         SavedConnection removed = savedConnections.remove(name);
         if (removed != null) {
             persistSavedConnections();
@@ -1399,7 +1567,7 @@ Seleccione una conexión para iniciar:
         for (SavedConnection sc : savedConnections.values()) {
             boolean isCur = sc.host().equals(currentHost) && sc.port() == currentPort;
             sb.append(String.format("| %-20s | %-20s | %-5d | %-15s | %-8s |\n",
-                sc.name(), sc.host(), sc.port(), sc.user(), isCur ? "* SI" : "NO"));
+                    sc.name(), sc.host(), sc.port(), sc.user(), isCur ? "* SI" : "NO"));
         }
         sb.append("+----------------------+----------------------+-------+-----------------+----------+\n");
         sb.append(String.format("Total: %d perfil(es) de conexión guardado(s).", savedConnections.size()));
@@ -1432,45 +1600,49 @@ Seleccione una conexión para iniciar:
                     }
                 }
             }
-        } catch (Exception ignored) {}
+        } catch (Exception ignored) {
+        }
 
         return String.format("""
-            ==============================================================================================
-                                  JETTRASTORE RESOURCE MONITOR & TELEMETRY (JAVA 25+)
-            ==============================================================================================
-            1. RAM (MEMORIA):
-               - Panama FFM Off-Heap Direct: Habilitado (Arena Compartida Cero Copia)
-               - Heap JVM (ZGC Generational): Ocupada %d MB / Total %d MB (Máx JVM: %d MB)
-               - MemTable Tamaño Asignado:   %d MB
-               - Dynamic Ring Saturation:    Umbral 85%% (Descarga automática a nodos secundarios)
-               - Compact Object Headers:     Activo (--XX:+UseCompactObjectHeaders)
+                ==============================================================================================
+                                      JETTRASTORE RESOURCE MONITOR & TELEMETRY (JAVA 25+)
+                ==============================================================================================
+                1. RAM (MEMORIA):
+                   - Panama FFM Off-Heap Direct: Habilitado (Arena Compartida Cero Copia)
+                   - Heap JVM (ZGC Generational): Ocupada %d MB / Total %d MB (Máx JVM: %d MB)
+                   - MemTable Tamaño Asignado:   %d MB
+                   - Dynamic Ring Saturation:    Umbral 85%% (Descarga automática a nodos secundarios)
+                   - Compact Object Headers:     Activo (--XX:+UseCompactObjectHeaders)
 
-            2. PROCESADOR (CPU):
-               - Núcleos Lógicos del Host:   %d Cores
-               - Virtual Threads (Loom):     Activos (I/O Concurrente No Bloqueante en red gRPC/REST)
-               - Hilos de Compaction LSM:    En segundo plano (Prioridad baja)
+                2. PROCESADOR (CPU):
+                   - Núcleos Lógicos del Host:   %d Cores
+                   - Virtual Threads (Loom):     Activos (I/O Concurrente No Bloqueante en red gRPC/REST)
+                   - Hilos de Compaction LSM:    En segundo plano (Prioridad baja)
 
-            3. DISCO (ALMACENAMIENTO):
-               - Ruta Física Configurada:    %s
-               - Directorio Activo de Datos: %s
-               - Tamaño Ocupado por SSTables: %.2f KB (%d bytes)
-               - Archivos de Datos (.jettra): %d archivo(s)
-               - Formato de Almacenamiento:  Estructura LSM (.jettra) con Bloom Filters y Sparse Indexes
+                3. DISCO (ALMACENAMIENTO):
+                   - Ruta Física Configurada:    %s
+                   - Directorio Activo de Datos: %s
+                   - Tamaño Ocupado por SSTables: %.2f KB (%d bytes)
+                   - Archivos de Datos (.jettra): %d archivo(s)
+                   - Formato de Almacenamiento:  Estructura LSM (.jettra) con Bloom Filters y Sparse Indexes
 
-            4. CLÚSTER & DISTRIBUCIÓN (CONSENSO):
-               - Modo Multinodo (cluster.multinode.active): %s (%s)
-               - Algoritmo de Consenso:      RAFT Integrado & Dynamic Ring
-               - Nodos Pares Registrados:    %d
-            ==============================================================================================
-            """, usedRam, totalRam, maxRam, cfg.getMemTableSizeMb(), cpuCores, rawConfigured, storagePath, (diskBytes / 1024.0), diskBytes, filesCount,
-            client.getRingEngine().getMultinodeActive().toUpperCase(),
-            client.getRingEngine().isMultinodeActive() ? "Consenso y distribución ACTIVO" : "STANDALONE - Operaciones locales en servidor único",
-            client.getRingEngine().getPeers().size());
+                4. CLÚSTER & DISTRIBUCIÓN (CONSENSO):
+                   - Modo Multinodo (cluster.multinode.active): %s (%s)
+                   - Algoritmo de Consenso:      RAFT Integrado & Dynamic Ring
+                   - Nodos Pares Registrados:    %d
+                ==============================================================================================
+                """, usedRam, totalRam, maxRam, cfg.getMemTableSizeMb(), cpuCores, rawConfigured, storagePath,
+                (diskBytes / 1024.0), diskBytes, filesCount,
+                client.getRingEngine().getMultinodeActive().toUpperCase(),
+                client.getRingEngine().isMultinodeActive() ? "Consenso y distribución ACTIVO"
+                        : "STANDALONE - Operaciones locales en servidor único",
+                client.getRingEngine().getPeers().size());
     }
 
     // --- 4. Administración de Nodos del Clúster ---
     private static boolean isNodeReachable(String host, int port, int timeoutMs) {
-        if (host == null || host.isBlank() || port <= 0) return false;
+        if (host == null || host.isBlank() || port <= 0)
+            return false;
         try (Socket socket = new Socket()) {
             socket.connect(new InetSocketAddress(host, port), Math.min(timeoutMs, 100));
             return true;
@@ -1489,7 +1661,8 @@ Seleccione una conexión para iniciar:
         sb.append("| Nodo ID  | Dirección IP         | Puerto| Rol       | Estado Raft  | Estado   | Offload Bytes|\n");
         sb.append("+----------+----------------------+-------+-----------+--------------+----------+--------------+\n");
 
-        record TargetNode(String id, String ip, int grpcPort, int restPort, String configuredRole) {}
+        record TargetNode(String id, String ip, int grpcPort, int restPort, String configuredRole) {
+        }
         Map<String, TargetNode> topology = new LinkedHashMap<>();
 
         // 1. Cargar topología completa desde jettra.config si existe
@@ -1497,7 +1670,8 @@ Seleccione una conexión para iniciar:
             Path clusterPath = JettraConfigValidator.locateJettraConfigFile();
             if (clusterPath != null && Files.exists(clusterPath)) {
                 Properties clusterProps = JettraConfigValidator.loadProperties(clusterPath, "/jettra.config");
-                List<JettraConfigValidator.ClusterNodeInfo> nodes = JettraConfigValidator.parseClusterNodes(clusterProps);
+                List<JettraConfigValidator.ClusterNodeInfo> nodes = JettraConfigValidator
+                        .parseClusterNodes(clusterProps);
                 for (JettraConfigValidator.ClusterNodeInfo n : nodes) {
                     String host = (n.ip() != null && !n.ip().isBlank()) ? n.ip() : "127.0.0.1";
                     int gPort = n.grpcPort() > 0 ? n.grpcPort() : 50001;
@@ -1505,25 +1679,29 @@ Seleccione una conexión para iniciar:
                     topology.put(n.id(), new TargetNode(n.id(), host, gPort, rPort, n.role()));
                 }
             }
-        } catch (Exception ignored) {}
+        } catch (Exception ignored) {
+        }
 
-        // Fallbacks conocidos si no se cargó jettra.config o para entornos con puertos mapeados (Docker Compose / Local)
+        // Fallbacks conocidos si no se cargó jettra.config o para entornos con puertos
+        // mapeados (Docker Compose / Local)
         Map<String, TargetNode> standardDockerPorts = Map.of(
-            "node-01", new TargetNode("node-01", "127.0.0.1", 50001, 8081, "PRIMARY"),
-            "node-02", new TargetNode("node-02", "127.0.0.1", 50002, 8082, "SECONDARY"),
-            "node-03", new TargetNode("node-03", "127.0.0.1", 50003, 8083, "SECONDARY")
-        );
+                "node-01", new TargetNode("node-01", "127.0.0.1", 50001, 8081, "PRIMARY"),
+                "node-02", new TargetNode("node-02", "127.0.0.1", 50002, 8082, "SECONDARY"),
+                "node-03", new TargetNode("node-03", "127.0.0.1", 50003, 8083, "SECONDARY"));
         if (topology.isEmpty()) {
             topology.putAll(standardDockerPorts);
         } else {
-            // Si los puertos gRPC o REST en jettra.config coinciden todos en 50001/8080 (modelo contenedor puro),
-            // ajustar a los puertos expuestos de mapeo de puertos estándar si los puertos mapeados responden
+            // Si los puertos gRPC o REST en jettra.config coinciden todos en 50001/8080
+            // (modelo contenedor puro),
+            // ajustar a los puertos expuestos de mapeo de puertos estándar si los puertos
+            // mapeados responden
             for (Map.Entry<String, TargetNode> entry : standardDockerPorts.entrySet()) {
                 String id = entry.getKey();
                 TargetNode defNode = entry.getValue();
                 TargetNode cur = topology.get(id);
                 if (cur != null && isNodeReachable(defNode.ip(), defNode.grpcPort(), 150)) {
-                    topology.put(id, new TargetNode(id, defNode.ip(), defNode.grpcPort(), defNode.restPort(), cur.configuredRole()));
+                    topology.put(id, new TargetNode(id, defNode.ip(), defNode.grpcPort(), defNode.restPort(),
+                            cur.configuredRole()));
                 }
             }
         }
@@ -1531,18 +1709,21 @@ Seleccione una conexión para iniciar:
         // Incorporar nodos pares registrados dinámicamente en ringEngine
         for (ClusterNode peer : ring.getPeers()) {
             if (!topology.containsKey(peer.getId())) {
-                topology.put(peer.getId(), new TargetNode(peer.getId(), peer.getIp(), peer.getPort(), 8080, peer.getRole().name()));
+                topology.put(peer.getId(),
+                        new TargetNode(peer.getId(), peer.getIp(), peer.getPort(), 8080, peer.getRole().name()));
             }
         }
 
-        record LiveStatus(boolean isUp, String role, String raftState, long offloadBytes) {}
+        record LiveStatus(boolean isUp, String role, String raftState, long offloadBytes) {
+        }
         Map<String, LiveStatus> liveStates = new ConcurrentHashMap<>();
 
         // Consultar concurrentemente la salud en tiempo real de cada nodo
         List<CompletableFuture<Void>> futures = new ArrayList<>();
         for (TargetNode node : topology.values()) {
             futures.add(CompletableFuture.runAsync(() -> {
-                boolean reachable = isNodeReachable(node.ip(), node.grpcPort(), 200) || isNodeReachable(node.ip(), node.restPort(), 200);
+                boolean reachable = isNodeReachable(node.ip(), node.grpcPort(), 200)
+                        || isNodeReachable(node.ip(), node.restPort(), 200);
                 if (!reachable) {
                     liveStates.put(node.id(), new LiveStatus(false, "SECONDARY", "DISCONNECTED", 0));
                     return;
@@ -1553,14 +1734,15 @@ Seleccione una conexión para iniciar:
                 boolean polled = false;
                 try {
                     java.net.http.HttpClient httpClient = java.net.http.HttpClient.newBuilder()
-                        .connectTimeout(java.time.Duration.ofMillis(80))
-                        .build();
+                            .connectTimeout(java.time.Duration.ofMillis(80))
+                            .build();
                     java.net.http.HttpRequest req = java.net.http.HttpRequest.newBuilder()
-                        .uri(java.net.URI.create(String.format("http://%s:%d/api/v1/health", node.ip(), p)))
-                        .timeout(java.time.Duration.ofMillis(120))
-                        .GET()
-                        .build();
-                    java.net.http.HttpResponse<String> resp = httpClient.send(req, java.net.http.HttpResponse.BodyHandlers.ofString());
+                            .uri(java.net.URI.create(String.format("http://%s:%d/api/v1/health", node.ip(), p)))
+                            .timeout(java.time.Duration.ofMillis(120))
+                            .GET()
+                            .build();
+                    java.net.http.HttpResponse<String> resp = httpClient.send(req,
+                            java.net.http.HttpResponse.BodyHandlers.ofString());
                     if (resp.statusCode() == 200) {
                         String body = resp.body();
                         String role = body.contains("\"role\":\"PRIMARY\"") ? "PRIMARY" : "SECONDARY";
@@ -1568,21 +1750,25 @@ Seleccione una conexión para iniciar:
                         liveStates.put(node.id(), new LiveStatus(true, role, raft, 0));
                         polled = true;
                     }
-                } catch (Exception ignored) {}
+                } catch (Exception ignored) {
+                }
 
                 if (!polled) {
                     // Si el puerto gRPC o Socket respondió pero REST falló
                     boolean isConfigPrimary = "PRIMARY".equalsIgnoreCase(node.configuredRole());
-                    liveStates.put(node.id(), new LiveStatus(true, isConfigPrimary ? "PRIMARY" : "SECONDARY", isConfigPrimary ? "LEADER" : "FOLLOWER", 0));
+                    liveStates.put(node.id(), new LiveStatus(true, isConfigPrimary ? "PRIMARY" : "SECONDARY",
+                            isConfigPrimary ? "LEADER" : "FOLLOWER", 0));
                 }
             }));
         }
 
         try {
             CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).get(250, TimeUnit.MILLISECONDS);
-        } catch (Exception ignored) {}
+        } catch (Exception ignored) {
+        }
 
-        // Si ningún nodo online fue marcado como PRIMARY, pero hay nodos activos, el primer nodo activo asume LEADER
+        // Si ningún nodo online fue marcado como PRIMARY, pero hay nodos activos, el
+        // primer nodo activo asume LEADER
         boolean hasPrimary = liveStates.values().stream().anyMatch(s -> s.isUp() && "PRIMARY".equals(s.role()));
         if (!hasPrimary) {
             for (TargetNode node : topology.values()) {
@@ -1610,17 +1796,20 @@ Seleccione una conexión para iniciar:
             if (peer != null) {
                 peer.setRole("PRIMARY".equals(role) ? ClusterNode.Role.PRIMARY : ClusterNode.Role.SECONDARY);
                 peer.setRaftState(ClusterNode.RaftState.valueOf(raft));
-                if (ls.isUp()) peer.start(); else peer.stop();
+                if (ls.isUp())
+                    peer.start();
+                else
+                    peer.stop();
             }
 
             sb.append(String.format("| %-8s | %-20s | %-5d | %-9s | %-12s | %-8s | %-12d |\n",
-                node.id(), node.ip(), node.grpcPort(), role, raft, status, ls.offloadBytes()));
+                    node.id(), node.ip(), node.grpcPort(), role, raft, status, ls.offloadBytes()));
         }
 
         sb.append("+----------+----------------------+-------+-----------+--------------+----------+--------------+\n");
         boolean multiActive = ring.isMultinodeActive();
         sb.append(String.format("Modo Multinodo (cluster.multinode.active): %s\n",
-            multiActive ? "ON (Algoritmo de consenso y distribución de datos ACTIVO)"
+                multiActive ? "ON (Algoritmo de consenso y distribución de datos ACTIVO)"
                         : "OFF (Servidor Único / Standalone - Distribución de datos DESACTIVADA)"));
 
         int totalNodes = topology.size();
@@ -1630,20 +1819,24 @@ Seleccione una conexión para iniciar:
         if (!multiActive) {
             quorumStr = "Inactivo (Operaciones locales exclusivas)";
         } else if (quorumReached) {
-            quorumStr = String.format("Activo (Consenso distribuido con quórum mayoritario: %d/%d activos)", activeNodes, totalNodes);
+            quorumStr = String.format("Activo (Consenso distribuido con quórum mayoritario: %d/%d activos)",
+                    activeNodes, totalNodes);
         } else {
-            quorumStr = String.format("Inactivo (Sin mayoría de nodos para consenso: %d/%d activos)", activeNodes, totalNodes);
+            quorumStr = String.format("Inactivo (Sin mayoría de nodos para consenso: %d/%d activos)", activeNodes,
+                    totalNodes);
         }
 
         sb.append(String.format("Total: %d nodo(s) registrados en el anillo dinámico. Quórum: %s.\n",
-            totalNodes, quorumStr));
+                totalNodes, quorumStr));
         return sb.toString();
     }
 
-    public record ShellClusterNode(String id, String role, String host, int grpcPort, int restPort) {}
+    public record ShellClusterNode(String id, String role, String host, int grpcPort, int restPort) {
+    }
 
     private static boolean isPrimaryRole(String role) {
-        if (role == null) return false;
+        if (role == null)
+            return false;
         String r = role.trim().toUpperCase();
         return "PRIMARY".equals(r) || "LEADER".equals(r);
     }
@@ -1662,16 +1855,20 @@ Seleccione una conexión para iniciar:
         } catch (Exception e) {
             return "[ERROR] Puerto inválido: " + parts[2];
         }
-        ClusterNode.Role role = (parts.length > 3 && "PRIMARY".equalsIgnoreCase(parts[3])) 
-            ? ClusterNode.Role.PRIMARY : ClusterNode.Role.SECONDARY;
+        ClusterNode.Role role = (parts.length > 3 && "PRIMARY".equalsIgnoreCase(parts[3]))
+                ? ClusterNode.Role.PRIMARY
+                : ClusterNode.Role.SECONDARY;
 
-        int restPort = 8080;
+        int restPort = 60001;
         if (parts.length > 4) {
-            try { restPort = Integer.parseInt(parts[4].trim()); } catch (Exception ignored) {}
+            try {
+                restPort = Integer.parseInt(parts[4].trim());
+            } catch (Exception ignored) {
+            }
         } else if (port >= 9091 && port <= 9099) {
-            restPort = port - 1010;
+            restPort = 60000 + (port - 9090);
         } else if (port >= 50001 && port <= 50009) {
-            restPort = 8080 + (port - 50000);
+            restPort = 60000 + (port - 50000);
         }
 
         ClusterNode newNode = new ClusterNode(id, host, port, role);
@@ -1683,20 +1880,27 @@ Seleccione una conexión para iniciar:
         // Registrar dinámicamente en cluster.config local
         try {
             JettraConfigValidator.registerDynamicNodeInClusterConfig(
-                id, role.name(), host, port, restPort, "~/jettra/data"
-            );
-        } catch (Exception ignored) {}
+                    id, role.name(), host, port, restPort, "~/jettra/data");
+        } catch (Exception ignored) {
+        }
 
-        // Replicar cluster.config a todos los nodos: PRIMARY primero, luego los SECONDARY
+        // Replicar cluster.config a todos los nodos: PRIMARY primero, luego los
+        // SECONDARY
         String replicationReport = replicateClusterConfigToQuorum(id, role.name(), host, port, restPort, false);
 
+        // Notificar al PRIMARY para asegurar la distribución inmediata de todas las
+        // bases de datos y objetos al nuevo nodo
+        triggerPrimaryDatabaseSyncToNode(id, role.name(), host, port, restPort);
+
         return String.format("[SUCCESS] Nodo '%s' (%s:%d, %s) agregado exitosamente al clúster Raft.%n%s",
-            id, host, port, role, replicationReport);
+                id, host, port, role, replicationReport);
     }
 
     private String handleRemoveNode(String command) {
-        String clean = cleanQuotes(command.replaceAll("(?i)^(CLUSTER\\s+)?(REMOVE-NODE|REMOVE\\s+NODE|CLUSTER-REMOVE-NODE)\\s+", "").trim());
-        if (clean.isBlank()) return "[ERROR] Uso: REMOVE NODE <nodeId> o CLUSTER REMOVE-NODE <nodeId>";
+        String clean = cleanQuotes(command
+                .replaceAll("(?i)^(CLUSTER\\s+)?(REMOVE-NODE|REMOVE\\s+NODE|CLUSTER-REMOVE-NODE)\\s+", "").trim());
+        if (clean.isBlank())
+            return "[ERROR] Uso: REMOVE NODE <nodeId> o CLUSTER REMOVE-NODE <nodeId>";
         String id = clean;
         if ("node-01".equalsIgnoreCase(id) || client.getRingEngine().getNodeId().equalsIgnoreCase(id)) {
             return "[ERROR] No se puede remover el nodo primario activo del clúster.";
@@ -1711,41 +1915,48 @@ Seleccione una conexión para iniciar:
         // Remover de cluster.config local
         try {
             JettraConfigValidator.removeDynamicNodeFromClusterConfig(id);
-        } catch (Exception ignored) {}
+        } catch (Exception ignored) {
+        }
 
-        // Replicar cluster.config actualizado a todos los nodos: PRIMARY primero, luego los SECONDARY
+        // Replicar cluster.config actualizado a todos los nodos: PRIMARY primero, luego
+        // los SECONDARY
         String replicationReport = replicateClusterConfigToQuorum(id, "SECONDARY", "", 0, 0, true);
 
         return ok ? String.format("[SUCCESS] Nodo '%s' removido del anillo de réplicas.%n%s", id, replicationReport)
-                  : String.format("[WARN] El nodo '%s' no existe en el registro del clúster.%n%s", id, replicationReport);
+                : String.format("[WARN] El nodo '%s' no existe en el registro del clúster.%n%s", id, replicationReport);
     }
 
-    private String replicateClusterConfigToQuorum(String targetNodeId, String role, String host, int grpcPort, int restPort, boolean isRemoval) {
+    private String replicateClusterConfigToQuorum(String targetNodeId, String role, String host, int grpcPort,
+            int restPort, boolean isRemoval) {
         Map<String, ShellClusterNode> clusterTopology = new LinkedHashMap<>();
 
         // 1. Cargar nodos existentes desde cluster.config
         Path clusterConfigFile = JettraConfigValidator.locateClusterConfigFile();
         if (clusterConfigFile != null && Files.exists(clusterConfigFile)) {
             try {
-                Properties props = JettraConfigValidator.loadProperties(clusterConfigFile, "/cluster.config", "/jettra.config");
+                Properties props = JettraConfigValidator.loadProperties(clusterConfigFile, "/cluster.config",
+                        "/jettra.config");
                 List<JettraConfigValidator.ClusterNodeInfo> parsed = JettraConfigValidator.parseClusterNodes(props);
                 for (JettraConfigValidator.ClusterNodeInfo cn : parsed) {
-                    if (cn.id() == null || cn.id().isBlank()) continue;
+                    if (cn.id() == null || cn.id().isBlank())
+                        continue;
                     String h = (cn.ip() != null && !cn.ip().isBlank()) ? cn.ip().trim() : "127.0.0.1";
                     int gp = cn.grpcPort() > 0 ? cn.grpcPort() : 50001;
-                    int rp = cn.restPort() > 0 ? cn.restPort() : 8080;
+                    int rp = cn.restPort() > 0 ? cn.restPort() : 60001;
                     String r = (cn.role() != null && !cn.role().isBlank()) ? cn.role().toUpperCase() : "SECONDARY";
                     clusterTopology.put(cn.id().toLowerCase(), new ShellClusterNode(cn.id(), r, h, gp, rp));
                 }
-            } catch (Exception ignored) {}
+            } catch (Exception ignored) {
+            }
         }
 
-        // 2. Incorporar conexiones guardadas como fallback si no estuvieran en cluster.config
+        // 2. Incorporar conexiones guardadas como fallback si no estuvieran en
+        // cluster.config
         for (SavedConnection sc : savedConnections.values()) {
             String key = sc.name().toLowerCase();
             if (!clusterTopology.containsKey(key)) {
                 String r = key.contains("primary") || "node-01".equalsIgnoreCase(key) ? "PRIMARY" : "SECONDARY";
-                clusterTopology.put(key, new ShellClusterNode(sc.name(), r, sc.host(), sc.port(), 8080));
+                clusterTopology.put(key, new ShellClusterNode(sc.name(), r, sc.host(), sc.port(), 60001));
             }
         }
 
@@ -1754,7 +1965,7 @@ Seleccione una conexión para iniciar:
             clusterTopology.remove(targetNodeId.toLowerCase());
         } else {
             clusterTopology.put(targetNodeId.toLowerCase(),
-                new ShellClusterNode(targetNodeId, role.toUpperCase(), host, grpcPort, restPort));
+                    new ShellClusterNode(targetNodeId, role.toUpperCase(), host, grpcPort, restPort));
         }
 
         // 4. Generar bytes canónicos actualizados de cluster.config
@@ -1772,7 +1983,7 @@ Seleccione una conexión para iniciar:
         int idx = 1;
         for (ShellClusterNode n : clusterTopology.values()) {
             String normRole = isPrimaryRole(n.role()) ? "PRIMARY" : "SECONDARY";
-            int rp = n.restPort() > 0 ? n.restPort() : (8080 + idx);
+            int rp = n.restPort() > 0 ? n.restPort() : (60000 + idx);
             sb.append("\n# ==============================================================================\n");
             sb.append("# NODO ").append(idx).append(": ").append(n.id()).append(" (").append(normRole).append(")\n");
             sb.append("# ==============================================================================\n");
@@ -1792,55 +2003,103 @@ Seleccione una conexión para iniciar:
         if (clusterConfigFile != null) {
             try {
                 JettraConfigValidator.writeClusterConfigAtomically(clusterConfigFile, cfgBytes);
-            } catch (Exception ignored) {}
+            } catch (Exception ignored) {
+            }
         }
 
-        // 5. Replicar a todos los nodos del quórum ordenados: PRIMARY primero, luego SECONDARY
+        // 5. Replicar a todos los nodos del quórum ordenados: PRIMARY primero, luego
+        // SECONDARY
         List<ShellClusterNode> targets = new ArrayList<>(clusterTopology.values());
         targets.sort((a, b) -> Boolean.compare(isPrimaryRole(b.role()), isPrimaryRole(a.role())));
 
         StringBuilder report = new StringBuilder();
-        report.append("[CLUSTER REPLICATION] Sincronizando cluster.config en todos los nodos (PRIMARY -> SECONDARY):\n");
+        report.append(
+                "[CLUSTER REPLICATION] Sincronizando cluster.config en todos los nodos (PRIMARY -> SECONDARY):\n");
 
         JettraRaftFrame syncFrame = JettraRaftFrame.syncClusterConfig(1L, "jettra-shell", cfgBytes);
 
         for (ShellClusterNode target : targets) {
             boolean isPrim = isPrimaryRole(target.role());
             String roleTag = isPrim ? "PRIMARY  " : "SECONDARY";
-            if (target.host() == null || target.host().isBlank() || target.grpcPort() <= 0) continue;
+            if (target.host() == null || target.host().isBlank() || target.grpcPort() <= 0)
+                continue;
 
             try (Socket s = new Socket()) {
                 s.setTcpNoDelay(true);
                 s.connect(new InetSocketAddress(target.host(), target.grpcPort()), 1000);
                 s.setSoTimeout(1500);
                 try (BufferedOutputStream bos = new BufferedOutputStream(s.getOutputStream(), 8192);
-                     BufferedInputStream bis = new BufferedInputStream(s.getInputStream(), 8192)) {
+                        BufferedInputStream bis = new BufferedInputStream(s.getInputStream(), 8192)) {
                     JettraClusterProtocol.writeFrame(bos, syncFrame);
                     bos.flush();
                     try {
                         JettraRaftFrame ack = JettraClusterProtocol.readFrame(bis);
                         report.append(String.format("  ✓ [%s] %s (%s:%d): cluster.config replicado exitosamente.%n",
-                            roleTag, target.id(), target.host(), target.grpcPort()));
+                                roleTag, target.id(), target.host(), target.grpcPort()));
                     } catch (Exception ex) {
                         report.append(String.format("  ✓ [%s] %s (%s:%d): Trama cluster.config enviada al nodo.%n",
-                            roleTag, target.id(), target.host(), target.grpcPort()));
+                                roleTag, target.id(), target.host(), target.grpcPort()));
                     }
                 }
             } catch (Exception e) {
-                report.append(String.format("  ⚠ [%s] %s (%s:%d): No alcanzable (%s). Se sincronizará automáticamente al iniciar.%n",
-                    roleTag, target.id(), target.host(), target.grpcPort(), e.getMessage()));
+                report.append(String.format(
+                        "  ⚠ [%s] %s (%s:%d): No alcanzable (%s). Se sincronizará automáticamente al iniciar.%n",
+                        roleTag, target.id(), target.host(), target.grpcPort(), e.getMessage()));
             }
         }
 
         return report.toString();
     }
 
+    private void triggerPrimaryDatabaseSyncToNode(String nodeId, String role, String host, int grpcPort, int restPort) {
+        if (nodeId == null || "PRIMARY".equalsIgnoreCase(role))
+            return;
+        Thread.ofVirtual().name("jettra-shell-sync-" + nodeId).start(() -> {
+            try {
+                Path clusterConfigFile = JettraConfigValidator.locateClusterConfigFile();
+                if (clusterConfigFile == null || !Files.exists(clusterConfigFile))
+                    return;
+                Properties props = JettraConfigValidator.loadProperties(clusterConfigFile, "/cluster.config",
+                        "/jettra.config");
+                List<JettraConfigValidator.ClusterNodeInfo> nodes = JettraConfigValidator.parseClusterNodes(props);
+                JettraConfigValidator.ClusterNodeInfo primary = null;
+                for (var cn : nodes) {
+                    if ("PRIMARY".equalsIgnoreCase(cn.role())) {
+                        primary = cn;
+                        break;
+                    }
+                }
+                if (primary == null || primary.ip() == null || primary.grpcPort() <= 0)
+                    return;
+                JettraRaftFrame joinReq = JettraRaftFrame.joinClusterReq(1L, nodeId, role, host, grpcPort, restPort);
+                try (java.net.Socket s = new java.net.Socket()) {
+                    s.setTcpNoDelay(true);
+                    s.connect(new java.net.InetSocketAddress(primary.ip(), primary.grpcPort()), 1500);
+                    s.setSoTimeout(3000);
+                    try (var bos = new BufferedOutputStream(s.getOutputStream(), 8192);
+                            var bis = new BufferedInputStream(s.getInputStream(), 8192)) {
+                        JettraClusterProtocol.writeFrame(bos, joinReq);
+                        JettraClusterProtocol.readFrame(bis);
+                    }
+                }
+            } catch (Exception ignored) {
+            }
+        });
+    }
+
     private String handleStartNode(String command) {
         String id = cleanQuotes(command.substring("START NODE ".length()).trim());
-        if (id.isBlank()) return "[ERROR] Uso: START NODE <nodeId>";
+        if (id.isBlank())
+            return "[ERROR] Uso: START NODE <nodeId>";
         boolean ok = client.getRingEngine().startPeer(id);
-        return ok ? "[SUCCESS] Nodo '" + id + "' iniciado (RUNNING)."
-                  : "[ERROR] No se pudo iniciar el nodo '" + id + "' (nodo no encontrado).";
+        if (ok) {
+            io.jettra.store.cluster.ClusterNode peer = client.getRingEngine().getPeer(id);
+            if (peer != null) {
+                triggerPrimaryDatabaseSyncToNode(peer.getId(), peer.getRole().name(), peer.getIp(), peer.getPort(), 0);
+            }
+        }
+        return ok ? "[SUCCESS] Nodo '" + id + "' iniciado (RUNNING) y sincronización con PRIMARY solicitada."
+                : "[ERROR] No se pudo iniciar el nodo '" + id + "' (nodo no encontrado).";
     }
 
     // --- 4.b Distribución y Migración de Datos en Clúster Raft ---
@@ -1848,13 +2107,13 @@ Seleccione una conexión para iniciar:
         String arg = command.replaceAll("(?i)^(CLUSTER-DISTRIBUTED|CLUSTER_DISTRIBUTED)\\s*", "").trim();
         if (arg.isEmpty()) {
             return """
-                [ERROR] Parámetro requerido para 'cluster-distributed'.
-                Uso:
-                  cluster-distributed all           Distribuye entre todos los nodos todas las bases de datos y registros.
-                  cluster-distributed <all>         Distribuye entre todos los nodos todas las bases de datos y registros.
-                  cluster-distributed <nombre-bd>   Distribuye la base de datos indicada con sus registros exactos.
-                  cluster-distributed info          Muestra una tabla con los nodos y las bases de datos en cada nodo.
-                """;
+                    [ERROR] Parámetro requerido para 'cluster-distributed'.
+                    Uso:
+                      cluster-distributed all           Distribuye entre todos los nodos todas las bases de datos y registros.
+                      cluster-distributed <all>         Distribuye entre todos los nodos todas las bases de datos y registros.
+                      cluster-distributed <nombre-bd>   Distribuye la base de datos indicada con sus registros exactos.
+                      cluster-distributed info          Muestra una tabla con los nodos y las bases de datos en cada nodo.
+                    """;
         }
 
         if (arg.equalsIgnoreCase("info")) {
@@ -1877,26 +2136,35 @@ Seleccione una conexión para iniciar:
         try {
             List<io.jettra.store.cluster.ClusterNodeDistributionInfo> infoList = client.getClusterDistributedInfo();
             StringBuilder sb = new StringBuilder();
-            sb.append("========================================================================================================================\n");
-            sb.append("                                   JETTRASTORE CLUSTER DATABASE DISTRIBUTION INFO                                       \n");
-            sb.append("========================================================================================================================\n");
-            sb.append("+----------+----------------------+-------+-----------+----------+---------------+--------------------------------------+\n");
-            sb.append("| Nodo ID  | Dirección IP         | Puerto| Rol       | Estado   | Cantidad BDs  | Bases de Datos                       |\n");
-            sb.append("+----------+----------------------+-------+-----------+----------+---------------+--------------------------------------+\n");
+            sb.append(
+                    "========================================================================================================================\n");
+            sb.append(
+                    "                                   JETTRASTORE CLUSTER DATABASE DISTRIBUTION INFO                                       \n");
+            sb.append(
+                    "========================================================================================================================\n");
+            sb.append(
+                    "+----------+----------------------+-------+-----------+----------+---------------+--------------------------------------+\n");
+            sb.append(
+                    "| Nodo ID  | Dirección IP         | Puerto| Rol       | Estado   | Cantidad BDs  | Bases de Datos                       |\n");
+            sb.append(
+                    "+----------+----------------------+-------+-----------+----------+---------------+--------------------------------------+\n");
             for (var node : infoList) {
-                String dbListStr = node.databases().isEmpty() 
-                    ? (node.status().equalsIgnoreCase("OFFLINE") ? "(Sin respuesta / Offline)" : "(0 bases de datos)")
-                    : String.join(", ", node.databases());
+                String dbListStr = node.databases().isEmpty()
+                        ? (node.status().equalsIgnoreCase("OFFLINE") ? "(Sin respuesta / Offline)"
+                                : "(0 bases de datos)")
+                        : String.join(", ", node.databases());
                 if (dbListStr.length() > 36) {
                     dbListStr = dbListStr.substring(0, 33) + "...";
                 }
                 sb.append(String.format("| %-8s | %-20s | %-5d | %-9s | %-8s | %-13d | %-36s |\n",
-                    node.nodeId(), node.ip(), node.port(), node.role(), node.status(), node.databaseCount(), dbListStr));
+                        node.nodeId(), node.ip(), node.port(), node.role(), node.status(), node.databaseCount(),
+                        dbListStr));
             }
-            sb.append("+----------+----------------------+-------+-----------+----------+---------------+--------------------------------------+\n");
+            sb.append(
+                    "+----------+----------------------+-------+-----------+----------+---------------+--------------------------------------+\n");
             boolean multi = client.getRingEngine().isMultinodeActive();
             sb.append(String.format("Total nodos en topología: %d | Modo Multinodo (cluster.multinode.active): %s\n",
-                infoList.size(), multi ? "ON (Consenso y Replicación Activos)" : "OFF (Standalone)"));
+                    infoList.size(), multi ? "ON (Consenso y Replicación Activos)" : "OFF (Standalone)"));
             return sb.toString();
         } catch (Exception e) {
             return "[ERROR] No se pudo obtener la información de distribución del clúster: " + e.getMessage();
@@ -1908,14 +2176,18 @@ Seleccione una conexión para iniciar:
             return String.format("[ERROR] La base de datos '%s' no existe en el catálogo local ni en disco.", dbName);
         }
         StringBuilder sb = new StringBuilder();
-        sb.append(String.format("[CLUSTER-DISTRIBUTED] Iniciando distribución integral de la base de datos '%s'...\n", dbName));
+        sb.append(String.format("[CLUSTER-DISTRIBUTED] Iniciando distribución integral de la base de datos '%s'...\n",
+                dbName));
         try {
             boolean ok = client.clusterDistributed(dbName);
             if (ok) {
-                sb.append(String.format("  ✓ Base de datos '%s' y todos sus registros internos, colecciones e índices fueron migrados con éxito a los nodos secundarios.\n", dbName));
+                sb.append(String.format(
+                        "  ✓ Base de datos '%s' y todos sus registros internos, colecciones e índices fueron migrados con éxito a los nodos secundarios.\n",
+                        dbName));
                 sb.append("[SUCCESS] Distribución completada bajo consenso Raft mayoritario.");
             } else {
-                sb.append(String.format("[WARNING] La distribución de '%s' finalizó sin confirmación de quórum completo.\n", dbName));
+                sb.append(String.format(
+                        "[WARNING] La distribución de '%s' finalizó sin confirmación de quórum completo.\n", dbName));
             }
             return sb.toString();
         } catch (UnsupportedOperationException e) {
@@ -1927,7 +2199,8 @@ Seleccione una conexión para iniciar:
 
     private String handleClusterDistributedAll() {
         StringBuilder sb = new StringBuilder();
-        sb.append("[CLUSTER-DISTRIBUTED <ALL>] Iniciando migración y distribución de TODAS las bases de datos del clúster...\n");
+        sb.append(
+                "[CLUSTER-DISTRIBUTED <ALL>] Iniciando migración y distribución de TODAS las bases de datos del clúster...\n");
         try {
             Map<String, Boolean> results = client.clusterDistributedAll();
             if (results.isEmpty()) {
@@ -1936,14 +2209,16 @@ Seleccione una conexión para iniciar:
             int successCount = 0;
             for (var entry : results.entrySet()) {
                 if (entry.getValue()) {
-                    sb.append(String.format("  ✓ [%s]: DISTRIBUIDA Y MIGRADA (Registros y metadatos OK)\n", entry.getKey()));
+                    sb.append(String.format("  ✓ [%s]: DISTRIBUIDA Y MIGRADA (Registros y metadatos OK)\n",
+                            entry.getKey()));
                     successCount++;
                 } else {
                     sb.append(String.format("  ✗ [%s]: ERROR EN DISTRIBUCIÓN (Sin quórum)\n", entry.getKey()));
                 }
             }
-            sb.append(String.format("[SUCCESS] %d de %d base(s) de datos y todos sus registros internos migrados exitosamente en el clúster.",
-                successCount, results.size()));
+            sb.append(String.format(
+                    "[SUCCESS] %d de %d base(s) de datos y todos sus registros internos migrados exitosamente en el clúster.",
+                    successCount, results.size()));
             return sb.toString();
         } catch (UnsupportedOperationException e) {
             return "[ERROR] " + e.getMessage();
@@ -1959,22 +2234,30 @@ Seleccione una conexión para iniciar:
             if (!arg.isEmpty()) {
                 try {
                     limit = Integer.parseInt(arg);
-                } catch (NumberFormatException ignored) {}
+                } catch (NumberFormatException ignored) {
+                }
             }
 
-            List<io.jettra.store.cluster.ClusterLiveEvent> events = (client != null) 
-                ? client.getRecentClusterLiveEvents(limit) 
-                : io.jettra.store.cluster.JettraClusterEventBus.getInstance().getRecentEvents(limit);
+            List<io.jettra.store.cluster.ClusterLiveEvent> events = (client != null)
+                    ? client.getRecentClusterLiveEvents(limit)
+                    : io.jettra.store.cluster.JettraClusterEventBus.getInstance().getRecentEvents(limit);
 
             StringBuilder sb = new StringBuilder();
-            sb.append("========================================================================================================================\n");
-            sb.append("                                        JETTRASTORE CLUSTER LIVE EVENT STREAM                                           \n");
-            sb.append("========================================================================================================================\n");
-            sb.append("+-------------------------+----------------------+---------+---------+-------------------------------------------------+\n");
-            sb.append("| Marca Temporal          | Tipo de Evento       | Origen  | Destino | Mensaje / Trazabilidad Operativa                |\n");
-            sb.append("+-------------------------+----------------------+---------+---------+-------------------------------------------------+\n");
+            sb.append(
+                    "========================================================================================================================\n");
+            sb.append(
+                    "                                        JETTRASTORE CLUSTER LIVE EVENT STREAM                                           \n");
+            sb.append(
+                    "========================================================================================================================\n");
+            sb.append(
+                    "+-------------------------+----------------------+---------+---------+-------------------------------------------------+\n");
+            sb.append(
+                    "| Marca Temporal          | Tipo de Evento       | Origen  | Destino | Mensaje / Trazabilidad Operativa                |\n");
+            sb.append(
+                    "+-------------------------+----------------------+---------+---------+-------------------------------------------------+\n");
             if (events == null || events.isEmpty()) {
-                sb.append("| (Sin eventos recientes de clúster registrados en el búfer)                                                           |\n");
+                sb.append(
+                        "| (Sin eventos recientes de clúster registrados en el búfer)                                                           |\n");
             } else {
                 for (var ev : events) {
                     String msg = ev.message();
@@ -1986,11 +2269,13 @@ Seleccione una conexión para iniciar:
                         typeStr = typeStr.substring(0, 17) + "...";
                     }
                     sb.append(String.format("| %-23s | %-20s | %-7s | %-7s | %-47s |\n",
-                        ev.formattedTimestamp(), typeStr, ev.sourceNodeId(), ev.targetNodeId(), msg));
+                            ev.formattedTimestamp(), typeStr, ev.sourceNodeId(), ev.targetNodeId(), msg));
                 }
             }
-            sb.append("+-------------------------+----------------------+---------+---------+-------------------------------------------------+\n");
-            sb.append(String.format("Eventos en búfer mostrados: %d | Canal de Eventos en Tiempo Real: ACTIVO\n", events != null ? events.size() : 0));
+            sb.append(
+                    "+-------------------------+----------------------+---------+---------+-------------------------------------------------+\n");
+            sb.append(String.format("Eventos en búfer mostrados: %d | Canal de Eventos en Tiempo Real: ACTIVO\n",
+                    events != null ? events.size() : 0));
             return sb.toString();
         } catch (Exception e) {
             return "[ERROR] No se pudo obtener el flujo en vivo del clúster: " + e.getMessage();
@@ -2001,19 +2286,18 @@ Seleccione una conexión para iniciar:
         DynamicRingEngine ring = client.getRingEngine();
         boolean active = ring.isMultinodeActive();
         return String.format("""
-            === ESTADO DE CONFIGURACIÓN MULTINODO (database.properties) ===
-            - cluster.multinode.active:  %s
-            - Algoritmo de Consenso:     RAFT Integrado & Dynamic Ring
-            - Estado de Distribución:    %s
-            - Comportamiento:            %s
-            - Nodos Réplica en Anillo:   %d
-            """,
-            active ? "ON" : "OFF",
-            active ? "ACTIVADO" : "DESACTIVADO (Servidor Único / Standalone)",
-            active ? "Distribución y particionamiento automático de datos en clúster"
-                   : "Todas las operaciones se resuelven exclusivamente en el servidor local sin distribuir datos",
-            ring.getPeers().size()
-        );
+                === ESTADO DE CONFIGURACIÓN MULTINODO (database.properties) ===
+                - cluster.multinode.active:  %s
+                - Algoritmo de Consenso:     RAFT Integrado & Dynamic Ring
+                - Estado de Distribución:    %s
+                - Comportamiento:            %s
+                - Nodos Réplica en Anillo:   %d
+                """,
+                active ? "ON" : "OFF",
+                active ? "ACTIVADO" : "DESACTIVADO (Servidor Único / Standalone)",
+                active ? "Distribución y particionamiento automático de datos en clúster"
+                        : "Todas las operaciones se resuelven exclusivamente en el servidor local sin distribuir datos",
+                ring.getPeers().size());
     }
 
     private String handleSetMultinode(boolean active) {
@@ -2027,24 +2311,20 @@ Seleccione una conexión para iniciar:
 
     private String handleStopNode(String command) {
         String id = cleanQuotes(command.substring("STOP NODE ".length()).trim());
-        if (id.isBlank()) return "[ERROR] Uso: STOP NODE <nodeId>";
+        if (id.isBlank())
+            return "[ERROR] Uso: STOP NODE <nodeId>";
         if ("node-01".equalsIgnoreCase(id) || client.getRingEngine().getNodeId().equalsIgnoreCase(id)) {
             return "[ERROR] No se puede detener el nodo primario local en ejecución.";
         }
         boolean ok = client.getRingEngine().stopPeer(id);
         return ok ? "[SUCCESS] Nodo '" + id + "' detenido (STOPPED). Tráfico de anillo pausado para este nodo."
-                  : "[ERROR] No se pudo detener el nodo '" + id + "' (nodo no encontrado).";
+                : "[ERROR] No se pudo detener el nodo '" + id + "' (nodo no encontrado).";
     }
 
-    // --- 5. Control de Bases de Datos & Detección en Disco ---
+    // --- 5. Control de Bases de Datos & Detección en Nodo PRIMARY ---
     private String handleShowDatabases() {
         List<String> dbs = client.listDatabases();
-        if (!dbs.contains(currentDatabase)) {
-            dbs.add(currentDatabase);
-        }
         Collections.sort(dbs);
-
-        JettraStoreConfig cfg = JettraStoreConfig.load();
 
         StringBuilder sb = new StringBuilder();
         sb.append("+------------------------------------+----------+-------------+----------------+\n");
@@ -2058,14 +2338,13 @@ Seleccione una conexión para iniciar:
             } else {
                 colCount = client.getLightweightCollectionCount(db);
             }
-            String tipo = db.startsWith("sample_") ? "SAMPLE" : (db.equals("default_db") ? "SYSTEM" : "USER");
-            String status = db.equals(currentDatabase) ? "* ACTIVA" : (loaded ? "EN MEMORIA" : "DISPONIBLE");
+            String tipo = db.startsWith("sample_") || db.startsWith("example_") ? "SAMPLE" : (db.equals("system_metadata_db") ? "SYSTEM" : "USER");
+            String status = db.equals(currentDatabase) ? "* ACTIVA" : (loaded ? "EN MEMORIA" : "EN PRIMARY");
             sb.append(String.format("| %-34s | %-8s | %-11d | %-14s |\n", db, tipo, colCount, status));
         }
         sb.append("+------------------------------------+----------+-------------+----------------+\n");
-        sb.append(String.format("Total: %d base(s) de datos detectadas. Base activa: '%s'\n", dbs.size(), currentDatabase));
-        sb.append(String.format("Ruta física en database.properties: '%s' | Directorio de lectura/escritura: '%s'",
-            cfg.getConfiguredStoragePath(), cfg.getStoragePath()));
+        String activeLabel = (currentDatabase != null && !currentDatabase.isBlank()) ? currentDatabase : "(ninguna seleccionada)";
+        sb.append(String.format("Total: %d base(s) de datos almacenadas en el nodo PRIMARY. Base activa: '%s'\n", dbs.size(), activeLabel));
         return sb.toString();
     }
 
@@ -2080,17 +2359,19 @@ Seleccione una conexión para iniciar:
         sb.append("+-------------------------+--------------------+---------------------------------------------+\n");
         boolean installed = allDbs.contains("example_factura_db");
         sb.append(String.format("| %-23s | %-18s | %-43s |\n",
-            "example_factura_db",
-            installed ? "INSTALADA (Lista)" : "NO INSTALADA",
-            "Facturación Multimodelo (Máx 500 registros)"));
+                "example_factura_db",
+                installed ? "INSTALADA (Lista)" : "NO INSTALADA",
+                "Facturación Multimodelo (Máx 500 registros)"));
         sb.append("+-------------------------+--------------------+---------------------------------------------+\n");
-        sb.append("Para instalar o re-inicializar la muestra, ejecute: INSTALL SAMPLES o LOAD SAMPLE example_factura_db\n");
+        sb.append(
+                "Para instalar o re-inicializar la muestra, ejecute: INSTALL SAMPLES o LOAD SAMPLE example_factura_db\n");
         return sb.toString();
     }
 
     private String handleCreateDatabase(String command) {
         String dbName = cleanQuotes(command.replaceAll("(?i)^(CREATE\\s+DATABASE|CREATE\\s+DB)\\s+", "").trim());
-        if (dbName.isBlank()) return "[ERROR] Nombre de base de datos requerido. Uso: CREATE DATABASE <nombre> o CREATE DB <nombre>";
+        if (dbName.isBlank())
+            return "[ERROR] Nombre de base de datos requerido. Uso: CREATE DATABASE <nombre> o CREATE DB <nombre>";
         try {
             var db = this.client.getDatabase(dbName);
             if (db != null) {
@@ -2105,15 +2386,15 @@ Seleccione una conexión para iniciar:
 
     private String handleDropDatabase(String command) {
         String dbName = cleanQuotes(command.replaceAll("(?i)^(DROP\\s+DATABASE|DROP\\s+DB)\\s+", "").trim());
-        if (dbName.isBlank()) return "[ERROR] Nombre de base de datos requerido. Uso: DROP DATABASE <nombre> o DROP DB <nombre>";
+        if (dbName.isBlank())
+            return "[ERROR] Nombre de base de datos requerido. Uso: DROP DATABASE <nombre> o DROP DB <nombre>";
         try {
             boolean dropped = client.dropDatabase(dbName);
             if (dbName.equalsIgnoreCase(currentDatabase)) {
-                this.currentDatabase = "default_db";
-                this.client.getDatabase(currentDatabase);
+                this.currentDatabase = null;
             }
             return dropped ? "[SUCCESS] Base de datos '" + dbName + "' eliminada correctamente."
-                           : "[INFO] La base de datos '" + dbName + "' no existía o ya fue eliminada.";
+                    : "[INFO] La base de datos '" + dbName + "' no existía o ya fue eliminada.";
         } catch (UnsupportedOperationException e) {
             return "[ERROR] " + e.getMessage();
         }
@@ -2121,11 +2402,14 @@ Seleccione una conexión para iniciar:
 
     private String handleUseDatabase(String command) {
         String dbName = cleanQuotes(command.substring(4));
-        if (dbName.isBlank()) return "[ERROR] Nombre de base de datos requerido.";
+        if (dbName.isBlank())
+            return "[ERROR] Nombre de base de datos requerido.";
 
         // Verificación de RBAC granular para el usuario activo
         if (!client.getSecurityManager().hasDatabaseAccess(currentUser, dbName, "USE")) {
-            return String.format("[ACCESS DENIED] El usuario '%s' no posee permisos asignados para la base de datos '%s'.", currentUser, dbName);
+            return String.format(
+                    "[ACCESS DENIED] El usuario '%s' no posee permisos asignados para la base de datos '%s'.",
+                    currentUser, dbName);
         }
 
         JettraDatabase db = this.client.getDatabase(dbName);
@@ -2133,57 +2417,65 @@ Seleccione una conexión para iniciar:
 
         if (db.isDistributedRingActive() || client.getRingEngine().isRingActive()) {
             String peersDesc = client.getRingEngine().getPeers().stream()
-                .map(p -> p.getId() + ": " + p.getIp() + ":" + p.getPort())
-                .collect(java.util.stream.Collectors.joining(", "));
+                    .map(p -> p.getId() + ": " + p.getIp() + ":" + p.getPort())
+                    .collect(java.util.stream.Collectors.joining(", "));
             if (peersDesc.isBlank()) {
                 peersDesc = "nodos secundarios";
             }
-            return String.format("""
-                [RING TRANSITION ACTIVE] Supervisión preventiva JettraPolice: Saturación de RAM prevenida (Umbral >= 85%%).
-                [CLUSTER] Activada Transición Dinámica a Motor de Anillo Distribuido (Consistent Ring Topology).
-                [OFFLOAD] Carga y particiones delegadas a nodos secundarios (%s).
-                [SUCCESS] Conmutado a base de datos activa: '%s' [MODO ANILLO DISTRIBUIDO].
-                """, peersDesc, dbName).trim();
+            return String
+                    .format("""
+                            [RING TRANSITION ACTIVE] Supervisión preventiva JettraPolice: Saturación de RAM prevenida (Umbral >= 85%%).
+                            [CLUSTER] Activada Transición Dinámica a Motor de Anillo Distribuido (Consistent Ring Topology).
+                            [OFFLOAD] Carga y particiones delegadas a nodos secundarios (%s).
+                            [SUCCESS] Conmutado a base de datos activa: '%s' [MODO ANILLO DISTRIBUIDO].
+                            """,
+                            peersDesc, dbName)
+                    .trim();
         }
 
         return "[SUCCESS] Conmutado a base de datos activa: '" + dbName + "'.";
     }
 
     private String handleDbStats() {
+        if (currentDatabase == null || currentDatabase.isBlank()) {
+            return "[INFO] No hay ninguna base de datos seleccionada. Use 'SHOW DATABASES', 'CREATE DATABASE <nombre>' o 'USE <nombre>'.";
+        }
         JettraDatabase db = client.getDatabase(currentDatabase);
         return String.format("""
-            === ESTADÍSTICAS DE BASE DE DATOS: '%s' ===
-            - Colecciones Totales: %d
-            - Documentos:          %s
-            - Clave-Valor (KV):    %s
-            - Vectores:            %s
-            - Grafos:              %s
-            - Series Temporales:   %s
-            - Geoespacial (GIS):   %s
-            - Columnar (OLAP):     %s
-            - Java Records:        %s
-            - Índices Secundarios: %d
-            - MemTable Utilizada:  %.2f KB
-            """, currentDatabase, db.getAllCollectionNames().size(),
-            db.getDocumentEngineNames(),
-            db.getKeyValueEngineNames(),
-            db.getVectorEngineNames(),
-            db.getGraphEngineNames(),
-            db.getTimeSeriesEngineNames(),
-            db.getGeospatialEngineNames(),
-            db.getColumnarEngineNames(),
-            db.getRecordsEngineNames(),
-            db.getIndexManager().listIndexes(null).size(),
-            (db.getMemTable().getUsedBytes() / 1024.0));
+                === ESTADÍSTICAS DE BASE DE DATOS: '%s' ===
+                - Colecciones Totales: %d
+                - Documentos:          %s
+                - Clave-Valor (KV):    %s
+                - Vectores:            %s
+                - Grafos:              %s
+                - Series Temporales:   %s
+                - Geoespacial (GIS):   %s
+                - Columnar (OLAP):     %s
+                - Java Records:        %s
+                - Índices Secundarios: %d
+                - MemTable Utilizada:  %.2f KB
+                """, currentDatabase, db.getAllCollectionNames().size(),
+                db.getDocumentEngineNames(),
+                db.getKeyValueEngineNames(),
+                db.getVectorEngineNames(),
+                db.getGraphEngineNames(),
+                db.getTimeSeriesEngineNames(),
+                db.getGeospatialEngineNames(),
+                db.getColumnarEngineNames(),
+                db.getRecordsEngineNames(),
+                db.getIndexManager().listIndexes(null).size(),
+                (db.getMemTable().getUsedBytes() / 1024.0));
     }
 
     // --- 6. Administración de Índices ---
     private String handleCreateIndex(String command) {
-        // CREATE INDEX <indexName> ON <collection> (<field>) [TYPE <BTREE|HASH|SPARSE>] [UNIQUE]
+        // CREATE INDEX <indexName> ON <collection> (<field>) [TYPE <BTREE|HASH|SPARSE>]
+        // [UNIQUE]
         try {
             String upper = command.toUpperCase();
             int onIdx = upper.indexOf(" ON ");
-            if (onIdx == -1) return "[ERROR] Sintaxis inválida. Uso: CREATE INDEX <nombre> ON <coleccion> (<campo>) [TYPE BTREE|HASH|SPARSE]";
+            if (onIdx == -1)
+                return "[ERROR] Sintaxis inválida. Uso: CREATE INDEX <nombre> ON <coleccion> (<campo>) [TYPE BTREE|HASH|SPARSE]";
 
             String indexName = cleanQuotes(command.substring(13, onIdx).trim());
             String rest = command.substring(onIdx + 4).trim();
@@ -2198,8 +2490,10 @@ Seleccione una conexión para iniciar:
             String tail = rest.substring(parenClose + 1).toUpperCase();
 
             String type = "BTREE";
-            if (tail.contains("HASH")) type = "HASH";
-            else if (tail.contains("SPARSE")) type = "SPARSE";
+            if (tail.contains("HASH"))
+                type = "HASH";
+            else if (tail.contains("SPARSE"))
+                type = "SPARSE";
 
             boolean unique = tail.contains("UNIQUE");
 
@@ -2207,7 +2501,7 @@ Seleccione una conexión para iniciar:
             var info = db.getIndexManager().createIndex(col, indexName, field, type, unique, db.getDocumentEngine(col));
             client.replicateCreateIndex(currentDatabase, col, indexName, field, type, unique);
             return String.format("[SUCCESS] Índice '%s' creado sobre '%s'(%s) tipo %s (Entradas indexadas: %d).",
-                info.name(), info.collection(), info.field(), info.type(), info.entriesCount());
+                    info.name(), info.collection(), info.field(), info.type(), info.entriesCount());
         } catch (UnsupportedOperationException e) {
             return "[ERROR] " + e.getMessage();
         } catch (Exception e) {
@@ -2225,22 +2519,24 @@ Seleccione una conexión para iniciar:
                 client.replicateDropIndex(currentDatabase, indexName);
             }
             return ok ? "[SUCCESS] Índice '" + indexName + "' eliminado correctamente."
-                      : "[WARN] El índice '" + indexName + "' no existe en la base de datos '" + currentDatabase + "'.";
+                    : "[WARN] El índice '" + indexName + "' no existe en la base de datos '" + currentDatabase + "'.";
         } catch (UnsupportedOperationException e) {
             return "[ERROR] " + e.getMessage();
         }
     }
 
     private String handleRebuildIndex(String command) {
-        String clean = cleanQuotes(command.replaceAll("(?i)^(ALTER INDEX|REINDEX)\\s+", "").replaceAll("(?i)REBUILD", "").trim());
+        String clean = cleanQuotes(
+                command.replaceAll("(?i)^(ALTER INDEX|REINDEX)\\s+", "").replaceAll("(?i)REBUILD", "").trim());
         String indexName = clean.split("\\s+")[0];
         JettraDatabase db = client.getDatabase(currentDatabase);
         var info = db.getIndexManager().getIndex(indexName);
-        if (info == null) return "[ERROR] Índice '" + indexName + "' no encontrado.";
+        if (info == null)
+            return "[ERROR] Índice '" + indexName + "' no encontrado.";
 
         var updated = db.getIndexManager().rebuildIndex(indexName, db.getDocumentEngine(info.collection()));
         return String.format("[SUCCESS] Índice '%s' reconstruido exitosamente. Total entradas indexadas: %d.",
-            updated.name(), updated.entriesCount());
+                updated.name(), updated.entriesCount());
     }
 
     private String handleShowIndexes(String command) {
@@ -2252,19 +2548,25 @@ Seleccione una conexión para iniciar:
         List<JettraIndexManager.IndexInfo> list = db.getIndexManager().listIndexes(col);
 
         if (list.isEmpty()) {
-            return "[INFO] No se encontraron índices en '" + currentDatabase + "'" + (col != null ? " para la colección '" + col + "'." : ".");
+            return "[INFO] No se encontraron índices en '" + currentDatabase + "'"
+                    + (col != null ? " para la colección '" + col + "'." : ".");
         }
 
         StringBuilder sb = new StringBuilder();
         sb.append(String.format("=== ÍNDICES DE BASE DE DATOS: '%s' ===\n", currentDatabase));
-        sb.append("+----------------------+----------------------+----------------------+--------+--------+----------+\n");
-        sb.append("| Nombre de Índice     | Colección            | Campo Indexado       | Tipo   | Único  | Entradas |\n");
-        sb.append("+----------------------+----------------------+----------------------+--------+--------+----------+\n");
+        sb.append(
+                "+----------------------+----------------------+----------------------+--------+--------+----------+\n");
+        sb.append(
+                "| Nombre de Índice     | Colección            | Campo Indexado       | Tipo   | Único  | Entradas |\n");
+        sb.append(
+                "+----------------------+----------------------+----------------------+--------+--------+----------+\n");
         for (var idx : list) {
             sb.append(String.format("| %-20s | %-20s | %-20s | %-6s | %-6s | %-8d |\n",
-                idx.name(), idx.collection(), idx.field(), idx.type(), idx.unique() ? "SI" : "NO", idx.entriesCount()));
+                    idx.name(), idx.collection(), idx.field(), idx.type(), idx.unique() ? "SI" : "NO",
+                    idx.entriesCount()));
         }
-        sb.append("+----------------------+----------------------+----------------------+--------+--------+----------+\n");
+        sb.append(
+                "+----------------------+----------------------+----------------------+--------+--------+----------+\n");
         return sb.toString();
     }
 
@@ -2286,7 +2588,7 @@ Seleccione una conexión para iniciar:
                 u.databaseRoles().forEach((db, r) -> rolesSb.append(db).append(":").append(r).append(" "));
             }
             sb.append(String.format("| %-15s | %-15s | %-40s | %-11s |\n",
-                u.username(), u.role(), rolesSb.toString().trim(), u.immutable() ? "SI (Protegido)" : "NO"));
+                    u.username(), u.role(), rolesSb.toString().trim(), u.immutable() ? "SI (Protegido)" : "NO"));
         }
         sb.append("+-----------------+-----------------+------------------------------------------+-------------+\n");
         return sb.toString();
@@ -2297,7 +2599,8 @@ Seleccione una conexión para iniciar:
         try {
             String after = command.substring("CREATE USER ".length()).trim();
             int passIdx = after.toUpperCase().indexOf(" PASSWORD ");
-            if (passIdx == -1) return "[ERROR] Uso: CREATE USER <username> PASSWORD <password> [ROLE <globalRole>]";
+            if (passIdx == -1)
+                return "[ERROR] Uso: CREATE USER <username> PASSWORD <password> [ROLE <globalRole>]";
 
             String username = cleanQuotes(after.substring(0, passIdx).trim());
             String rest = after.substring(passIdx + 10).trim();
@@ -2330,11 +2633,13 @@ Seleccione una conexión para iniciar:
     }
 
     private String handleAlterUser(String command) {
-        // ALTER USER <username> PASSWORD <newPass> | ALTER USER <username> ROLE <newRole>
+        // ALTER USER <username> PASSWORD <newPass> | ALTER USER <username> ROLE
+        // <newRole>
         try {
             String after = command.substring("ALTER USER ".length()).trim();
             String[] parts = after.split("\\s+", 3);
-            if (parts.length < 3) return "[ERROR] Uso: ALTER USER <username> PASSWORD <newPass> | ALTER USER <username> ROLE <newRole>";
+            if (parts.length < 3)
+                return "[ERROR] Uso: ALTER USER <username> PASSWORD <newPass> | ALTER USER <username> ROLE <newRole>";
             String username = cleanQuotes(parts[0]);
             String action = parts[1].toUpperCase();
             String val = cleanQuotes(parts[2]);
@@ -2367,7 +2672,8 @@ Seleccione una conexión para iniciar:
             String user = cleanQuotes(command.substring(toIdx + 4).trim());
 
             client.getSecurityManager().grantDatabaseRole(client.getSessionToken(), user, db, role);
-            return String.format("[SUCCESS] Concedido rol '%s' sobre la base de datos '%s' al usuario '%s'.", role, db, user);
+            return String.format("[SUCCESS] Concedido rol '%s' sobre la base de datos '%s' al usuario '%s'.", role, db,
+                    user);
         } catch (Exception e) {
             return "[ERROR] " + e.getMessage();
         }
@@ -2378,13 +2684,15 @@ Seleccione una conexión para iniciar:
         try {
             String upper = command.toUpperCase();
             int fromIdx = upper.indexOf(" FROM ");
-            if (fromIdx == -1) return "[ERROR] Uso: REVOKE <database> FROM <username>";
+            if (fromIdx == -1)
+                return "[ERROR] Uso: REVOKE <database> FROM <username>";
 
             String targetDb = cleanQuotes(command.substring(7, fromIdx).replaceAll("(?i)ROLE\\s+ON\\s+", "").trim());
             String user = cleanQuotes(command.substring(fromIdx + 6).trim());
 
             client.getSecurityManager().revokeDatabaseRole(client.getSessionToken(), user, targetDb);
-            return String.format("[SUCCESS] Permisos sobre base de datos '%s' revocados para el usuario '%s'.", targetDb, user);
+            return String.format("[SUCCESS] Permisos sobre base de datos '%s' revocados para el usuario '%s'.",
+                    targetDb, user);
         } catch (Exception e) {
             return "[ERROR] " + e.getMessage();
         }
@@ -2393,7 +2701,8 @@ Seleccione una conexión para iniciar:
     private String handleShowGrants(String command) {
         String username = cleanQuotes(command.substring("SHOW GRANTS FOR ".length()).trim());
         var user = client.getSecurityManager().getUser(username);
-        if (user == null) return "[ERROR] Usuario '" + username + "' no encontrado.";
+        if (user == null)
+            return "[ERROR] Usuario '" + username + "' no encontrado.";
 
         StringBuilder sb = new StringBuilder();
         sb.append(String.format("=== PRIVILEGIOS ASIGNADOS AL USUARIO: '%s' ===\n", username));
@@ -2436,7 +2745,8 @@ Seleccione una conexión para iniciar:
                     }
                     case "kv" -> {
                         byte[] val = db.getKeyValueEngine(col).get(targetId);
-                        yield val != null ? "KV Valor: " + new String(val, StandardCharsets.UTF_8) : "(Clave KV no encontrada)";
+                        yield val != null ? "KV Valor: " + new String(val, StandardCharsets.UTF_8)
+                                : "(Clave KV no encontrada)";
                     }
                     default -> refStr;
                 };
@@ -2448,7 +2758,8 @@ Seleccione una conexión para iniciar:
     }
 
     private String handleInsertRef(String command) {
-        // INSERT REF <collection> <docId> KEY <refKey> TARGET <engine>::<targetCol>#<targetId>
+        // INSERT REF <collection> <docId> KEY <refKey> TARGET
+        // <engine>::<targetCol>#<targetId>
         try {
             String upper = command.toUpperCase();
             int keyIdx = upper.indexOf(" KEY ");
@@ -2459,7 +2770,8 @@ Seleccione una conexión para iniciar:
 
             String beforeKey = command.substring(11, keyIdx).trim();
             String[] parts = beforeKey.split("\\s+");
-            if (parts.length < 2) return "[ERROR] Debe especificar colección e ID de registro.";
+            if (parts.length < 2)
+                return "[ERROR] Debe especificar colección e ID de registro.";
             String col = cleanQuotes(parts[0]);
             String id = cleanQuotes(parts[1]);
 
@@ -2477,7 +2789,7 @@ Seleccione una conexión para iniciar:
             docEngine.insert(id, doc);
 
             return String.format("[SUCCESS] Referencia JettraRef '%s' vinculada en '%s'[%s] -> '%s'.",
-                refKey, col, id, targetRef);
+                    refKey, col, id, targetRef);
         } catch (Exception e) {
             return "[ERROR] " + e.getMessage();
         }
@@ -2493,13 +2805,15 @@ Seleccione una conexión para iniciar:
     private String handleShowRefs(String command) {
         String clean = cleanQuotes(command.substring("SHOW REFS ".length()).trim());
         String[] parts = clean.split("\\s+");
-        if (parts.length < 2) return "[ERROR] Uso: SHOW REFS <coleccion> <id>";
+        if (parts.length < 2)
+            return "[ERROR] Uso: SHOW REFS <coleccion> <id>";
         String col = parts[0];
         String id = parts[1];
 
         JettraDatabase db = client.getDatabase(currentDatabase);
         var doc = db.getDocumentEngine(col).findById(id);
-        if (doc == null) return "[ERROR] Documento no encontrado: " + id;
+        if (doc == null)
+            return "[ERROR] Documento no encontrado: " + id;
 
         StringBuilder sb = new StringBuilder();
         sb.append(String.format("=== REFERENCIAS CRUZADAS PARA [%s] EN '%s' ===\n", id, col));
@@ -2510,7 +2824,7 @@ Seleccione una conexión para iniciar:
                 String refVal = String.valueOf(entry.getValue());
                 sb.append(String.format("  [%02d] Campo: %-18s -> %s\n", count, entry.getKey(), refVal));
                 sb.append(String.format("       ↳ Resolución %s: %s\n",
-                    lazyLoad ? "(Lazy On-Demand)" : "(Eager)", resolveReference(db, refVal)));
+                        lazyLoad ? "(Lazy On-Demand)" : "(Eager)", resolveReference(db, refVal)));
             }
         }
         if (count == 0) {
@@ -2525,15 +2839,17 @@ Seleccione una conexión para iniciar:
         String valStr = parts[parts.length - 1].replaceAll("[;]", "");
         try {
             int newSize = Integer.parseInt(valStr);
-            if (newSize <= 0) return "[ERROR] El tamaño de página debe ser mayor a 0.";
+            if (newSize <= 0)
+                return "[ERROR] El tamaño de página debe ser mayor a 0.";
             this.pageSize = Math.min(newSize, 5000);
             if (lastPagedBaseQuery != null) {
                 this.totalQueryPages = (int) Math.max(1, Math.ceil((double) totalQueryRecords / pageSize));
                 this.currentQueryPage = Math.min(currentQueryPage, totalQueryPages);
-                return String.format("[PAGINACIÓN] Tamaño de página configurado a %d registros.\n%s", 
-                    pageSize, executePagedQuery(lastPagedBaseQuery, currentQueryPage));
+                return String.format("[PAGINACIÓN] Tamaño de página configurado a %d registros.\n%s",
+                        pageSize, executePagedQuery(lastPagedBaseQuery, currentQueryPage));
             }
-            return String.format("[PAGINACIÓN] Tamaño de página configurado a %d registros para futuras consultas.", pageSize);
+            return String.format("[PAGINACIÓN] Tamaño de página configurado a %d registros para futuras consultas.",
+                    pageSize);
         } catch (Exception e) {
             return "[ERROR] Uso: PAGE_SIZE <tamaño> (ejemplo: PAGE_SIZE 25)";
         }
@@ -2547,13 +2863,17 @@ Seleccione una conexión para iniciar:
         int targetPage = currentQueryPage;
         String upper = action.toUpperCase();
 
-        if (upper.equals("FIRST") || upper.equals("PRIMERO") || upper.equals("PAGE FIRST") || upper.equals("|<<") || upper.equals("P")) {
+        if (upper.equals("FIRST") || upper.equals("PRIMERO") || upper.equals("PAGE FIRST") || upper.equals("|<<")
+                || upper.equals("P")) {
             targetPage = 1;
-        } else if (upper.equals("PREV") || upper.equals("ANTERIOR") || upper.equals("PAGE PREV") || upper.equals("<") || upper.equals("A")) {
+        } else if (upper.equals("PREV") || upper.equals("ANTERIOR") || upper.equals("PAGE PREV") || upper.equals("<")
+                || upper.equals("A")) {
             targetPage = Math.max(1, currentQueryPage - 1);
-        } else if (upper.equals("NEXT") || upper.equals("SIGUIENTE") || upper.equals("PAGE NEXT") || upper.equals(">") || upper.equals("S")) {
+        } else if (upper.equals("NEXT") || upper.equals("SIGUIENTE") || upper.equals("PAGE NEXT") || upper.equals(">")
+                || upper.equals("S")) {
             targetPage = Math.min(totalQueryPages, currentQueryPage + 1);
-        } else if (upper.equals("LAST") || upper.equals("ULTIMO") || upper.equals("PAGE LAST") || upper.equals(">>|") || upper.equals("U")) {
+        } else if (upper.equals("LAST") || upper.equals("ULTIMO") || upper.equals("PAGE LAST") || upper.equals(">>|")
+                || upper.equals("U")) {
             targetPage = totalQueryPages;
         } else if (upper.startsWith("PAGE ") || upper.startsWith("PAGINA ")) {
             String[] parts = action.split("\\s+");
@@ -2574,20 +2894,30 @@ Seleccione una conexión para iniciar:
         return handleJettraSQLInternal(pagedSql, false);
     }
 
-    private String renderPaginationBar(int currentPage, int totalPages, int currentPageSize, long totalRecords, int rowsInPage) {
+    private String renderPaginationBar(int currentPage, int totalPages, int currentPageSize, long totalRecords,
+            int rowsInPage) {
         long startRow = totalRecords == 0 ? 0 : (long) (currentPage - 1) * currentPageSize + 1;
-        long endRow = totalRecords == 0 ? 0 : Math.min(totalRecords, (long) (currentPage - 1) * currentPageSize + rowsInPage);
+        long endRow = totalRecords == 0 ? 0
+                : Math.min(totalRecords, (long) (currentPage - 1) * currentPageSize + rowsInPage);
 
         StringBuilder sb = new StringBuilder();
-        sb.append("┌──────────────────────────────────────────────────────────────────────────────────────────────────────┐\n");
-        sb.append(String.format("│  PÁGINA [ %d / %d ]  •  Registros %d a %d de %d total  •  Tamaño de página: %d               │\n",
-            currentPage, totalPages, startRow, endRow, totalRecords, currentPageSize));
-        sb.append("├──────────────────────────────────────────────────────────────────────────────────────────────────────┤\n");
-        sb.append("│  OPCIONES DE DESPLAZAMIENTO:                                                                         │\n");
-        sb.append("│    [F] Primero (|<<)   - Va a la primera página       [A] Anterior (<)    - Página anterior          │\n");
-        sb.append("│    [S] Siguiente (>)   - Página siguiente             [U] Última (>>|)    - Va a la última página    │\n");
-        sb.append("│    PAGE <n>            - Salta a una página directa   PAGE_SIZE <n>       - Modifica tamaño de página│\n");
-        sb.append("└──────────────────────────────────────────────────────────────────────────────────────────────────────┘\n");
+        sb.append(
+                "┌──────────────────────────────────────────────────────────────────────────────────────────────────────┐\n");
+        sb.append(String.format(
+                "│  PÁGINA [ %d / %d ]  •  Registros %d a %d de %d total  •  Tamaño de página: %d               │\n",
+                currentPage, totalPages, startRow, endRow, totalRecords, currentPageSize));
+        sb.append(
+                "├──────────────────────────────────────────────────────────────────────────────────────────────────────┤\n");
+        sb.append(
+                "│  OPCIONES DE DESPLAZAMIENTO:                                                                         │\n");
+        sb.append(
+                "│    [F] Primero (|<<)   - Va a la primera página       [A] Anterior (<)    - Página anterior          │\n");
+        sb.append(
+                "│    [S] Siguiente (>)   - Página siguiente             [U] Última (>>|)    - Va a la última página    │\n");
+        sb.append(
+                "│    PAGE <n>            - Salta a una página directa   PAGE_SIZE <n>       - Modifica tamaño de página│\n");
+        sb.append(
+                "└──────────────────────────────────────────────────────────────────────────────────────────────────────┘\n");
         return sb.toString();
     }
 
@@ -2597,11 +2927,24 @@ Seleccione una conexión para iniciar:
 
     private String handleJettraSQLInternal(String command, boolean isNewQuery) {
         String clean = command;
-        if (clean.toUpperCase().startsWith("SQL ")) clean = clean.substring(4).trim();
-        else if (clean.toUpperCase().startsWith("JETTRASQL ")) clean = clean.substring(10).trim();
+        if (clean.toUpperCase().startsWith("SQL "))
+            clean = clean.substring(4).trim();
+        else if (clean.toUpperCase().startsWith("JETTRASQL "))
+            clean = clean.substring(10).trim();
 
         long start = System.currentTimeMillis();
-        JettraSQLProcessor.QueryResult res = client.sql(currentDatabase, clean);
+        JettraSQLProcessor.QueryResult res;
+        if (currentDatabase == null || currentDatabase.isBlank()) {
+            String upperClean = clean.toUpperCase();
+            if (upperClean.startsWith("MATH ") || upperClean.startsWith("FINANCE ")
+                    || upperClean.startsWith("STATS ") || upperClean.startsWith("VECTOR ")) {
+                res = new JettraSQLProcessor(null).execute(clean);
+            } else {
+                return "[INFO] No hay ninguna base de datos seleccionada. Use 'SHOW DATABASES', 'CREATE DATABASE <nombre>' o 'USE <nombre>'.";
+            }
+        } else {
+            res = client.sql(currentDatabase, clean);
+        }
         long elapsed = System.currentTimeMillis() - start;
 
         StringBuilder sb = new StringBuilder();
@@ -2612,9 +2955,11 @@ Seleccione una conexión para iniciar:
             sb.append("   Diagnóstico: ").append(res.message()).append("\n");
             if (lastSentinelNotification != null) {
                 sb.append(String.format("   Lote seguro: %d registros | Heap: %.1f%% | RAM libre: %d MB\n",
-                    lastSentinelNotification.safeBatchSize(), lastSentinelNotification.heapUsagePercent(), lastSentinelNotification.availableMemoryMb()));
+                        lastSentinelNotification.safeBatchSize(), lastSentinelNotification.heapUsagePercent(),
+                        lastSentinelNotification.availableMemoryMb()));
             }
-            sb.append("   Recepción progresiva: Prototipo de stream procesado en bloques para proteger terminal y heap.\n");
+            sb.append(
+                    "   Recepción progresiva: Prototipo de stream procesado en bloques para proteger terminal y heap.\n");
         } else {
             sb.append("Mensaje: ").append(res.message()).append("\n");
         }
@@ -2623,17 +2968,21 @@ Seleccione una conexión para iniciar:
             // Renderizar tabla ASCII con formato dinámico
             List<String> cols = res.columns();
             sb.append("+");
-            for (String c : cols) sb.append("-".repeat(Math.max(c.length() + 2, 14))).append("+");
+            for (String c : cols)
+                sb.append("-".repeat(Math.max(c.length() + 2, 14))).append("+");
             sb.append("\n|");
-            for (String c : cols) sb.append(String.format(" %-" + Math.max(c.length(), 12) + "s |", c));
+            for (String c : cols)
+                sb.append(String.format(" %-" + Math.max(c.length(), 12) + "s |", c));
             sb.append("\n+");
-            for (String c : cols) sb.append("-".repeat(Math.max(c.length() + 2, 14))).append("+");
+            for (String c : cols)
+                sb.append("-".repeat(Math.max(c.length() + 2, 14))).append("+");
             sb.append("\n");
 
             int maxDisplay = Math.min(res.rows().size(), pageSize > 0 ? pageSize : 50);
             int displayCount = 0;
             for (List<Object> row : res.rows()) {
-                if (++displayCount > maxDisplay) break;
+                if (++displayCount > maxDisplay)
+                    break;
                 sb.append("|");
                 for (int i = 0; i < cols.size(); i++) {
                     String val = (i < row.size() && row.get(i) != null) ? row.get(i).toString() : "";
@@ -2642,16 +2991,18 @@ Seleccione una conexión para iniciar:
                 sb.append("\n");
             }
             if (res.rows().size() > maxDisplay) {
-                sb.append(String.format("... y %d fila(s) más. Use LIMIT o aumente PAGE_SIZE para ver más.\n", 
-                    res.rows().size() - maxDisplay));
+                sb.append(String.format("... y %d fila(s) más. Use LIMIT o aumente PAGE_SIZE para ver más.\n",
+                        res.rows().size() - maxDisplay));
             }
             if (res.message().contains("[JettraPolice SENTINEL")) {
-                sb.append(String.format("💡 Consejo JettraPolice: Para iterar la siguiente página lazy ejecute: %s LIMIT %d OFFSET %d\n",
-                    clean.contains("LIMIT") ? clean.replaceAll("(?i)LIMIT\\s+\\d+", "").trim() : clean, 
-                    res.rows().size(), res.rows().size()));
+                sb.append(String.format(
+                        "💡 Consejo JettraPolice: Para iterar la siguiente página lazy ejecute: %s LIMIT %d OFFSET %d\n",
+                        clean.contains("LIMIT") ? clean.replaceAll("(?i)LIMIT\\s+\\d+", "").trim() : clean,
+                        res.rows().size(), res.rows().size()));
             }
             sb.append("+");
-            for (String c : cols) sb.append("-".repeat(Math.max(c.length() + 2, 14))).append("+");
+            for (String c : cols)
+                sb.append("-".repeat(Math.max(c.length() + 2, 14))).append("+");
             sb.append("\n");
         }
         sb.append(String.format("Total: %d fila(s) seleccionadas / afectadas.\n", res.affectedRows()));
@@ -2666,7 +3017,8 @@ Seleccione una conexión para iniciar:
                 String upperQ = lastPagedBaseQuery.toUpperCase();
                 int fromPos = upperQ.indexOf(" FROM ");
                 if (fromPos != -1) {
-                    String afterFrom = lastPagedBaseQuery.substring(fromPos + 6).trim().split("\\s+")[0].replaceAll("[;]", "");
+                    String afterFrom = lastPagedBaseQuery.substring(fromPos + 6).trim().split("\\s+")[0]
+                            .replaceAll("[;]", "");
                     try {
                         var engine = client.getDatabase(currentDatabase).getDocumentEngine(afterFrom);
                         this.totalQueryRecords = engine != null ? engine.count() : res.affectedRows();
@@ -2680,7 +3032,8 @@ Seleccione una conexión para iniciar:
             }
 
             if (totalQueryPages > 1 || res.rows().size() >= pageSize) {
-                sb.append(renderPaginationBar(currentQueryPage, totalQueryPages, pageSize, totalQueryRecords, res.rows().size()));
+                sb.append(renderPaginationBar(currentQueryPage, totalQueryPages, pageSize, totalQueryRecords,
+                        res.rows().size()));
             }
         }
 
@@ -2689,8 +3042,10 @@ Seleccione una conexión para iniciar:
 
     private String handleJettraQL(String command) {
         String clean = command;
-        if (clean.toUpperCase().startsWith("JQL ")) clean = clean.substring(4).trim();
-        else if (clean.toUpperCase().startsWith("JETTRAQL ")) clean = clean.substring(9).trim();
+        if (clean.toUpperCase().startsWith("JQL "))
+            clean = clean.substring(4).trim();
+        else if (clean.toUpperCase().startsWith("JETTRAQL "))
+            clean = clean.substring(9).trim();
 
         long start = System.currentTimeMillis();
         JettraQLProcessor.JQLResult res = client.jql(currentDatabase, clean);
@@ -2751,31 +3106,35 @@ Seleccione una conexión para iniciar:
             }
         } catch (UnsupportedOperationException e) {
             return "[ERROR] " + e.getMessage();
-        } catch (Exception ignored) {}
+        } catch (Exception ignored) {
+        }
         return "[ERROR] Formato inválido. Uso: INSERT INTO <col> ID <id> JSON {...} o INSERT INTO <col> VALUES ('<id>', '{...}')";
     }
 
     private String handleGetRecord(String command) {
         String clean = command.replaceAll("(?i)^(GET|FIND ONE|FIND BY ID)\\s+", "").trim();
         String[] parts = clean.split("\\s+");
-        if (parts.length < 2) return "[ERROR] Uso: GET <colección> <id>";
+        if (parts.length < 2)
+            return "[ERROR] Uso: GET <colección> <id>";
         String colName = parts[0].trim();
         String id = cleanQuotes(parts[1]);
 
         JettraDatabase db = client.getDatabase(currentDatabase);
         Map<String, Object> doc = db.getDocumentEngine(colName).findById(id);
         if (doc == null) {
-            return String.format("[NOT FOUND] No se encontró el registro con _id '%s' en la colección '%s'.", id, colName);
+            return String.format("[NOT FOUND] No se encontró el registro con _id '%s' en la colección '%s'.", id,
+                    colName);
         }
 
         StringBuilder sb = new StringBuilder();
         sb.append(String.format("--- REGISTRO [%s] EN '%s' ---\n", id, colName));
         for (Map.Entry<String, Object> entry : doc.entrySet()) {
             sb.append(String.format("  %-15s : %s\n", entry.getKey(), entry.getValue()));
-            if (showReferences && (entry.getKey().startsWith("_ref_") || String.valueOf(entry.getValue()).contains("::"))) {
+            if (showReferences
+                    && (entry.getKey().startsWith("_ref_") || String.valueOf(entry.getValue()).contains("::"))) {
                 String refVal = String.valueOf(entry.getValue());
-                sb.append(String.format("    ↳ [JettraRef Resolución %s]: %s\n", 
-                    lazyLoad ? "(Lazy Proxy On-Demand)" : "(Eager Carga Inmediata)", resolveReference(db, refVal)));
+                sb.append(String.format("    ↳ [JettraRef Resolución %s]: %s\n",
+                        lazyLoad ? "(Lazy Proxy On-Demand)" : "(Eager Carga Inmediata)", resolveReference(db, refVal)));
             }
         }
         return sb.toString();
@@ -2784,13 +3143,17 @@ Seleccione una conexión para iniciar:
     private String handleFindAll(String command) {
         String clean = command.replaceAll("(?i)^(FIND ALL|SCAN)\\s+", "").trim();
         String[] parts = clean.split("\\s+");
-        if (parts.length < 1 || parts[0].isBlank()) return "[ERROR] Uso: FIND ALL <colección> [LIMIT <n>]";
+        if (parts.length < 1 || parts[0].isBlank())
+            return "[ERROR] Uso: FIND ALL <colección> [LIMIT <n>]";
         String colName = cleanQuotes(parts[0]);
 
         int limit = pageSize;
         for (int i = 1; i < parts.length - 1; i++) {
             if ("LIMIT".equalsIgnoreCase(parts[i])) {
-                try { limit = Integer.parseInt(parts[i + 1].replaceAll("[;]", "")); } catch (Exception ignored) {}
+                try {
+                    limit = Integer.parseInt(parts[i + 1].replaceAll("[;]", ""));
+                } catch (Exception ignored) {
+                }
             }
         }
 
@@ -2801,11 +3164,12 @@ Seleccione una conexión para iniciar:
         }
 
         StringBuilder sb = new StringBuilder();
-        sb.append(String.format("--- COLECCIÓN '%s' (Mostrando %d de %d registros) ---\n", 
-            colName, Math.min((int) docEngine.count(), limit), docEngine.count()));
+        sb.append(String.format("--- COLECCIÓN '%s' (Mostrando %d de %d registros) ---\n",
+                colName, Math.min((int) docEngine.count(), limit), docEngine.count()));
         int count = 0;
         for (Map<String, Object> doc : docEngine) {
-            if (++count > limit) break;
+            if (++count > limit)
+                break;
             sb.append(String.format("  [%02d] %s\n", count, doc));
         }
         return sb.toString();
@@ -2823,7 +3187,8 @@ Seleccione una conexión para iniciar:
                     String wherePart = after.substring(whereIdx + 7).trim();
                     id = cleanQuotes(wherePart.split("=")[1].trim());
                 }
-                String jsonPart = whereIdx != -1 ? after.substring(setIdx + 5, whereIdx).trim() : after.substring(setIdx + 5).trim();
+                String jsonPart = whereIdx != -1 ? after.substring(setIdx + 5, whereIdx).trim()
+                        : after.substring(setIdx + 5).trim();
                 Map<String, Object> updates = parseJsonOrKeyValues(jsonPart);
 
                 if (id != null) {
@@ -2839,7 +3204,8 @@ Seleccione una conexión para iniciar:
             }
         } catch (UnsupportedOperationException e) {
             return "[ERROR] " + e.getMessage();
-        } catch (Exception ignored) {}
+        } catch (Exception ignored) {
+        }
         return "[ERROR] Formato inválido. Uso: UPDATE <colección> SET {campo:valor} WHERE _id = '<id>'";
     }
 
@@ -2860,9 +3226,9 @@ Seleccione una conexión para iniciar:
                     if (deleted) {
                         client.replicateDeleteDocument(currentDatabase, col, id);
                     }
-                    return deleted 
-                        ? String.format("[SUCCESS] Registro con _id '%s' eliminado de '%s'.", id, col)
-                        : String.format("[WARN] No se encontró el registro con _id '%s' para eliminar.", id);
+                    return deleted
+                            ? String.format("[SUCCESS] Registro con _id '%s' eliminado de '%s'.", id, col)
+                            : String.format("[WARN] No se encontró el registro con _id '%s' para eliminar.", id);
                 }
             } else {
                 String[] parts = clean.split("\\s+");
@@ -2876,14 +3242,15 @@ Seleccione una conexión para iniciar:
                     if (deleted) {
                         client.replicateDeleteDocument(currentDatabase, col, id);
                     }
-                    return deleted 
-                        ? String.format("[SUCCESS] Registro con _id '%s' eliminado de '%s'.", id, col)
-                        : String.format("[WARN] No se encontró el registro con _id '%s' para eliminar.", id);
+                    return deleted
+                            ? String.format("[SUCCESS] Registro con _id '%s' eliminado de '%s'.", id, col)
+                            : String.format("[WARN] No se encontró el registro con _id '%s' para eliminar.", id);
                 }
             }
         } catch (UnsupportedOperationException e) {
             return "[ERROR] " + e.getMessage();
-        } catch (Exception ignored) {}
+        } catch (Exception ignored) {
+        }
         return "[ERROR] Formato inválido. Uso: DELETE <col> <id> o DELETE FROM <col> WHERE _id = '<id>'";
     }
 
@@ -2897,7 +3264,8 @@ Seleccione una conexión para iniciar:
             String vecStr = after.substring(after.indexOf('[') + 1, after.indexOf(']'));
             String[] floatsStr = vecStr.split(",");
             float[] floats = new float[floatsStr.length];
-            for (int i = 0; i < floatsStr.length; i++) floats[i] = Float.parseFloat(floatsStr[i].trim());
+            for (int i = 0; i < floatsStr.length; i++)
+                floats[i] = Float.parseFloat(floatsStr[i].trim());
 
             JettraDatabase db = client.getDatabase(currentDatabase);
             db.getVectorEngine(col, floats.length).index(id, floats);
@@ -2914,7 +3282,8 @@ Seleccione una conexión para iniciar:
             String vecStr = after.substring(after.indexOf('[') + 1, after.indexOf(']'));
             String[] floatsStr = vecStr.split(",");
             float[] floats = new float[floatsStr.length];
-            for (int i = 0; i < floatsStr.length; i++) floats[i] = Float.parseFloat(floatsStr[i].trim());
+            for (int i = 0; i < floatsStr.length; i++)
+                floats[i] = Float.parseFloat(floatsStr[i].trim());
 
             int k = 3;
             int kIdx = after.toUpperCase().indexOf(" K ");
@@ -2928,7 +3297,8 @@ Seleccione una conexión para iniciar:
             sb.append(String.format("=== VECTOR COSINE EN '%s' (k=%d) ===\n", col, k));
             int idx = 1;
             for (var match : matches) {
-                sb.append(String.format("  [%02d] Vector ID: %-15s | Similaridad: %.4f\n", idx++, match.id(), match.score()));
+                sb.append(String.format("  [%02d] Vector ID: %-15s | Similaridad: %.4f\n", idx++, match.id(),
+                        match.score()));
             }
             return sb.toString();
         } catch (Exception e) {
@@ -2938,7 +3308,8 @@ Seleccione una conexión para iniciar:
 
     private String handleGraphAddVertex(String command) {
         String[] parts = command.substring("GRAPH ADD VERTEX ".length()).trim().split("\\s+");
-        if (parts.length < 2) return "[ERROR] Uso: GRAPH ADD VERTEX <grafo> <verticeId>";
+        if (parts.length < 2)
+            return "[ERROR] Uso: GRAPH ADD VERTEX <grafo> <verticeId>";
         client.getDatabase(currentDatabase).getGraphEngine(parts[0]).addVertex(cleanQuotes(parts[1]));
         return String.format("[SUCCESS] Vértice '%s' agregado al grafo '%s'.", parts[1], parts[0]);
     }
@@ -2952,13 +3323,17 @@ Seleccione una conexión para iniciar:
             String to = parts[2];
             String label = "RELATES_TO";
             int lblIdx = after.toUpperCase().indexOf("LABEL");
-            if (lblIdx != -1) label = cleanQuotes(after.substring(lblIdx + 5).split("\\s+")[0]);
+            if (lblIdx != -1)
+                label = cleanQuotes(after.substring(lblIdx + 5).split("\\s+")[0]);
             double weight = 1.0;
             int wIdx = after.toUpperCase().indexOf("WEIGHT");
-            if (wIdx != -1) weight = Double.parseDouble(after.substring(wIdx + 6).replaceAll("[;]", "").trim());
+            if (wIdx != -1)
+                weight = Double.parseDouble(after.substring(wIdx + 6).replaceAll("[;]", "").trim());
 
-            client.getDatabase(currentDatabase).getGraphEngine(graph).addEdge(from, to, label, Map.of("weight", weight));
-            return String.format("[SUCCESS] Arista (%s)-[%s, w=%.1f]->(%s) agregada en grafo '%s'.", from, label, weight, to, graph);
+            client.getDatabase(currentDatabase).getGraphEngine(graph).addEdge(from, to, label,
+                    Map.of("weight", weight));
+            return String.format("[SUCCESS] Arista (%s)-[%s, w=%.1f]->(%s) agregada en grafo '%s'.", from, label,
+                    weight, to, graph);
         } catch (Exception e) {
             return "[ERROR] Formato inválido. Uso: GRAPH ADD EDGE <grafo> <de> <a> [LABEL <nombre>] [WEIGHT <peso>]";
         }
@@ -2967,14 +3342,16 @@ Seleccione una conexión para iniciar:
     private String handleGraphGetEdges(String command) {
         String clean = command.replaceAll("(?i)^(GRAPH GET EDGES|GRAPH EDGES)\\s+", "").trim();
         String[] parts = clean.split("\\s+");
-        if (parts.length < 2) return "[ERROR] Uso: GRAPH GET EDGES <grafo> <verticeId>";
-        var edges = client.getDatabase(currentDatabase).getGraphEngine(parts[0]).getOutboundEdges(cleanQuotes(parts[1]));
+        if (parts.length < 2)
+            return "[ERROR] Uso: GRAPH GET EDGES <grafo> <verticeId>";
+        var edges = client.getDatabase(currentDatabase).getGraphEngine(parts[0])
+                .getOutboundEdges(cleanQuotes(parts[1]));
         StringBuilder sb = new StringBuilder();
         sb.append(String.format("=== ARISTAS SALIENTES DESDE '%s' EN '%s' ===\n", parts[1], parts[0]));
         int idx = 1;
         for (var edge : edges) {
             sb.append(String.format("  [%02d] -> Destino: %-15s | Relación: %-15s | Props: %s\n",
-                idx++, edge.targetVertex(), edge.label(), edge.properties()));
+                    idx++, edge.targetVertex(), edge.label(), edge.properties()));
         }
         return sb.toString();
     }
@@ -2987,10 +3364,12 @@ Seleccione una conexión para iniciar:
             double val = Double.parseDouble(parts[1]);
             long timestamp = System.currentTimeMillis();
             int timeIdx = after.toUpperCase().indexOf("TIME");
-            if (timeIdx != -1) timestamp = Long.parseLong(after.substring(timeIdx + 4).replaceAll("[;]", "").trim());
+            if (timeIdx != -1)
+                timestamp = Long.parseLong(after.substring(timeIdx + 4).replaceAll("[;]", "").trim());
 
             client.getDatabase(currentDatabase).getTimeSeriesEngine(series).record(timestamp, val);
-            return String.format("[SUCCESS] Métrica (timestamp=%d, valor=%.2f) registrada en '%s'.", timestamp, val, series);
+            return String.format("[SUCCESS] Métrica (timestamp=%d, valor=%.2f) registrada en '%s'.", timestamp, val,
+                    series);
         } catch (Exception e) {
             return "[ERROR] Formato inválido. Uso: TS RECORD <serie> <valor> [TIME <timestamp>]";
         }
@@ -3009,7 +3388,8 @@ Seleccione una conexión para iniciar:
             sb.append(String.format("=== TIME SERIES EN '%s' [%d a %d] ===\n", series, start, end));
             int idx = 1;
             for (var entry : points.entrySet()) {
-                sb.append(String.format("  [%02d] Timestamp: %d | Valor: %.4f\n", idx++, entry.getKey(), entry.getValue()));
+                sb.append(String.format("  [%02d] Timestamp: %d | Valor: %.4f\n", idx++, entry.getKey(),
+                        entry.getValue()));
             }
             return sb.toString();
         } catch (Exception e) {
@@ -3019,23 +3399,27 @@ Seleccione una conexión para iniciar:
 
     private String handleKvPut(String command) {
         String[] parts = command.substring(7).trim().split("\\s+", 3);
-        if (parts.length < 3) return "[ERROR] Uso: KV PUT <tabla> <clave> <valor>";
-        client.getDatabase(currentDatabase).getKeyValueEngine(parts[0]).put(cleanQuotes(parts[1]), parts[2].getBytes(StandardCharsets.UTF_8));
+        if (parts.length < 3)
+            return "[ERROR] Uso: KV PUT <tabla> <clave> <valor>";
+        client.getDatabase(currentDatabase).getKeyValueEngine(parts[0]).put(cleanQuotes(parts[1]),
+                parts[2].getBytes(StandardCharsets.UTF_8));
         return String.format("[SUCCESS] Clave '%s' guardada en tabla KV '%s'.", parts[1], parts[0]);
     }
 
     private String handleKvGet(String command) {
         String[] parts = command.substring(7).trim().split("\\s+");
-        if (parts.length < 2) return "[ERROR] Uso: KV GET <tabla> <clave>";
+        if (parts.length < 2)
+            return "[ERROR] Uso: KV GET <tabla> <clave>";
         byte[] val = client.getDatabase(currentDatabase).getKeyValueEngine(parts[0]).get(cleanQuotes(parts[1]));
-        return val != null ? "[KV] " + new String(val, StandardCharsets.UTF_8) : "[NOT FOUND] Clave '" + parts[1] + "' no encontrada.";
+        return val != null ? "[KV] " + new String(val, StandardCharsets.UTF_8)
+                : "[NOT FOUND] Clave '" + parts[1] + "' no encontrada.";
     }
 
     // --- 12. Persistencia y Muestras ---
     public String installAllSampleDatabases() {
-        return "[SUCCESS] Base de datos de ejemplo instalada y persistida exitosamente:\n" + installFacturaSampleDatabase();
+        return "[SUCCESS] Base de datos de ejemplo instalada y persistida exitosamente:\n"
+                + installFacturaSampleDatabase();
     }
-
 
     public String installHospitalSampleDatabase() {
         long start = System.currentTimeMillis();
@@ -3046,28 +3430,28 @@ Seleccione una conexión para iniciar:
         long duration = System.currentTimeMillis() - start;
 
         return String.format("""
-            ==============================================================================================
-                    CARGA MASIVA EXITOSA: BASE DE DATOS 'samples_hostipal_db' (2,000,000 OBJETOS)
-            ==============================================================================================
-            [OK] Tiempo de Inserción y Procesamiento: %d ms (Java 25 Virtual Threads)
-            [OK] Objetos Repartidos en 11 Buckets Multimodelo:
-              * [DOCUMENT]   'pacientes'                  :   500,000 pacientes con historial y referencias
-              * [DOCUMENT]   'afecciones'                 :   400,000 afecciones clínicas y sintomatología
-              * [DOCUMENT]   'medicamentos'               :   200,000 fármacos con principio activo y dosis
-              * [DOCUMENT]   'enfermedades'               :   100,000 diagnósticos con código CIE-10
-              * [DOCUMENT]   'hospitales'                 :    50,000 centros y hospitales con camas y UCI
-              * [KEYVALUE]   'inventario_medicamentos'    :   300,000 registros de stock y disponibilidad
-              * [VECTOR]     'sintomas_embeddings'        :   200,000 embeddings 3D para triaje predictivo
-              * [GRAPH]      'red_hospitalaria'           :   100,000 relaciones internamiento / pabellones
-              * [TIMESERIES] 'telemetria_signos_vitales'  :   100,000 lecturas continuas de ritmo/presión
-              * [GEOSPATIAL] 'ubicacion_hospitales'       :    25,000 coordenadas geográficas de centros
-              * [COLUMNAR]   'analitica_costos_salud'     :    25,000 filas de cálculo analítico de costos
-            ----------------------------------------------------------------------------------------------
-            GRAN TOTAL EN 'samples_hostipal_db': 2,000,000 objetos multimodelo conectados mediante JettraRef.
-            Índices Creados: idx_pac_hospital, idx_pac_sangre, idx_enf_cie10, idx_med_principio
-            Base de datos activa conmutada a: 'samples_hostipal_db'
-            ==============================================================================================
-            """, duration);
+                ==============================================================================================
+                        CARGA MASIVA EXITOSA: BASE DE DATOS 'samples_hostipal_db' (2,000,000 OBJETOS)
+                ==============================================================================================
+                [OK] Tiempo de Inserción y Procesamiento: %d ms (Java 25 Virtual Threads)
+                [OK] Objetos Repartidos en 11 Buckets Multimodelo:
+                  * [DOCUMENT]   'pacientes'                  :   500,000 pacientes con historial y referencias
+                  * [DOCUMENT]   'afecciones'                 :   400,000 afecciones clínicas y sintomatología
+                  * [DOCUMENT]   'medicamentos'               :   200,000 fármacos con principio activo y dosis
+                  * [DOCUMENT]   'enfermedades'               :   100,000 diagnósticos con código CIE-10
+                  * [DOCUMENT]   'hospitales'                 :    50,000 centros y hospitales con camas y UCI
+                  * [KEYVALUE]   'inventario_medicamentos'    :   300,000 registros de stock y disponibilidad
+                  * [VECTOR]     'sintomas_embeddings'        :   200,000 embeddings 3D para triaje predictivo
+                  * [GRAPH]      'red_hospitalaria'           :   100,000 relaciones internamiento / pabellones
+                  * [TIMESERIES] 'telemetria_signos_vitales'  :   100,000 lecturas continuas de ritmo/presión
+                  * [GEOSPATIAL] 'ubicacion_hospitales'       :    25,000 coordenadas geográficas de centros
+                  * [COLUMNAR]   'analitica_costos_salud'     :    25,000 filas de cálculo analítico de costos
+                ----------------------------------------------------------------------------------------------
+                GRAN TOTAL EN 'samples_hostipal_db': 2,000,000 objetos multimodelo conectados mediante JettraRef.
+                Índices Creados: idx_pac_hospital, idx_pac_sangre, idx_enf_cie10, idx_med_principio
+                Base de datos activa conmutada a: 'samples_hostipal_db'
+                ==============================================================================================
+                """, duration);
     }
 
     public String installAmbientalSampleDatabase() {
@@ -3079,28 +3463,28 @@ Seleccione una conexión para iniciar:
         long duration = System.currentTimeMillis() - start;
 
         return String.format("""
-            ==============================================================================================
-                    CARGA MASIVA EXITOSA: BASE DE DATOS 'samples_ambiental_db' (3,000,000 OBJETOS)
-            ==============================================================================================
-            [OK] Tiempo de Inserción y Procesamiento: %d ms (Java 25 Virtual Threads)
-            [OK] Objetos Repartidos en 11 Buckets Multimodelo:
-              * [DOCUMENT]   'mediciones_calidad_aire'    : 1,000,000 mediciones (AQI, PM2.5, PM10, CO2)
-              * [DOCUMENT]   'estaciones_meteorologicas'  :   200,000 estaciones de monitoreo mundial
-              * [DOCUMENT]   'fuentes_emision'            :   200,000 industrias y plantas emisoras
-              * [DOCUMENT]   'reservas_naturales'         :   100,000 reservas, biomas y parques
-              * [DOCUMENT]   'especies_afectadas'         :   100,000 registros de biodiversidad
-              * [KEYVALUE]   'cache_alertas_ambientales'  :   400,000 alertas globales en caché
-              * [VECTOR]     'patrones_climaticos_embeddings': 300,000 vectores 3D de atmósfera/presión
-              * [GRAPH]      'red_corredores_biologicos'  :   200,000 enlaces entre reservas y estaciones
-              * [TIMESERIES] 'temperatura_global_telemetria': 300,000 puntos temporales de temperatura
-              * [GEOSPATIAL] 'coordenadas_estaciones'     :   100,000 coordenadas GIS globales
-              * [COLUMNAR]   'analitica_emisiones_anuales':   100,000 filas de cálculo analítico de CO2
-            ----------------------------------------------------------------------------------------------
-            GRAN TOTAL EN 'samples_ambiental_db': 3,000,000 objetos multimodelo conectados mediante JettraRef.
-            Índices Creados: idx_med_aqi, idx_med_estacion, idx_est_pais, idx_res_bioma
-            Base de datos activa conmutada a: 'samples_ambiental_db'
-            ==============================================================================================
-            """, duration);
+                ==============================================================================================
+                        CARGA MASIVA EXITOSA: BASE DE DATOS 'samples_ambiental_db' (3,000,000 OBJETOS)
+                ==============================================================================================
+                [OK] Tiempo de Inserción y Procesamiento: %d ms (Java 25 Virtual Threads)
+                [OK] Objetos Repartidos en 11 Buckets Multimodelo:
+                  * [DOCUMENT]   'mediciones_calidad_aire'    : 1,000,000 mediciones (AQI, PM2.5, PM10, CO2)
+                  * [DOCUMENT]   'estaciones_meteorologicas'  :   200,000 estaciones de monitoreo mundial
+                  * [DOCUMENT]   'fuentes_emision'            :   200,000 industrias y plantas emisoras
+                  * [DOCUMENT]   'reservas_naturales'         :   100,000 reservas, biomas y parques
+                  * [DOCUMENT]   'especies_afectadas'         :   100,000 registros de biodiversidad
+                  * [KEYVALUE]   'cache_alertas_ambientales'  :   400,000 alertas globales en caché
+                  * [VECTOR]     'patrones_climaticos_embeddings': 300,000 vectores 3D de atmósfera/presión
+                  * [GRAPH]      'red_corredores_biologicos'  :   200,000 enlaces entre reservas y estaciones
+                  * [TIMESERIES] 'temperatura_global_telemetria': 300,000 puntos temporales de temperatura
+                  * [GEOSPATIAL] 'coordenadas_estaciones'     :   100,000 coordenadas GIS globales
+                  * [COLUMNAR]   'analitica_emisiones_anuales':   100,000 filas de cálculo analítico de CO2
+                ----------------------------------------------------------------------------------------------
+                GRAN TOTAL EN 'samples_ambiental_db': 3,000,000 objetos multimodelo conectados mediante JettraRef.
+                Índices Creados: idx_med_aqi, idx_med_estacion, idx_est_pais, idx_res_bioma
+                Base de datos activa conmutada a: 'samples_ambiental_db'
+                ==============================================================================================
+                """, duration);
     }
 
     public String installFacturaSampleDatabase() {
@@ -3117,12 +3501,11 @@ Seleccione una conexión para iniciar:
                 for (int i = 0; i < total; i++) {
                     String id = "cli_" + i;
                     batch.put(id, Map.of(
-                        "_id", id,
-                        "razon_social", "Corporación Comercial " + i + " S.A.",
-                        "rfc_tax_id", "RFC-PAN-" + (1000000 + i),
-                        "ciudad", (i % 2 == 0) ? "Ciudad de Panamá" : "Colón",
-                        "limite_credito", 50000.0 + (i % 1000) * 100
-                    ));
+                            "_id", id,
+                            "razon_social", "Corporación Comercial " + i + " S.A.",
+                            "rfc_tax_id", "RFC-PAN-" + (1000000 + i),
+                            "ciudad", (i % 2 == 0) ? "Ciudad de Panamá" : "Colón",
+                            "limite_credito", 50000.0 + (i % 1000) * 100));
                 }
                 docEngine.insertBatch(batch);
             });
@@ -3135,16 +3518,15 @@ Seleccione una conexión para iniciar:
                 for (int i = 0; i < total; i++) {
                     String id = "fac_" + i;
                     batch.put(id, Map.of(
-                        "_id", id,
-                        "fecha", "2026-09-29",
-                        "total", 250.0 + (i % 2000),
-                        "estado", "TIMBRADA",
-                        "_ref_cliente", "document::clientes#cli_" + (i % 100),
-                        "_ref_detalle", "document::detalles_factura#det_" + i,
-                        "_ref_folio", "kv::cache_folios#fol_" + (i % 50),
-                        "_ref_vector", "vector::factura_embeddings#emb_" + (i % 50),
-                        "_ref_sucursal", "geospatial::sucursales_fiscales#suc_" + (i % 20)
-                    ));
+                            "_id", id,
+                            "fecha", "2026-09-29",
+                            "total", 250.0 + (i % 2000),
+                            "estado", "TIMBRADA",
+                            "_ref_cliente", "document::clientes#cli_" + (i % 100),
+                            "_ref_detalle", "document::detalles_factura#det_" + i,
+                            "_ref_folio", "kv::cache_folios#fol_" + (i % 50),
+                            "_ref_vector", "vector::factura_embeddings#emb_" + (i % 50),
+                            "_ref_sucursal", "geospatial::sucursales_fiscales#suc_" + (i % 20)));
                 }
                 docEngine.insertBatch(batch);
             });
@@ -3159,13 +3541,12 @@ Seleccione una conexión para iniciar:
                     int qty = (i % 10) + 1;
                     double price = 50.0 + (i % 200);
                     batch.put(id, Map.of(
-                        "_id", id,
-                        "concepto", "Servicio Cloud / Licencia Empresarial #" + (i % 100),
-                        "cantidad", qty,
-                        "precio_unitario", price,
-                        "subtotal", qty * price,
-                        "_ref_factura", "document::facturas#fac_" + i
-                    ));
+                            "_id", id,
+                            "concepto", "Servicio Cloud / Licencia Empresarial #" + (i % 100),
+                            "cantidad", qty,
+                            "precio_unitario", price,
+                            "subtotal", qty * price,
+                            "_ref_factura", "document::facturas#fac_" + i));
                 }
                 docEngine.insertBatch(batch);
             });
@@ -3186,7 +3567,7 @@ Seleccione una conexión para iniciar:
             executor.submit(() -> {
                 var vecEngine = db.getVectorEngine("factura_embeddings", 3);
                 int total = 50;
-                float[] emb = new float[]{0.75f, -0.20f, 0.60f};
+                float[] emb = new float[] { 0.75f, -0.20f, 0.60f };
                 Map<String, float[]> batch = new HashMap<>(total);
                 for (int i = 0; i < total; i++) {
                     batch.put("emb_" + i, emb);
@@ -3203,8 +3584,7 @@ Seleccione una conexión para iniciar:
                     String from = "cli_" + i;
                     String to = "fac_" + i;
                     batch.put(from, List.of(new io.jettra.store.engine.models.GraphEngine.Edge(
-                        to, "FACTURA_EMITIDA", Map.of("weight", 1.0)
-                    )));
+                            to, "FACTURA_EMITIDA", Map.of("weight", 1.0))));
                 }
                 graphEngine.addEdgesBatch(batch);
             });
@@ -3227,8 +3607,7 @@ Seleccione una conexión para iniciar:
                 for (int i = 0; i < 20; i++) {
                     String id = "suc_" + i;
                     batch.put(id, new io.jettra.store.engine.models.GeospatialEngine.GeoPoint(
-                        id, 8.9800 + (i % 100) * 0.001, -79.5200 + (i % 100) * 0.001
-                    ));
+                            id, 8.9800 + (i % 100) * 0.001, -79.5200 + (i % 100) * 0.001));
                 }
                 geoEngine.insertBatch(batch);
             });
@@ -3247,70 +3626,74 @@ Seleccione una conexión para iniciar:
                     tot.add(s + iv);
                 }
                 colEngine.appendBatch(
-                    Map.of("subtotal", sub, "iva", iva, "total", tot),
-                    Map.of(),
-                    10
-                );
+                        Map.of("subtotal", sub, "iva", iva, "total", tot),
+                        Map.of(),
+                        10);
             });
 
             // Task 10: Pure Java 25 Records (10 auditoria_records)
             executor.submit(() -> {
-                var recordsEngine = db.getRecordsEngine("auditoria_records", io.jettra.store.sample.model.FacturaAuditRecord.class);
+                var recordsEngine = db.getRecordsEngine("auditoria_records",
+                        io.jettra.store.sample.model.FacturaAuditRecord.class);
                 int totalRecords = 10;
                 long now = System.currentTimeMillis();
                 Map<String, io.jettra.store.sample.model.FacturaAuditRecord> batch = new HashMap<>(totalRecords);
                 for (int i = 0; i < totalRecords; i++) {
                     String id = "rec_" + i;
                     batch.put(id, new io.jettra.store.sample.model.FacturaAuditRecord(
-                        id,
-                        "FOL-SAT-2026-" + i,
-                        "RFC-EMISOR-PAN-" + (i % 500),
-                        "RFC-REC-PAN-" + (i % 100),
-                        150.0 + (i % 1500),
-                        "sha256-hash-audit-" + i,
-                        now - (i * 500L)
-                    ));
+                            id,
+                            "FOL-SAT-2026-" + i,
+                            "RFC-EMISOR-PAN-" + (i % 500),
+                            "RFC-REC-PAN-" + (i % 100),
+                            150.0 + (i % 1500),
+                            "sha256-hash-audit-" + i,
+                            now - (i * 500L)));
                 }
                 recordsEngine.insertBatch(batch);
             });
         }
 
-        // Flush persistencia física para volcar buffers a almacenamiento antes de indexación
+        // Flush persistencia física para volcar buffers a almacenamiento antes de
+        // indexación
         try {
             db.flushMemTable();
-        } catch (Exception ignored) {}
+        } catch (Exception ignored) {
+        }
 
         // Creación de índices compactos (Zero-Set Singletons)
         try {
-            db.getIndexManager().createIndex("facturas", "idx_fac_cliente", "_ref_cliente", "HASH", false, db.getDocumentEngine("facturas"));
-            db.getIndexManager().createIndex("clientes", "idx_cli_rfc", "rfc_tax_id", "BTREE", false, db.getDocumentEngine("clientes"));
-        } catch (Exception ignored) {}
+            db.getIndexManager().createIndex("facturas", "idx_fac_cliente", "_ref_cliente", "HASH", false,
+                    db.getDocumentEngine("facturas"));
+            db.getIndexManager().createIndex("clientes", "idx_cli_rfc", "rfc_tax_id", "BTREE", false,
+                    db.getDocumentEngine("clientes"));
+        } catch (Exception ignored) {
+        }
 
         this.currentDatabase = "example_factura_db";
         long duration = System.currentTimeMillis() - start;
 
         return String.format("""
-            ==============================================================================================
-                    CARGA DE BASE DE DATOS DE EJEMPLO: 'example_factura_db' (500 OBJETOS MULTIMODELO)
-            ==============================================================================================
-            [OK] Tiempo de Inserción y Timbrado Multimodelo: %d ms (Java 25 Virtual Threads)
-            [OK] Objetos Repartidos en 10 Buckets Especializados (Máximo 500 registros):
-              * [DOCUMENT]   'facturas'              :        100 facturas electrónicas timbradas
-              * [DOCUMENT]   'detalles_factura'      :        100 renglones/items vinculados
-              * [DOCUMENT]   'clientes'              :        100 clientes empresariales con RFC/RUC
-              * [KEYVALUE]   'cache_folios'          :         50 folios fiscales en caché ultrarrápida
-              * [VECTOR]     'factura_embeddings'    :         50 vectores 3D indexados para IA
-              * [GRAPH]      'red_comercial'         :         40 vértices conectados (clientes -> facturas)
-              * [TIMESERIES] 'volumen_facturacion'   :         20 métricas históricas de facturación
-              * [GEOSPATIAL] 'sucursales_fiscales'   :         20 puntos GIS de sucursales emisoras
-              * [COLUMNAR]   'analitica_fiscal'      :         10 filas de cálculo analítico de IVA/Totales
-              * [RECORDS]    'auditoria_records'     :         10 registros tipados Java 25 (FacturaAuditRecord)
-            ----------------------------------------------------------------------------------------------
-            GRAN TOTAL EN 'example_factura_db': 500 registro(s) multimodelo conectados mediante JettraRef.
-            Índices Creados: idx_fac_cliente (HASH), idx_cli_rfc (BTREE)
-            Base de datos activa conmutada a: 'example_factura_db'
-            ==============================================================================================
-            """, duration);
+                ==============================================================================================
+                        CARGA DE BASE DE DATOS DE EJEMPLO: 'example_factura_db' (500 OBJETOS MULTIMODELO)
+                ==============================================================================================
+                [OK] Tiempo de Inserción y Timbrado Multimodelo: %d ms (Java 25 Virtual Threads)
+                [OK] Objetos Repartidos en 10 Buckets Especializados (Máximo 500 registros):
+                  * [DOCUMENT]   'facturas'              :        100 facturas electrónicas timbradas
+                  * [DOCUMENT]   'detalles_factura'      :        100 renglones/items vinculados
+                  * [DOCUMENT]   'clientes'              :        100 clientes empresariales con RFC/RUC
+                  * [KEYVALUE]   'cache_folios'          :         50 folios fiscales en caché ultrarrápida
+                  * [VECTOR]     'factura_embeddings'    :         50 vectores 3D indexados para IA
+                  * [GRAPH]      'red_comercial'         :         40 vértices conectados (clientes -> facturas)
+                  * [TIMESERIES] 'volumen_facturacion'   :         20 métricas históricas de facturación
+                  * [GEOSPATIAL] 'sucursales_fiscales'   :         20 puntos GIS de sucursales emisoras
+                  * [COLUMNAR]   'analitica_fiscal'      :         10 filas de cálculo analítico de IVA/Totales
+                  * [RECORDS]    'auditoria_records'     :         10 registros tipados Java 25 (FacturaAuditRecord)
+                ----------------------------------------------------------------------------------------------
+                GRAN TOTAL EN 'example_factura_db': 500 registro(s) multimodelo conectados mediante JettraRef.
+                Índices Creados: idx_fac_cliente (HASH), idx_cli_rfc (BTREE)
+                Base de datos activa conmutada a: 'example_factura_db'
+                ==============================================================================================
+                """, duration);
     }
 
     private String handleBackup(String command) {
@@ -3326,13 +3709,14 @@ Seleccione una conexión para iniciar:
                 } else {
                     String[] parts = after.split("\s+");
                     dbName = cleanQuotes(parts[0]);
-                    if (parts.length > 1) dest = cleanQuotes(parts[1]);
+                    if (parts.length > 1)
+                        dest = cleanQuotes(parts[1]);
                 }
             }
             JettraDatabase db = client.getDatabase(dbName);
             var meta = BackupManager.backupDatabase(db, Path.of(dest));
             return String.format("[SUCCESS] Respaldo de '%s' completado en '%s'. Tamaño: %d bytes (CRC32: %d).",
-                meta.databaseName(), dest, meta.sizeBytes(), meta.checksum());
+                    meta.databaseName(), dest, meta.sizeBytes(), meta.checksum());
         } catch (Exception e) {
             return "[ERROR] Error al crear respaldo: " + e.getMessage();
         }
@@ -3349,14 +3733,15 @@ Seleccione una conexión para iniciar:
                 snap = Path.of(cleanQuotes(parts[1].trim()));
             } else {
                 String[] parts = after.split("\s+");
-                if (parts.length < 2) return "[ERROR] Uso: RESTORE DATABASE <archivo.snap> <nombreBaseDatosDestino> o RESTORE DATABASE <db> FROM '<archivo.snap>'";
+                if (parts.length < 2)
+                    return "[ERROR] Uso: RESTORE DATABASE <archivo.snap> <nombreBaseDatosDestino> o RESTORE DATABASE <db> FROM '<archivo.snap>'";
                 snap = Path.of(cleanQuotes(parts[0]));
                 targetDb = cleanQuotes(parts[1]);
             }
             JettraDatabase db = client.getDatabase(targetDb);
             boolean ok = BackupManager.restoreDatabase(snap, db);
             return ok ? String.format("[SUCCESS] Snapshot '%s' restaurado en base de datos '%s'.", snap, targetDb)
-                      : "[ERROR] Falló la restauración del snapshot.";
+                    : "[ERROR] Falló la restauración del snapshot.";
         } catch (Exception e) {
             return "[ERROR] Error al restaurar respaldo: " + e.getMessage();
         }
@@ -3376,11 +3761,13 @@ Seleccione una conexión para iniciar:
             count++;
         }
         for (String c : db.getVectorEngineNames()) {
-            sb.append(String.format("| %-25s | %-19s | %-7d |\n", c, "VECTOR (Cosine)", db.getVectorEngine(c, 3).size()));
+            sb.append(
+                    String.format("| %-25s | %-19s | %-7d |\n", c, "VECTOR (Cosine)", db.getVectorEngine(c, 3).size()));
             count++;
         }
         for (String c : db.getGraphEngineNames()) {
-            sb.append(String.format("| %-25s | %-19s | %-7d |\n", c, "GRAPH (Adjacency)", db.getGraphEngine(c).getVertices().size()));
+            sb.append(String.format("| %-25s | %-19s | %-7d |\n", c, "GRAPH (Adjacency)",
+                    db.getGraphEngine(c).getVertices().size()));
             count++;
         }
         for (String c : db.getTimeSeriesEngineNames()) {
@@ -3410,7 +3797,8 @@ Seleccione una conexión para iniciar:
 
     private String handleCreateCollection(String command) {
         String[] parts = command.split("\\s+");
-        if (parts.length < 3) return "[ERROR] Uso: CREATE <ENGINE|COLLECTION|BUCKET|UNIT> <nombre> [TYPE <tipo>]";
+        if (parts.length < 3)
+            return "[ERROR] Uso: CREATE <ENGINE|COLLECTION|BUCKET|UNIT> <nombre> [TYPE <tipo>]";
         String colName = cleanQuotes(parts[2]);
         String type = "DOCUMENT";
         for (int i = 3; i < parts.length - 1; i++) {
@@ -3429,13 +3817,18 @@ Seleccione una conexión para iniciar:
             case "GEOSPATIAL", "GEO" -> db.getGeospatialEngine(colName);
             default -> db.getDocumentEngine(colName);
         }
-        return String.format("[SUCCESS] Unidad/Motor '%s' creado con motor multimodelo '%s' en base de datos '%s'.", colName, type, currentDatabase);
+        return String.format("[SUCCESS] Unidad/Motor '%s' creado con motor multimodelo '%s' en base de datos '%s'.",
+                colName, type, currentDatabase);
     }
 
     // --- Control de Buckets / Units, Conteo y Visualización de Registros ---
     private String handleShowBuckets(String command) {
+        if (currentDatabase == null || currentDatabase.isBlank()) {
+            return "[INFO] No hay ninguna base de datos seleccionada. Use 'SHOW DATABASES', 'CREATE DATABASE <nombre>' o 'USE <nombre>'.";
+        }
         JettraDatabase db = client.getDatabase(currentDatabase);
-        record UnitRow(String engine, String unitType, String name, long count, String status) {}
+        record UnitRow(String engine, String unitType, String name, long count, String status) {
+        }
         List<UnitRow> rows = new ArrayList<>();
 
         String clean = command.replaceAll("(?i)^SHOW\\s+(BUCKETS|BUCKET|UNITS|UNIT)\\s*", "").trim();
@@ -3452,7 +3845,8 @@ Seleccione una conexión para iniciar:
         if (filterEngine == null || filterEngine.contains("VEC")) {
             for (String col : db.getVectorEngineNames()) {
                 var vEng = db.getVectorEngine(col, 3);
-                rows.add(new UnitRow("VECTOR", "Vector Index [" + vEng.getDimensions() + "d]", col, vEng.size(), "INDEXED (HNSW)"));
+                rows.add(new UnitRow("VECTOR", "Vector Index [" + vEng.getDimensions() + "d]", col, vEng.size(),
+                        "INDEXED (HNSW)"));
             }
         }
         // 3. Graph
@@ -3494,32 +3888,39 @@ Seleccione una conexión para iniciar:
         if (filterEngine == null || filterEngine.contains("REC")) {
             for (String col : db.getRecordsEngineNames()) {
                 var recEng = db.getRecordsEngine(col);
-                rows.add(new UnitRow("RECORDS", "Typed Java Record", col, recEng != null ? recEng.count() : 0, "TYPED-HEAP (Zero-Copy)"));
+                rows.add(new UnitRow("RECORDS", "Typed Java Record", col, recEng != null ? recEng.count() : 0,
+                        "TYPED-HEAP (Zero-Copy)"));
             }
         }
 
         if (rows.isEmpty()) {
             return String.format("[INFO] No se encontraron buckets/units en la base de datos '%s'%s.",
-                currentDatabase, filterEngine != null ? " para el motor " + filterEngine : "");
+                    currentDatabase, filterEngine != null ? " para el motor " + filterEngine : "");
         }
 
         StringBuilder sb = new StringBuilder();
         sb.append("==============================================================================================\n");
-        sb.append(String.format("                BUCKETS / UNITS EN BASE DE DATOS: '%s'                                        \n", currentDatabase));
+        sb.append(String.format(
+                "                BUCKETS / UNITS EN BASE DE DATOS: '%s'                                        \n",
+                currentDatabase));
         sb.append("==============================================================================================\n");
         sb.append("+-------------+----------------------+--------------------+-----------+----------------------+\n");
         sb.append("| Motor       | Tipo de Unidad       | Nombre de Unidad   | Registros | Estado               |\n");
         sb.append("+-------------+----------------------+--------------------+-----------+----------------------+\n");
         for (UnitRow r : rows) {
             sb.append(String.format("| %-11s | %-20s | %-18s | %-9d | %-20s |\n",
-                r.engine(), r.unitType(), r.name(), r.count(), r.status()));
+                    r.engine(), r.unitType(), r.name(), r.count(), r.status()));
         }
         sb.append("+-------------+----------------------+--------------------+-----------+----------------------+\n");
-        sb.append(String.format("Total: %d bucket(s)/unit(s) registrados en la base de datos '%s'.\n", rows.size(), currentDatabase));
+        sb.append(String.format("Total: %d bucket(s)/unit(s) registrados en la base de datos '%s'.\n", rows.size(),
+                currentDatabase));
         return sb.toString();
     }
 
     private String handleShowRecords(String command) {
+        if (currentDatabase == null || currentDatabase.isBlank()) {
+            return "[INFO] No hay ninguna base de datos seleccionada. Use 'SHOW DATABASES', 'CREATE DATABASE <nombre>' o 'USE <nombre>'.";
+        }
         String clean = command.replaceAll("(?i)^SHOW\\s+RECORDS(\\s+FROM)?\\s*", "").trim();
         JettraDatabase db = client.getDatabase(currentDatabase);
         if (clean.isBlank()) {
@@ -3535,42 +3936,51 @@ Seleccione una conexión para iniciar:
         int limit = pageSize;
         for (int i = 1; i < parts.length - 1; i++) {
             if ("LIMIT".equalsIgnoreCase(parts[i])) {
-                try { limit = Integer.parseInt(parts[i + 1].replaceAll("[;]", "")); } catch (Exception ignored) {}
+                try {
+                    limit = Integer.parseInt(parts[i + 1].replaceAll("[;]", ""));
+                } catch (Exception ignored) {
+                }
             }
         }
 
         // 1. DOCUMENT
         if (db.getDocumentEngineNames().contains(unitName)) {
             var docEngine = db.getDocumentEngine(unitName);
-            if (docEngine.isEmpty()) return String.format("[INFO] El bucket de documentos '%s' está vacío.", unitName);
+            if (docEngine.isEmpty())
+                return String.format("[INFO] El bucket de documentos '%s' está vacío.", unitName);
 
             StringBuilder sb = new StringBuilder();
             sb.append(String.format("=== REGISTROS DE DOCUMENT BUCKET '%s' (Mostrando %d de %d) ===\n",
-                unitName, Math.min((int) docEngine.count(), limit), docEngine.count()));
+                    unitName, Math.min((int) docEngine.count(), limit), docEngine.count()));
 
             // Streaming por Chunks interactivo con protección Anti-OOM
             StreamResponse<Map<String, Object>> stream = client.streamFindAll(currentDatabase, unitName, limit);
             if (stream.isSentinelActivated() || lastSentinelNotification != null) {
                 sb.append("🛡️  [JETTRAPOLICE SENTINEL: STREAMING POR CHUNKS ACTIVADO]\n");
-                sb.append(String.format("   Partición defensiva en lotes de %d registros para evitar OOM.\n", stream.getSafeBatchSize()));
+                sb.append(String.format("   Partición defensiva en lotes de %d registros para evitar OOM.\n",
+                        stream.getSafeBatchSize()));
             }
 
             int idx = 1;
             int chunkIndex = 1;
             for (List<Map<String, Object>> chunk : stream) {
-                sb.append(String.format("--- [Chunk #%d: %d registro(s) recibidos progresivamente] ---\n", chunkIndex++, chunk.size()));
+                sb.append(String.format("--- [Chunk #%d: %d registro(s) recibidos progresivamente] ---\n", chunkIndex++,
+                        chunk.size()));
                 for (Map<String, Object> doc : chunk) {
-                    if (idx > limit) break;
+                    if (idx > limit)
+                        break;
                     sb.append(String.format("  [%02d] _id: %-15s -> %s\n", idx++, doc.getOrDefault("_id", "?"), doc));
                     if (showReferences) {
                         for (var entry : doc.entrySet()) {
                             if (entry.getKey().startsWith("_ref_") || String.valueOf(entry.getValue()).contains("::")) {
-                                sb.append(String.format("       ↳ Ref [%s]: %s\n", entry.getKey(), resolveReference(db, String.valueOf(entry.getValue()))));
+                                sb.append(String.format("       ↳ Ref [%s]: %s\n", entry.getKey(),
+                                        resolveReference(db, String.valueOf(entry.getValue()))));
                             }
                         }
                     }
                 }
-                if (idx > limit) break;
+                if (idx > limit)
+                    break;
             }
             return sb.toString();
         }
@@ -3579,15 +3989,18 @@ Seleccione una conexión para iniciar:
         if (db.getVectorEngineNames().contains(unitName)) {
             var vecEngine = db.getVectorEngine(unitName, 3);
             var vecs = vecEngine.getAllVectors();
-            if (vecs.isEmpty()) return String.format("[INFO] El bucket vectorial '%s' está vacío.", unitName);
+            if (vecs.isEmpty())
+                return String.format("[INFO] El bucket vectorial '%s' está vacío.", unitName);
 
             StringBuilder sb = new StringBuilder();
             sb.append(String.format("=== REGISTROS DE VECTOR BUCKET '%s' (Dim: %d | Mostrando %d de %d) ===\n",
-                unitName, vecEngine.getDimensions(), Math.min(vecs.size(), limit), vecs.size()));
+                    unitName, vecEngine.getDimensions(), Math.min(vecs.size(), limit), vecs.size()));
             int idx = 1;
             for (var entry : vecs.entrySet()) {
-                if (idx > limit) break;
-                sb.append(String.format("  [%02d] Vector ID: %-15s -> %s\n", idx++, entry.getKey(), Arrays.toString(entry.getValue())));
+                if (idx > limit)
+                    break;
+                sb.append(String.format("  [%02d] Vector ID: %-15s -> %s\n", idx++, entry.getKey(),
+                        Arrays.toString(entry.getValue())));
             }
             return sb.toString();
         }
@@ -3595,17 +4008,21 @@ Seleccione una conexión para iniciar:
         // 3. GRAPH
         if (db.getGraphEngineNames().contains(unitName)) {
             var graph = db.getGraphEngine(unitName);
-            if (graph.getVertices().isEmpty()) return String.format("[INFO] El bucket de grafos '%s' está vacío.", unitName);
+            if (graph.getVertices().isEmpty())
+                return String.format("[INFO] El bucket de grafos '%s' está vacío.", unitName);
 
             StringBuilder sb = new StringBuilder();
-            sb.append(String.format("=== REGISTROS DE GRAPH BUCKET '%s' (%d vértices) ===\n", unitName, graph.getVertices().size()));
+            sb.append(String.format("=== REGISTROS DE GRAPH BUCKET '%s' (%d vértices) ===\n", unitName,
+                    graph.getVertices().size()));
             int idx = 1;
             for (String v : graph.getVertices()) {
-                if (idx > limit) break;
+                if (idx > limit)
+                    break;
                 var out = graph.getOutboundEdges(v);
                 sb.append(String.format("  [%02d] Vértice: %-15s (Aristas salientes: %d)\n", idx++, v, out.size()));
                 for (var e : out) {
-                    sb.append(String.format("       ↳ (%s)-[%s, props=%s]->(%s)\n", v, e.label(), e.properties(), e.targetVertex()));
+                    sb.append(String.format("       ↳ (%s)-[%s, props=%s]->(%s)\n", v, e.label(), e.properties(),
+                            e.targetVertex()));
                 }
             }
             return sb.toString();
@@ -3615,15 +4032,18 @@ Seleccione una conexión para iniciar:
         if (db.getTimeSeriesEngineNames().contains(unitName)) {
             var ts = db.getTimeSeriesEngine(unitName);
             var pts = ts.getAll();
-            if (pts.isEmpty()) return String.format("[INFO] El bucket de series temporales '%s' está vacío.", unitName);
+            if (pts.isEmpty())
+                return String.format("[INFO] El bucket de series temporales '%s' está vacío.", unitName);
 
             StringBuilder sb = new StringBuilder();
             sb.append(String.format("=== REGISTROS DE TIMESERIES BUCKET '%s' (Mostrando %d de %d) ===\n",
-                unitName, Math.min(pts.size(), limit), pts.size()));
+                    unitName, Math.min(pts.size(), limit), pts.size()));
             int idx = 1;
             for (var entry : pts.entrySet()) {
-                if (idx > limit) break;
-                sb.append(String.format("  [%02d] Timestamp: %-15d -> Valor: %.4f\n", idx++, entry.getKey(), entry.getValue()));
+                if (idx > limit)
+                    break;
+                sb.append(String.format("  [%02d] Timestamp: %-15d -> Valor: %.4f\n", idx++, entry.getKey(),
+                        entry.getValue()));
             }
             return sb.toString();
         }
@@ -3632,14 +4052,16 @@ Seleccione una conexión para iniciar:
         if (db.getKeyValueEngineNames().contains(unitName)) {
             var kv = db.getKeyValueEngine(unitName);
             var store = kv.getAll();
-            if (store.isEmpty()) return String.format("[INFO] El bucket clave-valor '%s' está vacío.", unitName);
+            if (store.isEmpty())
+                return String.format("[INFO] El bucket clave-valor '%s' está vacío.", unitName);
 
             StringBuilder sb = new StringBuilder();
             sb.append(String.format("=== REGISTROS DE KEYVALUE BUCKET '%s' (Mostrando %d de %d) ===\n",
-                unitName, Math.min(store.size(), limit), store.size()));
+                    unitName, Math.min(store.size(), limit), store.size()));
             int idx = 1;
             for (var entry : store.entrySet()) {
-                if (idx > limit) break;
+                if (idx > limit)
+                    break;
                 String valStr = new String(entry.getValue(), StandardCharsets.UTF_8);
                 sb.append(String.format("  [%02d] Clave: %-20s -> Valor: %s\n", idx++, entry.getKey(), valStr));
             }
@@ -3650,26 +4072,31 @@ Seleccione una conexión para iniciar:
         if (db.getGeospatialEngineNames().contains(unitName)) {
             var geo = db.getGeospatialEngine(unitName);
             var pts = geo.getAllPoints();
-            if (pts.isEmpty()) return String.format("[INFO] El bucket geoespacial '%s' está vacío.", unitName);
+            if (pts.isEmpty())
+                return String.format("[INFO] El bucket geoespacial '%s' está vacío.", unitName);
 
             StringBuilder sb = new StringBuilder();
             sb.append(String.format("=== REGISTROS DE GEOSPATIAL BUCKET '%s' (Mostrando %d de %d) ===\n",
-                unitName, Math.min(pts.size(), limit), pts.size()));
+                    unitName, Math.min(pts.size(), limit), pts.size()));
             int idx = 1;
             for (var p : pts.values()) {
-                if (idx > limit) break;
-                sb.append(String.format("  [%02d] Feature ID: %-15s -> Lat: %.6f, Lon: %.6f\n", idx++, p.id(), p.latitude(), p.longitude()));
+                if (idx > limit)
+                    break;
+                sb.append(String.format("  [%02d] Feature ID: %-15s -> Lat: %.6f, Lon: %.6f\n", idx++, p.id(),
+                        p.latitude(), p.longitude()));
             }
             return sb.toString();
         }
 
-                // 7. COLUMNAR
+        // 7. COLUMNAR
         if (db.getColumnarEngineNames().contains(unitName)) {
             var col = db.getColumnarEngine(unitName);
-            if (col.getRowCount() == 0) return String.format("[INFO] El bucket columnar '%s' está vacío.", unitName);
+            if (col.getRowCount() == 0)
+                return String.format("[INFO] El bucket columnar '%s' está vacío.", unitName);
 
             StringBuilder sb = new StringBuilder();
-            sb.append(String.format("=== REGISTROS DE COLUMNAR BUCKET '%s' (Total Filas: %d) ===\n", unitName, col.getRowCount()));
+            sb.append(String.format("=== REGISTROS DE COLUMNAR BUCKET '%s' (Total Filas: %d) ===\n", unitName,
+                    col.getRowCount()));
             sb.append("  Columnas Numéricas: ").append(col.getNumericColumns().keySet()).append("\n");
             sb.append("  Columnas Texto:     ").append(col.getTextColumns().keySet()).append("\n");
             return sb.toString();
@@ -3678,25 +4105,31 @@ Seleccione una conexión para iniciar:
         // 8. RECORDS
         if (db.getRecordsEngineNames().contains(unitName)) {
             var recEng = db.getRecordsEngine(unitName);
-            if (recEng == null || recEng.count() == 0) return String.format("[INFO] El bucket de registros tipados '%s' está vacío.", unitName);
+            if (recEng == null || recEng.count() == 0)
+                return String.format("[INFO] El bucket de registros tipados '%s' está vacío.", unitName);
 
             var recs = recEng.findAll();
             StringBuilder sb = new StringBuilder();
             sb.append(String.format("=== REGISTROS DE TYPED RECORD BUCKET '%s' (Tipo: %s | Mostrando %d de %d) ===\n",
-                unitName, recEng.getRecordClass().getSimpleName(), Math.min(recs.size(), limit), recs.size()));
+                    unitName, recEng.getRecordClass().getSimpleName(), Math.min(recs.size(), limit), recs.size()));
             int idx = 1;
             for (var entry : recs.entrySet()) {
-                if (idx > limit) break;
+                if (idx > limit)
+                    break;
                 sb.append(String.format("  [%02d] Record ID: %-15s -> %s\n", idx++, entry.getKey(), entry.getValue()));
             }
             return sb.toString();
         }
 
-return String.format("[NOT FOUND] No se encontró el bucket/unit '%s' en la base de datos '%s'. Use 'show buckets' para ver las unidades disponibles.",
-            unitName, currentDatabase);
+        return String.format(
+                "[NOT FOUND] No se encontró el bucket/unit '%s' en la base de datos '%s'. Use 'show buckets' para ver las unidades disponibles.",
+                unitName, currentDatabase);
     }
 
     private String handleCount(String command) {
+        if (currentDatabase == null || currentDatabase.isBlank()) {
+            return "[INFO] No hay ninguna base de datos seleccionada. Use 'SHOW DATABASES', 'CREATE DATABASE <nombre>' o 'USE <nombre>'.";
+        }
         String clean = command.replaceAll("(?i)^COUNT(\\s+FROM)?\\s*", "").trim();
         JettraDatabase db = client.getDatabase(currentDatabase);
 
@@ -3785,7 +4218,8 @@ return String.format("[NOT FOUND] No se encontró el bucket/unit '%s' en la base
             return String.format("[COUNT] [RECORDS] '%s': %d objeto(s) tipado(s).", unitName, c);
         }
 
-        return String.format("[NOT FOUND] El bucket/unit '%s' no existe en la base de datos '%s'.", unitName, currentDatabase);
+        return String.format("[NOT FOUND] El bucket/unit '%s' no existe en la base de datos '%s'.", unitName,
+                currentDatabase);
     }
 
     private String handleDropCollection(String command) {
@@ -3793,18 +4227,20 @@ return String.format("[NOT FOUND] No se encontró el bucket/unit '%s' en la base
         String col = cleanQuotes(clean.split("\\s+")[0]);
         boolean ok = client.getDatabase(currentDatabase).dropCollection(col);
         return ok ? String.format("[SUCCESS] Unidad/Colección/Motor '%s' eliminado.", col)
-                  : String.format("[WARN] La unidad/colección/motor '%s' no existía.", col);
+                : String.format("[WARN] La unidad/colección/motor '%s' no existía.", col);
     }
 
     // --- Auxiliares de Parseo ---
     private String cleanQuotes(String text) {
-        if (text == null) return "";
+        if (text == null)
+            return "";
         return text.replace(";", "").replace("'", "").replace("\"", "").trim();
     }
 
     private Map<String, Object> parseJsonOrKeyValues(String raw) {
         Map<String, Object> map = new LinkedHashMap<>();
-        if (raw == null || raw.isBlank()) return map;
+        if (raw == null || raw.isBlank())
+            return map;
 
         String clean = raw.trim();
         if (clean.startsWith("{") && clean.endsWith("}")) {
@@ -3837,233 +4273,284 @@ return String.format("[NOT FOUND] No se encontró el bucket/unit '%s' en la base
 
     public String getHelpText() {
         return """
-            ==============================================================================================
-                                     JETTRASTORE SHELL - GUÍA COMPLETA DE COMANDOS
-            ==============================================================================================
-            1. CONEXIÓN Y SESIÓN:
-              connect <url> <port>                  Establece la dirección del nodo servidor JettraStore.
-              connect <nombre-perfil>               Conecta utilizando un perfil previamente guardado.
-              login <username> <password>            Autentica y obtiene un token de sesión criptográfico JettraJWT.
-              logout                                Cierra la sesión activa y revoca el token JWT.
-              save connection <nombre> Guarda el perfil de conexión actual con un alias.
-              remove connection <nombre>            Elimina un perfil de conexión guardado.
-              list connections / list conections    Lista todos los perfiles de conexión guardados.
+                ==============================================================================================
+                                         JETTRASTORE SHELL - GUÍA COMPLETA DE COMANDOS
+                ==============================================================================================
+                1. CONEXIÓN Y SESIÓN:
+                  connect <url> <port>                  Establece la dirección del nodo servidor JettraStore.
+                  connect <nombre-perfil>               Conecta utilizando un perfil previamente guardado.
+                  login <username> <password>            Autentica y obtiene un token de sesión criptográfico JettraJWT.
+                  logout                                Cierra la sesión activa y revoca el token JWT.
+                  save connection <nombre> Guarda el perfil de conexión actual con un alias.
+                  remove connection <nombre>            Elimina un perfil de conexión guardado.
+                  list connections / list conections    Lista todos los perfiles de conexión guardados.
 
-            2. TELEMETRÍA Y CLÚSTER:
-              status                                Monitorea RAM Panama FFM, CPU Loom y Disco LSM.
-              show nodes / list nodes               Muestra la topología del clúster Raft y nodos del anillo.
-              cluster-distributed <all>             distribuye entre todos los nodos todas las bases de datos
-              cluster-distributed <nombre-base-datos>: distribuye la base de datos indicada
-              cluster-distributed info :            Muestra una tabla con los nodos y las bases de datos en cada nodo.
-              cluster live [límite]                 Muestra trazas y eventos en tiempo real de lo que ocurre en el clúster.
-              multinode / show multinode            Muestra el estado de cluster.multinode.active (ON/OFF).
-              multinode on / multinode off          Activa o desactiva dinámicamente la distribución de datos.
-              cluster add-node <id> <host> <port> [ROLE]  Agrega un nuevo nodo y replica cluster.config (PRIMARY -> SECONDARIES).
-              add node <id> <host> <port> [ROLE]    Agrega un nuevo nodo al clúster y replica cluster.config.
-              cluster remove-node <id>              Remueve un nodo y replica cluster.config (PRIMARY -> SECONDARIES).
-              remove node <id>                      Remueve un nodo réplica del anillo y replica cluster.config.
-              start node <id>                       Inicia y activa el procesamiento para un nodo específico.
-              stop node <id>                        Detiene un nodo réplica (pausa el tráfico de descarga).
+                2. TELEMETRÍA Y CLÚSTER:
+                  status                                Monitorea RAM Panama FFM, CPU Loom y Disco LSM.
+                  show nodes / list nodes               Muestra la topología del clúster Raft y nodos del anillo.
+                  cluster-distributed <all>             distribuye entre todos los nodos todas las bases de datos
+                  cluster-distributed <nombre-base-datos>: distribuye la base de datos indicada
+                  cluster-distributed info :            Muestra una tabla con los nodos y las bases de datos en cada nodo.
+                  cluster live [límite]                 Muestra trazas y eventos en tiempo real de lo que ocurre en el clúster.
+                  multinode / show multinode            Muestra el estado de cluster.multinode.active (ON/OFF).
+                  multinode on / multinode off          Activa o desactiva dinámicamente la distribución de datos.
+                  cluster add-node <id> <host> <port> [ROLE] [REST_PORT]  Agrega un nuevo nodo; replica cluster.config (PRIMARY -> SECONDARIES) y sincroniza datos desde PRIMARY.
+                  add node <id> <host> <port> [ROLE] [REST_PORT]    Agrega un nuevo nodo al clúster y replica cluster.config.
+                  cluster remove-node <id>              Remueve un nodo y replica cluster.config (PRIMARY -> SECONDARIES).
+                  remove node <id>                      Remueve un nodo réplica del anillo y replica cluster.config.
+                  start node <id>                       Inicia/reactiva un nodo y sincroniza automáticamente bases de datos y objetos desde PRIMARY.
+                  stop node <id>                        Detiene un nodo réplica (pausa el tráfico de descarga).
 
-            3. BASES DE DATOS, BUCKETS/UNITS Y PERSISTENCIA EN DISCO:
-              show databases / show dbs             Lista todas las bases de datos detectadas en disco y memoria.
-              show buckets / show unit              Muestra todos los buckets/units de cada motor con sus conteos.
-              show records <bucket> [LIMIT n]       Muestra los registros que contiene el bucket indicado en cualquier motor.
-              count <bucket> / count all            Cuenta los registros de un bucket o el total de la base de datos activa.
-              show samples / show sample dbs        Muestra las 5 bases de datos de prueba preconfiguradas.
-              create database <nombre>              Crea una nueva base de datos lógica.
-              drop database <nombre>                Elimina la base de datos especificada.
-              use <nombre>                          Conmuta la base de datos activa.
-              db stats                              Muestra estadísticas de la base de datos activa.
-              INSTALL SAMPLES                       Instala y persiste las 5 bases de datos de ejemplo estándar.
-              LOAD SAMPLE example_factura_db        Carga la base de datos de facturación (3M objetos).
-              LOAD SAMPLE samples_hostipal_db       Carga la base de datos hospitalaria (2M objetos).
-              LOAD SAMPLE samples_ambiental_db      Carga la base de datos ambiental mundial (3M objetos).
-              backup database [nombre] [destino]    Genera un snapshot físico .snap de la base de datos.
-              restore database <archivo> <nombre>   Restaura un snapshot .snap en una base de datos.
+                3. BASES DE DATOS, BUCKETS/UNITS Y PERSISTENCIA EN DISCO:
+                  show databases / show dbs             Lista todas las bases de datos detectadas en disco y memoria.
+                  show buckets / show unit              Muestra todos los buckets/units de cada motor con sus conteos.
+                  show records <bucket> [LIMIT n]       Muestra los registros que contiene el bucket indicado en cualquier motor.
+                  count <bucket> / count all            Cuenta los registros de un bucket o el total de la base de datos activa.
+                  show samples / show sample dbs        Muestra las 5 bases de datos de prueba preconfiguradas.
+                  create database <nombre>              Crea una nueva base de datos lógica.
+                  drop database <nombre>                Elimina la base de datos especificada.
+                  use <nombre>                          Conmuta la base de datos activa.
+                  db stats                              Muestra estadísticas de la base de datos activa.
+                  INSTALL SAMPLES                       Instala y persiste las 5 bases de datos de ejemplo estándar.
+                  LOAD SAMPLE example_factura_db        Carga la base de datos de facturación (3M objetos).
+                  LOAD SAMPLE samples_hostipal_db       Carga la base de datos hospitalaria (2M objetos).
+                  LOAD SAMPLE samples_ambiental_db      Carga la base de datos ambiental mundial (3M objetos).
+                  backup database [nombre] [destino]    Genera un snapshot físico .snap de la base de datos.
+                  restore database <archivo> <nombre>   Restaura un snapshot .snap en una base de datos.
 
-            4. CONSULTAS POLÍGLOTAS (JETTRAQL Y JETTRASQL):
-              JettraQL: Declarativo multimodelo (FROM, MATCH, VECTOR SIMILARITY, FETCH)
-              JQL FROM <col> [WHERE campo = valor]  Consulta declarativa sobre documentos.
-              JQL MATCH (a)-[r]->(b) IN <grafo>     Pattern matching sobre redes de grafos.
-              JQL VECTOR SIMILARITY <col> TO [...]  Búsqueda de vecinos más cercanos por similaridad coseno.
-              JQL FETCH <col> <id> [RESOLVE REFS]   Recupera un registro resolviendo referencias JettraRef.
-              SQL SELECT * FROM <col> [WHERE k = v] Consulta relacional con tabla formateada de columnas y filas.
-              SQL INSERT INTO <col> VALUES (id, json) Inserta registro en la colección activa.
-              SQL UPDATE <col> SET k = v WHERE _id = id Actualiza campos de un registro.
-              SQL DELETE FROM <col> WHERE _id = id  Elimina un registro mediante sintaxis SQL.
+                4. CONSULTAS POLÍGLOTAS (JETTRAQL Y JETTRASQL):
+                  JettraQL: Declarativo multimodelo (FROM, MATCH, VECTOR SIMILARITY, FETCH)
+                  JQL FROM <col> [WHERE campo = valor]  Consulta declarativa sobre documentos.
+                  JQL MATCH (a)-[r]->(b) IN <grafo>     Pattern matching sobre redes de grafos.
+                  JQL VECTOR SIMILARITY <col> TO [...]  Búsqueda de vecinos más cercanos por similaridad coseno.
+                  JQL FETCH <col> <id> [RESOLVE REFS]   Recupera un registro resolviendo referencias JettraRef.
+                  SQL SELECT * FROM <col> [WHERE k = v] Consulta relacional con tabla formateada de columnas y filas.
+                  SQL INSERT INTO <col> VALUES (id, json) Inserta registro en la colección activa.
+                  SQL UPDATE <col> SET k = v WHERE _id = id Actualiza campos de un registro.
+                  SQL DELETE FROM <col> WHERE _id = id  Elimina un registro mediante sintaxis SQL.
 
-              STORAGE_MODE                          Muestra el modo de almacenamiento activo (JVM-RAM, DISK-MEMORY u OFF-HEAP).
-              STORAGE_MODE <JVM_RAM|DISK_MEMORY|OFF_HEAP>  Conmuta el modo entre RAM JVM, DISK-MEMORY o páginas nativas OFF-HEAP.
+                  STORAGE_MODE                          Muestra el modo de almacenamiento activo (JVM-RAM, DISK-MEMORY u OFF-HEAP).
+                  STORAGE_MODE <JVM_RAM|DISK_MEMORY|OFF_HEAP>  Conmuta el modo entre RAM JVM, DISK-MEMORY o páginas nativas OFF-HEAP.
 
-            5. CÁLCULO, AGREGACIONES, ESTADÍSTICA, FINANZAS Y ÁLGEBRA VECTORIAL:
-              AGGREGATE <col> [GROUP BY c] [SUM f] [AVG f] [MIN f] [MAX f] [MEDIAN f] [COUNT]
-              MATH <expresion>                     Evaluador matemático (sqrt, cbrt, pow, gcd, lcm, fact, hypot, etc.)
-              FINANCE PMT <tasa> <nper> <prestamo>  Cálculo de cuota periódica fija (sistema francés).
-              FINANCE FV <tasa> <nper> <cuota>      Cálculo de valor futuro de una inversión.
-              FINANCE CAGR <inicial> <final> <anios> Tasa de crecimiento anual compuesto (CAGR %).
-              FINANCE NPV <tasa> <cf0> <cf1>...    Valor presente neto / VAN.
-              FINANCE IRR <cf0> <cf1> <cf2>...     Tasa interna de retorno / TIR %.
-              FINANCE AMORTIZATION <p> <tasa> <n>  Genera tabla completa de amortización francesa.
-              STATS MEAN <n1, n2, n3...>            Media aritmética muestral.
-              STATS MEDIAN <n1, n2, n3...>          Mediana muestral.
-              STATS SUMMARY <n1, n2, n3...>         Resumen descriptivo completo (mean, median, stddev, min, max, p95).
-              STATS CORRELATION [x1, x2...] [y1, y2...] Coeficiente de correlación de Pearson r.
-              STATS REGRESSION [x1, x2...] [y1, y2...]  Regresión lineal simple (y = mx + b).
-              VECTOR DOT [v1] [v2]                 Producto punto entre vectores.
-              VECTOR COSINE [v1] [v2]              Similitud coseno entre embeddings.
-              VECTOR EUCLIDEAN [v1] [v2]           Distancia euclidiana.
-              VECTOR CROSS [v1] [v2]               Producto cruz 3D.
-              VECTOR ANGLE [v1] [v2]               Ángulo entre vectores (radianes y grados).
-              VECTOR NORMALIZE [v]                 Normaliza a vector unitario (norma L2 = 1.0).
-              SELECT cat, SUM(v), AVG(v), MEDIAN(v) FROM <col> GROUP BY cat  SQL estándar con agregaciones.
+                5. CÁLCULO, AGREGACIONES, ESTADÍSTICA, FINANZAS Y ÁLGEBRA VECTORIAL:
+                  AGGREGATE <col> [GROUP BY c] [SUM f] [AVG f] [MIN f] [MAX f] [MEDIAN f] [COUNT]
+                  MATH <expresion>                     Evaluador matemático (sqrt, cbrt, pow, gcd, lcm, fact, hypot, etc.)
+                  FINANCE PMT <tasa> <nper> <prestamo>  Cálculo de cuota periódica fija (sistema francés).
+                  FINANCE FV <tasa> <nper> <cuota>      Cálculo de valor futuro de una inversión.
+                  FINANCE CAGR <inicial> <final> <anios> Tasa de crecimiento anual compuesto (CAGR %).
+                  FINANCE NPV <tasa> <cf0> <cf1>...    Valor presente neto / VAN.
+                  FINANCE IRR <cf0> <cf1> <cf2>...     Tasa interna de retorno / TIR %.
+                  FINANCE AMORTIZATION <p> <tasa> <n>  Genera tabla completa de amortización francesa.
+                  STATS MEAN <n1, n2, n3...>            Media aritmética muestral.
+                  STATS MEDIAN <n1, n2, n3...>          Mediana muestral.
+                  STATS SUMMARY <n1, n2, n3...>         Resumen descriptivo completo (mean, median, stddev, min, max, p95).
+                  STATS CORRELATION [x1, x2...] [y1, y2...] Coeficiente de correlación de Pearson r.
+                  STATS REGRESSION [x1, x2...] [y1, y2...]  Regresión lineal simple (y = mx + b).
+                  VECTOR DOT [v1] [v2]                 Producto punto entre vectores.
+                  VECTOR COSINE [v1] [v2]              Similitud coseno entre embeddings.
+                  VECTOR EUCLIDEAN [v1] [v2]           Distancia euclidiana.
+                  VECTOR CROSS [v1] [v2]               Producto cruz 3D.
+                  VECTOR ANGLE [v1] [v2]               Ángulo entre vectores (radianes y grados).
+                  VECTOR NORMALIZE [v]                 Normaliza a vector unitario (norma L2 = 1.0).
+                  SELECT cat, SUM(v), AVG(v), MEDIAN(v) FROM <col> GROUP BY cat  SQL estándar con agregaciones.
 
-            6. REGISTROS REFERENCIADOS (JETTRAREF) Y LAZY LOADING:
-              lazy reference on / off (lazy reference on / lazy reference off)               Alterna la resolución diferida (Lazy) o inmediata (Eager).
-              insert ref <col> <id> KEY <k> TARGET <engine>::<col>#<id>  Vincula un puntero cruzado multimodelo.
-              resolve ref <engine>::<col>#<id>      Resuelve manualmente el destino de una referencia.
-              show refs <col> <id>                  Muestra todas las referencias de un registro y sus resoluciones.
-              get <col> <id>                        Obtiene un documento y resuelve sus punteros _ref_*.
+                6. REGISTROS REFERENCIADOS (JETTRAREF) Y LAZY LOADING:
+                  lazy reference on / off (lazy reference on / lazy reference off)               Alterna la resolución diferida (Lazy) o inmediata (Eager).
+                  insert ref <col> <id> KEY <k> TARGET <engine>::<col>#<id>  Vincula un puntero cruzado multimodelo.
+                  resolve ref <engine>::<col>#<id>      Resuelve manualmente el destino de una referencia.
+                  show refs <col> <id>                  Muestra todas las referencias de un registro y sus resoluciones.
+                  get <col> <id>                        Obtiene un documento y resuelve sus punteros _ref_*.
 
-            7. ADMINISTRACIÓN DE ÍNDICES:
-              create index <nombre> ON <col> (campo) [TYPE BTREE|HASH|SPARSE] [UNIQUE]  Crea índice secundario.
-              drop index <nombre>                   Elimina el índice especificado.
-              alter index <nombre> rebuild          Reconstruye el índice re-escaneando los documentos.
-              show indexes [ON <col>]               Muestra la tabla de índices creados en la base de datos.
+                7. ADMINISTRACIÓN DE ÍNDICES:
+                  create index <nombre> ON <col> (campo) [TYPE BTREE|HASH|SPARSE] [UNIQUE]  Crea índice secundario.
+                  drop index <nombre>                   Elimina el índice especificado.
+                  alter index <nombre> rebuild          Reconstruye el índice re-escaneando los documentos.
+                  show indexes [ON <col>]               Muestra la tabla de índices creados en la base de datos.
 
-            7. ADMINISTRACIÓN DE USUARIOS Y ROLES (RBAC):
-              show users / list users               Muestra todos los usuarios, rol global y roles por base de datos.
-              create user <user> PASSWORD <pass> [ROLE <role>] Crea un nuevo usuario en el sistema.
-              drop user <user>                      Elimina un usuario (superuser 'admin' inmutable).
-              alter user <user> PASSWORD <newPass>  Actualiza la contraseña del usuario.
-              alter user <user> ROLE <newRole>      Actualiza el rol global del usuario.
-              grant <DB_OWNER|READ_WRITE|READ_ONLY> ON <db> TO <user>  Asigna privilegios sobre una base de datos.
-              revoke <db> FROM <user>               Revoca el acceso sobre la base de datos indicada.
-              show grants for <user>                Muestra los privilegios asignados al usuario especificado.
+                7. ADMINISTRACIÓN DE USUARIOS Y ROLES (RBAC):
+                  show users / list users               Muestra todos los usuarios, rol global y roles por base de datos.
+                  create user <user> PASSWORD <pass> [ROLE <role>] Crea un nuevo usuario en el sistema.
+                  drop user <user>                      Elimina un usuario (superuser 'admin' inmutable).
+                  alter user <user> PASSWORD <newPass>  Actualiza la contraseña del usuario.
+                  alter user <user> ROLE <newRole>      Actualiza el rol global del usuario.
+                  grant <DB_OWNER|READ_WRITE|READ_ONLY> ON <db> TO <user>  Asigna privilegios sobre una base de datos.
+                  revoke <db> FROM <user>               Revoca el acceso sobre la base de datos indicada.
+                  show grants for <user>                Muestra los privilegios asignados al usuario especificado.
 
-            8. MOTORES ESPECIALIZADOS (VECTORES, GRAFOS, TIME SERIES, KV):
-              vector index <col> <id> [f1,f2,..]    Indexa vector float[] en el motor vectorial.
-              vector search <col> [f1,f2] K <num>   Búsqueda k-NN por similaridad coseno.
-              graph add vertex <grafo> <id>         Agrega un vértice a la red de grafos.
-              graph add edge <g> <a> <b> [LABEL l]  Agrega arista dirigida ponderada.
-              ts record <serie> <val> [TIME t]      Registra punto métrico en serie temporal.
-              ts range <serie> <inicio> <fin>       Consulta métricas en rango de tiempo.
-              kv put <tabla> <clave> <valor>        Almacena clave-valor en memoria de acceso ultra rápido.
-              kv get <tabla> <clave>                Recupera el valor asociado a la clave.
+                8. MOTORES ESPECIALIZADOS (VECTORES, GRAFOS, TIME SERIES, KV):
+                  vector index <col> <id> [f1,f2,..]    Indexa vector float[] en el motor vectorial.
+                  vector search <col> [f1,f2] K <num>   Búsqueda k-NN por similaridad coseno.
+                  graph add vertex <grafo> <id>         Agrega un vértice a la red de grafos.
+                  graph add edge <g> <a> <b> [LABEL l]  Agrega arista dirigida ponderada.
+                  ts record <serie> <val> [TIME t]      Registra punto métrico en serie temporal.
+                  ts range <serie> <inicio> <fin>       Consulta métricas en rango de tiempo.
+                  kv put <tabla> <clave> <valor>        Almacena clave-valor en memoria de acceso ultra rápido.
+                  kv get <tabla> <clave>                Recupera el valor asociado a la clave.
 
-            9. HISTORIAL Y AUTOCOMPLETADO:
-              history [n]                           Muestra los últimos n comandos ejecutados (o todos).
-              history search <término>              Busca comandos en el historial que contengan el texto.
-              history clear                         Borra el historial en memoria y en disco (~/.jettra/history.log).
-              !<n>                                  Ejecuta el comando en la posición n del historial.
-              !!                                    Ejecuta el último comando ejecutado.
-              !<prefijo>                            Ejecuta el comando más reciente que comience con el prefijo.
-              complete <prefijo> / tab <prefijo>    Muestra sugerencias de autocompletado para el prefijo indicado.
-            ==============================================================================================
-            """;
+                9. HISTORIAL Y AUTOCOMPLETADO:
+                  history [n]                           Muestra los últimos n comandos ejecutados (o todos).
+                  history search <término>              Busca comandos en el historial que contengan el texto.
+                  history clear                         Borra el historial en memoria y en disco (~/.jettra/history.log).
+                  !<n>                                  Ejecuta el comando en la posición n del historial.
+                  !!                                    Ejecuta el último comando ejecutado.
+                  !<prefijo>                            Ejecuta el comando más reciente que comience con el prefijo.
+                  complete <prefijo> / tab <prefijo>    Muestra sugerencias de autocompletado para el prefijo indicado.
+                ==============================================================================================
+                """;
     }
 
     public String getClusterDistributedHelpText() {
         return """
-            ==============================================================================================
-                               AYUDA DE COMANDOS: CLUSTER-DISTRIBUTED
-            ==============================================================================================
-              cluster-distributed <all>             distribuye entre todos los nodos todas las bases de datos
-              cluster-distributed <nombre-base-datos>: distribuye la base de datos indicada
-              cluster-distributed info :            Muestra una tabla con los nodos y las bases de datos en cada nodo.
-              cluster live [límite]                 Muestra trazas en tiempo real de lo que ocurre en el clúster.
-            ==============================================================================================
-            """;
+                ==============================================================================================
+                                   AYUDA DE COMANDOS: CLUSTER-DISTRIBUTED
+                ==============================================================================================
+                  cluster-distributed <all>             distribuye entre todos los nodos todas las bases de datos
+                  cluster-distributed <nombre-base-datos>: distribuye la base de datos indicada
+                  cluster-distributed info :            Muestra una tabla con los nodos y las bases de datos en cada nodo.
+                  cluster live [límite]                 Muestra trazas en tiempo real de lo que ocurre en el clúster.
+
+                  GESTIÓN DE NODOS EN CALIENTE:
+                    add node <id> <host> <port> [ROLE] [REST_PORT]
+                    cluster add-node <id> <host> <port> [ROLE] [REST_PORT]
+                        -> Registra un nuevo nodo en el anillo y propaga la configuración cluster.config.
+                        -> FLUJO DE REPLICACIÓN DE CONFIGURACIÓN:
+                           1. Actualiza primero el archivo cluster.config en el nodo PRIMARY.
+                           2. Replica ordenadamente la configuración canónica a todos los nodos SECONDARY.
+                        -> SINCRONIZACIÓN AUTOMÁTICA DE DATOS:
+                           Notifica inmediatamente al nodo PRIMARY para que transmita la réplica completa
+                           de todas las bases de datos y objetos al nuevo nodo, manteniéndolo actualizado.
+
+                    remove node <id>
+                    cluster remove-node <id>
+                        -> Remueve un nodo réplica del anillo del clúster.
+                        -> Replica ordenadamente la configuración actualizada: primero al PRIMARY, luego a SECONDARIES.
+
+                    start node <id>
+                        -> Reactiva el tráfico operativo hacia un nodo previamente detenido (RUNNING).
+                        -> SINCRONIZACIÓN AUTOMÁTICA DE REINICIO:
+                           Al reactivar el nodo, solicita al nodo PRIMARY una sincronización inmediata
+                           de todas las bases de datos y objetos para asegurar que el nodo cuente con el
+                           estado más reciente tras el periodo que estuvo fuera de línea.
+
+                    stop node <id>
+                        -> Pausa temporalmente el nodo en el anillo de réplicas (detiene tráfico operativo).
+                ==============================================================================================
+                """;
     }
 
     public String getStorageModeHelpText() {
         return """
-            ==============================================================================================
-                                  AYUDA DE COMANDOS: STORAGE_MODE (MODOS DE ALMACENAMIENTO)
-            ==============================================================================================
-              El comando STORAGE_MODE permite consultar y conmutar el motor de almacenamiento de JettraStore
-              en tiempo de ejecución para la base de datos seleccionada o a nivel global.
+                ==============================================================================================
+                                      AYUDA DE COMANDOS: STORAGE_MODE (MODOS DE ALMACENAMIENTO)
+                ==============================================================================================
+                  El comando STORAGE_MODE permite consultar y conmutar el motor de almacenamiento de JettraStore
+                  en tiempo de ejecución para la base de datos seleccionada o a nivel global.
 
-              SINTAXIS:
-                STORAGE_MODE                              Muestra el modo de almacenamiento activo.
-                STORAGE_MODE <JVM_RAM|DISK_MEMORY|OFF_HEAP>  Cambia el modo de almacenamiento.
-                SET STORAGE_MODE <JVM_RAM|DISK_MEMORY|OFF_HEAP> Forma alternativa de asignación.
+                  SINTAXIS:
+                    STORAGE_MODE                              Muestra el modo de almacenamiento activo.
+                    STORAGE_MODE <JVM_RAM|DISK_MEMORY|OFF_HEAP>  Cambia el modo de almacenamiento.
+                    SET STORAGE_MODE <JVM_RAM|DISK_MEMORY|OFF_HEAP> Forma alternativa de asignación.
 
-              OPCIONES DISPONIBLES:
-                1. JVM_RAM (o JVM-RAM)
-                   -> Modo memoria RAM estándar de la JVM (Heap & Stack).
-                   -> Ideal para desarrollo, pruebas unitarias y micro-servicios de bajo volumen.
-                   -> Sujeto al recolector de basura (GC) convencional.
+                  OPCIONES DISPONIBLES:
+                    1. JVM_RAM (o JVM-RAM)
+                       -> Modo memoria RAM estándar de la JVM (Heap & Stack).
+                       -> Ideal para desarrollo, pruebas unitarias y micro-servicios de bajo volumen.
+                       -> Sujeto al recolector de basura (GC) convencional.
 
-                2. DISK_MEMORY (o DISK-MEMORY)
-                   -> Motor de disco directo Off-Heap LSM (JettraMemory).
-                   -> Utiliza Project Panama FFM (Foreign Function & Memory API) y buffers de archivo mapeados.
-                   -> Persistencia directa en disco sin pausas de Garbage Collector.
+                    2. DISK_MEMORY (o DISK-MEMORY)
+                       -> Motor de disco directo Off-Heap LSM (JettraMemory).
+                       -> Utiliza Project Panama FFM (Foreign Function & Memory API) y buffers de archivo mapeados.
+                       -> Persistencia directa en disco sin pausas de Garbage Collector.
 
-                3. OFF_HEAP (o OFF-HEAP)
-                   -> Motor de páginas ranuradas nativas Slotted-Page (JettraStore-OffHeap).
-                   -> Asignación contigua en memoria virtual nativa fuera del Heap con Project Panama.
-                   -> Cero pausas de GC (GC pauses = 0) y liberación determinista por ámbito RAII (Arena).
-                   -> Acceso Cero-Copia mediante MemorySegment y VarHandles nativos.
-            ==============================================================================================
-            """;
+                    3. OFF_HEAP (o OFF-HEAP)
+                       -> Motor de páginas ranuradas nativas Slotted-Page (JettraStore-OffHeap).
+                       -> Asignación contigua en memoria virtual nativa fuera del Heap con Project Panama.
+                       -> Cero pausas de GC (GC pauses = 0) y liberación determinista por ámbito RAII (Arena).
+                       -> Acceso Cero-Copia mediante MemorySegment y VarHandles nativos.
+                ==============================================================================================
+                """;
     }
 
     public String getInteractiveMenu() {
         return """
-            ================================================================================
-                                   JETTRASTORE MENU INTERACTIVO
-            ================================================================================
-            [1] Instalar todas las Bases de Datos de Muestra (INSTALL SAMPLES)
-            [2] Listar Bases de Datos (SHOW DATABASES)
-            [3] Monitoreo de Recursos (STATUS)
-            [4] Topología de Nodos del Clúster (SHOW NODES)
-            [5] Administrar Índices de la Base de Datos (SHOW INDEXES)
-            [6] Administrar Usuarios y Roles RBAC (SHOW USERS)
-            [7] Ayuda Completa (HELP)
-            [8] Distribución de Datos en Clúster (cluster-distributed info)
-            [9] Flujo de Eventos en Tiempo Real (cluster live)
-            ================================================================================
-            """;
+                ================================================================================
+                                       JETTRASTORE MENU INTERACTIVO
+                ================================================================================
+                [1] Instalar todas las Bases de Datos de Muestra (INSTALL SAMPLES)
+                [2] Listar Bases de Datos (SHOW DATABASES)
+                [3] Monitoreo de Recursos (STATUS)
+                [4] Topología de Nodos del Clúster (SHOW NODES)
+                [5] Administrar Índices de la Base de Datos (SHOW INDEXES)
+                [6] Administrar Usuarios y Roles RBAC (SHOW USERS)
+                [7] Ayuda Completa (HELP)
+                [8] Distribución de Datos en Clúster (cluster-distributed info)
+                [9] Flujo de Eventos en Tiempo Real (cluster live)
+                ================================================================================
+                """;
     }
 
     // Getters para Testing y Verificación
-    public boolean isAuthenticated() { return authenticated; }
-    public String getCurrentUser() { return currentUser; }
-    public String getCurrentRole() { return currentRole; }
-    public String getCurrentDatabase() { return currentDatabase; }
-    public String getCurrentHost() { return currentHost; }
-    public int getCurrentPort() { return currentPort; }
-    public boolean isLazyLoad() { return lazyLoad; }
-    public Map<String, SavedConnection> getSavedConnections() { return savedConnections; }
-    public JettraClient getClient() { return client; }
+    public boolean isAuthenticated() {
+        return authenticated;
+    }
+
+    public String getCurrentUser() {
+        return currentUser;
+    }
+
+    public String getCurrentRole() {
+        return currentRole;
+    }
+
+    public String getCurrentDatabase() {
+        return currentDatabase;
+    }
+
+    public String getCurrentHost() {
+        return currentHost;
+    }
+
+    public int getCurrentPort() {
+        return currentPort;
+    }
+
+    public boolean isLazyLoad() {
+        return lazyLoad;
+    }
+
+    public Map<String, SavedConnection> getSavedConnections() {
+        return savedConnections;
+    }
+
+    public JettraClient getClient() {
+        return client;
+    }
 
     private String handleShowStorageMode() {
         if (currentDatabase == null) {
             return """
-                ==============================================================================================
-                                          MODO DE ALMACENAMIENTO GLOBAL (JettraStore)                        
-                ==============================================================================================
-                  Modo Activo: JVM_RAM (Memoria RAM Heap/Stack de Java)
-                  Modos Disponibles:
-                   * JVM_RAM      : Trabaja en memoria RAM usando áreas de Heap y Stack de la JVM.
-                   * DISK_MEMORY  : Modo directo en disco sin pausas GC usando JettraMemory (LSM Panama FFM).
-                   * OFF_HEAP     : Motor de páginas ranuradas nativas Slotted-Page Off-Heap FFM (JettraStore-OffHeap).
-                  Comando para cambiar: STORAGE_MODE <JVM_RAM | DISK_MEMORY | OFF_HEAP>
-                ==============================================================================================""";
+                    ==============================================================================================
+                                              MODO DE ALMACENAMIENTO GLOBAL (JettraStore)
+                    ==============================================================================================
+                      Modo Activo: JVM_RAM (Memoria RAM Heap/Stack de Java)
+                      Modos Disponibles:
+                       * JVM_RAM      : Trabaja en memoria RAM usando áreas de Heap y Stack de la JVM.
+                       * DISK_MEMORY  : Modo directo en disco sin pausas GC usando JettraMemory (LSM Panama FFM).
+                       * OFF_HEAP     : Motor de páginas ranuradas nativas Slotted-Page Off-Heap FFM (JettraStore-OffHeap).
+                      Comando para cambiar: STORAGE_MODE <JVM_RAM | DISK_MEMORY | OFF_HEAP>
+                    ==============================================================================================""";
         }
         var mode = client.getStorageMode(currentDatabase);
         return String.format("""
-            ==============================================================================================
-                            MODO DE ALMACENAMIENTO ACTIVO PARA '%s'                                      
-            ==============================================================================================
-              Modo Actual      : %s (%s)
-              Descripción      : %s
-              Motor Off-Heap   : JettraMemory (LSM Panama FFM) / JettraStore-OffHeap (Slotted-Page RAII)
-              Comando para conmutar: STORAGE_MODE <JVM_RAM | DISK_MEMORY | OFF_HEAP>
-            ==============================================================================================""",
-            currentDatabase, mode.name(), mode.getCode(), mode.getDescription()
-        );
+                ==============================================================================================
+                                MODO DE ALMACENAMIENTO ACTIVO PARA '%s'
+                ==============================================================================================
+                  Modo Actual      : %s (%s)
+                  Descripción      : %s
+                  Motor Off-Heap   : JettraMemory (LSM Panama FFM) / JettraStore-OffHeap (Slotted-Page RAII)
+                  Comando para conmutar: STORAGE_MODE <JVM_RAM | DISK_MEMORY | OFF_HEAP>
+                ==============================================================================================""",
+                currentDatabase, mode.name(), mode.getCode(), mode.getDescription());
     }
 
     private String handleSetStorageMode(String cmd) {
@@ -4072,11 +4559,11 @@ return String.format("[NOT FOUND] No se encontró el bucket/unit '%s' en la base
         if (currentDatabase != null) {
             client.setStorageMode(currentDatabase, mode);
             return String.format("[STORAGE_MODE] Modo de almacenamiento para '%s' configurado a: %s (%s)",
-                currentDatabase, mode.getCode(), mode.getDescription());
+                    currentDatabase, mode.getCode(), mode.getDescription());
         } else {
             client.setGlobalStorageMode(mode);
             return String.format("[STORAGE_MODE] Modo de almacenamiento global configurado a: %s (%s)",
-                mode.getCode(), mode.getDescription());
+                    mode.getCode(), mode.getDescription());
         }
     }
 
@@ -4097,19 +4584,27 @@ return String.format("[NOT FOUND] No se encontró el bucket/unit '%s' en la base
         for (int i = 0; i < args.length; i++) {
             String arg = args[i].trim();
             if (arg.equals("--node") || arg.equals("-n")) {
-                if (i + 1 < args.length) cliNode = args[++i].trim();
+                if (i + 1 < args.length)
+                    cliNode = args[++i].trim();
             } else if (arg.equals("--host") || arg.equals("-h")) {
-                if (i + 1 < args.length) cliHost = args[++i].trim();
+                if (i + 1 < args.length)
+                    cliHost = args[++i].trim();
             } else if (arg.equals("--port") || arg.equals("-p")) {
                 if (i + 1 < args.length) {
-                    try { cliPort = Integer.parseInt(args[++i].trim()); } catch (Exception ignored) {}
+                    try {
+                        cliPort = Integer.parseInt(args[++i].trim());
+                    } catch (Exception ignored) {
+                    }
                 }
             } else if (arg.equals("--user") || arg.equals("-u")) {
-                if (i + 1 < args.length) cliUser = args[++i].trim();
+                if (i + 1 < args.length)
+                    cliUser = args[++i].trim();
             } else if (arg.equals("--password") || arg.equals("-P")) {
-                if (i + 1 < args.length) cliPass = args[++i].trim();
+                if (i + 1 < args.length)
+                    cliPass = args[++i].trim();
             } else if (arg.equals("-e") || arg.equals("--exec")) {
-                if (i + 1 < args.length) cliExec = args[++i].trim();
+                if (i + 1 < args.length)
+                    cliExec = args[++i].trim();
             } else if (arg.equals("--auto-connect") || arg.equals("-a")) {
                 cliAuto = true;
             } else if (!arg.startsWith("-") && shell.getSavedConnections().containsKey(arg)) {
@@ -4175,8 +4670,8 @@ return String.format("[NOT FOUND] No se encontró el bucket/unit '%s' en la base
             }
 
             List<SavedConnection> conns = shell.getOrderedConnectionsList();
-            boolean isNewConnection = option.equalsIgnoreCase("N") || option.equalsIgnoreCase("nueva") || 
-                                      option.toUpperCase().startsWith("CONNECT");
+            boolean isNewConnection = option.equalsIgnoreCase("N") || option.equalsIgnoreCase("nueva") ||
+                    option.toUpperCase().startsWith("CONNECT");
 
             if (!isNewConnection) {
                 try {
@@ -4187,9 +4682,11 @@ return String.format("[NOT FOUND] No se encontró el bucket/unit '%s' en la base
                         targetPort = chosen.port();
                         suggestedUser = chosen.user();
                         shell.executeCommand(String.format("CONNECT %s %d", targetHost, targetPort));
-                        System.out.printf("[CONNECT] Conexión seleccionada: '%s' (%s:%d)%n", chosen.name(), targetHost, targetPort);
+                        System.out.printf("[CONNECT] Conexión seleccionada: '%s' (%s:%d)%n", chosen.name(), targetHost,
+                                targetPort);
                     } else {
-                        System.out.printf("[WARN] Opción fuera de rango. Usando conexión predeterminada: %s:%d%n", targetHost, targetPort);
+                        System.out.printf("[WARN] Opción fuera de rango. Usando conexión predeterminada: %s:%d%n",
+                                targetHost, targetPort);
                         shell.executeCommand(String.format("CONNECT %s %d", targetHost, targetPort));
                     }
                 } catch (NumberFormatException e) {
@@ -4199,7 +4696,8 @@ return String.format("[NOT FOUND] No se encontró el bucket/unit '%s' en la base
                         targetPort = chosen.port();
                         suggestedUser = chosen.user();
                         shell.executeCommand(String.format("CONNECT %s %d", targetHost, targetPort));
-                        System.out.printf("[CONNECT] Conexión seleccionada: '%s' (%s:%d)%n", chosen.name(), targetHost, targetPort);
+                        System.out.printf("[CONNECT] Conexión seleccionada: '%s' (%s:%d)%n", chosen.name(), targetHost,
+                                targetPort);
                     } else {
                         isNewConnection = true;
                     }
@@ -4208,57 +4706,64 @@ return String.format("[NOT FOUND] No se encontró el bucket/unit '%s' en la base
 
             // Si eligió 'Conexión nueva', el usuario ejecuta el connect
             if (isNewConnection) {
-            System.out.println("""
---------------------------------------------------------------------------------
-                         OPCIÓN: CONEXIÓN NUEVA
---------------------------------------------------------------------------------
-Ejecute el comando 'connect <host> <puerto>' (o presione Enter para [127.0.0.1 50001]):""");
-            System.out.print(">> ");
-            String connCmd = "";
-            if (console != null) {
-                connCmd = console.readLine();
-            } else if (scanner.hasNextLine()) {
-                connCmd = scanner.nextLine();
-            }
-            if (connCmd == null || connCmd.isBlank()) {
-                connCmd = "connect 127.0.0.1 50001";
-            }
-            connCmd = connCmd.trim();
-            if (!connCmd.toUpperCase().startsWith("CONNECT ")) {
-                connCmd = "CONNECT " + connCmd;
-            }
-            String connectResult = shell.executeCommand(connCmd);
-            System.out.println(connectResult);
-            targetHost = shell.getCurrentHost();
-            targetPort = shell.getCurrentPort();
+                System.out.println("""
+                        --------------------------------------------------------------------------------
+                                                 OPCIÓN: CONEXIÓN NUEVA
+                        --------------------------------------------------------------------------------
+                        Ejecute el comando 'connect <host> <puerto>' (o presione Enter para [127.0.0.1 50001]):""");
+                System.out.print(">> ");
+                String connCmd = "";
+                if (console != null) {
+                    connCmd = console.readLine();
+                } else if (scanner.hasNextLine()) {
+                    connCmd = scanner.nextLine();
+                }
+                if (connCmd == null || connCmd.isBlank()) {
+                    connCmd = "connect 127.0.0.1 50001";
+                }
+                connCmd = connCmd.trim();
+                if (!connCmd.toUpperCase().startsWith("CONNECT ")) {
+                    connCmd = "CONNECT " + connCmd;
+                }
+                String connectResult = shell.executeCommand(connCmd);
+                System.out.println(connectResult);
+                targetHost = shell.getCurrentHost();
+                targetPort = shell.getCurrentPort();
 
-            // Preguntar si desea guardar el perfil
-            System.out.print(">> ¿Desea guardar esta conexión en el menú? (s/N): ");
-            String saveAns = "";
-            if (console != null) saveAns = console.readLine();
-            else if (scanner.hasNextLine()) saveAns = scanner.nextLine();
-            if (saveAns != null && (saveAns.trim().equalsIgnoreCase("s") || saveAns.trim().equalsIgnoreCase("si"))) {
-                System.out.print(">> Ingrese un nombre/alias para la conexión: ");
-                String alias = "";
-                if (console != null) alias = console.readLine();
-                else if (scanner.hasNextLine()) alias = scanner.nextLine();
-                if (alias != null && !alias.isBlank()) {
-                    shell.executeCommand(String.format("SAVE CONNECTION %s %s %d %s", alias.trim(), targetHost, targetPort, suggestedUser));
-                    System.out.printf("[SUCCESS] Perfil '%s' guardado para futuros arranques.%n", alias.trim());
+                // Preguntar si desea guardar el perfil
+                System.out.print(">> ¿Desea guardar esta conexión en el menú? (s/N): ");
+                String saveAns = "";
+                if (console != null)
+                    saveAns = console.readLine();
+                else if (scanner.hasNextLine())
+                    saveAns = scanner.nextLine();
+                if (saveAns != null
+                        && (saveAns.trim().equalsIgnoreCase("s") || saveAns.trim().equalsIgnoreCase("si"))) {
+                    System.out.print(">> Ingrese un nombre/alias para la conexión: ");
+                    String alias = "";
+                    if (console != null)
+                        alias = console.readLine();
+                    else if (scanner.hasNextLine())
+                        alias = scanner.nextLine();
+                    if (alias != null && !alias.isBlank()) {
+                        shell.executeCommand(String.format("SAVE CONNECTION %s %s %d %s", alias.trim(), targetHost,
+                                targetPort, suggestedUser));
+                        System.out.printf("[SUCCESS] Perfil '%s' guardado para futuros arranques.%n", alias.trim());
+                    }
                 }
             }
+        } else {
+            shell.executeCommand(String.format("CONNECT %s %d", targetHost, targetPort));
         }
-    } else {
-        shell.executeCommand(String.format("CONNECT %s %d", targetHost, targetPort));
-    }
 
         // 2. Solicitar la ejecución del login para autentificar el usuario
         System.out.println("""
---------------------------------------------------------------------------------
-                     AUTENTICACIÓN REQUERIDA (LOGIN)
---------------------------------------------------------------------------------""");
+                --------------------------------------------------------------------------------
+                                     AUTENTICACIÓN REQUERIDA (LOGIN)
+                --------------------------------------------------------------------------------""");
         System.out.printf("Servidor activo: %s:%d%n", targetHost, targetPort);
-        System.out.printf("Ejecute el comando 'login <usuario> <password>' o presione Enter para usuario [%s]:%n", suggestedUser);
+        System.out.printf("Ejecute el comando 'login <usuario> <password>' o presione Enter para usuario [%s]:%n",
+                suggestedUser);
         System.out.print(">> ");
         String loginInput = "";
         if (console != null) {
@@ -4279,46 +4784,53 @@ Ejecute el comando 'connect <host> <puerto>' (o presione Enter para [127.0.0.1 5
             }
             if (console != null) {
                 char[] pArr = console.readPassword(">> Password para '%s' [hidden]: ", finalUser);
-                if (pArr != null && pArr.length > 0) finalPass = new String(pArr);
+                if (pArr != null && pArr.length > 0)
+                    finalPass = new String(pArr);
             } else {
                 System.out.printf(">> Password para '%s': ", finalUser);
                 if (scanner.hasNextLine()) {
                     String p = scanner.nextLine();
-                    if (p != null && !p.isBlank()) finalPass = p.trim();
+                    if (p != null && !p.isBlank())
+                        finalPass = p.trim();
                 }
             }
             boolean ok = shell.connectAndLogin(targetHost, targetPort, finalUser, finalPass);
             if (ok) {
-                System.out.printf("[AUTH OK] Autenticado exitosamente como '%s' (Rol: %s) en %s:%d%n", 
-                    shell.getCurrentUser(), shell.getCurrentRole(), targetHost, targetPort);
+                System.out.printf("[AUTH OK] Autenticado exitosamente como '%s' (Rol: %s) en %s:%d%n",
+                        shell.getCurrentUser(), shell.getCurrentRole(), targetHost, targetPort);
             } else {
-                System.out.printf("[AUTH WARN] No se pudo autenticar en %s:%d. Inicie sesión en la consola con: login <usuario> <password>%n", targetHost, targetPort);
+                System.out.printf(
+                        "[AUTH WARN] No se pudo autenticar en %s:%d. Inicie sesión en la consola con: login <usuario> <password>%n",
+                        targetHost, targetPort);
             }
         }
 
-        System.out.println("\nEscriba 'help' o '?' para ver los comandos disponibles, 'menu' para el menú interactivo, o 'exit' para salir.\n");
+        System.out.println(
+                "\nEscriba 'help' o '?' para ver los comandos disponibles, 'menu' para el menú interactivo, o 'exit' para salir.\n");
 
-        // 3. Ciclo interactivo de comandos con soporte avanzado de JLine (Historial con flechas y Autocompletado con TAB)
+        // 3. Ciclo interactivo de comandos con soporte avanzado de JLine (Historial con
+        // flechas y Autocompletado con TAB)
         org.jline.terminal.Terminal terminal = null;
         org.jline.reader.LineReader lineReader = null;
         try {
             String termEnv = System.getenv("TERM");
             org.jline.terminal.TerminalBuilder termBuilder = org.jline.terminal.TerminalBuilder.builder()
-                .system(true);
+                    .system(true);
             if (termEnv == null || termEnv.isBlank() || "dumb".equalsIgnoreCase(termEnv)) {
                 termBuilder.type("xterm-256color");
             }
             terminal = termBuilder.build();
 
             org.jline.reader.impl.DefaultParser parser = new org.jline.reader.impl.DefaultParser();
-            parser.setEscapeChars(new char[]{});
+            parser.setEscapeChars(new char[] {});
 
             org.jline.reader.Completer completer = (reader, parsedLine, candidates) -> {
                 String rawLine = parsedLine.line();
                 int cursor = parsedLine.cursor();
                 String buffer = rawLine.substring(0, Math.min(cursor, rawLine.length()));
                 String currentWord = parsedLine.word();
-                if (currentWord == null) currentWord = "";
+                if (currentWord == null)
+                    currentWord = "";
 
                 String prefixBeforeWord = buffer.substring(0, Math.max(0, buffer.length() - currentWord.length()));
 
@@ -4326,7 +4838,8 @@ Ejecute el comando 'connect <host> <puerto>' (o presione Enter para [127.0.0.1 5
                 Set<String> seenTokens = new LinkedHashSet<>();
 
                 for (String s : suggestions) {
-                    if (s == null || s.isBlank()) continue;
+                    if (s == null || s.isBlank())
+                        continue;
 
                     String candidateAfterPrefix = s;
                     if (!prefixBeforeWord.isEmpty() && s.toUpperCase().startsWith(prefixBeforeWord.toUpperCase())) {
@@ -4340,7 +4853,8 @@ Ejecute el comando 'connect <host> <puerto>' (o presione Enter para [127.0.0.1 5
                             candidateAfterPrefix = s.substring(idx).stripLeading();
                         }
                     }
-                    if (candidateAfterPrefix.isBlank()) continue;
+                    if (candidateAfterPrefix.isBlank())
+                        continue;
 
                     int firstSpace = candidateAfterPrefix.indexOf(' ');
                     String tokenForWord;
@@ -4353,8 +4867,10 @@ Ejecute el comando 'connect <host> <puerto>' (o presione Enter para [127.0.0.1 5
                         hasMoreTokens = false;
                     }
 
-                    if (tokenForWord.isBlank()) continue;
-                    if (!seenTokens.add(tokenForWord.toUpperCase())) continue;
+                    if (tokenForWord.isBlank())
+                        continue;
+                    if (!seenTokens.add(tokenForWord.toUpperCase()))
+                        continue;
 
                     String group = shell.resolveCandidateGroup(s);
                     String descr = shell.resolveCandidateDescription(s);
@@ -4362,42 +4878,48 @@ Ejecute el comando 'connect <host> <puerto>' (o presione Enter para [127.0.0.1 5
                     boolean isComplete = true;
 
                     candidates.add(new org.jline.reader.Candidate(
-                        tokenForWord,
-                        tokenForWord,
-                        group,
-                        descr,
-                        null,
-                        null,
-                        isComplete
-                    ));
+                            tokenForWord,
+                            tokenForWord,
+                            group,
+                            descr,
+                            null,
+                            null,
+                            isComplete));
                 }
             };
 
             lineReader = org.jline.reader.LineReaderBuilder.builder()
-                .terminal(terminal)
-                .parser(parser)
-                .completer(completer)
-                .variable(org.jline.reader.LineReader.HISTORY_FILE, JLINE_HISTORY_FILE)
-                .option(org.jline.reader.LineReader.Option.AUTO_MENU_LIST, true)
-                .option(org.jline.reader.LineReader.Option.AUTO_LIST, true)
-                .option(org.jline.reader.LineReader.Option.AUTO_GROUP, true)
-                .option(org.jline.reader.LineReader.Option.CASE_INSENSITIVE, true)
-                .option(org.jline.reader.LineReader.Option.COMPLETE_IN_WORD, true)
-                .option(org.jline.reader.LineReader.Option.INSERT_TAB, false)
-                .option(org.jline.reader.LineReader.Option.DISABLE_EVENT_EXPANSION, true)
-                .build();
+                    .terminal(terminal)
+                    .parser(parser)
+                    .completer(completer)
+                    .variable(org.jline.reader.LineReader.HISTORY_FILE, JLINE_HISTORY_FILE)
+                    .option(org.jline.reader.LineReader.Option.AUTO_MENU_LIST, true)
+                    .option(org.jline.reader.LineReader.Option.AUTO_LIST, true)
+                    .option(org.jline.reader.LineReader.Option.AUTO_GROUP, true)
+                    .option(org.jline.reader.LineReader.Option.CASE_INSENSITIVE, true)
+                    .option(org.jline.reader.LineReader.Option.COMPLETE_IN_WORD, true)
+                    .option(org.jline.reader.LineReader.Option.INSERT_TAB, false)
+                    .option(org.jline.reader.LineReader.Option.DISABLE_EVENT_EXPANSION, true)
+                    .build();
 
-            // Mapeo explícito de secuencias de escape ANSI para navegación fluida por historial y autocompletado
+            // Mapeo explícito de secuencias de escape ANSI para navegación fluida por
+            // historial y autocompletado
             for (String mapName : List.of(org.jline.reader.LineReader.EMACS, org.jline.reader.LineReader.MAIN)) {
                 org.jline.keymap.KeyMap<org.jline.reader.Binding> map = lineReader.getKeyMaps().get(mapName);
                 if (map != null) {
                     map.bind(new org.jline.reader.Reference(org.jline.reader.LineReader.EXPAND_OR_COMPLETE), "\t");
-                    map.bind(new org.jline.reader.Reference(org.jline.reader.LineReader.UP_LINE_OR_HISTORY), "\033[A", "\033OA");
-                    map.bind(new org.jline.reader.Reference(org.jline.reader.LineReader.DOWN_LINE_OR_HISTORY), "\033[B", "\033OB");
-                    map.bind(new org.jline.reader.Reference(org.jline.reader.LineReader.FORWARD_CHAR), "\033[C", "\033OC");
-                    map.bind(new org.jline.reader.Reference(org.jline.reader.LineReader.BACKWARD_CHAR), "\033[D", "\033OD");
-                    map.bind(new org.jline.reader.Reference(org.jline.reader.LineReader.BEGINNING_OF_LINE), "\033[H", "\033[1~", "\033OH");
-                    map.bind(new org.jline.reader.Reference(org.jline.reader.LineReader.END_OF_LINE), "\033[F", "\033[4~", "\033OF");
+                    map.bind(new org.jline.reader.Reference(org.jline.reader.LineReader.UP_LINE_OR_HISTORY), "\033[A",
+                            "\033OA");
+                    map.bind(new org.jline.reader.Reference(org.jline.reader.LineReader.DOWN_LINE_OR_HISTORY), "\033[B",
+                            "\033OB");
+                    map.bind(new org.jline.reader.Reference(org.jline.reader.LineReader.FORWARD_CHAR), "\033[C",
+                            "\033OC");
+                    map.bind(new org.jline.reader.Reference(org.jline.reader.LineReader.BACKWARD_CHAR), "\033[D",
+                            "\033OD");
+                    map.bind(new org.jline.reader.Reference(org.jline.reader.LineReader.BEGINNING_OF_LINE), "\033[H",
+                            "\033[1~", "\033OH");
+                    map.bind(new org.jline.reader.Reference(org.jline.reader.LineReader.END_OF_LINE), "\033[F",
+                            "\033[4~", "\033OF");
                     map.bind(new org.jline.reader.Reference(org.jline.reader.LineReader.DELETE_CHAR), "\033[3~");
                 }
             }
@@ -4414,22 +4936,27 @@ Ejecute el comando 'connect <host> <puerto>' (o presione Enter para [127.0.0.1 5
                     if (shutdownReader != null) {
                         shutdownReader.getHistory().save();
                     }
-                } catch (Exception ignored) {}
+                } catch (Exception ignored) {
+                }
             }));
         } catch (Throwable t) {
-            // Fallback elegante a System.console o Scanner si la terminal interactiva no está disponible (ej. entornos de test o redirección)
+            // Fallback elegante a System.console o Scanner si la terminal interactiva no
+            // está disponible (ej. entornos de test o redirección)
             lineReader = null;
         }
 
         while (true) {
-            String prompt = String.format("jettra-shell [%s@%s:%d/%s]> ", 
-                shell.getCurrentUser(), shell.getCurrentHost(), shell.getCurrentPort(), shell.getCurrentDatabase());
+            String dbLabel = (shell.getCurrentDatabase() != null && !shell.getCurrentDatabase().isBlank())
+                    ? shell.getCurrentDatabase() : "no-db";
+            String prompt = String.format("jettra-shell [%s@%s:%d/%s]> ",
+                shell.getCurrentUser(), shell.getCurrentHost(), shell.getCurrentPort(), dbLabel);
             String line = null;
             if (lineReader != null) {
                 try {
                     line = lineReader.readLine(prompt);
                 } catch (IllegalArgumentException e) {
-                    // Si el archivo de historial de JLine tuviese sintaxis corrupta previa, purgar y continuar
+                    // Si el archivo de historial de JLine tuviese sintaxis corrupta previa, purgar
+                    // y continuar
                     try {
                         Files.deleteIfExists(JLINE_HISTORY_FILE);
                         lineReader.getHistory().purge();
@@ -4448,7 +4975,8 @@ Ejecute el comando 'connect <host> <puerto>' (o presione Enter para [127.0.0.1 5
                     if (lineReader != null) {
                         try {
                             lineReader.getHistory().save();
-                        } catch (Exception ignored) {}
+                        } catch (Exception ignored) {
+                        }
                     }
                     break;
                 }
@@ -4462,14 +4990,16 @@ Ejecute el comando 'connect <host> <puerto>' (o presione Enter para [127.0.0.1 5
                 break;
             }
 
-            if (line == null) break;
+            if (line == null)
+                break;
             String trimmed = line.trim();
             if (trimmed.equalsIgnoreCase("exit") || trimmed.equalsIgnoreCase("quit")) {
                 System.out.println("Saliendo de JettraStore Shell...");
                 if (lineReader != null) {
                     try {
                         lineReader.getHistory().save();
-                    } catch (Exception ignored) {}
+                    } catch (Exception ignored) {
+                    }
                 }
                 break;
             }
@@ -4486,7 +5016,8 @@ Ejecute el comando 'connect <host> <puerto>' (o presione Enter para [127.0.0.1 5
         if (this.client != null) {
             try {
                 this.client.close();
-            } catch (Exception ignored) {}
+            } catch (Exception ignored) {
+            }
         }
     }
 }

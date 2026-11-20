@@ -46,7 +46,7 @@ public class JettraStoreExplorerTest {
 
     static {
         // Reducir latencias de comprobación de clúster a loopback local (0.05 ms vs 1000 ms por timeout TCP)
-        System.setProperty("cluster.nodes", "node-01:127.0.0.1:9091,node-02:127.0.0.1:9092,node-03:127.0.0.1:9093");
+        System.setProperty("cluster.nodes", "node-01:127.0.0.1:50001,node-02:127.0.0.1:50002,node-03:127.0.0.1:50003");
         System.setProperty("cluster.healthcheck.timeout.ms", "200");
         System.setProperty("cluster.heartbeat.interval.ms", "60000");
 
@@ -514,9 +514,9 @@ public class JettraStoreExplorerTest {
         ServerNodeInfo replicaNode3 = plugin.getNodeById("node-03");
         int originalPrimaryPort = primaryNode.getPort();
         String originalPrimaryRole = primaryNode.getRole();
-        int originalReplicaPort2 = replicaNode2 != null ? replicaNode2.getPort() : 9092;
+        int originalReplicaPort2 = replicaNode2 != null ? replicaNode2.getPort() : 50002;
         String originalReplicaRole2 = replicaNode2 != null ? replicaNode2.getRole() : "SECONDARY";
-        int originalReplicaPort3 = replicaNode3 != null ? replicaNode3.getPort() : 9093;
+        int originalReplicaPort3 = replicaNode3 != null ? replicaNode3.getPort() : 50003;
         String originalReplicaRole3 = replicaNode3 != null ? replicaNode3.getRole() : "SECONDARY";
         try {
             // 1. Host, puerto Web UI y contextpath cargados desde microprofile-config.properties
@@ -525,10 +525,10 @@ public class JettraStoreExplorerTest {
             JettraAssert.assertEquals(8085, plugin.getServerPort(), "El server.port Web UI debe ser 8085");
             JettraAssert.assertEquals("/", plugin.getServerContextPath(), "El server.contextpath en microprofile-config.properties debe ser /");
 
-            // 2. Nodo PRIMARY registrado con su puerto propio (9091)
+            // 2. Nodo PRIMARY registrado con su puerto propio (50001)
             JettraAssert.assertNotNull(primaryNode, "El nodo node-01 debe existir");
             JettraAssert.assertEquals("PRIMARY", primaryNode.getRole(), "El rol de node-01 debe ser PRIMARY");
-            JettraAssert.assertEquals(9091, originalPrimaryPort, "El puerto de node-01 debe provenir de cluster.nodes (9091), no de server.port");
+            JettraAssert.assertEquals(50001, originalPrimaryPort, "El puerto de node-01 debe provenir de cluster.nodes (50001), no de server.port");
 
             // 3. Aislar nodos secundarios y cerrar puerto de PRIMARY: todo el clúster OFFLINE
             int closedPrimaryPort;
@@ -1443,17 +1443,17 @@ public class JettraStoreExplorerTest {
         String prevCfg = System.getProperty("jettra.explorer.config.file");
         try {
             java.nio.file.Files.writeString(tempMp,
-                    "app.title=JettraStore Explorer\ncluster.nodes=node-01:127.0.0.1:9091,node-02:127.0.0.1:9092,node-03:127.0.0.1:9093\n",
+                    "app.title=JettraStore Explorer\ncluster.nodes=node-01:127.0.0.1:50001,node-02:127.0.0.1:50002,node-03:127.0.0.1:50003\n",
                     java.nio.charset.StandardCharsets.UTF_8);
             System.setProperty("jettra.explorer.config.file", tempMp.toAbsolutePath().toString());
 
             // 1. Añadir nodo-09 y verificar actualización en microprofile-config.properties y cluster.config generado
-            boolean added = plugin.addNode("node-09", "node-09-replica", "SECONDARY", "127.0.0.1", 9099, 2048);
+            boolean added = plugin.addNode("node-09", "node-09-replica", "SECONDARY", "127.0.0.1", 50009, 2048);
             JettraAssert.assertTrue(added, "Debe añadir node-09 correctamente");
 
             String mpAfterAdd = java.nio.file.Files.readString(tempMp, java.nio.charset.StandardCharsets.UTF_8);
-            JettraAssert.assertTrue(mpAfterAdd.contains("node-09:127.0.0.1:9099"),
-                    "microprofile-config.properties debe contener node-09:127.0.0.1:9099 en cluster.nodes");
+            JettraAssert.assertTrue(mpAfterAdd.contains("node-09:127.0.0.1:50009"),
+                    "microprofile-config.properties debe contener node-09:127.0.0.1:50009 en cluster.nodes");
 
             String clusterCfgAfterAdd = new String(plugin.buildClusterConfigBytesFromNodes(), java.nio.charset.StandardCharsets.UTF_8);
             JettraAssert.assertTrue(clusterCfgAfterAdd.contains("node-09"),
@@ -1466,7 +1466,7 @@ public class JettraStoreExplorerTest {
             JettraAssert.assertTrue(removed, "Debe expulsar node-09 correctamente");
 
             String mpAfterRemove = java.nio.file.Files.readString(tempMp, java.nio.charset.StandardCharsets.UTF_8);
-            JettraAssert.assertFalse(mpAfterRemove.contains("node-09:127.0.0.1:9099"),
+            JettraAssert.assertFalse(mpAfterRemove.contains("node-09:127.0.0.1:50009"),
                     "microprofile-config.properties no debe contener node-09 tras expulsarlo");
 
             String clusterCfgAfterRemove = new String(plugin.buildClusterConfigBytesFromNodes(), java.nio.charset.StandardCharsets.UTF_8);
@@ -1480,6 +1480,66 @@ public class JettraStoreExplorerTest {
                 System.setProperty("jettra.explorer.config.file", prevCfg);
             }
             java.nio.file.Files.deleteIfExists(tempMp);
+        }
+    }
+
+    @Test
+    @DisplayName("38. Sincronización de catálogo de bases de datos desde el nodo PRIMARY en /databases")
+    public void testDatabasesCatalogReflectsPrimaryNodeDatabases() throws Exception {
+        java.nio.file.Path tempStorage = java.nio.file.Files.createTempDirectory("jettra_explorer_primary_dbs_");
+        int grpcPort = 51131;
+        int restPort = 61131;
+        java.util.Properties props = new java.util.Properties();
+        props.setProperty("cluster.node.id", "node-01");
+        props.setProperty("cluster.node.role", "PRIMARY");
+        props.setProperty("jettra.network.host", "127.0.0.1");
+        props.setProperty("jettra.network.rest.port", String.valueOf(restPort));
+        props.setProperty("jettra.network.grpc.port", String.valueOf(grpcPort));
+        props.setProperty("jettra.storage.path", tempStorage.toAbsolutePath().toString());
+        props.setProperty("jettra.storage.mode", "JVM_RAM");
+        props.setProperty("cluster.multinode.active", "on");
+        props.setProperty("jettrapolice.active", "false");
+        io.jettra.store.core.JettraStoreConfig primaryCfg = new io.jettra.store.core.JettraStoreConfig(props);
+        io.jettra.store.JettraStoreServer primaryServer = new io.jettra.store.JettraStoreServer(primaryCfg);
+        JettraStorePlugin plugin = JettraStorePlugin.getInstance();
+        var primaryNode = plugin.getPrimaryNode();
+        String origHost = primaryNode != null ? primaryNode.getHost() : "127.0.0.1";
+        int origPort = primaryNode != null ? primaryNode.getPort() : 50001;
+        int origRestPort = primaryNode != null ? primaryNode.getRestPort() : 60001;
+        boolean origActive = primaryNode != null && primaryNode.isActive();
+        try {
+            primaryServer.start();
+            primaryServer.getOrCreateDatabase("primary_crm_db");
+            primaryServer.getOrCreateDatabase("primary_erp_db");
+
+            JettraAssert.assertTrue(primaryNode != null, "Debe existir un nodo PRIMARY registrado");
+            primaryNode.setHost("127.0.0.1");
+            primaryNode.setPort(grpcPort);
+            primaryNode.setRestPort(restPort);
+            primaryNode.setActive(true);
+
+            boolean synced = plugin.syncDatabasesFromPrimary(true);
+            JettraAssert.assertTrue(synced, "Debe sincronizar el catálogo desde el nodo PRIMARY activo");
+            JettraAssert.assertTrue(plugin.getDatabaseNames().contains("primary_crm_db"),
+                    "El catálogo debe incluir primary_crm_db del nodo PRIMARY");
+            JettraAssert.assertTrue(plugin.getDatabaseNames().contains("primary_erp_db"),
+                    "El catálogo debe incluir primary_erp_db del nodo PRIMARY");
+
+            HttpResponse<String> res = get("/databases");
+            JettraAssert.assertEquals(200, res.statusCode(), "/databases debe responder HTTP 200");
+            JettraAssert.assertTrue(res.body().contains("primary_crm_db"),
+                    "La vista /databases debe mostrar primary_crm_db almacenada en el nodo PRIMARY");
+            JettraAssert.assertTrue(res.body().contains("primary_erp_db"),
+                    "La vista /databases debe mostrar primary_erp_db almacenada en el nodo PRIMARY");
+        } finally {
+            primaryServer.stop();
+            if (primaryNode != null) {
+                primaryNode.setHost(origHost);
+                primaryNode.setPort(origPort);
+                primaryNode.setRestPort(origRestPort);
+                primaryNode.setActive(origActive);
+            }
+            plugin.installAllExampleDatabases();
         }
     }
 }

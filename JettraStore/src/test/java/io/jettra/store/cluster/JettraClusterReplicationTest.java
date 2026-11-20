@@ -898,5 +898,173 @@ public class JettraClusterReplicationTest extends JettraStoreBaseTest {
         }
     }
 
+    @Test
+    @DisplayName("Nodo detenido y luego reiniciado, así como nodo nuevo, deben obtener réplica de BD y objetos desde PRIMARY")
+    public void testNodeRestartAndNewNodeSynchronizeDatabaseFromPrimary() throws Exception {
+        Path root = Files.createTempDirectory("jettra_node_restart_sync_test");
+        Path dir1 = root.resolve("n1");
+        Path dir2 = root.resolve("n2");
+        Path dir3 = root.resolve("n3");
+        Files.createDirectories(dir1);
+        Files.createDirectories(dir2);
+        Files.createDirectories(dir3);
+
+        int p1 = 19481, p2 = 19482, p3 = 19483;
+
+        String clusterCfg =
+            "cluster.name = jettra-test-sync\n" +
+            "cluster.node.1.id = node-01\n" +
+            "cluster.node.1.role = PRIMARY\n" +
+            "cluster.node.1.ip = 127.0.0.1\n" +
+            "cluster.node.1.grpc.port = " + p1 + "\n" +
+            "cluster.node.1.rest.port = 18481\n" +
+            "cluster.node.2.id = node-02\n" +
+            "cluster.node.2.role = SECONDARY\n" +
+            "cluster.node.2.ip = 127.0.0.1\n" +
+            "cluster.node.2.grpc.port = " + p2 + "\n" +
+            "cluster.node.2.rest.port = 18482\n";
+
+        Path cfg1 = dir1.resolve("cluster.config");
+        Path cfg2 = dir2.resolve("cluster.config");
+        Files.writeString(cfg1, clusterCfg, java.nio.charset.StandardCharsets.UTF_8);
+        Files.writeString(cfg2, clusterCfg, java.nio.charset.StandardCharsets.UTF_8);
+
+        Properties cProps12 = new Properties();
+        try (var in = Files.newInputStream(cfg1)) { cProps12.load(in); }
+
+        Properties mp1 = new Properties();
+        mp1.setProperty("cluster.node.id", "node-01");
+        mp1.setProperty("cluster.node.role", "PRIMARY");
+        mp1.setProperty("jettra.storage.path", dir1.toString());
+        mp1.setProperty("cluster.multinode.active", "on");
+        JettraStoreServer s1 = new JettraStoreServer(new JettraStoreConfig(mp1, cProps12));
+        s1.setClusterConfigFilePath(cfg1);
+
+        Properties mp2 = new Properties();
+        mp2.setProperty("cluster.node.id", "node-02");
+        mp2.setProperty("cluster.node.role", "SECONDARY");
+        mp2.setProperty("jettra.storage.path", dir2.toString());
+        mp2.setProperty("cluster.multinode.active", "on");
+        JettraStoreServer s2 = new JettraStoreServer(new JettraStoreConfig(mp2, cProps12));
+        s2.setClusterConfigFilePath(cfg2);
+
+        JettraClusterTransportServer t1 = new JettraClusterTransportServer(p1, s1);
+        JettraClusterTransportServer t2 = new JettraClusterTransportServer(p2, s2);
+        try {
+            t1.start();
+            t2.start();
+            Thread.sleep(150);
+
+            // 1. Crear base 'catalogo_db' con documento 'prod_01' en PRIMARY
+            var db1 = s1.getOrCreateDatabase("catalogo_db");
+            assertNotNull(db1);
+            db1.getDocumentEngine("productos").insert("prod_01", java.util.Map.of("nombre", "Laptop Pro", "precio", 1200));
+            db1.saveToDisk();
+
+            for (int i = 0; i < 20 && !Files.exists(dir2.resolve("catalogo_db_meta.json")); i++) {
+                Thread.sleep(100);
+            }
+            assertTrue(Files.exists(dir2.resolve("catalogo_db_meta.json")), "catalogo_db debe haberse replicado a node-02");
+
+            // 2. DETENER node-02 (simular parada del nodo)
+            t2.stop();
+            s2.stop();
+            Thread.sleep(150);
+
+            // 3. Modificar estado en PRIMARY mientras node-02 está detenido:
+            // - Agregar nuevo documento 'prod_02' a 'catalogo_db'
+            // - Crear nueva base de datos 'pedidos_db' con 'ped_01'
+            db1.getDocumentEngine("productos").insert("prod_02", java.util.Map.of("nombre", "Mouse Gamer", "precio", 50));
+            db1.saveToDisk();
+
+            var dbPedidos = s1.getOrCreateDatabase("pedidos_db");
+            assertNotNull(dbPedidos);
+            dbPedidos.getDocumentEngine("ordenes").insert("ped_01", java.util.Map.of("pedidoId", "PED-101", "total", 1250));
+            dbPedidos.saveToDisk();
+
+            // 4. REINICIAR node-02
+            JettraStoreServer s2Restarted = new JettraStoreServer(new JettraStoreConfig(mp2, cProps12));
+            s2Restarted.setClusterConfigFilePath(cfg2);
+            t2 = new JettraClusterTransportServer(p2, s2Restarted);
+            t2.start();
+            Thread.sleep(100);
+
+            // node-02 se reconecta y sincroniza con PRIMARY
+            s2Restarted.syncClusterConfigWithActivePrimary();
+            s2Restarted.synchronizeFromPrimary();
+
+            for (int i = 0; i < 25 && !Files.exists(dir2.resolve("pedidos_db_meta.json")); i++) {
+                Thread.sleep(100);
+            }
+
+            // 5. Verificar que node-02 reiniciado tiene los datos actualizados del PRIMARY
+            assertTrue(Files.exists(dir2.resolve("pedidos_db_meta.json")), "node-02 reiniciado debe tener pedidos_db");
+            var secPedidos = s2Restarted.getOrCreateDatabaseInternal("pedidos_db", false);
+            assertNotNull(secPedidos);
+            var pedDoc = secPedidos.getDocumentEngine("ordenes").findById("ped_01");
+            assertNotNull(pedDoc, "node-02 reiniciado debe tener ped_01 de pedidos_db");
+            assertEquals("PED-101", pedDoc.get("pedidoId"));
+
+            var secCatalogo = s2Restarted.getOrCreateDatabaseInternal("catalogo_db", false);
+            assertNotNull(secCatalogo);
+            var prod2Doc = secCatalogo.getDocumentEngine("productos").findById("prod_02");
+            assertNotNull(prod2Doc, "node-02 reiniciado debe tener prod_02 creado mientras estaba detenido");
+            assertEquals("Mouse Gamer", prod2Doc.get("nombre"));
+
+            // 6. Probar incorporación de un nuevo nodo (node-03)
+            String local3 =
+                "cluster.name = jettra-test-sync\n" +
+                "cluster.node.1.id = node-01\n" +
+                "cluster.node.1.role = PRIMARY\n" +
+                "cluster.node.1.ip = 127.0.0.1\n" +
+                "cluster.node.1.grpc.port = " + p1 + "\n" +
+                "cluster.node.1.rest.port = 18481\n" +
+                "cluster.node.3.id = node-03\n" +
+                "cluster.node.3.role = SECONDARY\n" +
+                "cluster.node.3.ip = 127.0.0.1\n" +
+                "cluster.node.3.grpc.port = " + p3 + "\n" +
+                "cluster.node.3.rest.port = 18483\n";
+            Path cfg3 = dir3.resolve("cluster.config");
+            Files.writeString(cfg3, local3, java.nio.charset.StandardCharsets.UTF_8);
+            Properties cProps3 = new Properties();
+            try (var in = Files.newInputStream(cfg3)) { cProps3.load(in); }
+
+            Properties mp3 = new Properties();
+            mp3.setProperty("cluster.node.id", "node-03");
+            mp3.setProperty("cluster.node.role", "SECONDARY");
+            mp3.setProperty("jettra.storage.path", dir3.toString());
+            mp3.setProperty("cluster.multinode.active", "on");
+            JettraStoreServer s3 = new JettraStoreServer(new JettraStoreConfig(mp3, cProps3));
+            s3.setClusterConfigFilePath(cfg3);
+
+            try (JettraClusterTransportServer t3 = new JettraClusterTransportServer(p3, s3)) {
+                t3.start();
+                Thread.sleep(100);
+
+                // node-03 se une al clúster y sincroniza con PRIMARY
+                assertTrue(s3.syncClusterConfigWithActivePrimary(), "node-03 debe sincronizar con PRIMARY");
+                s3.synchronizeFromPrimary();
+
+                for (int i = 0; i < 25 && !Files.exists(dir3.resolve("catalogo_db_meta.json")); i++) {
+                    Thread.sleep(100);
+                }
+
+                assertTrue(Files.exists(dir3.resolve("catalogo_db_meta.json")), "node-03 nuevo debe tener catalogo_db");
+                assertTrue(Files.exists(dir3.resolve("pedidos_db_meta.json")), "node-03 nuevo debe tener pedidos_db");
+
+                var n3Cat = s3.getOrCreateDatabaseInternal("catalogo_db", false);
+                assertNotNull(n3Cat.getDocumentEngine("productos").findById("prod_01"));
+                assertNotNull(n3Cat.getDocumentEngine("productos").findById("prod_02"));
+            } finally {
+                s3.stop();
+            }
+
+            s2Restarted.stop();
+        } finally {
+            t1.stop();
+            s1.stop();
+        }
+    }
+
     public record TestRecord(String id, String name, int score) {}
 }

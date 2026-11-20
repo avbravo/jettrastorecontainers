@@ -62,12 +62,13 @@ public class DatabasesFluxView extends FluxView {
     @Override
     public Widget build() {
         JettraStorePlugin plugin = JettraStorePlugin.getInstance();
+        plugin.syncDatabasesFromPrimary(true);
         Map<String, List<EngineBucketInfo>> catalog = plugin.getDatabasesCatalog();
         List<String> dbNames = plugin.getDatabaseNames();
 
         String currentDb = (selectedDb != null && catalog.containsKey(selectedDb)) 
             ? selectedDb 
-            : (dbNames.isEmpty() ? "example_factura_db" : dbNames.get(0));
+            : (dbNames.isEmpty() ? "" : dbNames.get(0));
 
         // Métricas Globales de Catálogo
         int totalDatabases = catalog.size();

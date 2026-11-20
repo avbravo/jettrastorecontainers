@@ -23,6 +23,11 @@ public final class JettraClusterReplicationClient implements AutoCloseable {
     private final AtomicLong logIndex = new AtomicLong(0);
     private final ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
     private static final int TIMEOUT_MS = 250;
+    private volatile java.util.function.Consumer<ClusterNode> peerRecoveryListener;
+
+    public void setPeerRecoveryListener(java.util.function.Consumer<ClusterNode> listener) {
+        this.peerRecoveryListener = listener;
+    }
 
     public JettraClusterReplicationClient(String localNodeId, List<ClusterNode> peers) {
         this.localNodeId = localNodeId != null ? localNodeId : "node-01";
@@ -486,9 +491,13 @@ public final class JettraClusterReplicationClient implements AutoCloseable {
         for (ClusterNode peer : peers) {
             executor.submit(() -> {
                 try {
+                    boolean wasOffline = !peer.isOnline();
                     JettraRaftFrame resp = sendFrameToPeer(peer, frame);
                     if (resp != null && resp.frameType() == JettraRaftFrame.TYPE_HEARTBEAT_ACK) {
                         peer.start();
+                        if (wasOffline && peerRecoveryListener != null) {
+                            peerRecoveryListener.accept(peer);
+                        }
                     } else {
                         peer.markOffline();
                     }
