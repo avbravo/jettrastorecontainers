@@ -1,6 +1,9 @@
 package io.jettra.shell;
 
 import io.jettra.driver.JettraClient;
+import io.jettra.test.annotation.AfterAll;
+import io.jettra.test.annotation.AfterEach;
+import io.jettra.test.annotation.BeforeAll;
 import io.jettra.test.annotation.DisplayName;
 import io.jettra.test.annotation.Test;
 
@@ -11,6 +14,55 @@ import java.nio.file.Path;
 import static io.jettra.test.core.JettraAssert.*;
 
 public class JettraStoreShellTest {
+
+    private static Path tempTestStorageDir;
+    private static Path tempTestClusterConfig;
+    private static String prevStoragePathProp;
+    private static String prevClusterConfigProp;
+
+    @BeforeAll
+    public static void setupTempTestStorage() throws IOException {
+        prevStoragePathProp = System.getProperty("jettra.storage.path");
+        prevClusterConfigProp = System.getProperty("cluster.config.path");
+        tempTestStorageDir = Files.createTempDirectory("jettra_shell_test_storage_");
+        tempTestClusterConfig = tempTestStorageDir.resolve("cluster-test_db.config");
+        Files.writeString(tempTestClusterConfig,
+                "cluster.name = jettra-shell-test\n"
+                        + "cluster.consensus.protocol = RAFT\n"
+                        + "cluster.node.1.id = node-01\n"
+                        + "cluster.node.1.role = PRIMARY\n"
+                        + "cluster.node.1.ip = 127.0.0.1\n"
+                        + "cluster.node.1.grpc.port = 59201\n"
+                        + "cluster.node.1.rest.port = 69201\n"
+                        + "cluster.node.2.id = node-02\n"
+                        + "cluster.node.2.role = SECONDARY\n"
+                        + "cluster.node.2.ip = 127.0.0.1\n"
+                        + "cluster.node.2.grpc.port = 59202\n"
+                        + "cluster.node.2.rest.port = 69202\n"
+                        + "cluster.node.3.id = node-03\n"
+                        + "cluster.node.3.role = SECONDARY\n"
+                        + "cluster.node.3.ip = 127.0.0.1\n"
+                        + "cluster.node.3.grpc.port = 59203\n"
+                        + "cluster.node.3.rest.port = 69203\n",
+                java.nio.charset.StandardCharsets.UTF_8);
+        System.setProperty("jettra.storage.path", tempTestStorageDir.toAbsolutePath().toString());
+        System.setProperty("cluster.config.path", tempTestClusterConfig.toAbsolutePath().toString());
+    }
+
+    @AfterEach
+    public void cleanupAfterEachTest() {
+        JettraShellTestCleanup.cleanStorageDirectories();
+    }
+
+    @AfterAll
+    public static void cleanupAfterAllTests() {
+        JettraShellTestCleanup.cleanStorageDirectories();
+        if (prevClusterConfigProp == null) {
+            System.clearProperty("cluster.config.path");
+        } else {
+            System.setProperty("cluster.config.path", prevClusterConfigProp);
+        }
+    }
 
     @Test
     @DisplayName("Debe procesar connect, login, logout, save/remove/list connections")
@@ -126,7 +178,8 @@ public class JettraStoreShellTest {
         try (JettraClient client = JettraClient.connect("127.0.0.1", 50001, "admin", "admin-jettra")) {
             JettraStoreShellApp shell = new JettraStoreShellApp(client);
 
-            // 1. INSTALL SAMPLES debe instalar la única base de datos de ejemplo con máximo 500 registros
+            // 1. INSTALL SAMPLES debe instalar la única base de datos de ejemplo con máximo
+            // 500 registros
             String samples = shell.executeCommand("INSTALL SAMPLES");
             assertTrue(samples.contains("[SUCCESS]"));
             assertTrue(samples.contains("example_factura_db"));
@@ -163,9 +216,10 @@ public class JettraStoreShellTest {
     public void testIndexManagement() {
         try (JettraClient client = JettraClient.connect("127.0.0.1", 50001, "admin", "admin-jettra")) {
             JettraStoreShellApp shell = new JettraStoreShellApp(client);
-            shell.executeCommand("CREATE DATABASE idx_db");
-            shell.executeCommand("USE idx_db");
-            shell.executeCommand("INSERT INTO articles ID art1 JSON {\"title\": \"Java 25 Vectors\", \"category\": \"Tech\"}");
+            shell.executeCommand("CREATE DATABASE idx_test_db");
+            shell.executeCommand("USE idx_test_db");
+            shell.executeCommand(
+                    "INSERT INTO articles ID art1 JSON {\"title\": \"Java 25 Vectors\", \"category\": \"Tech\"}");
 
             // 1. Crear índice
             String createIdx = shell.executeCommand("CREATE INDEX idx_cat ON articles (category) TYPE BTREE");
@@ -226,15 +280,17 @@ public class JettraStoreShellTest {
     public void testReferencedRecordsAndCrud() {
         try (JettraClient client = JettraClient.connect("127.0.0.1", 50001, "admin", "admin-jettra")) {
             JettraStoreShellApp shell = new JettraStoreShellApp(client);
-            shell.executeCommand("CREATE DATABASE ref_db");
-            shell.executeCommand("USE ref_db");
+            shell.executeCommand("CREATE DATABASE ref_test_db");
+            shell.executeCommand("USE ref_test_db");
 
             // 1. Inserción de documentos
-            shell.executeCommand("INSERT INTO customers ID c100 JSON {\"name\": \"Maria Silva\", \"city\": \"Panama\"}");
+            shell.executeCommand(
+                    "INSERT INTO customers ID c100 JSON {\"name\": \"Maria Silva\", \"city\": \"Panama\"}");
             shell.executeCommand("INSERT INTO orders ID o500 JSON {\"amount\": 350.0, \"status\": \"NEW\"}");
 
             // 2. Vincular referencia cruzada JettraRef
-            String insRef = shell.executeCommand("INSERT REF orders o500 KEY _ref_customer TARGET document::customers#c100");
+            String insRef = shell
+                    .executeCommand("INSERT REF orders o500 KEY _ref_customer TARGET document::customers#c100");
             assertTrue(insRef.contains("[SUCCESS]"));
 
             // 3. Obtener registro y verificar resolución
@@ -265,10 +321,12 @@ public class JettraStoreShellTest {
             shell.executeCommand("INSTALL SAMPLES");
 
             Path tempBackup = Files.createTempFile("shell_backup", ".jettra_bak");
-            String backupOutput = shell.executeCommand("BACKUP DATABASE example_factura_db TO '" + tempBackup.toAbsolutePath() + "'");
+            String backupOutput = shell
+                    .executeCommand("BACKUP DATABASE example_factura_db TO '" + tempBackup.toAbsolutePath() + "'");
             assertTrue(backupOutput.contains("[SUCCESS]"));
 
-            String restoreOutput = shell.executeCommand("RESTORE DATABASE example_factura_db FROM '" + tempBackup.toAbsolutePath() + "'");
+            String restoreOutput = shell
+                    .executeCommand("RESTORE DATABASE example_factura_db FROM '" + tempBackup.toAbsolutePath() + "'");
             assertTrue(restoreOutput.contains("[SUCCESS]"));
 
             Files.deleteIfExists(tempBackup);
@@ -373,49 +431,58 @@ public class JettraStoreShellTest {
         try (JettraClient client = JettraClient.connect("127.0.0.1", 50001, "admin", "admin-jettra")) {
             JettraStoreShellApp shell = new JettraStoreShellApp(client);
 
-            // 1. Crear BD 'test_drop_db' y verificar existencia
-            String created = shell.executeCommand("CREATE DATABASE test_drop_db");
+            // 1. Crear BD 'drop_test_db' y verificar existencia
+            String created = shell.executeCommand("CREATE DATABASE drop_test_db");
             assertTrue(created.contains("[SUCCESS]"));
-            shell.executeCommand("USE test_drop_db");
+            shell.executeCommand("USE drop_test_db");
             shell.executeCommand("CREATE COLLECTION users");
             shell.executeCommand("INSERT INTO users (id, name) VALUES ('u1', 'Alice')");
 
             String dbsBefore = shell.executeCommand("SHOW DATABASES");
-            assertTrue(dbsBefore.contains("test_drop_db"));
+            assertTrue(dbsBefore.contains("drop_test_db"));
 
             // 2. Eliminar con DROP DATABASE
-            String dropResult = shell.executeCommand("DROP DATABASE test_drop_db");
+            String dropResult = shell.executeCommand("DROP DATABASE drop_test_db");
             assertTrue(dropResult.contains("[SUCCESS]"));
 
             String dbsAfter = shell.executeCommand("SHOW DATABASES");
-            assertFalse(dbsAfter.contains("test_drop_db"));
+            assertFalse(dbsAfter.contains("drop_test_db"));
 
             // 3. Crear con CREATE DB y eliminar con DROP DB
-            shell.executeCommand("CREATE DB test_drop_db2");
+            shell.executeCommand("CREATE DB drop2_test_db");
             String dbs2 = shell.executeCommand("SHOW DATABASES");
-            assertTrue(dbs2.contains("test_drop_db2"));
+            assertTrue(dbs2.contains("drop2_test_db"));
 
-            String dropResult2 = shell.executeCommand("DROP DB test_drop_db2");
+            String dropResult2 = shell.executeCommand("DROP DB drop2_test_db");
             assertTrue(dropResult2.contains("[SUCCESS]"));
 
             String dbsAfter2 = shell.executeCommand("SHOW DATABASES");
-            assertFalse(dbsAfter2.contains("test_drop_db2"));
+            assertFalse(dbsAfter2.contains("drop2_test_db"));
         }
     }
 
     @Test
     @DisplayName("show dbs debe ejecutarse de forma perezosa (lazy) sin cargar todo el contenido a RAM")
     public void testShowDatabasesLazyLoadingAndNoOOM() {
-        try (JettraClient client = JettraClient.connect("127.0.0.1", 50001, "admin", "admin-jettra")) {
+        try (JettraClient client = JettraClient.connect("127.0.0.1", 59201, "admin", "admin-jettra")) {
             JettraStoreShellApp shell = new JettraStoreShellApp(client);
 
-            // 1. show dbs y show databases deben listar sin error de memoria
+            // 1. Sin bases creadas arbitrariamente, show dbs lista la tabla vacía sin
+            // default_db
+            String showDbsEmpty = shell.executeCommand("show dbs");
+            assertTrue(showDbsEmpty.contains("Base de Datos"));
+            assertFalse(showDbsEmpty.contains("default_db"));
+
+            // 2. Crear una BD explícitamente y verificar listado con show dbs y show
+            // databases
+            shell.executeCommand("CREATE DATABASE lazy_test_db");
             String showDbs = shell.executeCommand("show dbs");
-            assertTrue(showDbs.contains("default_db"));
+            assertTrue(showDbs.contains("lazy_test_db"));
             assertTrue(showDbs.contains("Base de Datos"));
 
             String showDatabases = shell.executeCommand("show databases");
-            assertTrue(showDatabases.contains("default_db"));
+            assertTrue(showDatabases.contains("lazy_test_db"));
+            shell.executeCommand("DROP DATABASE lazy_test_db");
         }
     }
 
@@ -424,11 +491,13 @@ public class JettraStoreShellTest {
     public void testSelectClientesQueryStreamingAndLimit() {
         try (JettraClient client = JettraClient.connect("127.0.0.1", 50001, "admin", "admin-jettra")) {
             JettraStoreShellApp shell = new JettraStoreShellApp(client);
+            shell.executeCommand("INSTALL SAMPLES");
             shell.executeCommand("use example_factura_db");
 
             // 1. select * from clientes sin limit explicito aplica default limit acotado
             String resDefault = shell.executeCommand("select * from clientes");
-            System.out.println("DEBUG select * from clientes:\n" + resDefault.substring(0, Math.min(resDefault.length(), 600)));
+            System.out.println(
+                    "DEBUG select * from clientes:\n" + resDefault.substring(0, Math.min(resDefault.length(), 600)));
             assertTrue(resDefault.contains("JETTRASQL RESULTADO"));
             assertTrue(resDefault.contains("clientes"));
             assertTrue(resDefault.contains("fila(s)"));
@@ -481,11 +550,12 @@ public class JettraStoreShellTest {
             assertTrue(p3.contains("PÁGINA [ 3 /"));
         }
     }
+
     @Test
     @DisplayName("Debe procesar comandos interactivos de cálculo, agregación, finanzas, estadística y vectores")
     public void testShellCalcAggregationsStatsFinanceVector() {
         try (JettraClient client = JettraClient.connect("127.0.0.1", 50001, "admin", "admin-jettra");
-             JettraStoreShellApp shell = new JettraStoreShellApp(client)) {
+                JettraStoreShellApp shell = new JettraStoreShellApp(client)) {
 
             // 1. Math
             String mathRes = shell.executeCommand("MATH 50 + cbrt(1000) * 2");
@@ -514,7 +584,7 @@ public class JettraStoreShellTest {
             assertTrue(vecCross.contains("0.0, 0.0, 1.0"));
 
             // 5. Aggregations via Shell
-            shell.executeCommand("USE shell_calc_db");
+            shell.executeCommand("USE shell_calc_test_db");
             shell.executeCommand("INSERT INTO metrics VALUES ('m1', '{\"server\": \"srv1\", \"cpu\": 40.0}')");
             shell.executeCommand("INSERT INTO metrics VALUES ('m2', '{\"server\": \"srv1\", \"cpu\": 60.0}')");
             shell.executeCommand("INSERT INTO metrics VALUES ('m3', '{\"server\": \"srv2\", \"cpu\": 80.0}')");
@@ -524,7 +594,8 @@ public class JettraStoreShellTest {
             assertTrue(aggRes.contains("AVG(cpu)"));
 
             // 6. SQL GROUP BY standard
-            String sqlGroup = shell.executeCommand("SELECT server, SUM(cpu) AS total_cpu, AVG(cpu) AS avg_cpu FROM metrics GROUP BY server");
+            String sqlGroup = shell.executeCommand(
+                    "SELECT server, SUM(cpu) AS total_cpu, AVG(cpu) AS avg_cpu FROM metrics GROUP BY server");
             assertTrue(sqlGroup.contains("total_cpu"));
         }
     }
@@ -671,9 +742,12 @@ public class JettraStoreShellTest {
 
         // 1. Ayuda general 'help' y '?'
         String helpGeneral = shell.executeCommand("help");
-        assertTrue(helpGeneral.contains("cluster-distributed <all>             distribuye entre todos los nodos todas las bases de datos"));
-        assertTrue(helpGeneral.contains("cluster-distributed <nombre-base-datos>: distribuye la base de datos indicada"));
-        assertTrue(helpGeneral.contains("cluster-distributed info :            Muestra una tabla con los nodos y las bases de datos en cada nodo."));
+        assertTrue(helpGeneral.contains(
+                "cluster-distributed <all>             distribuye entre todos los nodos todas las bases de datos"));
+        assertTrue(
+                helpGeneral.contains("cluster-distributed <nombre-base-datos>: distribuye la base de datos indicada"));
+        assertTrue(helpGeneral.contains(
+                "cluster-distributed info :            Muestra una tabla con los nodos y las bases de datos en cada nodo."));
         assertTrue(helpGeneral.contains("cluster live [límite]"));
 
         String helpQuestion = shell.executeCommand("?");
@@ -702,9 +776,8 @@ public class JettraStoreShellTest {
 
         // Publicar un evento de prueba en el bus
         io.jettra.store.cluster.JettraClusterEventBus.getInstance().publish(
-            io.jettra.store.cluster.ClusterLiveEvent.TYPE_DOCUMENT_REPLICATED,
-            "node-01", "node-02", "Replicando factura fac_100 a nodo 2", "db=ventas"
-        );
+                io.jettra.store.cluster.ClusterLiveEvent.TYPE_DOCUMENT_REPLICATED,
+                "node-01", "node-02", "Replicando factura fac_100 a nodo 2", "db=ventas");
 
         String out = shell.executeCommand("cluster live");
         assertTrue(out.contains("JETTRASTORE CLUSTER LIVE EVENT STREAM"));
@@ -723,7 +796,8 @@ public class JettraStoreShellTest {
     public void testTabAutocompletionSingleAndMultipleMatches() {
         JettraStoreShellApp shell = new JettraStoreShellApp(false);
 
-        // 1. Coincidencia única: 'LOAD SAMPLE ex' debe autocompletar a 'example_factura_db'
+        // 1. Coincidencia única: 'LOAD SAMPLE ex' debe autocompletar a
+        // 'example_factura_db'
         var singleMatches = shell.autocomplete("LOAD SAMPLE ex");
         assertNotNull(singleMatches);
         assertEquals(1, singleMatches.size());
@@ -771,31 +845,37 @@ public class JettraStoreShellTest {
 
         // 2. Crear LineReader simulado con terminal virtual
         org.jline.terminal.Terminal terminal = org.jline.terminal.TerminalBuilder.builder()
-            .dumb(true)
-            .build();
+                .dumb(true)
+                .build();
 
         org.jline.reader.LineReader lineReader = org.jline.reader.LineReaderBuilder.builder()
-            .terminal(terminal)
-            .option(org.jline.reader.LineReader.Option.AUTO_MENU_LIST, false)
-            .option(org.jline.reader.LineReader.Option.AUTO_LIST, true)
-            .build();
+                .terminal(terminal)
+                .option(org.jline.reader.LineReader.Option.AUTO_MENU_LIST, false)
+                .option(org.jline.reader.LineReader.Option.AUTO_LIST, true)
+                .build();
 
         // Aplicar los mismos mapeos ANSI que utiliza el Shell interactivo
         for (String mapName : java.util.List.of(org.jline.reader.LineReader.EMACS, org.jline.reader.LineReader.MAIN)) {
             org.jline.keymap.KeyMap<org.jline.reader.Binding> map = lineReader.getKeyMaps().get(mapName);
             if (map != null) {
-                map.bind(new org.jline.reader.Reference(org.jline.reader.LineReader.UP_LINE_OR_HISTORY), "\033[A", "\033OA");
-                map.bind(new org.jline.reader.Reference(org.jline.reader.LineReader.DOWN_LINE_OR_HISTORY), "\033[B", "\033OB");
+                map.bind(new org.jline.reader.Reference(org.jline.reader.LineReader.UP_LINE_OR_HISTORY), "\033[A",
+                        "\033OA");
+                map.bind(new org.jline.reader.Reference(org.jline.reader.LineReader.DOWN_LINE_OR_HISTORY), "\033[B",
+                        "\033OB");
                 map.bind(new org.jline.reader.Reference(org.jline.reader.LineReader.FORWARD_CHAR), "\033[C", "\033OC");
                 map.bind(new org.jline.reader.Reference(org.jline.reader.LineReader.BACKWARD_CHAR), "\033[D", "\033OD");
-                map.bind(new org.jline.reader.Reference(org.jline.reader.LineReader.BEGINNING_OF_LINE), "\033[H", "\033[1~", "\033OH");
-                map.bind(new org.jline.reader.Reference(org.jline.reader.LineReader.END_OF_LINE), "\033[F", "\033[4~", "\033OF");
+                map.bind(new org.jline.reader.Reference(org.jline.reader.LineReader.BEGINNING_OF_LINE), "\033[H",
+                        "\033[1~", "\033OH");
+                map.bind(new org.jline.reader.Reference(org.jline.reader.LineReader.END_OF_LINE), "\033[F", "\033[4~",
+                        "\033OF");
                 map.bind(new org.jline.reader.Reference(org.jline.reader.LineReader.DELETE_CHAR), "\033[3~");
             }
         }
 
-        // 3. Verificar que tanto secuencias ANSI (\033[A, \033[B) como Application (\033OA, \033OB) están mapeadas
-        org.jline.keymap.KeyMap<org.jline.reader.Binding> mainMap = lineReader.getKeyMaps().get(org.jline.reader.LineReader.MAIN);
+        // 3. Verificar que tanto secuencias ANSI (\033[A, \033[B) como Application
+        // (\033OA, \033OB) están mapeadas
+        org.jline.keymap.KeyMap<org.jline.reader.Binding> mainMap = lineReader.getKeyMaps()
+                .get(org.jline.reader.LineReader.MAIN);
         assertNotNull(mainMap);
         assertNotNull(mainMap.getBound("\033[A"));
         assertNotNull(mainMap.getBound("\033OA"));
@@ -851,14 +931,15 @@ public class JettraStoreShellTest {
         String prevCfg = System.getProperty("jettra.shell.config.file");
         try {
             java.nio.file.Files.writeString(tempMp,
-                "# JettraStore Shell Test Config\napp.title=JettraStore Shell\ncluster.nodes=node-01:127.0.0.1:50001,node-02:127.0.0.1:50002\n",
-                java.nio.charset.StandardCharsets.UTF_8);
+                    "# JettraStore Shell Test Config\napp.title=JettraStore Shell\ncluster.nodes=node-01:127.0.0.1:50001,node-02:127.0.0.1:50002\n",
+                    java.nio.charset.StandardCharsets.UTF_8);
             System.setProperty("jettra.shell.config.file", tempMp.toAbsolutePath().toString());
 
             try (JettraClient client = JettraClient.connect("127.0.0.1", 50001, "admin", "admin-jettra")) {
                 JettraStoreShellApp shell = new JettraStoreShellApp(client);
 
-                // 1. Verificar carga inicial desde microprofile-config.properties en menú de conexiones y LIST CONNECTIONS
+                // 1. Verificar carga inicial desde microprofile-config.properties en menú de
+                // conexiones y LIST CONNECTIONS
                 String menuBefore = shell.getConnectionsMenuDisplay();
                 assertTrue(menuBefore.contains("node-01"));
                 assertTrue(menuBefore.contains("127.0.0.1:50001"));
@@ -870,19 +951,22 @@ public class JettraStoreShellTest {
                 assertTrue(listBefore.contains("node-01"));
                 assertTrue(listBefore.contains("node-02"));
 
-                // 2. Guardar nueva conexión y verificar actualización en microprofile-config.properties
+                // 2. Guardar nueva conexión y verificar actualización en
+                // microprofile-config.properties
                 String saveRes = shell.executeCommand("SAVE CONNECTION node-04 127.0.0.1 50004 admin");
                 assertTrue(saveRes.contains("[SUCCESS]"));
                 String mpAfterSave = java.nio.file.Files.readString(tempMp, java.nio.charset.StandardCharsets.UTF_8);
                 assertTrue(mpAfterSave.contains("node-04:127.0.0.1:50004"));
 
-                // 3. Agregar nodo con ADD NODE y verificar actualización en microprofile-config.properties
+                // 3. Agregar nodo con ADD NODE y verificar actualización en
+                // microprofile-config.properties
                 String addRes = shell.executeCommand("ADD NODE node-05 127.0.0.1 50005 SECONDARY");
                 assertTrue(addRes.contains("[SUCCESS]"));
                 String mpAfterAdd = java.nio.file.Files.readString(tempMp, java.nio.charset.StandardCharsets.UTF_8);
                 assertTrue(mpAfterAdd.contains("node-05:127.0.0.1:50005"));
 
-                // 4. Remover nodo con REMOVE NODE y verificar eliminación en microprofile-config.properties
+                // 4. Remover nodo con REMOVE NODE y verificar eliminación en
+                // microprofile-config.properties
                 String remRes = shell.executeCommand("REMOVE NODE node-05");
                 assertTrue(remRes.contains("[SUCCESS]"));
                 String mpAfterRem = java.nio.file.Files.readString(tempMp, java.nio.charset.StandardCharsets.UTF_8);
@@ -909,11 +993,11 @@ public class JettraStoreShellTest {
         String prevCluster = System.getProperty("cluster.config.path");
         try {
             java.nio.file.Files.writeString(tempMp,
-                "# Shell Test Config\napp.title=JettraStore Shell\ncluster.nodes=node-01:127.0.0.1:50001\n",
-                java.nio.charset.StandardCharsets.UTF_8);
+                    "# Shell Test Config\napp.title=JettraStore Shell\ncluster.nodes=node-01:127.0.0.1:50001\n",
+                    java.nio.charset.StandardCharsets.UTF_8);
             java.nio.file.Files.writeString(tempCluster,
-                "cluster.name = test-cluster\ncluster.node.1.id = node-01\ncluster.node.1.role = PRIMARY\ncluster.node.1.ip = 127.0.0.1\ncluster.node.1.grpc.port = 50001\ncluster.node.1.rest.port = 8081\n",
-                java.nio.charset.StandardCharsets.UTF_8);
+                    "cluster.name = test-cluster\ncluster.node.1.id = node-01\ncluster.node.1.role = PRIMARY\ncluster.node.1.ip = 127.0.0.1\ncluster.node.1.grpc.port = 50001\ncluster.node.1.rest.port = 8081\n",
+                    java.nio.charset.StandardCharsets.UTF_8);
             System.setProperty("jettra.shell.config.file", tempMp.toAbsolutePath().toString());
             System.setProperty("cluster.config.path", tempCluster.toAbsolutePath().toString());
 
@@ -925,14 +1009,16 @@ public class JettraStoreShellTest {
                 assertTrue(addRes.contains("[SUCCESS]"));
                 assertTrue(addRes.contains("node-06"));
 
-                String clusterContentAfterAdd = java.nio.file.Files.readString(tempCluster, java.nio.charset.StandardCharsets.UTF_8);
+                String clusterContentAfterAdd = java.nio.file.Files.readString(tempCluster,
+                        java.nio.charset.StandardCharsets.UTF_8);
                 assertTrue(clusterContentAfterAdd.contains("node-06"));
 
                 // CLUSTER REMOVE-NODE
                 String remRes = shell.executeCommand("CLUSTER REMOVE-NODE node-06");
                 assertTrue(remRes.contains("[SUCCESS]"));
 
-                String clusterContentAfterRem = java.nio.file.Files.readString(tempCluster, java.nio.charset.StandardCharsets.UTF_8);
+                String clusterContentAfterRem = java.nio.file.Files.readString(tempCluster,
+                        java.nio.charset.StandardCharsets.UTF_8);
                 assertFalse(clusterContentAfterRem.contains("node-06"));
             }
         } finally {
@@ -982,18 +1068,19 @@ public class JettraStoreShellTest {
             assertFalse(emptyShow.contains("example_factura_db"));
             assertTrue(emptyShow.contains("Total: 0 base(s) de datos almacenadas en el nodo PRIMARY"));
 
-            // 2. Crear bases de datos en el nodo PRIMARY y verificar que SHOW DATABASES las lista desde el PRIMARY
-            primaryServer.getOrCreateDatabase("ventas_primary_db");
-            primaryServer.getOrCreateDatabase("inventario_primary_db");
+            // 2. Crear bases de datos en el nodo PRIMARY y verificar que SHOW DATABASES las
+            // lista desde el PRIMARY
+            primaryServer.getOrCreateDatabase("ventas_primary_test_db");
+            primaryServer.getOrCreateDatabase("inventario_primary_test_db");
 
             String populatedShow = shell.executeCommand("SHOW DATABASES");
-            assertTrue(populatedShow.contains("ventas_primary_db"));
-            assertTrue(populatedShow.contains("inventario_primary_db"));
+            assertTrue(populatedShow.contains("ventas_primary_test_db"));
+            assertTrue(populatedShow.contains("inventario_primary_test_db"));
             assertFalse(populatedShow.contains("default_db"));
             assertTrue(populatedShow.contains("Total: 2 base(s) de datos almacenadas en el nodo PRIMARY"));
         } finally {
             primaryServer.stop();
+            JettraShellTestCleanup.deleteRecursively(tempStorage);
         }
     }
 }
-

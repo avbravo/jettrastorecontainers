@@ -114,19 +114,26 @@ public class JettraStoreEngineTest extends JettraStoreBaseTest {
     @Test
     @DisplayName("Debe ejecutar Hot Backup y Restauración de base de datos .jettra")
     public void testBackupAndRestore() throws IOException {
-        JettraStoreConfig cfg = JettraStoreConfig.load();
-        try (JettraDatabase db = new JettraDatabase("test_backup_db", cfg)) {
+        Path tempDir = Files.createTempDirectory("jettra_backup_test_");
+        java.util.Properties props = new java.util.Properties();
+        props.setProperty("cluster.node.id", "node-01");
+        props.setProperty("cluster.node.role", "PRIMARY");
+        props.setProperty("cluster.multinode.active", "off");
+        props.setProperty("jettra.storage.path", tempDir.toAbsolutePath().toString());
+        JettraStoreConfig cfg = new JettraStoreConfig(props, new java.util.Properties());
+        try (JettraDatabase db = new JettraDatabase("backup_test_db", cfg)) {
             db.getDocumentEngine("users").insert("u1", Map.of("name", "Alice"));
 
             Path backupPath = Files.createTempFile("snapshot", ".jettra_bak");
             var meta = BackupManager.backupDatabase(db, backupPath);
             assertNotNull(meta);
-            assertEquals("test_backup_db", meta.databaseName());
+            assertEquals("backup_test_db", meta.databaseName());
 
             boolean restored = BackupManager.restoreDatabase(backupPath, db);
             assertTrue(restored);
             Files.deleteIfExists(backupPath);
         } finally {
+            JettraTestCleanup.deleteRecursively(tempDir);
             cleanUpNode1AndTestDatabases();
         }
     }
@@ -134,21 +141,28 @@ public class JettraStoreEngineTest extends JettraStoreBaseTest {
     @Test
     @DisplayName("Debe crear el directorio configurado en microprofile-config.properties y almacenar datos")
     public void testConfiguredStoragePathCreationAndStore() throws IOException {
-        JettraStoreConfig cfg = JettraStoreConfig.load();
+        Path tempDir = Files.createTempDirectory("jettra_storage_test_");
+        java.util.Properties props = new java.util.Properties();
+        props.setProperty("cluster.node.id", "node-01");
+        props.setProperty("cluster.node.role", "PRIMARY");
+        props.setProperty("cluster.multinode.active", "off");
+        props.setProperty("jettra.storage.path", tempDir.toAbsolutePath().toString());
+        JettraStoreConfig cfg = new JettraStoreConfig(props, new java.util.Properties());
         assertTrue(cfg.getStoragePath().contains("jettra") && Files.isDirectory(Path.of(cfg.getStoragePath())));
         assertTrue(Files.exists(Path.of(cfg.getStoragePath())));
         assertTrue(Files.isDirectory(Path.of(cfg.getStoragePath())));
         assertTrue(Files.isWritable(Path.of(cfg.getStoragePath())));
 
-        try (JettraDatabase db = new JettraDatabase("verify_storage_db", cfg)) {
+        try (JettraDatabase db = new JettraDatabase("verify_storage_test_db", cfg)) {
             db.getDocumentEngine("items").insert("i1", Map.of("title", "Product"));
             db.flushMemTable();
 
-            Path expectedFile = Path.of(cfg.getStoragePath(), "verify_storage_db_sstable" + cfg.getFileExtension());
+            Path expectedFile = Path.of(cfg.getStoragePath(), "verify_storage_test_db_sstable" + cfg.getFileExtension());
             assertTrue(Files.exists(expectedFile));
             assertTrue(Files.size(expectedFile) > 0);
             Files.deleteIfExists(expectedFile);
         } finally {
+            JettraTestCleanup.deleteRecursively(tempDir);
             cleanUpNode1AndTestDatabases();
         }
     }

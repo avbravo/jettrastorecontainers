@@ -208,6 +208,7 @@ public final class JettraStoreConfig {
                 configuredPath = ddVal.trim();
             }
         }
+        boolean storagePathExplicitlyConfigured = (configuredPath != null);
         if (configuredPath == null) {
             configuredPath = defaultStorage;
         }
@@ -220,38 +221,25 @@ public final class JettraStoreConfig {
             resolvedPath = System.getProperty("user.home");
         }
 
-        // Crear directorio de almacenamiento si no existe
+        // Solo crear el directorio de almacenamiento cuando fue especificado explícitamente en jettra.storage.path
         Path path = Path.of(resolvedPath);
         String effectivePath = resolvedPath;
-        try {
-            if (!Files.exists(path)) {
-                Files.createDirectories(path);
+        if (storagePathExplicitlyConfigured) {
+            try {
+                if (!Files.exists(path)) {
+                    Files.createDirectories(path);
+                }
+            } catch (Exception ex) {
+                System.err.printf("[JettraStoreConfig] Advertencia: No se pudo crear directorio '%s': %s%n",
+                    resolvedPath, ex.getMessage());
             }
-        } catch (Exception ex) {
-            System.err.printf("[JettraStoreConfig] Advertencia: No se pudo crear directorio '%s': %s%n", 
-                resolvedPath, ex.getMessage());
-        }
-
-        if (Files.exists(path) && Files.isWritable(path)) {
-            effectivePath = resolvedPath;
-        } else {
-            boolean fallbackApplied = false;
-            if (resolvedPath.startsWith("/jettra")) {
+            if (!(Files.exists(path) && Files.isWritable(path)) && resolvedPath.startsWith("/jettra")) {
                 Path userHomeFallback = Path.of(System.getProperty("user.home"), resolvedPath.substring(1));
                 try {
                     Files.createDirectories(userHomeFallback);
                     if (Files.exists(userHomeFallback) && Files.isWritable(userHomeFallback)) {
                         effectivePath = userHomeFallback.toAbsolutePath().toString();
-                        fallbackApplied = true;
                     }
-                } catch (Exception ignored) {}
-            }
-            if (!fallbackApplied) {
-                System.err.printf("[JettraStoreConfig] Advertencia: Directorio '%s' no accesible para escritura. Conmutando a fallback local './data/jettra'.%n", 
-                    resolvedPath);
-                effectivePath = "./data/jettra";
-                try {
-                    Files.createDirectories(Path.of(effectivePath));
                 } catch (Exception ignored) {}
             }
         }

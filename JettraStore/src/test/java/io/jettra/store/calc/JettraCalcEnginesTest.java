@@ -86,9 +86,15 @@ public class JettraCalcEnginesTest extends JettraStoreBaseTest {
 
     @Test
     @DisplayName("Test SQL & Aggregations Integration")
-    public void testSQLAggregations() {
-        JettraStoreConfig cfg = JettraStoreConfig.load();
-        try (JettraDatabase db = new JettraDatabase("test_calc_db", cfg)) {
+    public void testSQLAggregations() throws Exception {
+        java.nio.file.Path tempDir = java.nio.file.Files.createTempDirectory("jettra_calc_test_");
+        java.util.Properties props = new java.util.Properties();
+        props.setProperty("cluster.node.id", "node-01");
+        props.setProperty("cluster.node.role", "PRIMARY");
+        props.setProperty("cluster.multinode.active", "off");
+        props.setProperty("jettra.storage.path", tempDir.toAbsolutePath().toString());
+        JettraStoreConfig cfg = new JettraStoreConfig(props, new java.util.Properties());
+        try (JettraDatabase db = new JettraDatabase("calc_test_db", cfg)) {
             DocumentEngine engine = db.getDocumentEngine("sales");
 
             engine.insert("s1", Map.of("category", "A", "amount", 100.0));
@@ -110,6 +116,7 @@ public class JettraCalcEnginesTest extends JettraStoreBaseTest {
             assertEquals(1, qVec.totalRows());
             assertEquals(32.0f, (Float) qVec.rows().get(0).get(0), 0.001f);
         } finally {
+            io.jettra.store.JettraTestCleanup.deleteRecursively(tempDir);
             cleanUpNode1AndTestDatabases();
         }
     }

@@ -90,7 +90,7 @@ public class JettraStorePlugin {
     private final AtomicBoolean heartbeatRunning = new AtomicBoolean(false);
     private volatile Thread heartbeatThread;
     private volatile long heartbeatIntervalMs = 1000L;
-    private final String clusterNodesConfigPath = "memory/cluster_nodes.json";
+    private final String clusterNodesConfigPath = System.getProperty("jettra.explorer.cluster.nodes.file", "memory/cluster_nodes.json");
 
     private JettraStorePlugin() {
         this.mapper = new ObjectMapper();

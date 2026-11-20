@@ -44,9 +44,56 @@ public class JettraStoreExplorerTest {
             .followRedirects(HttpClient.Redirect.ALWAYS)
             .build();
 
+    private static java.nio.file.Path tempTestMicroprofileConfig;
+    private static java.nio.file.Path tempTestClusterConfig;
+    private static java.nio.file.Path tempTestClusterNodesFile;
+
     static {
+        try {
+            // Crear archivo temporal microprofile-config-test_db.properties y cluster-test_db.config aislados para tests
+            // sin alterar los archivos reales ni conectarse a un clúster en producción en ejecución
+            java.nio.file.Path targetDir = java.nio.file.Path.of("target");
+            java.nio.file.Files.createDirectories(targetDir);
+            tempTestMicroprofileConfig = targetDir.resolve("microprofile-config-test_db.properties");
+            java.nio.file.Files.writeString(tempTestMicroprofileConfig,
+                    "server.host=127.0.0.1\n"
+                    + "server.port=8085\n"
+                    + "server.contextpath=/\n"
+                    + "storage.mode=OFF_HEAP\n"
+                    + "app.title=JettraStore Explorer\n"
+                    + "cluster.multinode.active=on\n"
+                    + "cluster.healthcheck.timeout.ms=200\n"
+                    + "cluster.nodes=node-01:127.0.0.1:59001,node-02:127.0.0.1:59002,node-03:127.0.0.1:59003\n",
+                    java.nio.charset.StandardCharsets.UTF_8);
+            tempTestClusterConfig = targetDir.resolve("cluster-test_db.config");
+            java.nio.file.Files.writeString(tempTestClusterConfig,
+                    "cluster.name = jettra-test-cluster\n"
+                    + "cluster.consensus.protocol = RAFT\n"
+                    + "cluster.node.1.id = node-01\n"
+                    + "cluster.node.1.role = PRIMARY\n"
+                    + "cluster.node.1.ip = 127.0.0.1\n"
+                    + "cluster.node.1.grpc.port = 59001\n"
+                    + "cluster.node.1.rest.port = 69001\n"
+                    + "cluster.node.2.id = node-02\n"
+                    + "cluster.node.2.role = SECONDARY\n"
+                    + "cluster.node.2.ip = 127.0.0.1\n"
+                    + "cluster.node.2.grpc.port = 59002\n"
+                    + "cluster.node.2.rest.port = 69002\n"
+                    + "cluster.node.3.id = node-03\n"
+                    + "cluster.node.3.role = SECONDARY\n"
+                    + "cluster.node.3.ip = 127.0.0.1\n"
+                    + "cluster.node.3.grpc.port = 59003\n"
+                    + "cluster.node.3.rest.port = 69003\n",
+                    java.nio.charset.StandardCharsets.UTF_8);
+            tempTestClusterNodesFile = targetDir.resolve("cluster_nodes_test_db.json");
+            System.setProperty("jettra.explorer.config.file", tempTestMicroprofileConfig.toAbsolutePath().toString());
+            System.setProperty("microprofile.config.file", tempTestMicroprofileConfig.toAbsolutePath().toString());
+            System.setProperty("cluster.config.path", tempTestClusterConfig.toAbsolutePath().toString());
+            System.setProperty("jettra.explorer.cluster.nodes.file", tempTestClusterNodesFile.toAbsolutePath().toString());
+            System.setProperty("cluster.nodes", "node-01:127.0.0.1:59001,node-02:127.0.0.1:59002,node-03:127.0.0.1:59003");
+        } catch (Exception ignored) {}
+
         // Reducir latencias de comprobación de clúster a loopback local (0.05 ms vs 1000 ms por timeout TCP)
-        System.setProperty("cluster.nodes", "node-01:127.0.0.1:50001,node-02:127.0.0.1:50002,node-03:127.0.0.1:50003");
         System.setProperty("cluster.healthcheck.timeout.ms", "200");
         System.setProperty("cluster.heartbeat.interval.ms", "60000");
 
@@ -54,7 +101,26 @@ public class JettraStoreExplorerTest {
             if (sharedServer != null && sharedServer.isRunning()) {
                 App.stopApplication(sharedServer);
             }
+            cleanupTempConfigFiles();
         }));
+    }
+
+    private static void cleanupTempConfigFiles() {
+        try {
+            if (tempTestMicroprofileConfig != null) {
+                java.nio.file.Files.deleteIfExists(tempTestMicroprofileConfig);
+            }
+        } catch (Exception ignored) {}
+        try {
+            if (tempTestClusterConfig != null) {
+                java.nio.file.Files.deleteIfExists(tempTestClusterConfig);
+            }
+        } catch (Exception ignored) {}
+        try {
+            if (tempTestClusterNodesFile != null) {
+                java.nio.file.Files.deleteIfExists(tempTestClusterNodesFile);
+            }
+        } catch (Exception ignored) {}
     }
 
     @BeforeAll
@@ -70,10 +136,17 @@ public class JettraStoreExplorerTest {
 
     @AfterAll
     public static void tearDownSuite() {
+        try {
+            JettraExplorerTestCleanup.cleanAll(JettraStorePlugin.getInstance());
+        } catch (Exception ignored) {}
         if (sharedServer != null && sharedServer.isRunning()) {
             App.stopApplication(sharedServer);
             sharedServer = null;
         }
+        cleanupTempConfigFiles();
+        System.clearProperty("jettra.explorer.config.file");
+        System.clearProperty("microprofile.config.file");
+        System.clearProperty("jettra.explorer.cluster.nodes.file");
     }
 
     private static volatile boolean cleanStartVerified = false;
@@ -278,23 +351,23 @@ public class JettraStoreExplorerTest {
     @Test
     @DisplayName("6. Administrar Bases de Datos y Motores: Creación dinámica de Base de Datos y nuevo Motor")
     public void testCreateDatabaseAndBucket() throws Exception {
-        String createDbForm = "action=create_db&dbName=test_billing_db&defaultBucket=FacturasEmitidas&engineType=DOCUMENT&description=BD_Prueba_Automatizada";
+        String createDbForm = "action=create_db&dbName=billing_test_db&defaultBucket=FacturasEmitidas&engineType=DOCUMENT&description=BD_Prueba_Automatizada";
         HttpResponse<String> res1 = postForm("/databases", createDbForm);
         JettraAssert.assertEquals(302, res1.statusCode(), "Crear BD debe redirigir");
 
         JettraStorePlugin plugin = JettraStorePlugin.getInstance();
-        JettraAssert.assertTrue(plugin.getDatabaseNames().contains("test_billing_db"), "La BD debe haberse registrado en el catálogo");
+        JettraAssert.assertTrue(plugin.getDatabaseNames().contains("billing_test_db"), "La BD debe haberse registrado en el catálogo");
 
-        String addBucketForm = "action=add_bucket&db=test_billing_db&bucketName=FacturasEmbeddings&engineType=VECTOR&description=Embeddings_HNSW";
+        String addBucketForm = "action=add_bucket&db=billing_test_db&bucketName=FacturasEmbeddings&engineType=VECTOR&description=Embeddings_HNSW";
         HttpResponse<String> res2 = postForm("/databases", addBucketForm);
         JettraAssert.assertEquals(302, res2.statusCode(), "Añadir motor debe redirigir");
 
-        EngineBucketInfo b = plugin.getBucket("test_billing_db", "FacturasEmbeddings");
+        EngineBucketInfo b = plugin.getBucket("billing_test_db", "FacturasEmbeddings");
         JettraAssert.assertNotNull(b, "El nuevo bucket/motor debe existir");
         JettraAssert.assertEquals("VECTOR", b.getEngineType(), "El motor debe ser VECTOR");
 
-        plugin.deleteDatabase("test_billing_db");
-        JettraAssert.assertFalse(plugin.getDatabaseNames().contains("test_billing_db"), "La BD debe eliminarse");
+        plugin.deleteDatabase("billing_test_db");
+        JettraAssert.assertFalse(plugin.getDatabaseNames().contains("billing_test_db"), "La BD debe eliminarse");
     }
 
     @Test
@@ -525,10 +598,10 @@ public class JettraStoreExplorerTest {
             JettraAssert.assertEquals(8085, plugin.getServerPort(), "El server.port Web UI debe ser 8085");
             JettraAssert.assertEquals("/", plugin.getServerContextPath(), "El server.contextpath en microprofile-config.properties debe ser /");
 
-            // 2. Nodo PRIMARY registrado con su puerto propio (50001)
+            // 2. Nodo PRIMARY registrado con su puerto propio (59001 en microprofile-config-test_db.properties)
             JettraAssert.assertNotNull(primaryNode, "El nodo node-01 debe existir");
             JettraAssert.assertEquals("PRIMARY", primaryNode.getRole(), "El rol de node-01 debe ser PRIMARY");
-            JettraAssert.assertEquals(50001, originalPrimaryPort, "El puerto de node-01 debe provenir de cluster.nodes (50001), no de server.port");
+            JettraAssert.assertEquals(59001, originalPrimaryPort, "El puerto de node-01 debe provenir de cluster.nodes (59001), no de server.port");
 
             // 3. Aislar nodos secundarios y cerrar puerto de PRIMARY: todo el clúster OFFLINE
             int closedPrimaryPort;
@@ -1509,8 +1582,8 @@ public class JettraStoreExplorerTest {
         boolean origActive = primaryNode != null && primaryNode.isActive();
         try {
             primaryServer.start();
-            primaryServer.getOrCreateDatabase("primary_crm_db");
-            primaryServer.getOrCreateDatabase("primary_erp_db");
+            primaryServer.getOrCreateDatabase("primary_crm_test_db");
+            primaryServer.getOrCreateDatabase("primary_erp_test_db");
 
             JettraAssert.assertTrue(primaryNode != null, "Debe existir un nodo PRIMARY registrado");
             primaryNode.setHost("127.0.0.1");
@@ -1520,26 +1593,28 @@ public class JettraStoreExplorerTest {
 
             boolean synced = plugin.syncDatabasesFromPrimary(true);
             JettraAssert.assertTrue(synced, "Debe sincronizar el catálogo desde el nodo PRIMARY activo");
-            JettraAssert.assertTrue(plugin.getDatabaseNames().contains("primary_crm_db"),
-                    "El catálogo debe incluir primary_crm_db del nodo PRIMARY");
-            JettraAssert.assertTrue(plugin.getDatabaseNames().contains("primary_erp_db"),
-                    "El catálogo debe incluir primary_erp_db del nodo PRIMARY");
+            JettraAssert.assertTrue(plugin.getDatabaseNames().contains("primary_crm_test_db"),
+                    "El catálogo debe incluir primary_crm_test_db del nodo PRIMARY");
+            JettraAssert.assertTrue(plugin.getDatabaseNames().contains("primary_erp_test_db"),
+                    "El catálogo debe incluir primary_erp_test_db del nodo PRIMARY");
 
             HttpResponse<String> res = get("/databases");
             JettraAssert.assertEquals(200, res.statusCode(), "/databases debe responder HTTP 200");
-            JettraAssert.assertTrue(res.body().contains("primary_crm_db"),
-                    "La vista /databases debe mostrar primary_crm_db almacenada en el nodo PRIMARY");
-            JettraAssert.assertTrue(res.body().contains("primary_erp_db"),
-                    "La vista /databases debe mostrar primary_erp_db almacenada en el nodo PRIMARY");
+            JettraAssert.assertTrue(res.body().contains("primary_crm_test_db"),
+                    "La vista /databases debe mostrar primary_crm_test_db almacenada en el nodo PRIMARY");
+            JettraAssert.assertTrue(res.body().contains("primary_erp_test_db"),
+                    "La vista /databases debe mostrar primary_erp_test_db almacenada en el nodo PRIMARY");
         } finally {
             primaryServer.stop();
+            JettraExplorerTestCleanup.deleteRecursively(tempStorage);
             if (primaryNode != null) {
                 primaryNode.setHost(origHost);
                 primaryNode.setPort(origPort);
                 primaryNode.setRestPort(origRestPort);
                 primaryNode.setActive(origActive);
             }
-            plugin.installAllExampleDatabases();
+            plugin.deleteDatabase("primary_crm_test_db");
+            plugin.deleteDatabase("primary_erp_test_db");
         }
     }
 }

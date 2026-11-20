@@ -12,12 +12,16 @@ import io.jettra.store.core.StreamResponse;
 import io.jettra.store.engine.index.JettraIndexManager;
 import io.jettra.store.engine.models.JettraRef;
 import io.jettra.store.police.JettraPoliceNotification;
+import io.jettra.test.annotation.AfterAll;
+import io.jettra.test.annotation.BeforeAll;
 import io.jettra.test.annotation.DisplayName;
 import io.jettra.test.annotation.Test;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -27,6 +31,63 @@ import java.util.concurrent.atomic.AtomicReference;
 import static io.jettra.test.core.JettraAssert.*;
 
 public class JettraClientTest {
+
+    private static Path tempTestDir;
+    private static Path tempClusterConfig;
+    private static String prevClusterConfigProp;
+    private static String prevStoragePathProp;
+    private static String prevNodeRoleProp;
+
+    @BeforeAll
+    public static void setUpIsolatedDriverTestEnv() throws IOException {
+        prevClusterConfigProp = System.getProperty("cluster.config.path");
+        prevStoragePathProp = System.getProperty("jettra.storage.path");
+        prevNodeRoleProp = System.getProperty("jettra.node.role");
+
+        tempTestDir = Files.createTempDirectory("jettra_driver_test_");
+        tempClusterConfig = tempTestDir.resolve("cluster-test_db.config");
+        Files.writeString(tempClusterConfig,
+            "cluster.name = jettra-driver-test\n"
+            + "cluster.consensus.protocol = RAFT\n"
+            + "cluster.node.1.id = node-01\n"
+            + "cluster.node.1.role = PRIMARY\n"
+            + "cluster.node.1.ip = 127.0.0.1\n"
+            + "cluster.node.1.grpc.port = 59101\n"
+            + "cluster.node.1.rest.port = 69101\n"
+            + "cluster.node.2.id = node-02\n"
+            + "cluster.node.2.role = SECONDARY\n"
+            + "cluster.node.2.ip = 127.0.0.1\n"
+            + "cluster.node.2.grpc.port = 59102\n"
+            + "cluster.node.2.rest.port = 69102\n"
+            + "cluster.node.3.id = node-03\n"
+            + "cluster.node.3.role = SECONDARY\n"
+            + "cluster.node.3.ip = 127.0.0.1\n"
+            + "cluster.node.3.grpc.port = 59103\n"
+            + "cluster.node.3.rest.port = 69103\n",
+            StandardCharsets.UTF_8);
+
+        System.setProperty("cluster.config.path", tempClusterConfig.toAbsolutePath().toString());
+        System.setProperty("jettra.storage.path", tempTestDir.resolve("data").toAbsolutePath().toString());
+        System.setProperty("jettra.node.role", "PRIMARY");
+    }
+
+    @AfterAll
+    public static void tearDownIsolatedDriverTestEnv() {
+        if (prevClusterConfigProp == null) System.clearProperty("cluster.config.path");
+        else System.setProperty("cluster.config.path", prevClusterConfigProp);
+        if (prevStoragePathProp == null) System.clearProperty("jettra.storage.path");
+        else System.setProperty("jettra.storage.path", prevStoragePathProp);
+        if (prevNodeRoleProp == null) System.clearProperty("jettra.node.role");
+        else System.setProperty("jettra.node.role", prevNodeRoleProp);
+
+        if (tempTestDir != null && Files.exists(tempTestDir)) {
+            try (var walk = Files.walk(tempTestDir)) {
+                walk.sorted(Comparator.reverseOrder()).forEach(p -> {
+                    try { Files.deleteIfExists(p); } catch (Exception ignored) {}
+                });
+            } catch (Exception ignored) {}
+        }
+    }
 
     public record TestOrderRecord(long customerId, String product, double amount, boolean active) {}
     public record TestAccountRecord(String accountId, String holder, double balance) {}
