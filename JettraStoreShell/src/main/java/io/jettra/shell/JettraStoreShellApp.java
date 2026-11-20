@@ -74,8 +74,20 @@ public final class JettraStoreShellApp implements AutoCloseable {
     public JettraStoreShellApp(boolean autoConnect) {
         initDefaultConnections();
         if (autoConnect) {
-            connectAndLogin("127.0.0.1", 50001, "admin", "admin-jettra");
+            SavedConnection defConn = getDefaultSavedConnection();
+            String h = defConn != null ? defConn.host() : "127.0.0.1";
+            int p = defConn != null ? defConn.port() : 50001;
+            String u = defConn != null ? defConn.user() : "admin";
+            connectAndLogin(h, p, u, "admin-jettra");
         }
+    }
+
+    private SavedConnection getDefaultSavedConnection() {
+        if (defaultConnectionName != null && savedConnections.containsKey(defaultConnectionName)) {
+            return savedConnections.get(defaultConnectionName);
+        }
+        List<SavedConnection> ordered = getOrderedConnectionsList();
+        return ordered.isEmpty() ? null : ordered.get(0);
     }
 
     public JettraStoreShellApp(JettraClient client) {
@@ -110,8 +122,8 @@ public final class JettraStoreShellApp implements AutoCloseable {
     private String defaultConnectionName = "node-01";
 
     private void initDefaultConnections() {
-        savedConnections.clear();
-        if (!loadInitialConnectionsFromMicroprofileConfig()) {
+        boolean loadedFromMicroprofile = loadInitialConnectionsFromMicroprofileConfig();
+        if (!loadedFromMicroprofile) {
             loadInitialConnectionsFromJettraConfig();
             loadSavedConnections();
         }
@@ -120,30 +132,9 @@ public final class JettraStoreShellApp implements AutoCloseable {
 
     private boolean loadInitialConnectionsFromMicroprofileConfig() {
         Properties props = new Properties();
-        // 1. Classpath (/META-INF/microprofile-config.properties)
-        try (var is = getClass().getResourceAsStream("/META-INF/microprofile-config.properties")) {
-            if (is != null) {
-                Properties p = new Properties();
-                p.load(is);
-                if (p.containsKey("cluster.nodes")) {
-                    props.putAll(p);
-                }
-            }
-        } catch (Exception ignored) {}
-
-        // 2. Archivos en disco (prioridad sobre classpath)
-        List<String> candidates = new ArrayList<>(List.of(
-            "src/main/resources/META-INF/microprofile-config.properties",
-            "./microprofile-config.properties",
-            "./META-INF/microprofile-config.properties",
-            "./config/microprofile-config.properties"
-        ));
         String explicitFile = System.getProperty("jettra.shell.config.file", System.getProperty("microprofile.config.file"));
         if (explicitFile != null && !explicitFile.isBlank()) {
-            candidates.add(explicitFile.trim());
-        }
-        for (String c : candidates) {
-            Path p = Path.of(c);
+            Path p = Path.of(explicitFile.trim());
             if (Files.exists(p)) {
                 try (var is = Files.newInputStream(p)) {
                     Properties diskProps = new Properties();
@@ -153,13 +144,47 @@ public final class JettraStoreShellApp implements AutoCloseable {
                     }
                 } catch (Exception ignored) {}
             }
+        } else {
+            // 1. Classpath (/META-INF/microprofile-config.properties)
+            try (var is = getClass().getResourceAsStream("/META-INF/microprofile-config.properties")) {
+                if (is != null) {
+                    Properties p = new Properties();
+                    p.load(is);
+                    if (p.containsKey("cluster.nodes")) {
+                        props.putAll(p);
+                    }
+                }
+            } catch (Exception ignored) {}
+
+            // 2. Archivos en disco (prioridad sobre classpath)
+            List<String> candidates = List.of(
+                "JettraStoreShell/src/main/resources/META-INF/microprofile-config.properties",
+                "src/main/resources/META-INF/microprofile-config.properties",
+                "./META-INF/microprofile-config.properties",
+                "./config/microprofile-config.properties",
+                "./microprofile-config.properties"
+            );
+            for (String c : candidates) {
+                Path p = Path.of(c);
+                if (Files.exists(p)) {
+                    try (var is = Files.newInputStream(p)) {
+                        Properties diskProps = new Properties();
+                        diskProps.load(is);
+                        if (diskProps.containsKey("cluster.nodes")) {
+                            props.putAll(diskProps);
+                        }
+                    } catch (Exception ignored) {}
+                }
+            }
         }
 
         String nodesConfig = System.getProperty("cluster.nodes", props.getProperty("cluster.nodes"));
         if (nodesConfig == null || nodesConfig.isBlank()) {
             return false;
         }
+        String defaultUser = props.getProperty("jettra.security.default.admin.username", "admin");
         savedConnections.clear();
+        defaultConnectionName = null;
         boolean loadedAny = false;
         for (String entry : nodesConfig.split(",")) {
             String[] parts = entry.trim().split(":");
@@ -168,7 +193,7 @@ public final class JettraStoreShellApp implements AutoCloseable {
                 String host = parts[1].trim();
                 int port = 50001;
                 try { port = Integer.parseInt(parts[2].trim()); } catch (Exception ignored) {}
-                String user = (parts.length >= 4 && !parts[3].trim().isBlank()) ? parts[3].trim() : "admin";
+                String user = (parts.length >= 4 && !parts[3].trim().isBlank()) ? parts[3].trim() : defaultUser;
                 if (!id.isBlank() && !host.isBlank() && port > 0) {
                     savedConnections.put(id, new SavedConnection(id, host, port, user));
                     if (!loadedAny || "node-01".equalsIgnoreCase(id)) {
@@ -3842,9 +3867,10 @@ return String.format("[NOT FOUND] No se encontró el bucket/unit '%s' en la base
         // 1. Mostrar menú de conexiones creadas al iniciar
         System.out.print(shell.getConnectionsMenuDisplay());
 
-        String targetHost = "127.0.0.1";
-        int targetPort = 50001;
-        String suggestedUser = "admin";
+        SavedConnection defConn = shell.getDefaultSavedConnection();
+        String targetHost = defConn != null ? defConn.host() : "127.0.0.1";
+        int targetPort = defConn != null ? defConn.port() : 50001;
+        String suggestedUser = defConn != null ? defConn.user() : "admin";
 
         String option = "";
         System.out.print(">> Seleccione una opción [1]: ");
@@ -3878,8 +3904,8 @@ return String.format("[NOT FOUND] No se encontró el bucket/unit '%s' en la base
                     shell.executeCommand(String.format("CONNECT %s %d", targetHost, targetPort));
                     System.out.printf("[CONNECT] Conexión seleccionada: '%s' (%s:%d)%n", chosen.name(), targetHost, targetPort);
                 } else {
-                    System.out.println("[WARN] Opción fuera de rango. Usando conexión predeterminada: 127.0.0.1:50001");
-                    shell.executeCommand("CONNECT 127.0.0.1 50001");
+                    System.out.printf("[WARN] Opción fuera de rango. Usando conexión predeterminada: %s:%d%n", targetHost, targetPort);
+                    shell.executeCommand(String.format("CONNECT %s %d", targetHost, targetPort));
                 }
             } catch (NumberFormatException e) {
                 if (shell.getSavedConnections().containsKey(option)) {
