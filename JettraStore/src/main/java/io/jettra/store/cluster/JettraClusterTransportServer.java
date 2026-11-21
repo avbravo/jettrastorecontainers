@@ -545,7 +545,29 @@ public final class JettraClusterTransportServer implements AutoCloseable {
                             }
                             if (server != null) {
                                 String localId = server.getConfig().getNodeId();
+
+                                // 1. Conciliar rol local con el cluster.config canónico para evitar split-brain
+                                // (ej. un nodo nuevo que se promovió a PRIMARY estando aislado antes de ser añadido al clúster)
+                                boolean otherPrimaryExists = parsedNodes.stream().anyMatch(n ->
+                                    "PRIMARY".equalsIgnoreCase(n.role()) && !n.id().equalsIgnoreCase(localId));
+                                boolean selfMarkedSecondary = parsedNodes.stream().anyMatch(n ->
+                                    n.id().equalsIgnoreCase(localId) && !"PRIMARY".equalsIgnoreCase(n.role()));
+                                if (otherPrimaryExists && selfMarkedSecondary
+                                        && server.getConfig().getNodeRole() == ClusterNode.Role.PRIMARY) {
+                                    server.getConfig().setNodeRole(ClusterNode.Role.SECONDARY);
+                                    server.recordLeaderHeartbeat(frame.senderNodeId());
+                                    System.out.printf("[JettraClusterTransport] 🔄 Rol local de '%s' conciliado a SECONDARY según cluster.config canónico.%n", localId);
+                                }
+
                                 List<ClusterNode> newlyAddedPeers = server.applySyncedPeersToRuntime(parsedNodes);
+
+                                // 2. Idempotencia estricta: si cluster.config ya era idéntico y no hay nuevos peers,
+                                // evitar re-difusiones o tormentas de sincronización (Broadcast Storm).
+                                if (!written && newlyAddedPeers.isEmpty()) {
+                                    return JettraRaftFrame.ack(frame.term(), frame.logIndex(),
+                                        localId, "Cluster config already up to date");
+                                }
+
                                 JettraClusterEventBus.getInstance().publish(
                                     ClusterLiveEvent.TYPE_DATA_TRANSFER,
                                     frame.senderNodeId(),
@@ -553,9 +575,17 @@ public final class JettraClusterTransportServer implements AutoCloseable {
                                     String.format("Archivo cluster.config actualizado (%d nodos, %d bytes)", parsedNodes.size(), cfgBytes.length),
                                     "cluster.config"
                                 );
+
+                                // 3. Evitar bucles ping-pong entre nodos del clúster:
+                                // el PRIMARY solo re-difunde cuando la actualización proviene de un cliente externo
+                                // (Explorer/Shell), nunca cuando proviene de otro nodo miembro del clúster.
+                                String senderId = frame.senderNodeId() != null ? frame.senderNodeId().trim() : "";
+                                boolean senderIsClusterPeer = parsedNodes.stream().anyMatch(n -> n.id().equalsIgnoreCase(senderId));
+
                                 if (server.getConfig().getNodeRole() == ClusterNode.Role.PRIMARY
-                                        && !"cluster-master".equalsIgnoreCase(frame.senderNodeId())
-                                        && !localId.equalsIgnoreCase(frame.senderNodeId())) {
+                                        && !senderIsClusterPeer
+                                        && !"cluster-master".equalsIgnoreCase(senderId)
+                                        && !localId.equalsIgnoreCase(senderId)) {
                                     JettraClusterReplicationClient replClient = server.getOrCreateReplicationClient();
                                     if (replClient != null) {
                                         replClient.broadcastClusterConfigSync(cfgBytes);
@@ -569,11 +599,8 @@ public final class JettraClusterTransportServer implements AutoCloseable {
                                         });
                                     }
                                 } else if (server.getConfig().getNodeRole() == ClusterNode.Role.SECONDARY) {
-                                    // Sincronizar de inmediato el estado completo de bases de datos y objetos desde el PRIMARY
-                                    Thread.ofVirtual().name("jettra-secondary-sync-on-config").start(() -> {
-                                        try { Thread.sleep(200); } catch (InterruptedException ignored) {}
-                                        server.synchronizeFromPrimary();
-                                    });
+                                    // Sincronizar de forma coalescida (sin apilar hilos) solo si cambió la configuración
+                                    server.triggerAsyncSynchronizeFromPrimary();
                                 }
                             }
                         }

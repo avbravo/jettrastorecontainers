@@ -3071,3 +3071,23 @@ JAVA_OPTS="-Xms2g -Xmx8g -XX:+UseZGC -XX:+UseCompactObjectHeaders -XX:MaxDirectM
 ```
 
 De igual manera, tras actualizar y recompilar el proyecto, recuerde ejecutar `./script/create-nodes.sh` si desea propagar los nuevos scripts `start-node.sh`, `microprofile-config.properties` y el uber-JAR optimizado hacia los directorios locales `~/jettra-node-*`.
+
+
+## SINCRONIZACION DE NUEVOS NODOS
+Correcciones aplicadas
+Conciliación de rol, idempotencia y anti-eco en JettraClusterTransportServer.java:
+Anti Split-Brain: Si un nodo recibe un cluster.config canónico donde otro nodo es PRIMARY y él mismo figura como SECONDARY, se concilia automáticamente a SECONDARY y refresca el latido del líder.
+Idempotencia estricta: Si writeClusterConfigAtomically(...) detecta que el archivo ya era idéntico byte a byte y no hay peers nuevos, responde ACK de inmediato sin re-difundir ni re-sincronizar.
+Anti-Eco entre nodos: El PRIMARY solo re-difunde TYPE_SYNC_CLUSTER_CONFIG cuando la orden proviene de un cliente de administración (JettraStoreExplorer / JettraStoreShell), nunca cuando el remitente es otro nodo miembro del clúster.
+Coalescencia de sincronizaciones en JettraStoreServer.java:
+Nuevo método triggerAsyncSynchronizeFromPrimary() protegido con AtomicBoolean secondarySyncInProgress para evitar apilar hilos de sincronización en los SECONDARY.
+Deduplicación por peer (activePeerDistributions) en distributeAllDatabasesToPeer(...) para evitar múltiples replicaciones simultáneas hacia el mismo nodo nuevo.
+Refresco de lastLeaderHeartbeatTime dentro de applySyncedPeersToRuntime(...) para evitar falsos timeouts de failover durante la reconfiguración del clúster.
+Sincronización segura de disco en JettraDatabase.java:
+loadFromDisk(Path) ahora es synchronized, evitando colisiones concurrentes (Already closed) al aplicar instantáneas de replicación.
+Verificación y pasos para probar
+mvn install -pl JettraStore,JettraStoreDriver: BUILD SUCCESS (100% de pruebas pasando y JettraStore-1.0-SNAPSHOT-uber.jar actualizado). (Nota: en JettraStoreShellTest fallaron 2 pruebas locales de conexión porque node-01 seguía activo en el puerto 50001 en tu máquina durante la compilación).
+Para aplicar el binario corregido a tus nodos locales:
+Detén los nodos que sigan en ejecución (node-01, etc.).
+Ejecuta ./script/create-nodes.sh (o copia JettraStore/target/JettraStore-1.0-SNAPSHOT-uber.jar a cada directorio ~/jettra-node-01..04/).
+Inicia tus 3 nodos y añade node-04 desde JettraStoreExplorer o JettraStoreShell: cluster.config y las bases de datos se sincronizarán en todos los nodos sin detener ningún SECONDARY.

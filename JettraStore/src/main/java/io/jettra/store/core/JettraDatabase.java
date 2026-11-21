@@ -692,7 +692,7 @@ public final class JettraDatabase implements AutoCloseable {
         return loadFromDisk(metaFile);
     }
 
-    public boolean loadFromDisk(Path metaFile) {
+    public synchronized boolean loadFromDisk(Path metaFile) {
         if (metaFile == null || !Files.exists(metaFile)) {
             return false;
         }

@@ -54,6 +54,8 @@ public final class JettraStoreServer {
     private final AtomicBoolean isPrimaryHeartbeatLoopRunning = new AtomicBoolean(false);
     private volatile long lastLeaderHeartbeatTime = System.currentTimeMillis();
     private final AtomicBoolean failoverInProgress = new AtomicBoolean(false);
+    private final AtomicBoolean secondarySyncInProgress = new AtomicBoolean(false);
+    private final Set<String> activePeerDistributions = ConcurrentHashMap.newKeySet();
     private volatile Path clusterConfigFilePath;
 
     public void setClusterConfigFilePath(Path clusterConfigFilePath) {
@@ -1004,6 +1006,29 @@ public final class JettraStoreServer {
     }
 
     /**
+     * Dispara una sincronización asíncrona desde el PRIMARY evitando apilar múltiples hilos
+     * concurrentes si ya hay una sincronización en progreso.
+     */
+    public void triggerAsyncSynchronizeFromPrimary() {
+        if (config.getNodeRole() != ClusterNode.Role.SECONDARY) {
+            return;
+        }
+        if (!secondarySyncInProgress.compareAndSet(false, true)) {
+            return;
+        }
+        Thread.ofVirtual().name("jettra-secondary-sync-on-config").start(() -> {
+            try {
+                Thread.sleep(200);
+                synchronizeFromPrimary();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            } finally {
+                secondarySyncInProgress.set(false);
+            }
+        });
+    }
+
+    /**
      * Sincronización inicial de estado para nodos secundarios (SECONDARY).
      * Solicita al nodo primario (PRIMARY) el catálogo completo de bases de datos y la instantánea
      * de registros/estructuras, procesando y cargando el estado local antes de unirse formalmente
@@ -1352,6 +1377,10 @@ public final class JettraStoreServer {
         if (replClient != null) {
             replClient.syncPeers(updatedPeers);
         }
+        if (config.getNodeRole() == ClusterNode.Role.SECONDARY) {
+            // Refrescar timestamp de latido del líder para evitar falsos timeouts durante la reconfiguración
+            lastLeaderHeartbeatTime = System.currentTimeMillis();
+        }
         return newlyAddedPeers;
     }
 
@@ -1363,37 +1392,47 @@ public final class JettraStoreServer {
         if (targetPeer == null || config.getNodeRole() != ClusterNode.Role.PRIMARY) {
             return results;
         }
-        ClusterNode effectivePeer = targetPeer;
-        if ((effectivePeer.getPort() <= 0 || effectivePeer.getIp() == null || effectivePeer.getIp().isBlank()) && ringEngine != null) {
-            ClusterNode rn = ringEngine.getPeer(effectivePeer.getId());
-            if (rn != null) effectivePeer = rn;
+        String peerKey = targetPeer.getId() != null ? targetPeer.getId().toLowerCase(java.util.Locale.ROOT) : "";
+        if (!peerKey.isEmpty() && !activePeerDistributions.add(peerKey)) {
+            return results; // Ya hay una distribución activa hacia este peer
         }
-        JettraClusterReplicationClient client = getOrCreateReplicationClient();
-        if (client == null) {
+        try {
+            ClusterNode effectivePeer = targetPeer;
+            if ((effectivePeer.getPort() <= 0 || effectivePeer.getIp() == null || effectivePeer.getIp().isBlank()) && ringEngine != null) {
+                ClusterNode rn = ringEngine.getPeer(effectivePeer.getId());
+                if (rn != null) effectivePeer = rn;
+            }
+            JettraClusterReplicationClient client = getOrCreateReplicationClient();
+            if (client == null) {
+                return results;
+            }
+            List<String> dbs = listDatabaseNames();
+            System.out.printf("[JettraStoreServer] 🔄 Replicando %d base(s) de datos y sus objetos al nodo '%s' (%s:%d)...%n",
+                dbs.size(), effectivePeer.getId(), effectivePeer.getIp(), effectivePeer.getPort());
+            for (String db : dbs) {
+                byte[] payload = getDatabaseSnapshotBytes(db);
+                boolean ok = false;
+                for (int attempt = 0; attempt < 4; attempt++) {
+                    ok = client.sendDistributeDatabaseToPeer(effectivePeer, db, payload);
+                    if (ok) break;
+                    try { Thread.sleep(200); } catch (InterruptedException ignored) {}
+                }
+                results.put(db, ok);
+                if (ok) {
+                    JettraClusterEventBus.getInstance().publish(
+                        ClusterLiveEvent.TYPE_DATABASE_DISTRIBUTED,
+                        config.getNodeId(), effectivePeer.getId(),
+                        String.format("Base de datos '%s' (%d bytes) replicada al nodo '%s'.", db, payload.length, effectivePeer.getId()),
+                        "db=" + db + ",bytes=" + payload.length
+                    );
+                }
+            }
             return results;
-        }
-        List<String> dbs = listDatabaseNames();
-        System.out.printf("[JettraStoreServer] 🔄 Replicando %d base(s) de datos y sus objetos al nodo '%s' (%s:%d)...%n",
-            dbs.size(), effectivePeer.getId(), effectivePeer.getIp(), effectivePeer.getPort());
-        for (String db : dbs) {
-            byte[] payload = getDatabaseSnapshotBytes(db);
-            boolean ok = false;
-            for (int attempt = 0; attempt < 4; attempt++) {
-                ok = client.sendDistributeDatabaseToPeer(effectivePeer, db, payload);
-                if (ok) break;
-                try { Thread.sleep(200); } catch (InterruptedException ignored) {}
-            }
-            results.put(db, ok);
-            if (ok) {
-                JettraClusterEventBus.getInstance().publish(
-                    ClusterLiveEvent.TYPE_DATABASE_DISTRIBUTED,
-                    config.getNodeId(), effectivePeer.getId(),
-                    String.format("Base de datos '%s' (%d bytes) replicada al nodo '%s'.", db, payload.length, effectivePeer.getId()),
-                    "db=" + db + ",bytes=" + payload.length
-                );
+        } finally {
+            if (!peerKey.isEmpty()) {
+                activePeerDistributions.remove(peerKey);
             }
         }
-        return results;
     }
 
     public List<String> listDatabaseNames() {
