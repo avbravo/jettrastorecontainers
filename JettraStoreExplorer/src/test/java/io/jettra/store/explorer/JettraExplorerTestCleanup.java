@@ -35,8 +35,12 @@ public final class JettraExplorerTestCleanup {
 
     public static final List<String> KNOWN_TEST_DATABASES = List.of(
         "example_factura_db",
+        "samples_hospital_db",
         "samples_hostipal_db",
         "samples_ambiental_db",
+        "test_memory_engine_db",
+        "test_meter_db",
+        "test_multiuser_db",
         "system_metadata_db",
         "idx_db",
         "idx_test_db",
@@ -131,6 +135,11 @@ public final class JettraExplorerTestCleanup {
                 cleanDirectory(Path.of(cfg.getStoragePath()));
             }
         } catch (Exception ignored) {}
+        cleanDirectory(Path.of("/jettra/data"));
+        cleanDirectory(Path.of(System.getProperty("user.home"), "jettra", "data"));
+        cleanDirectory(Path.of("jettra/data"));
+        cleanDirectory(Path.of("./jettra/data"));
+        cleanDirectory(Path.of("../jettra/data"));
     }
 
     public static void cleanDirectory(Path dir) {

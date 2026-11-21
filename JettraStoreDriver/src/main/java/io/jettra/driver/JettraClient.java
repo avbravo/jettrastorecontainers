@@ -1490,13 +1490,23 @@ public final class JettraClient implements AutoCloseable {
         try {
             nodeRole = ClusterNode.Role.valueOf(role.toUpperCase());
         } catch (Exception ignored) {}
+        int restPort;
+        if (port >= 50001 && port <= 50999) {
+            restPort = 60000 + (port - 50000);
+        } else if (port >= 9091 && port <= 9999) {
+            restPort = 8080 + (port - 9090);
+        } else {
+            restPort = (port + 1000 <= 65535) ? (port + 1000) : Math.max(1024, port - 1000);
+        }
         ClusterNode node = new ClusterNode(peerId, ip, port, nodeRole);
-        ringEngine.registerDynamicPeer(node, port, null);
+        ringEngine.registerDynamicPeer(node, restPort, null);
         return true;
     }
 
     public boolean removeClusterPeer(String peerId) {
-        return ringEngine.removePeer(peerId);
+        boolean removed = ringEngine.removePeer(peerId);
+        io.jettra.store.core.JettraConfigValidator.removeDynamicNodeFromClusterConfig(peerId);
+        return removed;
     }
 
     public boolean checkClusterHealth() {

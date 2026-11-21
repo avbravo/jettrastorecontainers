@@ -17,8 +17,8 @@ java --enable-preview \
      --enable-native-access=ALL-UNNAMED \
      -XX:+UnlockExperimentalVMOptions \
      -XX:+UseCompactObjectHeaders \
-     -XX:+UseZGC \
-     -Xms2g -Xmx6g \
+     -XX:+UseG1GC -XX:+UseStringDeduplication -XX:CICompilerCount=2 \
+     -Xms128m -Xmx512m -XX:MaxMetaspaceSize=256m -XX:MaxDirectMemorySize=256m \
      -Djettra.node.id="${NODE_ID}" \
      -Djettra.node.role="${NODE_ROLE}" \
      -Dcluster.config.path=cluster.config \

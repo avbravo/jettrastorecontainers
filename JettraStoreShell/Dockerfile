@@ -37,7 +37,7 @@ ENV HOME=/home/jettra \
     MICROPROFILE_CONFIG_FILE=/app/config/microprofile-config.properties \
     JETTRA_HOST=jettra-node-01 \
     JETTRA_PORT=50001 \
-    JAVA_OPTS="-Xms64m -Xmx512m -XX:+UseG1GC -XX:+UnlockExperimentalVMOptions -XX:+UseCompactObjectHeaders --enable-preview --enable-native-access=ALL-UNNAMED"
+    JAVA_OPTS="-Xms64m -Xmx256m -XX:MaxMetaspaceSize=192m -XX:MaxDirectMemorySize=128m -XX:+UseContainerSupport -XX:+UseG1GC -XX:+UseStringDeduplication -XX:CICompilerCount=2 -XX:+UnlockExperimentalVMOptions -XX:+UseCompactObjectHeaders --enable-preview --enable-native-access=ALL-UNNAMED"
 
 USER 1000:1000
 

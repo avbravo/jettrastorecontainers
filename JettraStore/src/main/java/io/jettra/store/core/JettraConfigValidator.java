@@ -68,6 +68,7 @@ public final class JettraConfigValidator {
         public List<String> getWarnings() { return warnings; }
         public boolean hasWarnings() { return !warnings.isEmpty(); }
         public String getNotification() { return notification; }
+        public String getSummary() { return notification; }
     }
 
     public static String extractNodeNumber(String nodeId) {
@@ -970,6 +971,13 @@ cluster.index.max.inmemory.keys = 100000
             String storagePath) {
         Properties props = loadProperties(clusterConfigFile, "/cluster.config", "/jettra.config");
         List<ClusterNodeInfo> beforeNodes = parseClusterNodes(props);
+        String resolvedIp = (ip != null && !ip.isBlank()) ? ip.trim() : "127.0.0.1";
+        int resolvedGrpc = grpcPort > 0 ? grpcPort : 9091;
+        int resolvedRest = restPort > 0 ? restPort : 8082;
+        ValidationResult candidateCheck = validateCandidateNode(beforeNodes, nodeId, resolvedIp, resolvedGrpc, resolvedRest, true);
+        if (!candidateCheck.isValid()) {
+            throw new IllegalArgumentException(candidateCheck.getSummary());
+        }
         ClusterNodeInfo existing = findNodeInCluster(beforeNodes, nodeId);
         boolean alreadyExistedById = existing != null && existing.id().equalsIgnoreCase(nodeId.trim());
 
@@ -1046,20 +1054,240 @@ cluster.index.max.inmemory.keys = 100000
     }
 
     /**
-     * Escribe de forma atómica y segura el archivo cluster.config solo si el contenido es válido
-     * y difiere del archivo actual en disco, evitando sobreescrituras accidentales o corrupción concurrente.
+     * Valida la integridad completa de un archivo cluster.config (en texto):
+     * - Al menos 1 nodo configurado
+     * - Sin IDs de nodos duplicados
+     * - Sin puertos gRPC o REST duplicados en la misma IP (ni colisiones gRPC/REST)
+     * - Puertos válidos (1..65535) e IP/ID no vacíos
+     */
+    public static ValidationResult validateClusterConfigIntegrity(String content) {
+        if (content == null || content.isBlank()) {
+            return new ValidationResult(false, List.of("El contenido de cluster.config está vacío."), "Configuración vacía.");
+        }
+        return validateClusterConfigIntegrity(content.getBytes(StandardCharsets.UTF_8));
+    }
+
+    /**
+     * Valida la integridad completa de un archivo cluster.config (en bytes).
+     */
+    public static ValidationResult validateClusterConfigIntegrity(byte[] rawBytes) {
+        if (rawBytes == null || rawBytes.length == 0) {
+            return new ValidationResult(false, List.of("El contenido de cluster.config está vacío."), "Configuración vacía.");
+        }
+        Properties props = new Properties();
+        try (var bais = new java.io.ByteArrayInputStream(rawBytes)) {
+            props.load(bais);
+        } catch (IOException e) {
+            return new ValidationResult(false, List.of("Error al parsear cluster.config: " + e.getMessage()), "Error de sintaxis.");
+        }
+        return validateClusterConfigIntegrity(props);
+    }
+
+    /**
+     * Valida la integridad completa de un Properties de cluster.config:
+     * detecta IDs duplicados, puertos gRPC/REST duplicados en la misma IP y entradas incompletas.
+     */
+    public static ValidationResult validateClusterConfigIntegrity(Properties clusterProps) {
+        List<String> errors = new ArrayList<>();
+        if (clusterProps == null) {
+            errors.add("Las propiedades de cluster.config son nulas.");
+            return new ValidationResult(false, errors, "Configuración nula.");
+        }
+        List<ClusterNodeInfo> nodes = parseClusterNodes(clusterProps);
+        if (nodes.isEmpty()) {
+            errors.add("cluster.config debe definir al menos un nodo válido (cluster.node.<N>.id).");
+            return new ValidationResult(false, errors, "Sin nodos configurados.");
+        }
+
+        Map<String, String> seenIds = new LinkedHashMap<>();
+        Map<String, String> seenGrpcEndpoints = new LinkedHashMap<>();
+        Map<String, String> seenRestEndpoints = new LinkedHashMap<>();
+        Map<String, String> seenAnyPorts = new LinkedHashMap<>();
+
+        for (ClusterNodeInfo n : nodes) {
+            String num = n.nodeNumber();
+            String id = n.id() != null ? n.id().trim() : "";
+            String ip = n.ip() != null ? n.ip().trim() : "";
+            int grpc = n.grpcPort();
+            int rest = n.restPort();
+
+            if (id.isEmpty()) {
+                errors.add("El nodo #" + num + " tiene un ID vacío.");
+                continue;
+            }
+            if (ip.isEmpty()) {
+                errors.add("El nodo '" + id + "' (#" + num + ") no tiene dirección IP definida.");
+            }
+            if (grpc <= 0 || grpc > 65535) {
+                errors.add("El nodo '" + id + "' tiene un puerto gRPC inválido: " + grpc);
+            }
+            if (rest <= 0 || rest > 65535) {
+                errors.add("El nodo '" + id + "' tiene un puerto REST inválido: " + rest);
+            }
+            if (grpc > 0 && rest > 0 && grpc == rest) {
+                errors.add("El nodo '" + id + "' tiene el mismo puerto para gRPC y REST (" + grpc + ").");
+            }
+
+            String idKey = id.toLowerCase(Locale.ROOT);
+            if (seenIds.containsKey(idKey)) {
+                errors.add("ID de nodo duplicado: '" + id + "' (aparece en cluster.node." + seenIds.get(idKey) + " y cluster.node." + num + ").");
+            } else {
+                seenIds.put(idKey, num);
+            }
+
+            if (!ip.isEmpty() && grpc > 0) {
+                String grpcKey = ip.toLowerCase(Locale.ROOT) + ":" + grpc;
+                if (seenGrpcEndpoints.containsKey(grpcKey)) {
+                    errors.add("Puerto gRPC duplicado: " + grpcKey + " ya está asignado al nodo '" + seenGrpcEndpoints.get(grpcKey) + "' y colisiona con '" + id + "'.");
+                } else {
+                    seenGrpcEndpoints.put(grpcKey, id);
+                }
+                if (seenAnyPorts.containsKey(grpcKey) && !seenAnyPorts.get(grpcKey).equalsIgnoreCase(id)) {
+                    errors.add("Colisión de puerto en " + grpcKey + " entre '" + seenAnyPorts.get(grpcKey) + "' y '" + id + "'.");
+                } else {
+                    seenAnyPorts.put(grpcKey, id);
+                }
+            }
+
+            if (!ip.isEmpty() && rest > 0) {
+                String restKey = ip.toLowerCase(Locale.ROOT) + ":" + rest;
+                if (seenRestEndpoints.containsKey(restKey)) {
+                    errors.add("Puerto REST duplicado: " + restKey + " ya está asignado al nodo '" + seenRestEndpoints.get(restKey) + "' y colisiona con '" + id + "'.");
+                } else {
+                    seenRestEndpoints.put(restKey, id);
+                }
+                if (seenAnyPorts.containsKey(restKey) && !seenAnyPorts.get(restKey).equalsIgnoreCase(id)) {
+                    errors.add("Colisión de puerto en " + restKey + " entre '" + seenAnyPorts.get(restKey) + "' y '" + id + "'.");
+                } else {
+                    seenAnyPorts.put(restKey, id);
+                }
+            }
+        }
+
+        boolean valid = errors.isEmpty();
+        String summary = valid
+            ? "Integridad de cluster.config validada (" + nodes.size() + " nodos sin duplicados)."
+            : "Errores de integridad en cluster.config: " + String.join(" | ", errors);
+        return new ValidationResult(valid, errors, summary);
+    }
+
+    /**
+     * Valida un nodo candidato antes de agregarlo o actualizarlo, evitando IDs o puertos gRPC/REST duplicados.
+     */
+    public static ValidationResult validateCandidateNode(
+            List<ClusterNodeInfo> existingNodes,
+            String nodeId,
+            String ip,
+            int grpcPort,
+            int restPort,
+            boolean allowUpdateSameId) {
+        List<String> errors = new ArrayList<>();
+        String cleanId = nodeId != null ? nodeId.trim() : "";
+        String cleanIp = ip != null ? ip.trim() : "";
+        if (cleanId.isEmpty()) {
+            errors.add("El ID del nodo es obligatorio.");
+        }
+        if (cleanIp.isEmpty()) {
+            errors.add("La IP/Host del nodo es obligatoria.");
+        }
+        if (grpcPort <= 0 || grpcPort > 65535) {
+            errors.add("Puerto gRPC inválido: " + grpcPort);
+        }
+        if (restPort <= 0 || restPort > 65535) {
+            errors.add("Puerto REST inválido: " + restPort);
+        }
+        if (grpcPort > 0 && restPort > 0 && grpcPort == restPort) {
+            errors.add("El puerto gRPC y el puerto REST no pueden ser iguales (" + grpcPort + ").");
+        }
+
+        if (existingNodes != null && !cleanId.isEmpty()) {
+            for (ClusterNodeInfo existing : existingNodes) {
+                boolean sameId = existing.id() != null && existing.id().equalsIgnoreCase(cleanId);
+                if (sameId) {
+                    if (!allowUpdateSameId) {
+                        errors.add("ID de nodo duplicado: '" + cleanId + "' ya existe en el clúster.");
+                    }
+                    continue;
+                }
+                String existingIp = existing.ip() != null ? existing.ip().trim() : "";
+                boolean sameIp = existingIp.equalsIgnoreCase(cleanIp);
+                if (sameIp && grpcPort > 0 && existing.grpcPort() == grpcPort) {
+                    errors.add("Puerto gRPC duplicado: " + cleanIp + ":" + grpcPort + " ya está en uso por el nodo '" + existing.id() + "'.");
+                }
+                if (sameIp && restPort > 0 && existing.restPort() == restPort) {
+                    errors.add("Puerto REST duplicado: " + cleanIp + ":" + restPort + " ya está en uso por el nodo '" + existing.id() + "'.");
+                }
+                if (sameIp && grpcPort > 0 && existing.restPort() == grpcPort) {
+                    errors.add("El puerto gRPC " + grpcPort + " colisiona con el puerto REST del nodo '" + existing.id() + "'.");
+                }
+                if (sameIp && restPort > 0 && existing.grpcPort() == restPort) {
+                    errors.add("El puerto REST " + restPort + " colisiona con el puerto gRPC del nodo '" + existing.id() + "'.");
+                }
+            }
+        }
+        boolean valid = errors.isEmpty();
+        return new ValidationResult(valid, errors, valid ? "Nodo válido." : String.join(" | ", errors));
+    }
+
+    /**
+     * Genera el contenido canónico y re-indexado (1..N) de cluster.config a partir de una lista de nodos.
+     */
+    public static byte[] buildCanonicalClusterConfigBytes(List<ClusterNodeInfo> nodes, Properties baseProps) {
+        String clusterName = baseProps != null ? baseProps.getProperty("cluster.name", "jettra-production-cluster") : "jettra-production-cluster";
+        String protocol = baseProps != null ? baseProps.getProperty("cluster.consensus.protocol", "RAFT") : "RAFT";
+        String ringEnabled = baseProps != null ? baseProps.getProperty("cluster.ring.enabled", "true") : "true";
+        String hb = baseProps != null ? baseProps.getProperty("cluster.heartbeat.interval.ms", "150") : "150";
+        String elec = baseProps != null ? baseProps.getProperty("cluster.election.timeout.ms", "300") : "300";
+        String idxCap = baseProps != null ? baseProps.getProperty("cluster.index.initial.capacity", "65536") : "65536";
+        String idxMax = baseProps != null ? baseProps.getProperty("cluster.index.max.inmemory.keys", "100000") : "100000";
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("################################################################################\n");
+        sb.append("# JettraStore Cluster Topology Configuration (cluster.config)\n");
+        sb.append("# Centralized Topology for Raft Consensus and Dynamic Ring Discovery\n");
+        sb.append("################################################################################\n\n");
+        sb.append("cluster.name = ").append(clusterName).append("\n");
+        sb.append("cluster.consensus.protocol = ").append(protocol).append("\n");
+        sb.append("cluster.ring.enabled = ").append(ringEnabled).append("\n");
+        sb.append("cluster.heartbeat.interval.ms = ").append(hb).append("\n");
+        sb.append("cluster.election.timeout.ms = ").append(elec).append("\n");
+
+        int idx = 1;
+        for (ClusterNodeInfo n : nodes) {
+            String role = (n.role() != null && n.role().equalsIgnoreCase("PRIMARY")) ? "PRIMARY" : "SECONDARY";
+            String ip = (n.ip() != null && !n.ip().isBlank()) ? n.ip().trim() : "127.0.0.1";
+            int grpc = n.grpcPort() > 0 ? n.grpcPort() : (50000 + idx);
+            int rest = n.restPort() > 0 ? n.restPort() : (60000 + idx);
+            sb.append("\n# ==============================================================================\n");
+            sb.append("# NODO ").append(idx).append(": ").append(n.id().trim()).append(" (").append(role).append(")\n");
+            sb.append("# ==============================================================================\n");
+            sb.append("cluster.node.").append(idx).append(".id = ").append(n.id().trim()).append("\n");
+            sb.append("cluster.node.").append(idx).append(".role = ").append(role).append("\n");
+            sb.append("cluster.node.").append(idx).append(".ip = ").append(ip).append("\n");
+            sb.append("cluster.node.").append(idx).append(".grpc.port = ").append(grpc).append("\n");
+            sb.append("cluster.node.").append(idx).append(".rest.port = ").append(rest).append("\n");
+            idx++;
+        }
+
+        sb.append("\n# Asignación de Capacidad de Índices y Buffers en Clúster\n");
+        sb.append("cluster.index.initial.capacity = ").append(idxCap).append("\n");
+        sb.append("cluster.index.max.inmemory.keys = ").append(idxMax).append("\n");
+        return sb.toString().getBytes(StandardCharsets.UTF_8);
+    }
+
+    /**
+     * Escribe de forma atómica y segura el archivo cluster.config solo si el contenido es válido,
+     * supera la verificación de integridad (sin IDs ni puertos gRPC/REST duplicados) y difiere del archivo actual.
      */
     public static synchronized boolean writeClusterConfigAtomically(Path target, byte[] newBytes) throws IOException {
         if (target == null || newBytes == null || newBytes.length == 0) {
             return false;
         }
-        // Validar que el contenido sea parseable y contenga al menos 1 nodo válido antes de escribir
-        Properties checkProps = new Properties();
-        try (var bais = new java.io.ByteArrayInputStream(newBytes)) {
-            checkProps.load(bais);
-        }
-        List<ClusterNodeInfo> parsed = parseClusterNodes(checkProps);
-        if (parsed.isEmpty()) {
+        // Validar integridad completa antes de escribir (sin IDs ni puertos duplicados)
+        ValidationResult integrity = validateClusterConfigIntegrity(newBytes);
+        if (!integrity.isValid()) {
+            System.err.printf("[JettraStore] Rechazada escritura de cluster.config en '%s' por fallo de integridad: %s%n",
+                target, integrity.getSummary());
             return false;
         }
         if (Files.exists(target)) {
@@ -1093,7 +1321,8 @@ cluster.index.max.inmemory.keys = 100000
     }
 
     /**
-     * Elimina dinámicamente un nodo del archivo cluster.config especificado en disco.
+     * Elimina dinámicamente TODAS las referencias de un nodo del archivo cluster.config especificado en disco,
+     * re-indexa de forma limpia y verifica integridad antes de escribir atómicamente.
      */
     public static synchronized boolean removeDynamicNodeFromClusterConfig(Path clusterConfigFile, String nodeId) {
         if (clusterConfigFile == null || nodeId == null || nodeId.isBlank() || "node-01".equalsIgnoreCase(nodeId.trim())) {
@@ -1105,37 +1334,28 @@ cluster.index.max.inmemory.keys = 100000
             }
             Properties props = loadProperties(clusterConfigFile, "/cluster.config", "/jettra.config");
             List<ClusterNodeInfo> nodes = parseClusterNodes(props);
-            ClusterNodeInfo target = findNodeInCluster(nodes, nodeId);
-            if (target == null) {
+            String cleanTargetId = nodeId.trim();
+            List<ClusterNodeInfo> remaining = new ArrayList<>();
+            boolean removedAny = false;
+            for (ClusterNodeInfo n : nodes) {
+                if (n.id() != null && n.id().trim().equalsIgnoreCase(cleanTargetId)) {
+                    removedAny = true;
+                } else {
+                    remaining.add(n);
+                }
+            }
+            if (!removedAny || remaining.isEmpty()) {
                 return false;
             }
-            String prefix = "cluster.node." + target.nodeNumber() + ".";
-            String headerMarker = "# NODO " + target.nodeNumber() + ":";
-            List<String> lines = Files.readAllLines(clusterConfigFile, StandardCharsets.UTF_8);
-            List<String> updated = new ArrayList<>(lines.size());
-            boolean removedAny = false;
-            for (int i = 0; i < lines.size(); i++) {
-                String trimmed = lines.get(i).trim();
-                if (trimmed.startsWith(prefix)) {
-                    removedAny = true;
-                    continue;
-                }
-                if (trimmed.startsWith(headerMarker)) {
-                    // Omitir también la línea separadora anterior y posterior si forman el bloque de cabecera
-                    if (!updated.isEmpty() && updated.get(updated.size() - 1).trim().startsWith("# =====")) {
-                        updated.remove(updated.size() - 1);
-                    }
-                    if (i + 1 < lines.size() && lines.get(i + 1).trim().startsWith("# =====")) {
-                        i++;
-                    }
-                    continue;
-                }
-                updated.add(lines.get(i));
+            byte[] canonicalBytes = buildCanonicalClusterConfigBytes(remaining, props);
+            ValidationResult integrity = validateClusterConfigIntegrity(canonicalBytes);
+            if (!integrity.isValid()) {
+                System.err.printf("[JettraStore] Integridad fallida tras eliminar nodo '%s': %s%n",
+                    cleanTargetId, integrity.getSummary());
+                return false;
             }
-            if (removedAny) {
-                Files.write(clusterConfigFile, updated, StandardCharsets.UTF_8);
-            }
-            return removedAny;
+            writeClusterConfigAtomically(clusterConfigFile, canonicalBytes);
+            return true;
         } catch (IOException e) {
             System.err.printf("[JettraStore] Error al eliminar nodo '%s' de '%s': %s%n",
                 nodeId, clusterConfigFile, e.getMessage());

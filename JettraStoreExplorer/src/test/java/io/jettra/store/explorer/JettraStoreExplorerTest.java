@@ -1758,4 +1758,82 @@ public class JettraStoreExplorerTest {
             java.nio.file.Files.deleteIfExists(tmpNodesJson);
         }
     }
+
+    @Test
+    @DisplayName("42. Validación de duplicados en nodos y página /cluster-config (ver/editar/SINCRONIZAR) exclusiva para ADMIN")
+    public void testClusterConfigAdminPageAndDuplicateNodePrevention() throws Exception {
+        JettraStorePlugin plugin = JettraStorePlugin.getInstance();
+
+        // 1. Intentar agregar nodo con ID duplicado (node-01) -> debe rechazarse
+        boolean dupIdAdded = plugin.addNode("node-01", "Duplicado", "SECONDARY", "127.0.0.1", 55991, 2048);
+        JettraAssert.assertFalse(dupIdAdded, "No debe permitir agregar un nodo con ID duplicado");
+        JettraAssert.assertNotNull(plugin.getLastNodeOperationError(), "Debe registrar mensaje de error de duplicado");
+
+        // 2. Intentar agregar nodo con puerto gRPC duplicado del nodo-01 -> debe rechazarse
+        ServerNodeInfo primary = plugin.getPrimaryNode();
+        boolean dupPortAdded = plugin.addNode("node-dup-port-test", "DupPort", "SECONDARY", primary.getHost(), primary.getPort(), 2048);
+        JettraAssert.assertFalse(dupPortAdded, "No debe permitir agregar un nodo con puerto gRPC duplicado");
+
+        // 3. Acceso como ADMIN a /cluster-config muestra el contenido de cluster.config y botón SINCRONIZAR
+        HttpResponse<String> cfgGetRes = get("/cluster-config");
+        JettraAssert.assertEquals(200, cfgGetRes.statusCode(), "GET /cluster-config como ADMIN debe responder HTTP 200");
+        JettraAssert.assertTrue(cfgGetRes.body().contains("cluster.config"), "Debe mostrar el título de cluster.config");
+        JettraAssert.assertTrue(cfgGetRes.body().contains("SINCRONIZAR"), "Debe incluir el botón SINCRONIZAR");
+        JettraAssert.assertTrue(cfgGetRes.body().contains("clusterConfigEditor"), "Debe incluir el editor de cluster.config");
+
+        // 4. POST /cluster-config con puertos duplicados debe ser rechazado por validación de integridad
+        String invalidContent = "cluster.node.1.id = node-01\ncluster.node.1.role = PRIMARY\ncluster.node.1.ip = 127.0.0.1\ncluster.node.1.grpc.port = 50001\ncluster.node.1.rest.port = 60001\n"
+                + "cluster.node.2.id = node-02\ncluster.node.2.role = SECONDARY\ncluster.node.2.ip = 127.0.0.1\ncluster.node.2.grpc.port = 50001\ncluster.node.2.rest.port = 60002\n";
+        HttpResponse<String> invalidPost = postForm("/cluster-config",
+                "action=sync_cluster_config&clusterConfigContent=" + java.net.URLEncoder.encode(invalidContent, java.nio.charset.StandardCharsets.UTF_8));
+        JettraAssert.assertEquals(200, invalidPost.statusCode(), "POST /cluster-config inválido debe renderizar error de integridad");
+        JettraAssert.assertTrue(invalidPost.body().contains("duplicado") || invalidPost.body().contains("ERROR DE INTEGRIDAD"),
+                "Debe reportar error de integridad por puerto duplicado");
+    }
+
+    @Test
+    @DisplayName("43. Botón Añadir Fila en Crear Nuevo Registro para JAVA_RECORD, OBJECT, KEY_VALUE, COLUMNAR, TIMESERIES, GEOSPATIAL, GRAPH, VECTOR (y no DOCUMENT)")
+    public void testCreateNewRecordDynamicAddRowForAllNonDocumentEngines() {
+        io.jettra.server.flux.FluxRenderer renderer = new io.jettra.server.flux.FluxRenderer();
+
+        // 1. Todos los motores no-DOCUMENT deben incluir botón 'Añadir Fila' y tabla dinámica
+        for (String engine : java.util.List.of("JAVA_RECORD", "OBJECT", "KEY_VALUE", "COLUMNAR", "TIMESERIES", "GEOSPATIAL", "GRAPH", "VECTOR")) {
+            String html = renderer.render(
+                    io.jettra.store.explorer.pages.explorer.EngineRecordRenderer.renderCreateFieldsWidget(engine),
+                    "Test " + engine);
+            JettraAssert.assertTrue(html.contains("Añadir Fila"), "El motor " + engine + " debe incluir botón Añadir Fila");
+            JettraAssert.assertTrue(html.contains("data-dynamic-rows-table=\"" + engine + "\"") || html.contains("data-dynamic-rows-table='" + engine + "'"),
+                    "El motor " + engine + " debe incluir tabla de filas dinámicas");
+        }
+
+        // 2. DOCUMENT no debe incluir botón Añadir Fila (es un JSON normal)
+        String docHtml = renderer.render(
+                io.jettra.store.explorer.pages.explorer.EngineRecordRenderer.renderCreateFieldsWidget("DOCUMENT"),
+                "Test DOCUMENT");
+        JettraAssert.assertFalse(docHtml.contains("Añadir Fila"), "DOCUMENT no requiere botón Añadir Fila");
+
+        // 3. Verificar que buildDetailsFromForm procesa filas añadidas dinámicamente en JAVA_RECORD y KEY_VALUE
+        java.util.Map<String, String> javaRecForm = new java.util.LinkedHashMap<>();
+        javaRecForm.put("engineEditorMode", "JAVA_RECORD");
+        javaRecForm.put("rec_recordClass", "io.jettra.domain.CustomRec");
+        javaRecForm.put("rec_field_name_0", "id");
+        javaRecForm.put("rec_field_type_0", "Long");
+        javaRecForm.put("rec_field_rule_0", "@Id");
+        javaRecForm.put("rec_field_val_0", "99");
+        javaRecForm.put("rec_field_name_5", "extraTag");
+        javaRecForm.put("rec_field_type_5", "String");
+        javaRecForm.put("rec_field_rule_5", "@Indexed");
+        javaRecForm.put("rec_field_val_5", "VIP");
+        String jrJson = io.jettra.store.explorer.pages.explorer.EngineRecordRenderer.buildDetailsFromForm(javaRecForm, "{}");
+        JettraAssert.assertTrue(jrJson.contains("extraTag") && jrJson.contains("VIP"), "JAVA_RECORD debe persistir filas añadidas dinámicamente");
+
+        java.util.Map<String, String> kvForm = new java.util.LinkedHashMap<>();
+        kvForm.put("engineEditorMode", "KEY_VALUE");
+        kvForm.put("prop_key", "K1");
+        kvForm.put("prop_value", "100");
+        kvForm.put("extra_field_name_0", "region");
+        kvForm.put("extra_field_val_0", "LATAM");
+        String kvJson = io.jettra.store.explorer.pages.explorer.EngineRecordRenderer.buildDetailsFromForm(kvForm, "{}");
+        JettraAssert.assertTrue(kvJson.contains("region") && kvJson.contains("LATAM"), "KEY_VALUE debe persistir filas extra añadidas dinámicamente");
+    }
 }

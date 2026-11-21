@@ -285,14 +285,21 @@ public class StoreExplorerFluxTemplateView extends FluxView {
         );
         navCatalog.modifier(new Modifier().style("display: flex; flex-direction: column; gap: 0.28rem; margin-bottom: 1.4rem;"));
 
+        boolean isAdmin = plugin != null && plugin.findUser(username)
+                .map(u -> u.getGlobalRole() == io.jettra.store.explorer.model.JettraUser.GlobalRole.ADMIN)
+                .orElse(false);
+
         // Grupo 3: Gestión y Seguridad
         Widget headingAdmin = Div.of(Text.of("⚙️ Gestión y Seguridad")).modifier(new Modifier().cssClass("flux-menu-heading"));
-        Div navAdmin = Div.of(
-                createNavLink("/connections", "🔌 Conexiones de Base de Datos", isActive("connections")),
-                createNavLink("/users", "👥 Seguridad y Roles de Usuario", isActive("users", "security")),
-                createNavLink("/backups", "💾 Copias de Respaldo y Snapshots", isActive("backups")),
-                createExternalNavLink("/swagger-ui", "📄 OpenAPI / Swagger UI")
-        );
+        List<Widget> adminLinks = new ArrayList<>();
+        adminLinks.add(createNavLink("/connections", "🔌 Conexiones de Base de Datos", isActive("connections")));
+        adminLinks.add(createNavLink("/users", "👥 Seguridad y Roles de Usuario", isActive("users", "security")));
+        if (isAdmin) {
+            adminLinks.add(createNavLink("/cluster-config", "📄 Config Clúster (cluster.config)", isActive("cluster-config")));
+        }
+        adminLinks.add(createNavLink("/backups", "💾 Copias de Respaldo y Snapshots", isActive("backups")));
+        adminLinks.add(createExternalNavLink("/swagger-ui", "📄 OpenAPI / Swagger UI"));
+        Div navAdmin = Div.of(adminLinks.toArray(new Widget[0]));
         navAdmin.modifier(new Modifier().style("display: flex; flex-direction: column; gap: 0.28rem; margin-bottom: 1.4rem;"));
 
         // Grupo 4: Endpoints del Servidor
@@ -327,18 +334,25 @@ public class StoreExplorerFluxTemplateView extends FluxView {
         Div toolbarLeft = Div.of(titleRow, subtitle);
 
         // Barra de pestañas superiores de acceso rápido
-        Div tabs = Div.of(
-                createTabLink("/cluster", "🌐 Nodos", isActive("cluster", "nodes")),
-                createTabLink("/map", "🗺️ Mapa", isActive("map", "transfer")),
-                createTabLink("/status", "🩺 Estatus", isActive("status", "telemetry")),
-                createClusterDependentTabLink("/databases", "🗄️ Bases de Datos", isActive("databases", "engines"), clusterHasOnlineNodes),
-                createClusterDependentTabLink("/examples", "📚 Ejemplos", isActive("examples"), clusterHasOnlineNodes),
-                createClusterDependentTabLink("/explorer", "📦 Registros CRUD", isActive("explorer", "records"), clusterHasOnlineNodes),
-                createTabLink("/query", "💻 Consola SQL", isActive("query")),
-                createTabLink("/connections", "🔌 Conexiones", isActive("connections")),
-                createTabLink("/users", "👥 Usuarios", isActive("users")),
-                createTabLink("/backups", "💾 Backups", isActive("backups"))
-        );
+        JettraStorePlugin tabPlugin = JettraStorePlugin.getInstance();
+        boolean isAdminTab = tabPlugin != null && tabPlugin.findUser(username)
+                .map(u -> u.getGlobalRole() == io.jettra.store.explorer.model.JettraUser.GlobalRole.ADMIN)
+                .orElse(false);
+        List<Widget> tabWidgets = new ArrayList<>();
+        tabWidgets.add(createTabLink("/cluster", "🌐 Nodos", isActive("cluster", "nodes")));
+        tabWidgets.add(createTabLink("/map", "🗺️ Mapa", isActive("map", "transfer")));
+        tabWidgets.add(createTabLink("/status", "🩺 Estatus", isActive("status", "telemetry")));
+        tabWidgets.add(createClusterDependentTabLink("/databases", "🗄️ Bases de Datos", isActive("databases", "engines"), clusterHasOnlineNodes));
+        tabWidgets.add(createClusterDependentTabLink("/examples", "📚 Ejemplos", isActive("examples"), clusterHasOnlineNodes));
+        tabWidgets.add(createClusterDependentTabLink("/explorer", "📦 Registros CRUD", isActive("explorer", "records"), clusterHasOnlineNodes));
+        tabWidgets.add(createTabLink("/query", "💻 Consola SQL", isActive("query")));
+        tabWidgets.add(createTabLink("/connections", "🔌 Conexiones", isActive("connections")));
+        tabWidgets.add(createTabLink("/users", "👥 Usuarios", isActive("users")));
+        if (isAdminTab) {
+            tabWidgets.add(createTabLink("/cluster-config", "📄 cluster.config", isActive("cluster-config")));
+        }
+        tabWidgets.add(createTabLink("/backups", "💾 Backups", isActive("backups")));
+        Div tabs = Div.of(tabWidgets.toArray(new Widget[0]));
         tabs.modifier(new Modifier().cssClass("flux-tabs"));
 
         Div toolbar = Div.of(toolbarLeft, tabs);

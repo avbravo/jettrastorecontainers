@@ -125,12 +125,14 @@ public final class JettraIndexManager {
             throw new NoSuchElementException("Index '" + indexName + "' not found.");
         }
 
-        // 1. Capacidad inicial inteligente para evitar rehashes continuos en heap
-        int initialCap = (config != null) ? config.getIndexInitialCapacity() : 65536;
+        // 1. Capacidad inicial inteligente y acotada para evitar reservar grandes tablas vacías en heap
+        int configuredCap = (config != null) ? config.getIndexInitialCapacity() : 256;
+        int initialCap;
         if (docEngine != null && docEngine.count() > 0) {
             long docCount = docEngine.count();
-            initialCap = (int) Math.min(docCount, initialCap);
-            initialCap = Math.max(initialCap, 1024);
+            initialCap = (int) Math.max(16, Math.min(docCount, Math.max(configuredCap, 16)));
+        } else {
+            initialCap = Math.max(16, Math.min(configuredCap, 64));
         }
 
         // 2. Almacenamiento compacto: fieldValue -> String (si es único) o UnifiedSet (si múltiple)

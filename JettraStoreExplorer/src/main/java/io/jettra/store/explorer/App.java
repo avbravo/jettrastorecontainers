@@ -14,6 +14,7 @@ import io.jettra.store.explorer.model.JettraDatabaseRole;
 import io.jettra.store.explorer.model.JettraUser;
 import io.jettra.store.explorer.model.ServerNodeInfo;
 import io.jettra.store.explorer.pages.backup.BackupFluxView;
+import io.jettra.store.explorer.pages.cluster.ClusterConfigFluxView;
 import io.jettra.store.explorer.pages.cluster.ClusterFluxView;
 import io.jettra.store.explorer.pages.connections.ConnectionManagerFluxView;
 import io.jettra.store.explorer.pages.databases.DatabasesFluxView;
@@ -200,6 +201,10 @@ public class App {
         server.post("/cluster", (req, resp) -> handleClusterPost(req, resp));
         server.get("/clusters", (req, resp) -> handleClusterGet(req, resp, server));
         server.post("/clusters", (req, resp) -> handleClusterPost(req, resp));
+
+        // 2.1 Configuración del Clúster cluster.config (Solo Administrador)
+        server.get("/cluster-config", (req, resp) -> handleClusterConfigGet(req, resp, server));
+        server.post("/cluster-config", (req, resp) -> handleClusterConfigPost(req, resp, server));
         server.get("/map", (req, resp) -> handleMapGet(req, resp, server));
         server.get("/examples", (req, resp) -> handleExamplesGet(req, resp, server));
         server.post("/examples", (req, resp) -> handleExamplesPost(req, resp));
@@ -377,11 +382,61 @@ public class App {
             try { port = Integer.parseInt(form.get("nodePort")); } catch (Exception ignored) {}
             try { ram = Long.parseLong(form.get("nodeRam")); } catch (Exception ignored) {}
 
-            JettraStorePlugin.getInstance().addNode(nodeId, nodeName, nodeRole, nodeHost, port, ram);
+            JettraStorePlugin plugin = JettraStorePlugin.getInstance();
+            boolean added = plugin.addNode(nodeId, nodeName, nodeRole, nodeHost, port, ram);
+            if (!added) {
+                String err = plugin.getLastNodeOperationError();
+                String encodedErr = java.net.URLEncoder.encode(
+                        err != null && !err.isBlank() ? "Error: " + err : "Error: Nodo o puerto duplicado.",
+                        StandardCharsets.UTF_8);
+                redirect(resp, "/cluster?msg=" + encodedErr);
+                return;
+            }
             redirect(resp, "/cluster?msg=node_added");
             return;
         }
         redirect(resp, "/cluster");
+    }
+
+    // --- Visor/Editor de cluster.config del Nodo PRIMARY y Sincronización (Solo ADMIN) ---
+    private static void handleClusterConfigGet(HttpRequest req, HttpResponse resp, JettraServer server) {
+        if (!requireAuth(req, resp)) return;
+        boolean isAdmin = isLoggedUserAdmin(req);
+        String msg = req.getQueryParam("msg");
+        String action = req.getQueryParam("action");
+        String flash = msg;
+        if ("reload".equalsIgnoreCase(action) && (flash == null || flash.isBlank())) {
+            flash = "Archivo cluster.config recargado desde el nodo PRIMARY.";
+        }
+        Widget content = new ClusterConfigFluxView(isAdmin, flash, List.of(), null);
+        renderTemplate(resp, server, getLoggedUser(req), "Configuración del Clúster (cluster.config)", "cluster-config", content);
+    }
+
+    private static void handleClusterConfigPost(HttpRequest req, HttpResponse resp, JettraServer server) {
+        if (!requireAuth(req, resp)) return;
+        boolean isAdmin = isLoggedUserAdmin(req);
+        if (!isAdmin) {
+            Widget denied = new ClusterConfigFluxView(false, "Error: Acceso denegado. Solo administradores pueden editar o sincronizar cluster.config.", List.of(), null);
+            resp.status(HttpStatus.FORBIDDEN);
+            renderTemplate(resp, server, getLoggedUser(req), "Configuración del Clúster (cluster.config)", "cluster-config", denied);
+            return;
+        }
+        Map<String, String> form = parseFormBody(req.getBodyAsString());
+        String action = form.getOrDefault("action", "save_config");
+        String content = form.get("clusterConfigContent");
+        JettraStorePlugin plugin = JettraStorePlugin.getInstance();
+
+        JettraStorePlugin.ClusterSyncReport report;
+        if ("sync_cluster_config".equalsIgnoreCase(action)) {
+            report = plugin.synchronizeAllClusterConfigFiles(content);
+        } else {
+            report = plugin.saveClusterConfigContent(content, false);
+        }
+
+        String draft = report.success() ? null : content;
+        String flash = report.success() ? report.message() : "Error: " + report.message();
+        Widget view = new ClusterConfigFluxView(true, flash, report.nodeResults(), draft);
+        renderTemplate(resp, server, getLoggedUser(req), "Configuración del Clúster (cluster.config)", "cluster-config", view);
     }
 
     // --- Mapa de Transferencia en Tiempo Real (/map) ---

@@ -33,7 +33,7 @@ if [ -z "$JAR_FILE" ] || [ ! -f "$JAR_FILE" ]; then
     exit 1
 fi
 
-JAVA_OPTS_DEFAULT="-Xms256m -Xmx1g -XX:+UseZGC -XX:+UnlockExperimentalVMOptions -XX:+UseCompactObjectHeaders --enable-preview --enable-native-access=ALL-UNNAMED"
+JAVA_OPTS_DEFAULT="-Xms128m -Xmx512m -XX:MaxMetaspaceSize=256m -XX:MaxDirectMemorySize=192m -XX:+UseG1GC -XX:+UseStringDeduplication -XX:CICompilerCount=2 -XX:+UnlockExperimentalVMOptions -XX:+UseCompactObjectHeaders --enable-preview --enable-native-access=ALL-UNNAMED"
 
 exec java ${JAVA_OPTS:-$JAVA_OPTS_DEFAULT} \
     -Dmicroprofile.config.file="${CONFIG_FILE}" \

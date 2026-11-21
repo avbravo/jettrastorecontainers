@@ -62,19 +62,23 @@ else
     JAR_FILE="JettraStore-1.0-SNAPSHOT-uber.jar"
 fi
 
+# Opciones JVM optimizadas para bajo consumo de RAM (sobrescribible con JAVA_OPTS)
+JETTRA_JAVA_OPTS="${JAVA_OPTS:--Xms128m -Xmx512m -XX:MaxMetaspaceSize=256m -XX:MaxDirectMemorySize=256m -XX:+UseG1GC -XX:+UseStringDeduplication -XX:CICompilerCount=2}"
+
 echo "=============================================================================="
 echo "Iniciando nodo JettraStore: ID=${NODE_ID}, Rol=${NODE_ROLE}"
 echo "Topología local : ${CLUSTER_CONFIG}"
 echo "MicroProfile    : ${MP_CONFIG}"
 echo "JAR Binario     : ${JAR_FILE}"
+echo "JVM Opts        : ${JETTRA_JAVA_OPTS}"
 echo "=============================================================================="
 
+# shellcheck disable=SC2086
 exec java --enable-preview \
      --enable-native-access=ALL-UNNAMED \
      -XX:+UnlockExperimentalVMOptions \
      -XX:+UseCompactObjectHeaders \
-     -XX:+UseZGC \
-     -Xms2g -Xmx6g \
+     ${JETTRA_JAVA_OPTS} \
      -Dcluster.node.id="${NODE_ID}" \
      -Dcluster.node.role="${NODE_ROLE}" \
      -Djettra.node.id="${NODE_ID}" \

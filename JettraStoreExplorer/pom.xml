@@ -235,6 +235,32 @@
                 </configuration>
                 <executions>
                     <execution>
+                        <id>default-cli</id>
+                        <goals>
+                            <goal>exec</goal>
+                        </goals>
+                        <configuration>
+                            <mainClass>${main.class.path}</mainClass>
+                            <executable>java</executable>
+                            <arguments>
+                                <argument>-Xms128m</argument>
+                                <argument>-Xmx512m</argument>
+                                <argument>-XX:MaxMetaspaceSize=256m</argument>
+                                <argument>-XX:MaxDirectMemorySize=192m</argument>
+                                <argument>-XX:+UseG1GC</argument>
+                                <argument>-XX:+UseStringDeduplication</argument>
+                                <argument>-XX:CICompilerCount=2</argument>
+                                <argument>-XX:+UnlockExperimentalVMOptions</argument>
+                                <argument>-XX:+UseCompactObjectHeaders</argument>
+                                <argument>--enable-preview</argument>
+                                <argument>--enable-native-access=ALL-UNNAMED</argument>
+                                <argument>-classpath</argument>
+                                <classpath/>
+                                <argument>${main.class.path}</argument>
+                            </arguments>
+                        </configuration>
+                    </execution>
+                    <execution>
                         <id>jettra-test</id>
                         <phase>test</phase>
                         <goals>

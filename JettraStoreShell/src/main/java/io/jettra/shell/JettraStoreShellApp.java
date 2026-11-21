@@ -117,6 +117,10 @@ public final class JettraStoreShellApp implements AutoCloseable {
     private static final Path HISTORY_FILE = CONFIG_DIR.resolve("history.log");
     private static final Path JLINE_HISTORY_FILE = CONFIG_DIR.resolve(".jline_history");
     private final List<String> commandHistory = new CopyOnWriteArrayList<>();
+    private final java.net.http.HttpClient sharedHealthHttpClient = java.net.http.HttpClient.newBuilder()
+            .version(java.net.http.HttpClient.Version.HTTP_1_1)
+            .connectTimeout(java.time.Duration.ofMillis(120))
+            .build();
     private volatile org.jline.reader.LineReader activeLineReader;
 
     public void setActiveLineReader(org.jline.reader.LineReader activeLineReader) {
@@ -1733,15 +1737,12 @@ public final class JettraStoreShellApp implements AutoCloseable {
                 int p = node.restPort() > 0 ? node.restPort() : 8080;
                 boolean polled = false;
                 try {
-                    java.net.http.HttpClient httpClient = java.net.http.HttpClient.newBuilder()
-                            .connectTimeout(java.time.Duration.ofMillis(80))
-                            .build();
                     java.net.http.HttpRequest req = java.net.http.HttpRequest.newBuilder()
                             .uri(java.net.URI.create(String.format("http://%s:%d/api/v1/health", node.ip(), p)))
                             .timeout(java.time.Duration.ofMillis(120))
                             .GET()
                             .build();
-                    java.net.http.HttpResponse<String> resp = httpClient.send(req,
+                    java.net.http.HttpResponse<String> resp = sharedHealthHttpClient.send(req,
                             java.net.http.HttpResponse.BodyHandlers.ofString());
                     if (resp.statusCode() == 200) {
                         String body = resp.body();
@@ -1869,6 +1870,16 @@ public final class JettraStoreShellApp implements AutoCloseable {
             restPort = 60000 + (port - 9090);
         } else if (port >= 50001 && port <= 50009) {
             restPort = 60000 + (port - 50000);
+        } else if (port > 1000) {
+            restPort = port + 10000 <= 65535 ? port + 10000 : port - 1000;
+        }
+
+        // Validar que no exista ID de nodo duplicado ni puertos gRPC/REST duplicados en la misma IP
+        List<JettraConfigValidator.ClusterNodeInfo> currentNodes = collectCurrentClusterNodesForValidation();
+        JettraConfigValidator.ValidationResult nodeCheck = JettraConfigValidator.validateCandidateNode(
+                currentNodes, id, host, port, restPort, false);
+        if (!nodeCheck.isValid()) {
+            return "[ERROR] No se puede agregar el nodo '" + id + "': " + nodeCheck.getSummary();
         }
 
         ClusterNode newNode = new ClusterNode(id, host, port, role);
@@ -1881,6 +1892,8 @@ public final class JettraStoreShellApp implements AutoCloseable {
         try {
             JettraConfigValidator.registerDynamicNodeInClusterConfig(
                     id, role.name(), host, port, restPort, "~/jettra/data");
+        } catch (IllegalArgumentException dupEx) {
+            return "[ERROR] No se puede agregar el nodo '" + id + "': " + dupEx.getMessage();
         } catch (Exception ignored) {
         }
 
@@ -1896,6 +1909,33 @@ public final class JettraStoreShellApp implements AutoCloseable {
                 id, host, port, role, replicationReport);
     }
 
+    private List<JettraConfigValidator.ClusterNodeInfo> collectCurrentClusterNodesForValidation() {
+        Map<String, JettraConfigValidator.ClusterNodeInfo> merged = new LinkedHashMap<>();
+        Path clusterConfigFile = JettraConfigValidator.locateClusterConfigFile();
+        if (clusterConfigFile != null && Files.exists(clusterConfigFile)) {
+            try {
+                Properties props = JettraConfigValidator.loadProperties(clusterConfigFile, "/cluster.config", "/jettra.config");
+                for (JettraConfigValidator.ClusterNodeInfo cn : JettraConfigValidator.parseClusterNodes(props)) {
+                    if (cn.id() != null && !cn.id().isBlank()) {
+                        merged.put(cn.id().toLowerCase(), cn);
+                    }
+                }
+            } catch (Exception ignored) {}
+        }
+        int idx = merged.size() + 1;
+        for (SavedConnection sc : savedConnections.values()) {
+            String key = sc.name().toLowerCase();
+            if (!merged.containsKey(key)) {
+                int rp = (sc.port() >= 50001 && sc.port() <= 50009) ? (60000 + (sc.port() - 50000))
+                        : (sc.port() >= 9091 && sc.port() <= 9099 ? (60000 + (sc.port() - 9090)) : (sc.port() + 10000 <= 65535 ? sc.port() + 10000 : sc.port() - 1000));
+                merged.put(key, new JettraConfigValidator.ClusterNodeInfo(
+                        sc.name(), "node-01".equalsIgnoreCase(sc.name()) ? "PRIMARY" : "SECONDARY",
+                        sc.host(), sc.port(), rp, "~/jettra/data", String.valueOf(idx++)));
+            }
+        }
+        return new ArrayList<>(merged.values());
+    }
+
     private String handleRemoveNode(String command) {
         String clean = cleanQuotes(command
                 .replaceAll("(?i)^(CLUSTER\\s+)?(REMOVE-NODE|REMOVE\\s+NODE|CLUSTER-REMOVE-NODE)\\s+", "").trim());
@@ -1905,24 +1945,36 @@ public final class JettraStoreShellApp implements AutoCloseable {
         if ("node-01".equalsIgnoreCase(id) || client.getRingEngine().getNodeId().equalsIgnoreCase(id)) {
             return "[ERROR] No se puede remover el nodo primario activo del clúster.";
         }
-        boolean ok = client.getRingEngine().removePeer(id);
-        if (ok) {
-            savedConnections.remove(id);
+        boolean removedFromRing = client.getRingEngine().removePeer(id);
+        boolean removedFromSaved = savedConnections.remove(id) != null;
+        if (!removedFromSaved) {
+            String matchedKey = savedConnections.keySet().stream()
+                    .filter(k -> k.equalsIgnoreCase(id))
+                    .findFirst().orElse(null);
+            if (matchedKey != null) {
+                savedConnections.remove(matchedKey);
+                removedFromSaved = true;
+            }
+        }
+        if (removedFromRing || removedFromSaved) {
             persistSavedConnections();
             persistClusterNodesToMicroprofileConfig();
         }
 
-        // Remover de cluster.config local
+        // Remover de cluster.config local (limpiando todas las entradas del nodo y re-indexando)
+        boolean removedFromConfig = false;
         try {
-            JettraConfigValidator.removeDynamicNodeFromClusterConfig(id);
+            removedFromConfig = JettraConfigValidator.removeDynamicNodeFromClusterConfig(id);
         } catch (Exception ignored) {
         }
+
+        boolean ok = removedFromRing || removedFromSaved || removedFromConfig;
 
         // Replicar cluster.config actualizado a todos los nodos: PRIMARY primero, luego
         // los SECONDARY
         String replicationReport = replicateClusterConfigToQuorum(id, "SECONDARY", "", 0, 0, true);
 
-        return ok ? String.format("[SUCCESS] Nodo '%s' removido del anillo de réplicas.%n%s", id, replicationReport)
+        return ok ? String.format("[SUCCESS] Nodo '%s' removido del anillo de réplicas y eliminado de cluster.config.%n%s", id, replicationReport)
                 : String.format("[WARN] El nodo '%s' no existe en el registro del clúster.%n%s", id, replicationReport);
     }
 
@@ -1951,13 +2003,20 @@ public final class JettraStoreShellApp implements AutoCloseable {
         }
 
         // 2. Incorporar conexiones guardadas como fallback si no estuvieran en
-        // cluster.config
+        // cluster.config (evitando re-introducir un nodo que se está eliminando)
+        int fallbackRestOffset = 1;
         for (SavedConnection sc : savedConnections.values()) {
             String key = sc.name().toLowerCase();
+            if (isRemoval && key.equalsIgnoreCase(targetNodeId)) {
+                continue;
+            }
             if (!clusterTopology.containsKey(key)) {
                 String r = key.contains("primary") || "node-01".equalsIgnoreCase(key) ? "PRIMARY" : "SECONDARY";
-                clusterTopology.put(key, new ShellClusterNode(sc.name(), r, sc.host(), sc.port(), 60001));
+                int rp = (sc.port() >= 50001 && sc.port() <= 50009) ? (60000 + (sc.port() - 50000))
+                        : (sc.port() >= 9091 && sc.port() <= 9099 ? (60000 + (sc.port() - 9090)) : (60000 + fallbackRestOffset));
+                clusterTopology.put(key, new ShellClusterNode(sc.name(), r, sc.host(), sc.port(), rp));
             }
+            fallbackRestOffset++;
         }
 
         // 3. Ajustar topología según la operación
@@ -1968,36 +2027,25 @@ public final class JettraStoreShellApp implements AutoCloseable {
                     new ShellClusterNode(targetNodeId, role.toUpperCase(), host, grpcPort, restPort));
         }
 
-        // 4. Generar bytes canónicos actualizados de cluster.config
-        StringBuilder sb = new StringBuilder();
-        sb.append("################################################################################\n");
-        sb.append("# JettraStore Cluster Topology Configuration (cluster.config)\n");
-        sb.append("# Generado dinámicamente por JettraStoreShell\n");
-        sb.append("################################################################################\n\n");
-        sb.append("cluster.name = jettra-production-cluster\n");
-        sb.append("cluster.consensus.protocol = RAFT\n");
-        sb.append("cluster.ring.enabled = true\n");
-        sb.append("cluster.heartbeat.interval.ms = 150\n");
-        sb.append("cluster.election.timeout.ms = 300\n");
-
+        // 4. Generar bytes canónicos actualizados de cluster.config y validar integridad antes de distribuir
+        List<JettraConfigValidator.ClusterNodeInfo> canonicalNodes = new ArrayList<>();
         int idx = 1;
         for (ShellClusterNode n : clusterTopology.values()) {
             String normRole = isPrimaryRole(n.role()) ? "PRIMARY" : "SECONDARY";
             int rp = n.restPort() > 0 ? n.restPort() : (60000 + idx);
-            sb.append("\n# ==============================================================================\n");
-            sb.append("# NODO ").append(idx).append(": ").append(n.id()).append(" (").append(normRole).append(")\n");
-            sb.append("# ==============================================================================\n");
-            sb.append("cluster.node.").append(idx).append(".id = ").append(n.id()).append("\n");
-            sb.append("cluster.node.").append(idx).append(".role = ").append(normRole).append("\n");
-            sb.append("cluster.node.").append(idx).append(".ip = ").append(n.host()).append("\n");
-            sb.append("cluster.node.").append(idx).append(".grpc.port = ").append(n.grpcPort()).append("\n");
-            sb.append("cluster.node.").append(idx).append(".rest.port = ").append(rp).append("\n");
+            canonicalNodes.add(new JettraConfigValidator.ClusterNodeInfo(
+                    n.id(), normRole, n.host(), n.grpcPort(), rp, "~/jettra/data", String.valueOf(idx)));
             idx++;
         }
-        sb.append("\n# Asignación de Capacidad de Índices y Buffers en Clúster\n");
-        sb.append("cluster.index.initial.capacity = 65536\n");
-        sb.append("cluster.index.max.inmemory.keys = 100000\n");
-        byte[] cfgBytes = sb.toString().getBytes(StandardCharsets.UTF_8);
+        Properties baseProps = (clusterConfigFile != null && Files.exists(clusterConfigFile))
+                ? JettraConfigValidator.loadProperties(clusterConfigFile, "/cluster.config", "/jettra.config")
+                : new Properties();
+        byte[] cfgBytes = JettraConfigValidator.buildCanonicalClusterConfigBytes(canonicalNodes, baseProps);
+
+        JettraConfigValidator.ValidationResult integrity = JettraConfigValidator.validateClusterConfigIntegrity(cfgBytes);
+        if (!integrity.isValid()) {
+            return "[ERROR] Integridad de cluster.config fallida. Distribución abortada: " + integrity.getSummary();
+        }
 
         // Guardar atómicamente en el archivo local cluster.config si existe
         if (clusterConfigFile != null) {

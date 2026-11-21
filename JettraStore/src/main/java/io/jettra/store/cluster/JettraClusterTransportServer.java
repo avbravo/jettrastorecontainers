@@ -516,6 +516,15 @@ public final class JettraClusterTransportServer implements AutoCloseable {
                 byte[] cfgBytes = frame.payload();
                 if (cfgBytes != null && cfgBytes.length > 0) {
                     try {
+                        io.jettra.store.core.JettraConfigValidator.ValidationResult integrity =
+                            io.jettra.store.core.JettraConfigValidator.validateClusterConfigIntegrity(cfgBytes);
+                        if (!integrity.isValid()) {
+                            System.err.printf("[JettraClusterTransport] ❌ Rechazado TYPE_SYNC_CLUSTER_CONFIG inválido desde '%s': %s%n",
+                                frame.senderNodeId(), integrity.getSummary());
+                            return JettraRaftFrame.nack(frame.term(), frame.logIndex(),
+                                server != null ? server.getConfig().getNodeId() : "local",
+                                "INVALID_CLUSTER_CONFIG: " + integrity.getSummary());
+                        }
                         Path target = server != null
                             ? server.resolveClusterConfigFile()
                             : io.jettra.store.core.JettraConfigValidator.locateClusterConfigFile();
@@ -601,6 +610,27 @@ public final class JettraClusterTransportServer implements AutoCloseable {
                     return JettraRaftFrame.nack(frame.term(), frame.logIndex(), server.getConfig().getNodeId(), "JOIN_FAILED");
                 } catch (Exception ex) {
                     return JettraRaftFrame.nack(frame.term(), frame.logIndex(), server.getConfig().getNodeId(), ex.getMessage());
+                }
+            }
+
+            case JettraRaftFrame.TYPE_GET_CLUSTER_CONFIG_REQ -> {
+                String nodeId = server != null ? server.getConfig().getNodeId() : "local";
+                try {
+                    Path target = server != null
+                        ? server.resolveClusterConfigFile()
+                        : io.jettra.store.core.JettraConfigValidator.locateClusterConfigFile();
+                    byte[] bytes = null;
+                    if (target != null && java.nio.file.Files.exists(target)) {
+                        bytes = java.nio.file.Files.readAllBytes(target);
+                    } else if (server != null) {
+                        java.util.Properties p = io.jettra.store.core.JettraConfigValidator.loadProperties(null, "/cluster.config", "/jettra.config");
+                        List<io.jettra.store.core.JettraConfigValidator.ClusterNodeInfo> parsed =
+                            io.jettra.store.core.JettraConfigValidator.parseClusterNodes(p);
+                        bytes = io.jettra.store.core.JettraConfigValidator.buildCanonicalClusterConfigBytes(parsed, p);
+                    }
+                    return JettraRaftFrame.getClusterConfigResp(frame.term(), nodeId, bytes != null ? bytes : new byte[0]);
+                } catch (Exception ex) {
+                    return JettraRaftFrame.nack(frame.term(), frame.logIndex(), nodeId, "GET_CLUSTER_CONFIG_ERROR: " + ex.getMessage());
                 }
             }
 

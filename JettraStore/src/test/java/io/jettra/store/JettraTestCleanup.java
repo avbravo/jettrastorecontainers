@@ -41,6 +41,9 @@ public final class JettraTestCleanup {
 
         cleanTestDatabases(Path.of("/jettra/data"));
         cleanTestDatabases(Path.of(System.getProperty("user.home"), "jettra", "data"));
+        cleanTestDatabases(Path.of("jettra/data"));
+        cleanTestDatabases(Path.of("./jettra/data"));
+        cleanTestDatabases(Path.of("../jettra/data"));
         cleanTestDatabases(Path.of("./data/jettra"));
         cleanTestDatabases(Path.of("data/jettra"));
     }
@@ -57,7 +60,11 @@ public final class JettraTestCleanup {
             "test_meter_db",
             "test_multiuser_db",
             "test_stream_db",
-            "test_memory_engine_db"
+            "test_memory_engine_db",
+            "samples_ambiental_db",
+            "samples_hospital_db",
+            "samples_hostipal_db",
+            "example_factura_db"
         );
         for (String db : dbs) {
             try {

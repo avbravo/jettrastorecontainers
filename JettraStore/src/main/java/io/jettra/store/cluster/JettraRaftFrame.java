@@ -44,6 +44,8 @@ public record JettraRaftFrame(
     public static final byte TYPE_SYNC_CLUSTER_CONFIG = 0x17;
     public static final byte TYPE_JOIN_CLUSTER_REQ    = 0x18;
     public static final byte TYPE_JOIN_CLUSTER_RESP   = 0x19;
+    public static final byte TYPE_GET_CLUSTER_CONFIG_REQ  = 0x1A;
+    public static final byte TYPE_GET_CLUSTER_CONFIG_RESP = 0x1B;
 
     public static JettraRaftFrame heartbeat(long term, String senderNodeId) {
         return new JettraRaftFrame(TYPE_HEARTBEAT, term, 0, senderNodeId, "", "", "", new byte[0], System.currentTimeMillis());
@@ -167,6 +169,16 @@ public record JettraRaftFrame(
     public static JettraRaftFrame joinClusterResp(long term, String primaryNodeId, byte[] canonicalClusterConfigBytes) {
         return new JettraRaftFrame(TYPE_JOIN_CLUSTER_RESP, term, 0, primaryNodeId, "", "", "",
             canonicalClusterConfigBytes != null ? canonicalClusterConfigBytes : new byte[0], System.currentTimeMillis());
+    }
+
+    public static JettraRaftFrame getClusterConfigReq(long term, String senderNodeId) {
+        return new JettraRaftFrame(TYPE_GET_CLUSTER_CONFIG_REQ, term, 0, senderNodeId, "", "", "",
+            new byte[0], System.currentTimeMillis());
+    }
+
+    public static JettraRaftFrame getClusterConfigResp(long term, String primaryNodeId, byte[] clusterConfigBytes) {
+        return new JettraRaftFrame(TYPE_GET_CLUSTER_CONFIG_RESP, term, 0, primaryNodeId, "", "", "",
+            clusterConfigBytes != null ? clusterConfigBytes : new byte[0], System.currentTimeMillis());
     }
 
     public String getPayloadAsString() {

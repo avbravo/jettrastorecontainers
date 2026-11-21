@@ -245,8 +245,8 @@ public final class JettraStoreConfig {
         }
 
         this.storagePath = effectivePath;
-        this.memTableSizeMb = Integer.parseInt(props.getProperty("jettra.storage.memtable.size.mb", "128"));
-        this.ramGlobalLimitMb = Integer.parseInt(props.getProperty("jettra.storage.ram.global.limit.mb", "2048"));
+        this.memTableSizeMb = Integer.parseInt(props.getProperty("jettra.storage.memtable.size.mb", "16"));
+        this.ramGlobalLimitMb = Integer.parseInt(props.getProperty("jettra.storage.ram.global.limit.mb", "512"));
         this.offHeapDirect = Boolean.parseBoolean(props.getProperty("jettra.storage.offheap.direct", "true"));
         this.fileExtension = props.getProperty("jettra.storage.file.extension", ".jettra");
         String modeStr = getPropOrEnv(props, 
@@ -259,7 +259,7 @@ public final class JettraStoreConfig {
         this.ringSaturationThresholdPercent = Integer.parseInt(props.getProperty("jettra.ring.saturation.threshold.percent", "85"));
         this.ringReleaseTargetPercent = Integer.parseInt(props.getProperty("jettra.ring.release.target.percent", "45"));
         this.jettraPoliceActive = Boolean.parseBoolean(props.getProperty("jettrapolice.active", "true"));
-        this.jettraPoliceIntervalMs = Long.parseLong(props.getProperty("jettrapolice.interval.ms", "500"));
+        this.jettraPoliceIntervalMs = Long.parseLong(props.getProperty("jettrapolice.interval.ms", "2000"));
         try {
             double ramWarn = Double.parseDouble(props.getProperty("jettrapolice.ram.warning.threshold", "75"));
             double ramCrit = Double.parseDouble(props.getProperty("jettrapolice.ram.critical.threshold", "85"));
@@ -274,8 +274,8 @@ public final class JettraStoreConfig {
         this.defaultAdminUsername = getPropOrEnv(props, "jettra.security.default.admin.username", "JETTRA_ADMIN_USERNAME", "admin");
         this.defaultAdminPassword = getPropOrEnv(props, "jettra.security.default.admin.password", "JETTRA_ADMIN_PASSWORD", "admin-jettra");
 
-        this.indexInitialCapacity = Integer.parseInt(props.getProperty("jettra.index.initial.capacity", "65536"));
-        this.indexMaxInMemoryKeys = Integer.parseInt(props.getProperty("jettra.index.max.inmemory.keys", "100000"));
+        this.indexInitialCapacity = Integer.parseInt(props.getProperty("jettra.index.initial.capacity", "256"));
+        this.indexMaxInMemoryKeys = Integer.parseInt(props.getProperty("jettra.index.max.inmemory.keys", "50000"));
         this.indexCompactStorage = Boolean.parseBoolean(props.getProperty("jettra.index.compact.storage", "true"));
         
         String configuredIndexPath = null;

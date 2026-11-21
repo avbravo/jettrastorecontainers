@@ -5,8 +5,10 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import io.jettra.flux.core.Modifier;
 import io.jettra.flux.core.Widget;
+import io.jettra.flux.widgets.Button;
 import io.jettra.flux.widgets.Datatable;
 import io.jettra.flux.widgets.Div;
+import io.jettra.flux.widgets.RawScript;
 import io.jettra.flux.widgets.Text;
 import io.jettra.store.explorer.model.EngineRecordInfo;
 import io.jettra.store.explorer.model.EngineRecordVersion;
@@ -390,7 +392,51 @@ public final class EngineRecordRenderer {
         }
 
         Datatable fieldsTable = Datatable.ofWidgets(headers, rows);
-        fieldsTable.modifier(new Modifier().cssClass("app-table").attribute("data-java-record-fields", "true"));
+        fieldsTable.id("javaRecordFieldsTable");
+        fieldsTable.modifier(new Modifier()
+                .cssClass("app-table")
+                .attribute("data-java-record-fields", "true")
+                .attribute("data-dynamic-rows-table", "JAVA_RECORD"));
+
+        Button addRowBtn = Button.of("➕ Añadir Fila");
+        addRowBtn.id("btnAddRecordFieldRow");
+        addRowBtn.modifier(new Modifier()
+                .cssClass("app-btn-secondary")
+                .attribute("type", "button")
+                .attribute("onclick", "jettraAddJavaRecordRow()")
+                .style("margin-top: 0.6rem; font-size: 0.82rem; font-weight: 700; border-color: #3b82f6; color: #93c5fd;"));
+
+        RawScript addRowScript = RawScript.of("""
+            function jettraAddJavaRecordRow() {
+                var table = document.getElementById('javaRecordFieldsTable');
+                if (!table) return;
+                var tbody = table.querySelector('tbody');
+                if (!tbody) return;
+                var rows = tbody.querySelectorAll('tr');
+                if (rows.length === 0) return;
+                var nextIdx = rows.length;
+                while (tbody.querySelector('[name="rec_field_name_' + nextIdx + '"]')) { nextIdx++; }
+                var clone = rows[rows.length - 1].cloneNode(true);
+                clone.querySelectorAll('input, select').forEach(function(el) {
+                    var nm = el.getAttribute('name') || '';
+                    if (nm.indexOf('rec_field_name_') === 0) {
+                        el.setAttribute('name', 'rec_field_name_' + nextIdx);
+                        el.value = '';
+                    } else if (nm.indexOf('rec_field_type_') === 0) {
+                        el.setAttribute('name', 'rec_field_type_' + nextIdx);
+                        el.value = 'String';
+                    } else if (nm.indexOf('rec_field_rule_') === 0) {
+                        el.setAttribute('name', 'rec_field_rule_' + nextIdx);
+                        el.value = 'NONE';
+                    } else if (nm.indexOf('rec_field_val_') === 0) {
+                        el.setAttribute('name', 'rec_field_val_' + nextIdx);
+                        el.value = '';
+                    }
+                    el.removeAttribute('id');
+                });
+                tbody.appendChild(clone);
+            }
+            """);
 
         Widget classRow = Div.of(
                 FluxUi.fieldColumn("Clase Java Record (recordClass)",
@@ -398,14 +444,80 @@ public final class EngineRecordRenderer {
         ).modifier(new Modifier().style("margin-bottom: 0.85rem;"));
 
         Widget hint = FluxUi.coloredSpan(
-                "Defina cada componente del Java Record indicando nombre, tipo de dato, regla JettraStore (@Id, @Required, @Unique, @Indexed, @JettraRef, etc.) y valor.",
+                "Defina cada componente del Java Record indicando nombre, tipo de dato, regla JettraStore (@Id, @Required, @Unique, @Indexed, @JettraRef, etc.) y valor. Use 'Añadir Fila' para agregar más campos.",
                 "font-size: 0.76rem; color: var(--text-muted); display: block; margin-bottom: 0.65rem;");
 
         return creatorCard("JAVA_RECORD", "#3b82f6", "💎 Nuevo Java Canonical Record (Campos, Tipos y Reglas JettraStore)",
                 FluxUi.hidden("engineEditorMode", "JAVA_RECORD"),
                 classRow,
                 hint,
-                fieldsTable);
+                fieldsTable,
+                Div.of(addRowBtn).modifier(new Modifier().style("display: flex; justify-content: flex-start;")),
+                addRowScript);
+    }
+
+    private static Widget buildDynamicExtraFieldsSection(String engine, String accent) {
+        List<Widget> headers = List.of(
+                Text.of("Nombre del Campo / Propiedad"),
+                Text.of("Valor")
+        );
+        List<List<Widget>> initialRows = List.of(
+                List.of(
+                        FluxUi.textInput("extra_field_name_0", "", "nombreCampo", false),
+                        FluxUi.textInput("extra_field_val_0", "", "valor", false)
+                )
+        );
+
+        Datatable extraTable = Datatable.ofWidgets(headers, initialRows);
+        extraTable.id("dynamicExtraFieldsTable");
+        extraTable.modifier(new Modifier()
+                .cssClass("app-table")
+                .attribute("data-dynamic-rows-table", engine));
+
+        Button addRowBtn = Button.of("➕ Añadir Fila");
+        addRowBtn.id("btnAddExtraFieldRow");
+        addRowBtn.modifier(new Modifier()
+                .cssClass("app-btn-secondary")
+                .attribute("type", "button")
+                .attribute("onclick", "jettraAddExtraFieldRow()")
+                .style("margin-top: 0.55rem; font-size: 0.82rem; font-weight: 700; border-color: " + accent + "; color: " + accent + ";"));
+
+        RawScript addRowScript = RawScript.of("""
+            function jettraAddExtraFieldRow() {
+                var table = document.getElementById('dynamicExtraFieldsTable');
+                if (!table) return;
+                var tbody = table.querySelector('tbody');
+                if (!tbody) return;
+                var rows = tbody.querySelectorAll('tr');
+                if (rows.length === 0) return;
+                var nextIdx = rows.length;
+                while (tbody.querySelector('[name="extra_field_name_' + nextIdx + '"]')) { nextIdx++; }
+                var clone = rows[rows.length - 1].cloneNode(true);
+                clone.querySelectorAll('input').forEach(function(el) {
+                    var nm = el.getAttribute('name') || '';
+                    if (nm.indexOf('extra_field_name_') === 0) {
+                        el.setAttribute('name', 'extra_field_name_' + nextIdx);
+                        el.value = '';
+                    } else if (nm.indexOf('extra_field_val_') === 0) {
+                        el.setAttribute('name', 'extra_field_val_' + nextIdx);
+                        el.value = '';
+                    }
+                    el.removeAttribute('id');
+                });
+                tbody.appendChild(clone);
+            }
+            """);
+
+        Widget sectionTitle = FluxUi.coloredSpan(
+                "Campos / Filas Adicionales (Personalizados):",
+                "font-size: 0.76rem; font-weight: 700; color: var(--text-muted); display: block; margin: 0.9rem 0 0.45rem 0;");
+
+        return Div.of(
+                sectionTitle,
+                extraTable,
+                Div.of(addRowBtn).modifier(new Modifier().style("display: flex; justify-content: flex-start;")),
+                addRowScript
+        );
     }
 
     private static Widget renderObjectCreator() {
@@ -424,7 +536,8 @@ public final class EngineRecordRenderer {
                 FluxUi.hidden("engineEditorMode", "OBJECT"),
                 topRow,
                 FluxUi.coloredSpan("Propiedades de la instancia:", "font-size:0.75rem; font-weight:700; color:var(--text-muted); display:block; margin-bottom:0.45rem;"),
-                propsGrid);
+                propsGrid,
+                buildDynamicExtraFieldsSection("OBJECT", "#eab308"));
     }
 
     private static Widget renderKeyValueCreator() {
@@ -436,7 +549,8 @@ public final class EngineRecordRenderer {
         ).modifier(new Modifier().style("display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 0.75rem;"));
 
         return creatorCard("KEY_VALUE", "#f97316", "🔑 Nuevo Registro Clave-Valor (Key/Value Store)",
-                FluxUi.hidden("engineEditorMode", "KEY_VALUE"), grid);
+                FluxUi.hidden("engineEditorMode", "KEY_VALUE"), grid,
+                buildDynamicExtraFieldsSection("KEY_VALUE", "#f97316"));
     }
 
     private static Widget renderGraphCreator() {
@@ -449,7 +563,8 @@ public final class EngineRecordRenderer {
         ).modifier(new Modifier().style("display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 0.75rem;"));
 
         return creatorCard("GRAPH", "#ec4899", "🕸️ Nueva Arista / Relación de Grafo",
-                FluxUi.hidden("engineEditorMode", "GRAPH"), grid);
+                FluxUi.hidden("engineEditorMode", "GRAPH"), grid,
+                buildDynamicExtraFieldsSection("GRAPH", "#ec4899"));
     }
 
     private static Widget renderVectorCreator() {
@@ -464,7 +579,8 @@ public final class EngineRecordRenderer {
                 FluxUi.hidden("engineEditorMode", "VECTOR"),
                 grid,
                 FluxUi.fieldColumn("Vector Embedding (floats separados por coma)",
-                        FluxUi.textInput("vec_embedding", "0.012, -0.421, 0.881", "0.1, -0.2, 0.3", true), null));
+                        FluxUi.textInput("vec_embedding", "0.012, -0.421, 0.881", "0.1, -0.2, 0.3", true), null),
+                buildDynamicExtraFieldsSection("VECTOR", "#a855f7"));
     }
 
     private static Widget renderTimeseriesCreator() {
@@ -476,7 +592,8 @@ public final class EngineRecordRenderer {
         ).modifier(new Modifier().style("display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 0.75rem;"));
 
         return creatorCard("TIMESERIES", "#22c55e", "📈 Nuevo Punto de Serie Temporal (Telemetry / BRIN)",
-                FluxUi.hidden("engineEditorMode", "TIMESERIES"), grid);
+                FluxUi.hidden("engineEditorMode", "TIMESERIES"), grid,
+                buildDynamicExtraFieldsSection("TIMESERIES", "#22c55e"));
     }
 
     private static Widget renderGeospatialCreator() {
@@ -489,7 +606,8 @@ public final class EngineRecordRenderer {
         ).modifier(new Modifier().style("display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 0.75rem;"));
 
         return creatorCard("GEOSPATIAL", "#06b6d4", "🌍 Nuevo Punto Geoespacial (GeoJSON & R-Tree)",
-                FluxUi.hidden("engineEditorMode", "GEOSPATIAL"), grid);
+                FluxUi.hidden("engineEditorMode", "GEOSPATIAL"), grid,
+                buildDynamicExtraFieldsSection("GEOSPATIAL", "#06b6d4"));
     }
 
     private static Widget renderTabularCreator(String engine) {
@@ -506,7 +624,8 @@ public final class EngineRecordRenderer {
         ).modifier(new Modifier().style("display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 0.75rem;"));
 
         return creatorCard(engine, accent, title,
-                FluxUi.hidden("engineEditorMode", engine), grid);
+                FluxUi.hidden("engineEditorMode", engine), grid,
+                buildDynamicExtraFieldsSection(engine, accent));
     }
 
     private static Widget creatorCard(String engine, String accent, String title, Widget... children) {
@@ -726,6 +845,7 @@ public final class EngineRecordRenderer {
             result.put("serialVersion", parseScalar(form.getOrDefault("obj_serialVersion", strVal(existingMap.get("serialVersion"), "1"))));
             Map<String, Object> props = new LinkedHashMap<>();
             collectPrefixed(form, "prop_", props);
+            collectDynamicExtraFields(form, props);
             result.put("properties", props);
         } else if ("JAVA_RECORD".equalsIgnoreCase(mode)) {
             result.put("recordClass", form.getOrDefault("rec_recordClass", strVal(existingMap.get("recordClass"), "io.jettra.store.domain.Record")));
@@ -764,6 +884,7 @@ public final class EngineRecordRenderer {
             }
         } else if ("VECTOR".equalsIgnoreCase(mode)) {
             collectPrefixed(form, "prop_", result);
+            collectDynamicExtraFields(form, result);
             String embStr = form.get("vec_embedding");
             if (embStr != null) {
                 List<Double> nums = new ArrayList<>();
@@ -777,6 +898,7 @@ public final class EngineRecordRenderer {
             }
         } else {
             collectPrefixed(form, "prop_", result);
+            collectDynamicExtraFields(form, result);
         }
 
         if (result.isEmpty()) {
@@ -795,6 +917,24 @@ public final class EngineRecordRenderer {
                 String fieldName = entry.getKey().substring(prefix.length());
                 target.put(fieldName, parseScalar(entry.getValue()));
             }
+        }
+    }
+
+    private static void collectDynamicExtraFields(Map<String, String> form, Map<String, Object> target) {
+        List<Integer> indices = new ArrayList<>();
+        for (String key : form.keySet()) {
+            if (key.startsWith("extra_field_name_")) {
+                try {
+                    indices.add(Integer.parseInt(key.substring("extra_field_name_".length())));
+                } catch (NumberFormatException ignored) {}
+            }
+        }
+        indices.sort(Integer::compareTo);
+        for (int idx : indices) {
+            String rawName = form.get("extra_field_name_" + idx);
+            if (rawName == null || rawName.isBlank()) continue;
+            String rawVal = form.getOrDefault("extra_field_val_" + idx, "");
+            target.put(rawName.trim(), parseScalar(rawVal));
         }
     }
 

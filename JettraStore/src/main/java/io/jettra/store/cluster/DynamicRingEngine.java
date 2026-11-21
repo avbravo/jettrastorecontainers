@@ -37,14 +37,28 @@ public final class DynamicRingEngine {
      */
     public void registerDynamicPeer(ClusterNode peer, int restPort, String storagePath) {
         registerPeer(peer);
+        int grpcPort = peer.getPort();
+        int effectiveRestPort = (restPort > 0 && restPort != grpcPort)
+                ? restPort
+                : deriveDistinctRestPort(grpcPort);
         io.jettra.store.core.JettraConfigValidator.registerDynamicNodeInClusterConfig(
             peer.getId(),
             peer.getRole() != null ? peer.getRole().name() : "SECONDARY",
             peer.getIp(),
-            peer.getPort(),
-            restPort > 0 ? restPort : 8082,
+            grpcPort,
+            effectiveRestPort,
             (storagePath != null && !storagePath.isBlank()) ? storagePath : "~/jettra/data"
         );
+    }
+
+    private static int deriveDistinctRestPort(int grpcPort) {
+        if (grpcPort >= 50001 && grpcPort <= 50999) {
+            return 60000 + (grpcPort - 50000);
+        }
+        if (grpcPort >= 9091 && grpcPort <= 9999) {
+            return 8080 + (grpcPort - 9090);
+        }
+        return grpcPort + 1000 <= 65535 ? grpcPort + 1000 : Math.max(1024, grpcPort - 1000);
     }
 
     public boolean removePeer(String peerId) {

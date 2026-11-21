@@ -690,4 +690,78 @@ public class JettraConfigValidatorTest extends JettraStoreBaseTest {
             } catch (Exception ignored) {}
         }
     }
+
+    @Test
+    @DisplayName("Debe validar integridad de cluster.config rechazando IDs duplicados y puertos gRPC/REST duplicados, y limpiar completamente nodos removidos")
+    public void testClusterConfigIntegrityDuplicatePreventionAndCleanRemoval() throws IOException {
+        Path tempDir = Files.createTempDirectory("jettra_cfg_integrity_test");
+        Path cfgFile = tempDir.resolve("cluster.config");
+        try {
+            // 1. Crear archivo inicial con 2 nodos válidos
+            String initial = """
+                cluster.name = jettra-test
+                cluster.node.1.id = node-01
+                cluster.node.1.role = PRIMARY
+                cluster.node.1.ip = 127.0.0.1
+                cluster.node.1.grpc.port = 50001
+                cluster.node.1.rest.port = 60001
+                cluster.node.2.id = node-02
+                cluster.node.2.role = SECONDARY
+                cluster.node.2.ip = 127.0.0.1
+                cluster.node.2.grpc.port = 50002
+                cluster.node.2.rest.port = 60002
+                """;
+            Files.writeString(cfgFile, initial);
+            assertTrue(JettraConfigValidator.validateClusterConfigIntegrity(initial).isValid(), "Config inicial debe ser válida");
+
+            // 2. Validar rechazo de ID duplicado
+            String dupId = initial + """
+                cluster.node.3.id = node-02
+                cluster.node.3.role = SECONDARY
+                cluster.node.3.ip = 127.0.0.1
+                cluster.node.3.grpc.port = 50003
+                cluster.node.3.rest.port = 60003
+                """;
+            var dupIdRes = JettraConfigValidator.validateClusterConfigIntegrity(dupId);
+            assertFalse(dupIdRes.isValid(), "Debe rechazar ID de nodo duplicado");
+            assertFalse(JettraConfigValidator.writeClusterConfigAtomically(cfgFile, dupId.getBytes()), "writeClusterConfigAtomically debe rechazar ID duplicado");
+
+            // 3. Validar rechazo de puerto gRPC duplicado
+            String dupGrpc = initial + """
+                cluster.node.3.id = node-03
+                cluster.node.3.role = SECONDARY
+                cluster.node.3.ip = 127.0.0.1
+                cluster.node.3.grpc.port = 50002
+                cluster.node.3.rest.port = 60003
+                """;
+            assertFalse(JettraConfigValidator.validateClusterConfigIntegrity(dupGrpc).isValid(), "Debe rechazar puerto gRPC duplicado");
+
+            // 4. Validar rechazo de puerto REST duplicado
+            String dupRest = initial + """
+                cluster.node.3.id = node-03
+                cluster.node.3.role = SECONDARY
+                cluster.node.3.ip = 127.0.0.1
+                cluster.node.3.grpc.port = 50003
+                cluster.node.3.rest.port = 60002
+                """;
+            assertFalse(JettraConfigValidator.validateClusterConfigIntegrity(dupRest).isValid(), "Debe rechazar puerto REST duplicado");
+
+            // 5. Eliminar node-02 y verificar que se borran TODOS sus datos y queda limpio para re-agregarlo
+            assertTrue(JettraConfigValidator.removeDynamicNodeFromClusterConfig(cfgFile, "node-02"), "Debe eliminar node-02");
+            String afterRemove = Files.readString(cfgFile);
+            assertFalse(afterRemove.contains("node-02"), "cluster.config no debe conservar referencias a node-02 tras removerlo");
+            assertFalse(afterRemove.contains("50002"), "cluster.config no debe conservar el puerto gRPC de node-02 tras removerlo");
+            assertFalse(afterRemove.contains("60002"), "cluster.config no debe conservar el puerto REST de node-02 tras removerlo");
+            assertTrue(JettraConfigValidator.validateClusterConfigIntegrity(afterRemove).isValid(), "cluster.config tras remover debe ser íntegro");
+
+            // 6. Volver a agregar node-02 sin conflictos
+            JettraConfigValidator.ClusterNodeInfo reAdded = JettraConfigValidator.registerDynamicNodeInClusterConfig(
+                    cfgFile, "node-02", "SECONDARY", "127.0.0.1", 50002, 60002, "~/jettra/data");
+            assertEquals("node-02", reAdded.id());
+            assertTrue(JettraConfigValidator.validateClusterConfigIntegrity(Files.readString(cfgFile)).isValid());
+        } finally {
+            Files.deleteIfExists(cfgFile);
+            Files.deleteIfExists(tempDir);
+        }
+    }
 }

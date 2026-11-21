@@ -37,7 +37,7 @@ ENV SERVER_HOST=0.0.0.0 \
     SERVER_PORT=8085 \
     STORAGE_MODE=OFF_HEAP \
     MICROPROFILE_CONFIG_FILE=/app/config/microprofile-config.properties \
-    JAVA_OPTS="-Xms256m -Xmx1g -XX:+UseContainerSupport -XX:+UseZGC -XX:+UnlockExperimentalVMOptions -XX:+UseCompactObjectHeaders --enable-preview --enable-native-access=ALL-UNNAMED"
+    JAVA_OPTS="-Xms128m -Xmx512m -XX:MaxMetaspaceSize=256m -XX:MaxDirectMemorySize=192m -XX:+UseContainerSupport -XX:+UseG1GC -XX:+UseStringDeduplication -XX:CICompilerCount=2 -XX:+UnlockExperimentalVMOptions -XX:+UseCompactObjectHeaders --enable-preview --enable-native-access=ALL-UNNAMED"
 
 EXPOSE 8085
 

@@ -33,9 +33,9 @@ services:
       - JETTRA_ADMIN_USERNAME=admin
       - JETTRA_ADMIN_PASSWORD=admin-jettra
       - JETTRA_CLUSTER_PEERS=node-02:jettra-node-02:50002:SECONDARY,node-03:jettra-node-03:50003:SECONDARY
-      - JAVA_OPTS=--enable-preview --enable-native-access=ALL-UNNAMED -XX:+UnlockExperimentalVMOptions -XX:+UseCompactObjectHeaders -XX:+UseContainerSupport -XX:+UseZGC -Xms512m -Xmx2g -Djettra.storage.path=/jettra/data -Djettra.storage.mode=${JETTRA_STORAGE_MODE:-OFF_HEAP}
-    mem_limit: 3g
-    mem_reservation: 512m
+      - JAVA_OPTS=--enable-preview --enable-native-access=ALL-UNNAMED -XX:+UnlockExperimentalVMOptions -XX:+UseCompactObjectHeaders -XX:+UseContainerSupport -XX:+UseG1GC -XX:+UseStringDeduplication -XX:CICompilerCount=2 -Xms128m -Xmx512m -XX:MaxMetaspaceSize=256m -XX:MaxDirectMemorySize=256m -Djettra.storage.path=/jettra/data -Djettra.storage.mode=${JETTRA_STORAGE_MODE:-OFF_HEAP}
+    mem_limit: 1g
+    mem_reservation: 192m
     volumes:
       - jettra_data_node01:/jettra/data
       - jettra_checkpoint_node01:/jettra/checkpoint
@@ -83,9 +83,9 @@ services:
       - JETTRA_ADMIN_USERNAME=admin
       - JETTRA_ADMIN_PASSWORD=admin-jettra
       - JETTRA_CLUSTER_PEERS=node-01:jettra-node-01:50001:PRIMARY,node-03:jettra-node-03:50003:SECONDARY
-      - JAVA_OPTS=--enable-preview --enable-native-access=ALL-UNNAMED -XX:+UnlockExperimentalVMOptions -XX:+UseCompactObjectHeaders -XX:+UseContainerSupport -XX:+UseZGC -Xms512m -Xmx2g -Djettra.storage.path=/jettra/data -Djettra.storage.mode=${JETTRA_STORAGE_MODE:-OFF_HEAP}
-    mem_limit: 3g
-    mem_reservation: 512m
+      - JAVA_OPTS=--enable-preview --enable-native-access=ALL-UNNAMED -XX:+UnlockExperimentalVMOptions -XX:+UseCompactObjectHeaders -XX:+UseContainerSupport -XX:+UseG1GC -XX:+UseStringDeduplication -XX:CICompilerCount=2 -Xms128m -Xmx512m -XX:MaxMetaspaceSize=256m -XX:MaxDirectMemorySize=256m -Djettra.storage.path=/jettra/data -Djettra.storage.mode=${JETTRA_STORAGE_MODE:-OFF_HEAP}
+    mem_limit: 1g
+    mem_reservation: 192m
     volumes:
       - jettra_data_node02:/jettra/data
       - jettra_checkpoint_node02:/jettra/checkpoint
@@ -133,9 +133,9 @@ services:
       - JETTRA_ADMIN_USERNAME=admin
       - JETTRA_ADMIN_PASSWORD=admin-jettra
       - JETTRA_CLUSTER_PEERS=node-01:jettra-node-01:50001:PRIMARY,node-02:jettra-node-02:50002:SECONDARY
-      - JAVA_OPTS=--enable-preview --enable-native-access=ALL-UNNAMED -XX:+UnlockExperimentalVMOptions -XX:+UseCompactObjectHeaders -XX:+UseContainerSupport -XX:+UseZGC -Xms512m -Xmx2g -Djettra.storage.path=/jettra/data -Djettra.storage.mode=${JETTRA_STORAGE_MODE:-OFF_HEAP}
-    mem_limit: 3g
-    mem_reservation: 512m
+      - JAVA_OPTS=--enable-preview --enable-native-access=ALL-UNNAMED -XX:+UnlockExperimentalVMOptions -XX:+UseCompactObjectHeaders -XX:+UseContainerSupport -XX:+UseG1GC -XX:+UseStringDeduplication -XX:CICompilerCount=2 -Xms128m -Xmx512m -XX:MaxMetaspaceSize=256m -XX:MaxDirectMemorySize=256m -Djettra.storage.path=/jettra/data -Djettra.storage.mode=${JETTRA_STORAGE_MODE:-OFF_HEAP}
+    mem_limit: 1g
+    mem_reservation: 192m
     volumes:
       - jettra_data_node03:/jettra/data
       - jettra_checkpoint_node03:/jettra/checkpoint

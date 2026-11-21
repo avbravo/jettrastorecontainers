@@ -212,11 +212,15 @@
                             <mainClass>${mainClass}</mainClass>
                             <executable>java</executable>
                             <arguments>
-                                <argument>-Xms256m</argument>
-                                <argument>-Xmx2g</argument>
+                                <argument>-Xms128m</argument>
+                                <argument>-Xmx768m</argument>
+                                <argument>-XX:MaxMetaspaceSize=256m</argument>
+                                <argument>-XX:MaxDirectMemorySize=256m</argument>
                                 <argument>-XX:+UnlockExperimentalVMOptions</argument>
                                 <argument>-XX:+UseCompactObjectHeaders</argument>
                                 <argument>-XX:+UseG1GC</argument>
+                                <argument>-XX:+UseStringDeduplication</argument>
+                                <argument>-XX:CICompilerCount=2</argument>
                                 <argument>--enable-preview</argument>
                                 <argument>--enable-native-access=ALL-UNNAMED</argument>
                                 <argument>-classpath</argument>

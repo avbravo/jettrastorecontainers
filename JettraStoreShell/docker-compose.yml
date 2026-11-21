@@ -12,13 +12,13 @@ services:
     stdin_open: true
     tty: true
     restart: "no"
-    mem_limit: 512m
+    mem_limit: 384m
     mem_reservation: 64m
     environment:
       - MICROPROFILE_CONFIG_FILE=/app/config/microprofile-config.properties
       - JETTRA_HOST=jettra-node-01
       - JETTRA_PORT=50001
-      - JAVA_OPTS=-Xms64m -Xmx512m -XX:+UseG1GC -XX:+UnlockExperimentalVMOptions -XX:+UseCompactObjectHeaders --enable-preview --enable-native-access=ALL-UNNAMED -Dcluster.nodes=node-01:jettra-node-01:50001,node-02:jettra-node-02:50002,node-03:jettra-node-03:50003
+      - JAVA_OPTS=-Xms64m -Xmx256m -XX:MaxMetaspaceSize=192m -XX:MaxDirectMemorySize=128m -XX:+UseContainerSupport -XX:+UseG1GC -XX:+UseStringDeduplication -XX:CICompilerCount=2 -XX:+UnlockExperimentalVMOptions -XX:+UseCompactObjectHeaders --enable-preview --enable-native-access=ALL-UNNAMED -Dcluster.nodes=node-01:jettra-node-01:50001,node-02:jettra-node-02:50002,node-03:jettra-node-03:50003
     volumes:
       - jettra_shell_data:/home/jettra/.jettra
       - jettra_shell_config:/app/config

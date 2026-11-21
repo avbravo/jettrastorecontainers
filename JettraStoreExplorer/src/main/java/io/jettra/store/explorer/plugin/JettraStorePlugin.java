@@ -64,6 +64,7 @@ public class JettraStorePlugin {
     private final NodeLifecycleManager lifecycleManager = new NodeLifecycleManager();
     private final CopyOnWriteArrayList<Runnable> clusterListeners = new CopyOnWriteArrayList<>();
     private final HttpClient healthHttpClient = HttpClient.newBuilder()
+            .version(HttpClient.Version.HTTP_1_1)
             .connectTimeout(Duration.ofMillis(300))
             .build();
     private final Map<String, List<EngineBucketInfo>> databasesCatalog = new ConcurrentHashMap<>();
@@ -89,7 +90,7 @@ public class JettraStorePlugin {
 
     private final AtomicBoolean heartbeatRunning = new AtomicBoolean(false);
     private volatile Thread heartbeatThread;
-    private volatile long heartbeatIntervalMs = 1000L;
+    private volatile long heartbeatIntervalMs = Long.getLong("jettra.explorer.heartbeat.interval.ms", 3000L);
     private final String clusterNodesConfigPath = System.getProperty("jettra.explorer.cluster.nodes.file", "memory/cluster_nodes.json");
 
     private JettraStorePlugin() {
@@ -1252,76 +1253,291 @@ public class JettraStorePlugin {
         }
     }
 
+    public record ClusterConfigSnapshot(
+            String sourceNodeId,
+            String sourceAddress,
+            boolean fromRemotePrimary,
+            String content,
+            boolean valid,
+            List<String> errors,
+            List<io.jettra.store.core.JettraConfigValidator.ClusterNodeInfo> parsedNodes) {}
+
+    public record ClusterSyncReport(boolean success, String message, List<String> nodeResults) {}
+
+    private volatile String lastNodeOperationError;
+
+    public String getLastNodeOperationError() {
+        return lastNodeOperationError;
+    }
+
     /**
      * Genera el contenido actualizado del archivo cluster.config a partir de la topología actual de nodos
-     * (sin propiedades cluster.node.<N>.storage.path).
+     * (sin propiedades cluster.node.<N>.storage.path), validando puertos REST sin colisiones.
      */
     public synchronized byte[] buildClusterConfigBytesFromNodes() {
-        StringBuilder sb = new StringBuilder();
-        sb.append("################################################################################\n");
-        sb.append("# JettraStore Cluster Topology Configuration (cluster.config)\n");
-        sb.append("# Centralized Topology for Raft Consensus and Dynamic Ring Discovery\n");
-        sb.append("################################################################################\n\n");
-        sb.append("cluster.name = jettra-production-cluster\n");
-        sb.append("cluster.consensus.protocol = RAFT\n");
-        sb.append("cluster.ring.enabled = true\n");
-        sb.append("cluster.heartbeat.interval.ms = 150\n");
-        sb.append("cluster.election.timeout.ms = 300\n");
-
+        List<io.jettra.store.core.JettraConfigValidator.ClusterNodeInfo> canonical = new ArrayList<>();
+        Set<String> usedRestKeys = new HashSet<>();
         int idx = 1;
         for (ServerNodeInfo n : serverNodes) {
             String normalizedRole = isPrimaryRole(n.getRole()) ? "PRIMARY" : "SECONDARY";
-            int restPort = n.getRestPort() > 0 ? n.getRestPort() : (8080 + idx);
-            sb.append("\n# ==============================================================================\n");
-            sb.append("# NODO ").append(idx).append(": ").append(n.getId()).append(" (").append(normalizedRole).append(")\n");
-            sb.append("# ==============================================================================\n");
-            sb.append("cluster.node.").append(idx).append(".id = ").append(n.getId()).append("\n");
-            sb.append("cluster.node.").append(idx).append(".role = ").append(normalizedRole).append("\n");
-            sb.append("cluster.node.").append(idx).append(".ip = ").append(n.getHost()).append("\n");
-            sb.append("cluster.node.").append(idx).append(".grpc.port = ").append(n.getPort()).append("\n");
-            sb.append("cluster.node.").append(idx).append(".rest.port = ").append(restPort).append("\n");
+            String host = (n.getHost() != null && !n.getHost().isBlank()) ? n.getHost().trim() : "127.0.0.1";
+            int grpcPort = n.getPort() > 0 ? n.getPort() : (50000 + idx);
+            int restPort = n.getRestPort() > 0 ? n.getRestPort() : deriveRestPort(grpcPort, idx);
+            while (restPort == grpcPort || usedRestKeys.contains(host.toLowerCase() + ":" + restPort)) {
+                restPort++;
+            }
+            usedRestKeys.add(host.toLowerCase() + ":" + restPort);
+            canonical.add(new io.jettra.store.core.JettraConfigValidator.ClusterNodeInfo(
+                    n.getId(), normalizedRole, host, grpcPort, restPort, "~/jettra/data", String.valueOf(idx)));
             idx++;
         }
-
-        sb.append("\n# Asignación de Capacidad de Índices y Buffers en Clúster\n");
-        sb.append("cluster.index.initial.capacity = 65536\n");
-        sb.append("cluster.index.max.inmemory.keys = 100000\n");
-        return sb.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        Path clusterFile = io.jettra.store.core.JettraConfigValidator.locateClusterConfigFile();
+        Properties baseProps = (clusterFile != null && Files.exists(clusterFile))
+                ? io.jettra.store.core.JettraConfigValidator.loadProperties(clusterFile, "/cluster.config", "/jettra.config")
+                : new Properties();
+        return io.jettra.store.core.JettraConfigValidator.buildCanonicalClusterConfigBytes(canonical, baseProps);
     }
 
-    private void replicateClusterConfigToNodes() {
+    private int deriveRestPort(int grpcPort, int fallbackIdx) {
+        if (grpcPort >= 50001 && grpcPort <= 50999) {
+            return 60000 + (grpcPort - 50000);
+        }
+        if (grpcPort >= 9091 && grpcPort <= 9999) {
+            return 8080 + (grpcPort - 9090);
+        }
+        return 8080 + fallbackIdx;
+    }
+
+    private boolean replicateClusterConfigToNodes() {
         try {
             byte[] cfgBytes = buildClusterConfigBytesFromNodes();
             if (cfgBytes.length == 0) {
-                return;
+                return false;
             }
-            Path clusterFile = io.jettra.store.core.JettraConfigValidator.locateClusterConfigFile();
-            if (clusterFile != null && Files.exists(clusterFile)) {
-                try {
-                    Files.write(clusterFile, cfgBytes);
-                } catch (Exception ignored) {}
+            return validateAndDistributeClusterConfigBytes(cfgBytes).success();
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
+    /**
+     * Valida la integridad de cluster.config, lo persiste atómicamente en disco local y lo distribuye
+     * a todos los nodos del clúster (PRIMARY primero, luego SECONDARY).
+     */
+    public synchronized ClusterSyncReport validateAndDistributeClusterConfigBytes(byte[] cfgBytes) {
+        io.jettra.store.core.JettraConfigValidator.ValidationResult integrity =
+                io.jettra.store.core.JettraConfigValidator.validateClusterConfigIntegrity(cfgBytes);
+        if (!integrity.isValid()) {
+            this.lastNodeOperationError = integrity.getSummary();
+            return new ClusterSyncReport(false, "Validación de integridad fallida: " + integrity.getSummary(), integrity.getErrors());
+        }
+        Path clusterFile = io.jettra.store.core.JettraConfigValidator.locateClusterConfigFile();
+        if (clusterFile != null) {
+            try {
+                io.jettra.store.core.JettraConfigValidator.writeClusterConfigAtomically(clusterFile, cfgBytes);
+            } catch (Exception ignored) {}
+        }
+
+        io.jettra.store.cluster.JettraRaftFrame frame =
+            io.jettra.store.cluster.JettraRaftFrame.syncClusterConfig(1L, "jettra-explorer-config", cfgBytes);
+
+        // Construir lista de destinos: todos los nodos configurados en cluster.config + serverNodes actuales
+        Map<String, ServerNodeInfo> targetMap = new LinkedHashMap<>();
+        try {
+            Properties parsedProps = new Properties();
+            try (var bais = new java.io.ByteArrayInputStream(cfgBytes)) {
+                parsedProps.load(bais);
             }
+            for (io.jettra.store.core.JettraConfigValidator.ClusterNodeInfo cn :
+                    io.jettra.store.core.JettraConfigValidator.parseClusterNodes(parsedProps)) {
+                ServerNodeInfo existing = getNodeById(cn.id());
+                if (existing != null) {
+                    targetMap.put(cn.id().toLowerCase(), existing);
+                } else {
+                    ServerNodeInfo temp = new ServerNodeInfo(cn.id(), cn.id(), cn.role(), cn.ip(), cn.grpcPort(),
+                            0f, 0, 2048, 0, 0, 0, 0, 0f, 4, true);
+                    temp.setRestPort(cn.restPort());
+                    targetMap.put(cn.id().toLowerCase(), temp);
+                }
+            }
+        } catch (Exception ignored) {}
+        for (ServerNodeInfo n : serverNodes) {
+            targetMap.putIfAbsent(n.getId().toLowerCase(), n);
+        }
 
-            io.jettra.store.cluster.JettraRaftFrame frame =
-                io.jettra.store.cluster.JettraRaftFrame.syncClusterConfig(1L, "jettra-explorer-config", cfgBytes);
-
-            List<ServerNodeInfo> targets = new ArrayList<>(serverNodes);
-            // Enviar primero al PRIMARY/master (que además replica por Raft) y también a cada SECONDARY alcanzable
-            targets.sort((a, b) -> Boolean.compare(isPrimaryRole(b.getRole()), isPrimaryRole(a.getRole())));
-            for (ServerNodeInfo target : targets) {
-                if (target.getHost() == null || target.getHost().isBlank() || target.getPort() <= 0) continue;
-                try (java.net.Socket s = new java.net.Socket()) {
-                    s.setTcpNoDelay(true);
-                    s.connect(new java.net.InetSocketAddress(target.getHost(), target.getPort()), 1200);
-                    s.setSoTimeout(1500);
-                    try (java.io.BufferedOutputStream bos = new java.io.BufferedOutputStream(s.getOutputStream(), 8192);
-                         java.io.BufferedInputStream bis = new java.io.BufferedInputStream(s.getInputStream(), 8192)) {
-                        io.jettra.store.cluster.JettraClusterProtocol.writeFrame(bos, frame);
-                        io.jettra.store.cluster.JettraClusterProtocol.readFrame(bis);
+        List<ServerNodeInfo> targets = new ArrayList<>(targetMap.values());
+        // Enviar primero al PRIMARY/master y luego a cada SECONDARY alcanzable
+        targets.sort((a, b) -> Boolean.compare(isPrimaryRole(b.getRole()), isPrimaryRole(a.getRole())));
+        List<String> results = new ArrayList<>();
+        int syncedCount = 0;
+        for (ServerNodeInfo target : targets) {
+            if (target.getHost() == null || target.getHost().isBlank() || target.getPort() <= 0) continue;
+            String roleTag = isPrimaryRole(target.getRole()) ? "PRIMARY" : "SECONDARY";
+            try (java.net.Socket s = new java.net.Socket()) {
+                s.setTcpNoDelay(true);
+                s.connect(new java.net.InetSocketAddress(target.getHost(), target.getPort()), 1200);
+                s.setSoTimeout(1500);
+                try (java.io.BufferedOutputStream bos = new java.io.BufferedOutputStream(s.getOutputStream(), 8192);
+                     java.io.BufferedInputStream bis = new java.io.BufferedInputStream(s.getInputStream(), 8192)) {
+                    io.jettra.store.cluster.JettraClusterProtocol.writeFrame(bos, frame);
+                    io.jettra.store.cluster.JettraRaftFrame ack = io.jettra.store.cluster.JettraClusterProtocol.readFrame(bis);
+                    if (ack != null && ack.frameType() == io.jettra.store.cluster.JettraRaftFrame.TYPE_NACK) {
+                        results.add("❌ [" + roleTag + "] " + target.getId() + " (" + target.getHost() + ":" + target.getPort() + "): rechazado — " + ack.getPayloadAsString());
+                    } else {
+                        syncedCount++;
+                        results.add("✅ [" + roleTag + "] " + target.getId() + " (" + target.getHost() + ":" + target.getPort() + "): cluster.config sincronizado");
                     }
+                }
+            } catch (Exception ex) {
+                results.add("⚠️ [" + roleTag + "] " + target.getId() + " (" + target.getHost() + ":" + target.getPort() + "): no alcanzable (" + ex.getMessage() + ")");
+            }
+        }
+        String summary = String.format("cluster.config verificado y sincronizado (%d/%d nodo(s) confirmados).", syncedCount, targets.size());
+        return new ClusterSyncReport(true, summary, results);
+    }
+
+    /**
+     * Obtiene el contenido del archivo cluster.config directamente del nodo PRIMARY activo
+     * (con fallback al archivo local cluster.config si el PRIMARY no es alcanzable).
+     */
+    public synchronized ClusterConfigSnapshot fetchPrimaryClusterConfig() {
+        ServerNodeInfo primary = getPrimaryNode();
+        String sourceNodeId = primary != null ? primary.getId() : "node-01";
+        String sourceAddress = primary != null ? (primary.getHost() + ":" + primary.getPort()) : "local";
+        boolean fromRemote = false;
+        String content = null;
+
+        if (primary != null && primary.getHost() != null && !primary.getHost().isBlank() && primary.getPort() > 0) {
+            try (java.net.Socket s = new java.net.Socket()) {
+                s.setTcpNoDelay(true);
+                s.connect(new java.net.InetSocketAddress(primary.getHost(), primary.getPort()), 1200);
+                s.setSoTimeout(1500);
+                try (java.io.BufferedOutputStream bos = new java.io.BufferedOutputStream(s.getOutputStream(), 8192);
+                     java.io.BufferedInputStream bis = new java.io.BufferedInputStream(s.getInputStream(), 8192)) {
+                    io.jettra.store.cluster.JettraClusterProtocol.writeFrame(
+                            bos, io.jettra.store.cluster.JettraRaftFrame.getClusterConfigReq(1L, "jettra-explorer-admin"));
+                    io.jettra.store.cluster.JettraRaftFrame resp = io.jettra.store.cluster.JettraClusterProtocol.readFrame(bis);
+                    if (resp != null && resp.frameType() == io.jettra.store.cluster.JettraRaftFrame.TYPE_GET_CLUSTER_CONFIG_RESP
+                            && resp.payload() != null && resp.payload().length > 0) {
+                        content = new String(resp.payload(), java.nio.charset.StandardCharsets.UTF_8);
+                        fromRemote = true;
+                        if (resp.senderNodeId() != null && !resp.senderNodeId().isBlank()) {
+                            sourceNodeId = resp.senderNodeId();
+                        }
+                    }
+                }
+            } catch (Exception ignored) {}
+        }
+
+        if (content == null || content.isBlank()) {
+            Path localFile = io.jettra.store.core.JettraConfigValidator.locateClusterConfigFile();
+            if (localFile != null && Files.exists(localFile)) {
+                try {
+                    content = Files.readString(localFile, java.nio.charset.StandardCharsets.UTF_8);
+                    sourceAddress = localFile.toAbsolutePath().normalize().toString();
                 } catch (Exception ignored) {}
             }
-        } catch (Throwable ignored) {}
+        }
+        if (content == null || content.isBlank()) {
+            content = new String(buildClusterConfigBytesFromNodes(), java.nio.charset.StandardCharsets.UTF_8);
+            sourceAddress = "memoria-runtime";
+        }
+
+        io.jettra.store.core.JettraConfigValidator.ValidationResult val =
+                io.jettra.store.core.JettraConfigValidator.validateClusterConfigIntegrity(content);
+        List<io.jettra.store.core.JettraConfigValidator.ClusterNodeInfo> parsedNodes = List.of();
+        try {
+            Properties props = new Properties();
+            try (var bais = new java.io.ByteArrayInputStream(content.getBytes(java.nio.charset.StandardCharsets.UTF_8))) {
+                props.load(bais);
+            }
+            parsedNodes = io.jettra.store.core.JettraConfigValidator.parseClusterNodes(props);
+        } catch (Exception ignored) {}
+
+        return new ClusterConfigSnapshot(sourceNodeId, sourceAddress, fromRemote, content, val.isValid(), val.getErrors(), parsedNodes);
+    }
+
+    /**
+     * Valida y guarda un contenido editado de cluster.config (solo rol administrador),
+     * actualizando el catálogo local de nodos y microprofile-config.properties.
+     */
+    public synchronized ClusterSyncReport saveClusterConfigContent(String content, boolean distributeToAllNodes) {
+        io.jettra.store.core.JettraConfigValidator.ValidationResult val =
+                io.jettra.store.core.JettraConfigValidator.validateClusterConfigIntegrity(content);
+        if (!val.isValid()) {
+            this.lastNodeOperationError = val.getSummary();
+            return new ClusterSyncReport(false, "No se pudo guardar cluster.config: " + val.getSummary(), val.getErrors());
+        }
+
+        byte[] bytes = content.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        Path clusterFile = io.jettra.store.core.JettraConfigValidator.locateClusterConfigFile();
+        if (clusterFile == null) {
+            clusterFile = Paths.get(io.jettra.store.core.JettraConfigValidator.DEFAULT_CLUSTER_CONFIG_PATH);
+        }
+        try {
+            io.jettra.store.core.JettraConfigValidator.writeClusterConfigAtomically(clusterFile, bytes);
+        } catch (Exception ex) {
+            return new ClusterSyncReport(false, "Error al escribir cluster.config: " + ex.getMessage(), List.of(ex.getMessage()));
+        }
+
+        // Sincronizar lista runtime de serverNodes y microprofile-config.properties con el cluster.config validado
+        try {
+            Properties props = new Properties();
+            try (var bais = new java.io.ByteArrayInputStream(bytes)) {
+                props.load(bais);
+            }
+            List<io.jettra.store.core.JettraConfigValidator.ClusterNodeInfo> parsed =
+                    io.jettra.store.core.JettraConfigValidator.parseClusterNodes(props);
+            List<ServerNodeInfo> updatedNodes = new ArrayList<>();
+            for (io.jettra.store.core.JettraConfigValidator.ClusterNodeInfo cn : parsed) {
+                ServerNodeInfo existing = getNodeById(cn.id());
+                if (existing != null) {
+                    existing.setRole(cn.role());
+                    existing.setHost(cn.ip());
+                    existing.setPort(cn.grpcPort());
+                    existing.setRestPort(cn.restPort());
+                    updatedNodes.add(existing);
+                } else {
+                    ServerNodeInfo created = new ServerNodeInfo(
+                            cn.id(), cn.id(), cn.role(), cn.ip(), cn.grpcPort(),
+                            10.0f, 256, 2048, 512, 1000, 0, 10000, 0.5f, 4, true);
+                    created.setRestPort(cn.restPort());
+                    updatedNodes.add(created);
+                }
+            }
+            if (!updatedNodes.isEmpty()) {
+                serverNodes.clear();
+                serverNodes.addAll(updatedNodes);
+                saveClusterNodes();
+                persistClusterNodesToMicroprofileConfig();
+            }
+        } catch (Exception ignored) {}
+
+        if (distributeToAllNodes) {
+            ClusterSyncReport report = validateAndDistributeClusterConfigBytes(bytes);
+            logPoliceIncident("Cluster Config Sync", report.message(), report.success() ? "OK" : "WARN", "Sincronización manual por Administrador");
+            return report;
+        }
+        logPoliceIncident("Cluster Config Edit", "cluster.config guardado y validado (" + bytes.length + " bytes)", "OK", "Editado por Administrador");
+        return new ClusterSyncReport(true, "Archivo cluster.config guardado y validado correctamente (sin duplicados).", List.of());
+    }
+
+    /**
+     * Sincroniza todos los archivos de configuración del clúster tomando como fuente el cluster.config
+     * validado del nodo PRIMARY (o el contenido editado si se proporciona).
+     */
+    public synchronized ClusterSyncReport synchronizeAllClusterConfigFiles(String optionalContent) {
+        if (optionalContent != null && !optionalContent.isBlank()) {
+            return saveClusterConfigContent(optionalContent, true);
+        }
+        ClusterConfigSnapshot snap = fetchPrimaryClusterConfig();
+        if (!snap.valid()) {
+            return new ClusterSyncReport(false,
+                    "El archivo cluster.config del nodo PRIMARY tiene errores de integridad y no puede distribuirse: "
+                            + String.join(" | ", snap.errors()),
+                    snap.errors());
+        }
+        return saveClusterConfigContent(snap.content(), true);
     }
 
     public synchronized boolean addNode(String id, String name, String role, String host, int port, long heapMaxMb) {
@@ -1329,25 +1545,38 @@ public class JettraStorePlugin {
     }
 
     public synchronized boolean addNode(String id, String name, String role, String host, int port, long heapMaxMb, String storagePath) {
-        if (id == null || id.isBlank()) return false;
+        this.lastNodeOperationError = null;
+        if (id == null || id.isBlank()) {
+            this.lastNodeOperationError = "El ID del nodo es obligatorio.";
+            return false;
+        }
         String cleanId = id.trim();
-        String r = (role != null && !role.isBlank()) ? role.toUpperCase() : "FOLLOWER";
-        String h = (host != null && !host.isBlank()) ? host : "127.0.0.1";
+        String r = (role != null && !role.isBlank()) ? role.toUpperCase() : "SECONDARY";
+        String h = (host != null && !host.isBlank()) ? host.trim() : "127.0.0.1";
         int p = port > 0 ? port : 8770;
         long maxM = heapMaxMb > 0 ? heapMaxMb : 2048;
-        ServerNodeInfo existing = getNodeById(cleanId);
-        if (existing != null) {
-            existing.setOnline(true);
-            existing.setRole(r);
-            existing.setHost(h);
-            existing.setPort(p);
-            existing.setLastError(null);
-            saveClusterNodes();
-            persistClusterNodesToMicroprofileConfig();
-            replicateClusterConfigToNodes();
-            return true;
+
+        // Validar que no se ingrese ID duplicado ni puertos gRPC/REST duplicados en la misma IP
+        List<io.jettra.store.core.JettraConfigValidator.ClusterNodeInfo> existingConfigNodes = new ArrayList<>();
+        int idx = 1;
+        for (ServerNodeInfo n : serverNodes) {
+            int nRest = n.getRestPort() > 0 ? n.getRestPort() : deriveRestPort(n.getPort(), idx);
+            existingConfigNodes.add(new io.jettra.store.core.JettraConfigValidator.ClusterNodeInfo(
+                    n.getId(), n.getRole(), n.getHost(), n.getPort(), nRest, "~/jettra/data", String.valueOf(idx)));
+            idx++;
         }
-        ServerNodeInfo node = new ServerNodeInfo(cleanId, (name != null && !name.isBlank()) ? name.trim() : cleanId, r, h.trim(), p, 15.0f, 320, maxM, 850, 5000, 200, 10500, 0.65f, 8, true);
+        int candidateRestPort = deriveRestPort(p, idx);
+        io.jettra.store.core.JettraConfigValidator.ValidationResult candidateCheck =
+                io.jettra.store.core.JettraConfigValidator.validateCandidateNode(
+                        existingConfigNodes, cleanId, h, p, candidateRestPort, false);
+        if (!candidateCheck.isValid()) {
+            this.lastNodeOperationError = candidateCheck.getSummary();
+            logPoliceIncident("Raft Quorum K9", "Registro de nodo rechazado [" + cleanId + "]: " + candidateCheck.getSummary(), "WARN", "Duplicado bloqueado");
+            return false;
+        }
+
+        ServerNodeInfo node = new ServerNodeInfo(cleanId, (name != null && !name.isBlank()) ? name.trim() : cleanId, r, h, p, 15.0f, 320, maxM, 850, 5000, 200, 10500, 0.65f, 8, true);
+        node.setRestPort(candidateRestPort);
         serverNodes.add(node);
         saveClusterNodes();
         persistClusterNodesToMicroprofileConfig();
@@ -1369,26 +1598,32 @@ public class JettraStorePlugin {
     }
 
     public synchronized boolean removeNode(String id) {
-        if ("node-01".equalsIgnoreCase(id)) return false; // Proteger nodo master principal
-        ServerNodeInfo existing = getNodeById(id);
+        this.lastNodeOperationError = null;
+        if (id == null || id.isBlank() || "node-01".equalsIgnoreCase(id.trim())) {
+            this.lastNodeOperationError = "No se puede remover el nodo primario principal (node-01).";
+            return false; // Proteger nodo master principal
+        }
+        String cleanId = id.trim();
+        ServerNodeInfo existing = getNodeById(cleanId);
         if (existing != null) {
             lifecycleManager.shutdownNode(existing);
         }
-        boolean removed = serverNodes.removeIf(n -> n.getId().equalsIgnoreCase(id));
-        if (removed) {
-            lifecycleManager.clearStopped(id);
+        boolean removed = serverNodes.removeIf(n -> n.getId().equalsIgnoreCase(cleanId));
+        boolean removedFromDiskConfig = io.jettra.store.core.JettraConfigValidator.removeDynamicNodeFromClusterConfig(cleanId);
+        if (removed || removedFromDiskConfig) {
+            lifecycleManager.clearStopped(cleanId);
             reconcilePrimaryLeadership();
             saveClusterNodes();
             persistClusterNodesToMicroprofileConfig();
             replicateClusterConfigToNodes();
-            logPoliceIncident("Raft Quorum K9", "Nodo expulsado del clúster: " + id, "WARN", "microprofile-config.properties y cluster.config replicados en el clúster");
+            logPoliceIncident("Raft Quorum K9", "Nodo expulsado del clúster y limpiado de cluster.config: " + cleanId, "WARN", "microprofile-config.properties y cluster.config replicados en el clúster");
             try {
                 io.jettra.store.cluster.JettraClusterEventBus.getInstance().publish(
                     io.jettra.store.cluster.ClusterLiveEvent.TYPE_NODE_OFFLINE,
-                    id, "cluster", "Nodo expulsado del quórum", "");
+                    cleanId, "cluster", "Nodo expulsado del quórum", "");
             } catch (Throwable ignored) {}
         }
-        return removed;
+        return removed || removedFromDiskConfig;
     }
 
     public synchronized NodeLifecycleManager.ShutdownOutcome shutdownNode(String id) {

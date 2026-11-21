@@ -33,11 +33,11 @@ RUN cp /app/config/cluster.config /app/config/jettra.config && \
     fi
 
 # Variables de entorno predeterminadas para nodo autónomo o clúster
-# Configuración de alto rendimiento para base de datos con ZGC (Zero Garbage Collection Pauses < 1ms):
+# Configuración optimizada para bajo consumo de RAM en contenedores:
 # -XX:+UseContainerSupport respeta los cgroups y límites de memoria del contenedor Docker.
-# -XX:+UseZGC recolector de ultra-baja latencia concurrente para bases de datos de alto rendimiento.
+# -XX:+UseG1GC + -XX:+UseStringDeduplication reduce drásticamente el consumo de Heap y RSS.
 # -XX:+UseCompactObjectHeaders (Java 25 Lilliput) reduce la sobrecarga de encabezados de objetos a 64 bits.
-# -Xms512m -Xmx2g balance equilibrado entre alta tasa de transacciones concurrentes y consumo controlado de RAM.
+# -Xms128m -Xmx512m -XX:MaxMetaspaceSize=256m -XX:MaxDirectMemorySize=256m acota la RAM por nodo.
 ENV JETTRA_NODE_ID=node-01 \
     JETTRA_NODE_ROLE=PRIMARY \
     JETTRA_STORAGE_PATH=/jettra/data \
@@ -48,7 +48,7 @@ ENV JETTRA_NODE_ID=node-01 \
     JETTRA_REST_PORT=60001 \
     JETTRA_ADMIN_USERNAME=admin \
     JETTRA_ADMIN_PASSWORD=admin-jettra \
-    JAVA_OPTS="--enable-preview --enable-native-access=ALL-UNNAMED -XX:+UnlockExperimentalVMOptions -XX:+UseCompactObjectHeaders -XX:+UseContainerSupport -XX:+UseZGC -Xms512m -Xmx2g"
+    JAVA_OPTS="--enable-preview --enable-native-access=ALL-UNNAMED -XX:+UnlockExperimentalVMOptions -XX:+UseCompactObjectHeaders -XX:+UseContainerSupport -XX:+UseG1GC -XX:+UseStringDeduplication -XX:CICompilerCount=2 -Xms128m -Xmx512m -XX:MaxMetaspaceSize=256m -XX:MaxDirectMemorySize=256m"
 
 # Exponer puertos: REST HTTP (60001) y Puerto de Clúster / gRPC (50001)
 EXPOSE 60001 50001

@@ -2976,3 +2976,98 @@ Cuando se añade o se expulsa un nodo desde **JettraStoreExplorer** o **JettraSt
 1. Se actualiza automáticamente la propiedad `cluster.nodes` en el archivo `microprofile-config.properties` del cliente (`JettraStoreExplorer` / `JettraStoreShell`).
 2. Se transmite el nuevo archivo `cluster.config` mediante la trama binaria Raft `TYPE_SYNC_CLUSTER_CONFIG` (`0x17`) al nodo `PRIMARY` y a los nodos `SECONDARY`.
 3. Cada nodo actualiza su `cluster.config` local, refresca los *peers* en `DynamicRingEngine` y publica un evento en `JettraClusterEventBus` visible en tiempo real en `/map`.
+
+
+
+---
+
+## Capítulo 21: Optimización del Consumo de Recursos y Memoria RAM
+
+El ecosistema **JettraStore** (compuesto por los nodos de base de datos `JettraStore`, la consola web `JettraStoreExplorer` y la consola interactiva `JettraStoreShell`) ha sido diseñado para ejecutarse de forma eficiente tanto en equipos de desarrollo con memoria acotada (por ejemplo, estaciones Linux/macOS/Windows con 8–16 GB de RAM corriendo un clúster multinodo completo) como en servidores de producción de alta densidad.
+
+En Java 25 con **Project Panama (FFM)**, el consumo real de memoria residente (RSS) de un proceso JVM no depende únicamente del *Heap*, sino de la suma de cuatro regiones:
+
+$$\text{RAM Total (RSS)} \approx \text{Heap JVM} + \text{Metaspace} + \text{Direct / Off-Heap Native (Panama FFM)} + \text{CodeCache \& Threads}$$
+
+A continuación se documentan las optimizaciones arquitectónicas, de configuración y de JVM aplicadas de forma transversal en todo el ecosistema.
+
+---
+
+### 21.1 Optimizaciones en el Motor `JettraStore` (Servidor)
+
+#### 1. Asignación Perezosa (*Lazy Off-Heap Allocation*) en `NativeMemTable`
+Anteriormente, cada instancia de `JettraDatabase` reservaba inmediatamente un segmento nativo contiguo de `128 MB` mediante `Arena.ofShared().allocate(...)` en el constructor de `NativeMemTable`, incluso cuando la base de datos estaba vacía o se encontraba en modo lectura. En un clúster de 3 nodos con 5 bases de datos, esto consumía casi **2 GB de RAM nativa** antes de insertar un solo registro.
+
+* **Solución implementada:** `NativeMemTable` retrasa la creación del `Arena` y la reserva del `MemorySegment` hasta el primer `append(...)` (consumo inicial de **0 bytes nativos**).
+* Adicionalmente, `flushToJettraFile(...)` utiliza un `ByteBuffer` temporal de 8 bytes para escribir la cabecera `.jettra` en lugar de asignar memoria adicional dentro del `Arena` nativo en cada volcado a disco, eliminando fugas progresivas de memoria nativa.
+
+#### 2. Inicialización Perezosa de Motores Auxiliares en `JettraDatabase`
+Cada base de datos soporta múltiples modos de almacenamiento (`OFF_HEAP`, `DISK_MEMORY`, `JVM_RAM`). Anteriormente, el constructor de `JettraDatabase` instanciaba simultáneamente los tres motores auxiliares (`JettraMemoryEngine` con su hilo de GC en segundo plano, `OffHeapSlottedMap` con su `Arena` y `OffHeapPageManager` con su `FileChannel`), aunque solo uno estuviera activo.
+
+* **Solución implementada:** Los tres motores se inicializan bajo demanda mediante getters sincronizados con *double-checked locking* (`getMemoryEngine()`, `getOffHeapDatabaseStore()`, `getOffHeapPageManager()`).
+* El método `close()` libera únicamente los motores que fueron efectivamente inicializados, reduciendo tanto la huella de RAM como la cantidad de descriptores de archivo e hilos activos.
+
+#### 3. Dimensionamiento Proporcional en Índices Secundarios (`JettraIndexManager`)
+Al reconstruir o crear un índice secundario, `JettraIndexManager` pre-asignaba un `UnifiedMap` con capacidad inicial de `65,536` entradas incluso para colecciones vacías o con pocos registros.
+
+* **Solución implementada:** El mapa invertido ahora se dimensiona proporcionalmente a la cardinalidad real de la colección (`16–64` entradas para índices vacíos y crecimiento orgánico bajo demanda hasta el límite configurado).
+
+#### 4. Valores por Defecto Eficientes en `JettraStoreConfig` y `microprofile-config.properties`
+Se ajustaron los parámetros predeterminados para equilibrar rendimiento y consumo de RAM:
+
+| Propiedad | Valor Anterior | Valor Optimizado | Impacto |
+| :--- | :---: | :---: | :--- |
+| `jettra.storage.memtable.size.mb` | `128` | `16` | Reduce 8× la reserva nativa por MemTable activa |
+| `jettra.storage.ram.global.limit.mb` | `2048` | `512` | Acota la cuota global de RAM por nodo |
+| `jettra.index.initial.capacity` | `65536` | `256` | Evita tablas hash sobredimensionadas en heap |
+| `jettra.index.max.inmemory.keys` | `100000` | `50000` | Controla la retención de claves invertidas en RAM |
+| `jettrapolice.interval.ms` | `500` | `2000` | Reduce 4× los ciclos de sondeo preventivo en reposo |
+
+---
+
+### 21.2 Optimizaciones en `JettraStoreExplorer` y `JettraStoreShell`
+
+#### 1. `JettraStoreShell` (Consola Interactiva CLI)
+* **Reutilización de `HttpClient` compartido:** En el comando `show nodes`, anteriormente se instanciaba un nuevo `HttpClient.newBuilder().build()` por cada nodo consultado, creando hilos internos (`SelectorManager`) y pools de sockets que permanecían residentes. Ahora se reutiliza una única instancia compartida `sharedHealthHttpClient` configurada con `HTTP/1.1` y *timeout* acotado.
+* **Acotamiento de JVM:** Se sustituyó `-XX:+UseZGC -Xmx1g` por `G1GC` con `-Xms64m -Xmx256m -XX:MaxMetaspaceSize=192m -XX:MaxDirectMemorySize=128m -XX:+UseStringDeduplication -XX:CICompilerCount=2`.
+
+#### 2. `JettraStoreExplorer` (Consola Web JettraFlux)
+* **Eliminación de ZGC sin límite de Heap:** Anteriormente `start.sh` ejecutaba `-XX:+UseZGC` sin `-Xmx` explícito, provocando que la JVM reservara hasta el 25% de la RAM del host (4 GB en equipos de 16 GB) más el *overhead* de mapeo virtual de ZGC. Ahora opera con `G1GC`, `-Xms128m -Xmx512m`, `-XX:MaxMetaspaceSize=256m`, `-XX:MaxDirectMemorySize=192m`, `-XX:+UseStringDeduplication` y `-XX:CICompilerCount=2`.
+* **Optimización del monitor de latidos (*Heartbeat*):** `JettraStorePlugin` utiliza `HTTP/1.1` en `healthHttpClient` (evitando buffers HTTP/2 innecesarios para sondeos locales) y eleva el intervalo de sondeo pasivo de `1000 ms` a `3000 ms` (configurable vía `-Djettra.explorer.heartbeat.interval.ms`), reduciendo 3× la creación de objetos temporales en reposo sin afectar la actualización inmediata bajo demanda en `/cluster`.
+
+---
+
+### 21.3 Perfil de Flags JVM y Contenedores Docker
+
+El uso de **G1GC** combinado con **Compact Object Headers** (Java 25 Lilliput), **String Deduplication** y límites explícitos de `Metaspace`, `DirectMemory` y compiladores JIT (`CICompilerCount=2`) ofrece una reducción drástica de RSS frente a ZGC en despliegues con múltiples procesos en un mismo host:
+
+| Componente | Configuración Anterior | Configuración Optimizada (Por Defecto) | Límite Docker (`mem_limit`) |
+| :--- | :--- | :--- | :---: |
+| **JettraStore** (por nodo) | `-XX:+UseZGC -Xms2g -Xmx6g` (local) / `-Xms512m -Xmx2g` (Docker) | `-Xms128m -Xmx512m -XX:MaxMetaspaceSize=256m -XX:MaxDirectMemorySize=256m -XX:+UseG1GC -XX:+UseStringDeduplication -XX:CICompilerCount=2` | `1g` (`mem_reservation: 192m`) |
+| **JettraStoreExplorer** | `-XX:+UseZGC` (sin `-Xmx` local) / `-Xms256m -Xmx1g` (Docker) | `-Xms128m -Xmx512m -XX:MaxMetaspaceSize=256m -XX:MaxDirectMemorySize=192m -XX:+UseG1GC -XX:+UseStringDeduplication -XX:CICompilerCount=2` | `768m` (`mem_reservation: 160m`) |
+| **JettraStoreShell** | `-Xms128m -Xmx1g -XX:+UseZGC` (Maven) / `-Xmx512m` (Docker) | `-Xms64m -Xmx256m -XX:MaxMetaspaceSize=192m -XX:MaxDirectMemorySize=128m -XX:+UseG1GC -XX:+UseStringDeduplication -XX:CICompilerCount=2` | `384m` (`mem_reservation: 64m`) |
+| **Clúster Completo (3 Nodos + Explorer + Shell)** | **~8 – 20 GB** comprometidos | **~0.7 – 1.5 GB en reposo** (máx. ~2.3 GB heap combinado) | **~4.1 GB** máx. total |
+
+---
+
+### 21.4 Optimización de Compilación con Maven
+
+En equipos con 16 GB de RAM, compilar todo el reactor multi-módulo (`jettrastorecontainers`) podía saturar la memoria al ejecutar el compilador `javac` y múltiples pruebas dentro del mismo proceso Maven. Para evitarlo:
+
+1. **`.mvn/jvm.config`** en la raíz del reactor acota la JVM de Maven (`-Xms128m -Xmx768m -XX:MaxMetaspaceSize=256m -XX:+UseG1GC -XX:CICompilerCount=2`).
+2. **`exec-maven-plugin` (`jettra-test`)** ejecuta `JettraTestRunner` en un proceso aislado con `-Xms64m -Xmx512m -XX:MaxMetaspaceSize=256m -XX:MaxDirectMemorySize=256m -XX:+UseG1GC -XX:CICompilerCount=2`, liberando toda la memoria al terminar cada módulo.
+3. **`maven-surefire-plugin`** permanece desactivado (`<skipTests>true</skipTests>`) en los módulos que usan `JettraTestRunner` para evitar ejecuciones duplicadas.
+
+---
+
+### 21.5 Escalado Personalizado en Producción (`JAVA_OPTS`)
+
+Todos los scripts de arranque (`start-node.sh`, `JettraStoreExplorer/start.sh`, `JettraStoreShell/start.sh`) y contenedores Docker respetan la variable de entorno `JAVA_OPTS`. Si despliega `JettraStore` en un servidor dedicado de alta capacidad (por ejemplo, 32–128 GB de RAM) y desea priorizar latencia sub-milisegundo sobre huella de memoria, puede sobrescribir los parámetros sin modificar los scripts:
+
+```bash
+# Ejemplo para servidor dedicado de alta capacidad con ZGC Generacional
+JAVA_OPTS="-Xms2g -Xmx8g -XX:+UseZGC -XX:+UseCompactObjectHeaders -XX:MaxDirectMemorySize=2g" \
+  ./start-node.sh node-01 PRIMARY
+```
+
+De igual manera, tras actualizar y recompilar el proyecto, recuerde ejecutar `./script/create-nodes.sh` si desea propagar los nuevos scripts `start-node.sh`, `microprofile-config.properties` y el uber-JAR optimizado hacia los directorios locales `~/jettra-node-*`.

@@ -41,9 +41,9 @@ public final class JettraDatabase implements AutoCloseable {
     private final JettraIndexManager indexManager;
     private final DynamicRingEngine ringEngine;
     private final AtomicBoolean distributedRingActive = new AtomicBoolean(false);
-    private final JettraMemoryEngine memoryEngine;
-    private final OffHeapSlottedMap offHeapDatabaseStore = new OffHeapSlottedMap();
-    private final OffHeapPageManager offHeapPageManager;
+    private volatile JettraMemoryEngine memoryEngine;
+    private volatile OffHeapSlottedMap offHeapDatabaseStore;
+    private volatile OffHeapPageManager offHeapPageManager;
     private volatile StorageMode storageMode;
 
     private final Map<String, DocumentEngine> documentEngines = new ConcurrentHashMap<>();
@@ -70,34 +70,8 @@ public final class JettraDatabase implements AutoCloseable {
             this.config.getRingReleaseTargetPercent() / 100.0,
             this.config.isClusterMultinodeActive());
 
-        // Inicialización de JettraMemory (Almacenamiento Off-Heap de ultra-alta velocidad)
-        JettraMemoryEngine memEngine = null;
-        try {
-            Path memDir = Path.of(this.config.getStoragePath(), databaseName, "jettra_memory");
-            JettraMemoryConfig memConfig = JettraMemoryConfig.builder()
-                .storageDirectory(memDir)
-                .storeName(databaseName)
-                .autoGcEnabled(true)
-                .compactionThreshold(0.25)
-                .build();
-            memEngine = new JettraMemoryEngine(memConfig);
-        } catch (Exception ex) {
-            System.err.printf("[JettraDatabase] Aviso: JettraMemory off-heap fallback: %s%n", ex.getMessage());
-        }
-        this.memoryEngine = memEngine;
-
-        // Inicialización de JettraStore-OffHeap (Gestor de páginas ranuradas Slotted-Page)
-        OffHeapPageManager pageMgr = null;
-        try {
-            Path offHeapPath = Path.of(this.config.getStoragePath(), databaseName, databaseName + "_offheap.pages");
-            if (offHeapPath.getParent() != null) {
-                Files.createDirectories(offHeapPath.getParent());
-            }
-            pageMgr = new OffHeapPageManager(offHeapPath);
-        } catch (Exception ex) {
-            System.err.printf("[JettraDatabase] Aviso: JettraStore-OffHeap page manager fallback: %s%n", ex.getMessage());
-        }
-        this.offHeapPageManager = pageMgr;
+        // Los motores auxiliares (JettraMemoryEngine, OffHeapSlottedMap, OffHeapPageManager)
+        // se inicializan de forma perezosa (lazy) al primer uso para minimizar el consumo de RAM y threads.
         this.storageMode = (this.config != null && this.config.getStorageMode() != null) ? this.config.getStorageMode() : StorageMode.JVM_RAM;
 
         if (this.config.isClusterMultinodeActive() && this.ringEngine.getPeers().isEmpty()) {
@@ -1945,16 +1919,21 @@ public final class JettraDatabase implements AutoCloseable {
     @Override
     public void close() {
         try {
-            if (offHeapPageManager != null) {
-                offHeapPageManager.close();
+            OffHeapPageManager pm = this.offHeapPageManager;
+            if (pm != null) {
+                pm.close();
             }
         } catch (Exception ignored) {}
         try {
-            offHeapDatabaseStore.close();
+            OffHeapSlottedMap store = this.offHeapDatabaseStore;
+            if (store != null) {
+                store.close();
+            }
         } catch (Exception ignored) {}
         try {
-            if (memoryEngine != null) {
-                memoryEngine.close();
+            JettraMemoryEngine me = this.memoryEngine;
+            if (me != null) {
+                me.close();
             }
         } catch (Exception ignored) {}
         try {
@@ -2101,7 +2080,7 @@ public final class JettraDatabase implements AutoCloseable {
         this.storageMode = (storageMode != null) ? storageMode : StorageMode.JVM_RAM;
         System.out.printf("[JettraDatabase:%s] Modo de almacenamiento conmutado a: %s (%s)%n",
             databaseName, this.storageMode.getCode(), this.storageMode.getDescription());
-        if (this.storageMode.isDiskMemory() && memoryEngine != null) {
+        if (this.storageMode.isDiskMemory() && getMemoryEngine() != null) {
             // Sincronizar documentos existentes hacia JettraMemory (LSM Direct Off-Heap)
             io.jettra.json.JettraJson jsonHelper = new io.jettra.json.JettraJson();
             for (var entry : documentEngines.entrySet()) {
@@ -2117,70 +2096,126 @@ public final class JettraDatabase implements AutoCloseable {
     }
 
     public JettraMemoryEngine getMemoryEngine() {
-        return memoryEngine;
+        JettraMemoryEngine me = this.memoryEngine;
+        if (me != null) {
+            return me;
+        }
+        synchronized (this) {
+            if (this.memoryEngine == null) {
+                try {
+                    Path memDir = Path.of(this.config.getStoragePath(), databaseName, "jettra_memory");
+                    JettraMemoryConfig memConfig = JettraMemoryConfig.builder()
+                        .storageDirectory(memDir)
+                        .storeName(databaseName)
+                        .autoGcEnabled(true)
+                        .compactionThreshold(0.25)
+                        .build();
+                    this.memoryEngine = new JettraMemoryEngine(memConfig);
+                } catch (Exception ex) {
+                    System.err.printf("[JettraDatabase] Aviso: JettraMemory off-heap fallback: %s%n", ex.getMessage());
+                }
+            }
+            return this.memoryEngine;
+        }
     }
 
     public void putRecordDiskMemory(byte engineId, String key, byte[] payload) throws IOException {
-        if (memoryEngine != null && memoryEngine.getStoreConnector() != null) {
-            memoryEngine.getStoreConnector().putRecord(engineId, key, payload);
+        JettraMemoryEngine me = getMemoryEngine();
+        if (me != null && me.getStoreConnector() != null) {
+            me.getStoreConnector().putRecord(engineId, key, payload);
         }
     }
 
     public byte[] getRecordDiskMemory(byte engineId, String key) throws IOException {
-        if (memoryEngine != null && memoryEngine.getStoreConnector() != null) {
-            var rec = memoryEngine.getStoreConnector().getRecord(engineId, key);
+        JettraMemoryEngine me = getMemoryEngine();
+        if (me != null && me.getStoreConnector() != null) {
+            var rec = me.getStoreConnector().getRecord(engineId, key);
             return rec != null ? rec.payload() : null;
         }
         return null;
     }
 
     public boolean deleteRecordDiskMemory(byte engineId, String key) throws IOException {
-        if (memoryEngine != null && memoryEngine.getStoreConnector() != null) {
-            return memoryEngine.getStoreConnector().deleteRecord(engineId, key);
+        JettraMemoryEngine me = getMemoryEngine();
+        if (me != null && me.getStoreConnector() != null) {
+            return me.getStoreConnector().deleteRecord(engineId, key);
         }
         return false;
     }
 
     public StorageMetrics getMemoryMetrics() {
-        return memoryEngine != null ? memoryEngine.getMetrics() : null;
+        JettraMemoryEngine me = this.memoryEngine;
+        return me != null ? me.getMetrics() : null;
     }
 
     public void putOffHeapBinary(String key, byte[] data) throws IOException {
-        if (memoryEngine != null) {
-            memoryEngine.put(key, data);
+        JettraMemoryEngine me = getMemoryEngine();
+        if (me != null) {
+            me.put(key, data);
         }
     }
 
     public byte[] getOffHeapBinary(String key) throws IOException {
-        return memoryEngine != null ? memoryEngine.get(key) : null;
+        JettraMemoryEngine me = getMemoryEngine();
+        return me != null ? me.get(key) : null;
     }
 
     public boolean deleteOffHeapBinary(String key) throws IOException {
-        return memoryEngine != null && memoryEngine.delete(key);
+        JettraMemoryEngine me = getMemoryEngine();
+        return me != null && me.delete(key);
     }
 
     public void putRecordOffHeap(String key, byte[] payload) {
-        offHeapDatabaseStore.put(key, payload);
+        getOffHeapDatabaseStore().put(key, payload);
     }
 
     public byte[] getRecordOffHeap(String key) {
-        return offHeapDatabaseStore.get(key);
+        OffHeapSlottedMap store = this.offHeapDatabaseStore;
+        return store != null ? store.get(key) : null;
     }
 
     public MemorySegment getRecordOffHeapSlice(String key) {
-        return offHeapDatabaseStore.getSlice(key);
+        OffHeapSlottedMap store = this.offHeapDatabaseStore;
+        return store != null ? store.getSlice(key) : null;
     }
 
     public boolean deleteRecordOffHeap(String key) {
-        return offHeapDatabaseStore.remove(key);
+        OffHeapSlottedMap store = this.offHeapDatabaseStore;
+        return store != null && store.remove(key);
     }
 
     public OffHeapSlottedMap getOffHeapDatabaseStore() {
-        return offHeapDatabaseStore;
+        OffHeapSlottedMap store = this.offHeapDatabaseStore;
+        if (store != null) {
+            return store;
+        }
+        synchronized (this) {
+            if (this.offHeapDatabaseStore == null) {
+                this.offHeapDatabaseStore = new OffHeapSlottedMap();
+            }
+            return this.offHeapDatabaseStore;
+        }
     }
 
     public OffHeapPageManager getOffHeapPageManager() {
-        return offHeapPageManager;
+        OffHeapPageManager pm = this.offHeapPageManager;
+        if (pm != null) {
+            return pm;
+        }
+        synchronized (this) {
+            if (this.offHeapPageManager == null) {
+                try {
+                    Path offHeapPath = Path.of(this.config.getStoragePath(), databaseName, databaseName + "_offheap.pages");
+                    if (offHeapPath.getParent() != null) {
+                        Files.createDirectories(offHeapPath.getParent());
+                    }
+                    this.offHeapPageManager = new OffHeapPageManager(offHeapPath);
+                } catch (Exception ex) {
+                    System.err.printf("[JettraDatabase] Aviso: JettraStore-OffHeap page manager fallback: %s%n", ex.getMessage());
+                }
+            }
+            return this.offHeapPageManager;
+        }
     }
 
     public JettraTransactionContext newTransactionContext(long txId) {
