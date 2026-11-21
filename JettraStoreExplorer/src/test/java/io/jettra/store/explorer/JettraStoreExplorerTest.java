@@ -1534,9 +1534,17 @@ public class JettraStoreExplorerTest {
             JettraAssert.assertFalse(clusterCfgAfterAdd.contains(".storage.path"),
                     "cluster.config no debe contener propiedades storage.path");
 
-            // 2. Expulsar node-09 y verificar actualización en microprofile-config.properties y cluster.config generado
+            // 2. Verificar regla estricta: no se permite expulsar un nodo activo sin detenerlo primero
+            boolean blockedWhileActive = plugin.removeNode("node-09");
+            JettraAssert.assertFalse(blockedWhileActive, "No debe permitir expulsar node-09 mientras esté activo (RUNNING)");
+
+            // 3. Detener node-09 y luego expulsarlo correctamente
+            var node09 = plugin.getNodeById("node-09");
+            if (node09 != null) {
+                node09.setOnline(false);
+            }
             boolean removed = plugin.removeNode("node-09");
-            JettraAssert.assertTrue(removed, "Debe expulsar node-09 correctamente");
+            JettraAssert.assertTrue(removed, "Debe expulsar node-09 correctamente tras detenerlo");
 
             String mpAfterRemove = java.nio.file.Files.readString(tempMp, java.nio.charset.StandardCharsets.UTF_8);
             JettraAssert.assertFalse(mpAfterRemove.contains("node-09:127.0.0.1:50009"),

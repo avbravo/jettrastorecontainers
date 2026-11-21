@@ -1521,4 +1521,307 @@ public final class JettraClient implements AutoCloseable {
         }
         return true;
     }
+
+    // =========================================================================
+    // ADMINISTRACIÓN ZERO-DOWNTIME DE NODOS Y cluster.config (SOLO ROL ADMIN)
+    // =========================================================================
+
+    private volatile String activeRoleOverride;
+
+    public void setActiveRole(String role) {
+        this.activeRoleOverride = role;
+    }
+
+    public String getEffectiveRole() {
+        if (activeRoleOverride != null && !activeRoleOverride.isBlank()) {
+            return activeRoleOverride.trim();
+        }
+        return config.getRole();
+    }
+
+    public boolean isAdminUser() {
+        String r = getEffectiveRole();
+        return r != null && ("admin".equalsIgnoreCase(r) || "super_admin".equalsIgnoreCase(r));
+    }
+
+    public void assertAdminRole(String operation) {
+        if (!isAdminUser()) {
+            throw new SecurityException(String.format(
+                "Acceso denegado [ROL ADMIN REQUERIDO]: El usuario '%s' (rol '%s') no tiene permisos para ejecutar '%s'. " +
+                "Esta operación está restringida exclusivamente a usuarios con rol 'admin'.",
+                config.getUsername(), getEffectiveRole(), operation));
+        }
+    }
+
+    public boolean isNodeRunning(String host, int grpcPort, int restPort) {
+        if (host == null || host.isBlank()) return false;
+        if (grpcPort > 0 && isTcpPortOpen(host.trim(), grpcPort, 300)) return true;
+        return restPort > 0 && isTcpPortOpen(host.trim(), restPort, 300);
+    }
+
+    private boolean isTcpPortOpen(String host, int port, int timeoutMs) {
+        try (java.net.Socket s = new java.net.Socket()) {
+            s.connect(new java.net.InetSocketAddress(host, port), timeoutMs);
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /**
+     * Añade un nodo al clúster en caliente (zero-downtime), validando rol {@code admin},
+     * unicidad de ID/puertos y propagando {@code cluster.config} sin detener ningún nodo activo.
+     */
+    public synchronized boolean addClusterNode(String nodeId, String ip, int grpcPort, int restPort, String role) {
+        assertAdminRole("addClusterNode");
+        if (nodeId == null || nodeId.isBlank()) {
+            throw new IllegalArgumentException("El ID del nodo es obligatorio.");
+        }
+        String cleanId = nodeId.trim();
+        String effectiveIp = (ip != null && !ip.isBlank()) ? ip.trim() : "127.0.0.1";
+        int effectiveRest = restPort > 0 ? restPort : deriveRestPortForNode(grpcPort);
+        String effectiveRole = (role != null && !role.isBlank()) ? role.trim().toUpperCase(Locale.ROOT) : "SECONDARY";
+
+        java.nio.file.Path clusterFile = io.jettra.store.core.JettraConfigValidator.locateClusterConfigFile();
+        if (clusterFile == null) {
+            clusterFile = java.nio.file.Path.of(io.jettra.store.core.JettraConfigValidator.DEFAULT_CLUSTER_CONFIG_PATH);
+        }
+        io.jettra.store.core.JettraConfigValidator.registerDynamicNodeInClusterConfig(
+                clusterFile, cleanId, effectiveRole, effectiveIp, grpcPort, effectiveRest, null);
+
+        ClusterNode.Role nodeRole = "PRIMARY".equalsIgnoreCase(effectiveRole) ? ClusterNode.Role.PRIMARY : ClusterNode.Role.SECONDARY;
+        ringEngine.registerPeer(new ClusterNode(cleanId, effectiveIp, grpcPort, nodeRole));
+
+        try {
+            byte[] cfgBytes = java.nio.file.Files.readAllBytes(clusterFile);
+            distributeClusterConfigZeroDowntime(cfgBytes);
+        } catch (Exception ignored) {}
+        return true;
+    }
+
+    /**
+     * Remueve un nodo del clúster SOLO si el usuario tiene rol {@code admin} y el nodo está DETENIDO.
+     * Regla estricta: si el nodo está en ejecución (RUNNING), se rechaza la operación.
+     * No detiene ni reinicia ningún otro nodo activo del clúster.
+     */
+    public synchronized boolean removeStoppedClusterNode(String nodeId) {
+        assertAdminRole("removeStoppedClusterNode");
+        if (nodeId == null || nodeId.isBlank()) {
+            throw new IllegalArgumentException("El ID del nodo es obligatorio.");
+        }
+        String cleanId = nodeId.trim();
+        if ("node-01".equalsIgnoreCase(cleanId)) {
+            throw new IllegalArgumentException("No se puede remover el nodo primario principal (node-01).");
+        }
+
+        // Localizar datos de red del nodo para verificar si sigue en ejecución
+        String host = null;
+        int grpcPort = 0;
+        int restPort = 0;
+        ClusterNode peer = ringEngine.getPeer(cleanId);
+        if (peer != null) {
+            host = peer.getIp();
+            grpcPort = peer.getPort();
+        }
+        java.nio.file.Path clusterFile = io.jettra.store.core.JettraConfigValidator.locateClusterConfigFile();
+        if (clusterFile != null && java.nio.file.Files.exists(clusterFile)) {
+            Properties props = io.jettra.store.core.JettraConfigValidator.loadProperties(clusterFile, "/cluster.config", "/jettra.config");
+            var info = io.jettra.store.core.JettraConfigValidator.findNodeInCluster(
+                    io.jettra.store.core.JettraConfigValidator.parseClusterNodes(props), cleanId);
+            if (info != null) {
+                if (host == null || host.isBlank()) host = info.ip();
+                if (grpcPort <= 0) grpcPort = info.grpcPort();
+                restPort = info.restPort();
+            }
+        }
+        if (host != null && isNodeRunning(host, grpcPort, restPort)) {
+            throw new IllegalStateException(String.format(
+                "No se puede remover el nodo '%s' (%s:%d) porque se encuentra en ejecución (RUNNING). " +
+                "Primero debe detener el nodo y luego removerlo del clúster.",
+                cleanId, host, grpcPort));
+        }
+
+        boolean removedPeer = ringEngine.removePeer(cleanId);
+        boolean removedCfg = io.jettra.store.core.JettraConfigValidator.removeDynamicNodeFromClusterConfig(cleanId);
+        if ((removedPeer || removedCfg) && clusterFile != null && java.nio.file.Files.exists(clusterFile)) {
+            try {
+                byte[] cfgBytes = java.nio.file.Files.readAllBytes(clusterFile);
+                distributeClusterConfigZeroDowntime(cfgBytes);
+            } catch (Exception ignored) {}
+        }
+        return removedPeer || removedCfg;
+    }
+
+    /**
+     * Lee el archivo {@code cluster.config} del nodo PRIMARY (requiere rol {@code admin}).
+     */
+    public String readPrimaryClusterConfig() {
+        assertAdminRole("readPrimaryClusterConfig");
+        for (String ep : config.getClusterEndpoints()) {
+            String[] parts = ep.split(":");
+            String host = parts[0].trim();
+            int port = parts.length > 1 ? Integer.parseInt(parts[1].trim()) : 50001;
+            try (java.net.Socket s = new java.net.Socket()) {
+                s.setTcpNoDelay(true);
+                s.connect(new java.net.InetSocketAddress(host, port), 1000);
+                s.setSoTimeout(1500);
+                try (var bos = new java.io.BufferedOutputStream(s.getOutputStream(), 8192);
+                     var bis = new java.io.BufferedInputStream(s.getInputStream(), 8192)) {
+                    io.jettra.store.cluster.JettraClusterProtocol.writeFrame(
+                            bos, io.jettra.store.cluster.JettraRaftFrame.getClusterConfigReq(1L, "jettra-driver-admin"));
+                    var resp = io.jettra.store.cluster.JettraClusterProtocol.readFrame(bis);
+                    if (resp != null && resp.frameType() == io.jettra.store.cluster.JettraRaftFrame.TYPE_GET_CLUSTER_CONFIG_RESP
+                            && resp.payload() != null && resp.payload().length > 0) {
+                        return new String(resp.payload(), java.nio.charset.StandardCharsets.UTF_8);
+                    }
+                }
+            } catch (Exception ignored) {}
+        }
+        java.nio.file.Path local = io.jettra.store.core.JettraConfigValidator.locateClusterConfigFile();
+        if (local != null && java.nio.file.Files.exists(local)) {
+            try {
+                return java.nio.file.Files.readString(local, java.nio.charset.StandardCharsets.UTF_8);
+            } catch (Exception ignored) {}
+        }
+        return "";
+    }
+
+    /**
+     * Valida, persiste atómicamente y propaga {@code cluster.config} en todo el clúster sin detener
+     * ningún nodo activo (requiere rol {@code admin}).
+     */
+    public synchronized int updatePrimaryClusterConfig(String content, boolean syncToCluster) {
+        assertAdminRole("updatePrimaryClusterConfig");
+        if (content == null || content.isBlank()) {
+            throw new IllegalArgumentException("El contenido de cluster.config no puede estar vacío.");
+        }
+        byte[] bytes = content.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        var integrity = io.jettra.store.core.JettraConfigValidator.validateClusterConfigIntegrity(bytes);
+        if (!integrity.isValid()) {
+            throw new IllegalArgumentException("Validación de integridad de cluster.config fallida: " + integrity.getSummary());
+        }
+        java.nio.file.Path local = io.jettra.store.core.JettraConfigValidator.locateClusterConfigFile();
+        if (local == null) {
+            local = java.nio.file.Path.of(io.jettra.store.core.JettraConfigValidator.DEFAULT_CLUSTER_CONFIG_PATH);
+        }
+        try {
+            io.jettra.store.core.JettraConfigValidator.writeClusterConfigAtomically(local, bytes);
+        } catch (Exception e) {
+            throw new RuntimeException("Error guardando cluster.config: " + e.getMessage(), e);
+        }
+        return syncToCluster ? distributeClusterConfigZeroDowntime(bytes) : 0;
+    }
+
+    private int distributeClusterConfigZeroDowntime(byte[] cfgBytes) {
+        int confirmed = 0;
+        var integrity = io.jettra.store.core.JettraConfigValidator.validateClusterConfigIntegrity(cfgBytes);
+        if (!integrity.isValid()) return 0;
+        Properties props = new Properties();
+        try (var bais = new java.io.ByteArrayInputStream(cfgBytes)) {
+            props.load(bais);
+        } catch (Exception ignored) {}
+        var nodes = io.jettra.store.core.JettraConfigValidator.parseClusterNodes(props);
+        nodes.sort((a, b) -> Boolean.compare("PRIMARY".equalsIgnoreCase(b.role()), "PRIMARY".equalsIgnoreCase(a.role())));
+        var frame = io.jettra.store.cluster.JettraRaftFrame.syncClusterConfig(1L, "jettra-driver-admin", cfgBytes);
+        for (var n : nodes) {
+            if (n.ip() == null || n.ip().isBlank() || n.grpcPort() <= 0) continue;
+            try (java.net.Socket s = new java.net.Socket()) {
+                s.setTcpNoDelay(true);
+                s.connect(new java.net.InetSocketAddress(n.ip(), n.grpcPort()), 1000);
+                s.setSoTimeout(1500);
+                try (var bos = new java.io.BufferedOutputStream(s.getOutputStream(), 8192);
+                     var bis = new java.io.BufferedInputStream(s.getInputStream(), 8192)) {
+                    io.jettra.store.cluster.JettraClusterProtocol.writeFrame(bos, frame);
+                    var ack = io.jettra.store.cluster.JettraClusterProtocol.readFrame(bis);
+                    if (ack != null && ack.frameType() != io.jettra.store.cluster.JettraRaftFrame.TYPE_NACK) {
+                        confirmed++;
+                    }
+                }
+            } catch (Exception ignored) {}
+        }
+        return confirmed;
+    }
+
+    private int deriveRestPortForNode(int grpcPort) {
+        if (grpcPort >= 50001 && grpcPort <= 50999) return 60000 + (grpcPort - 50000);
+        if (grpcPort >= 9091 && grpcPort <= 9999) return 8080 + (grpcPort - 9090);
+        return (grpcPort + 1000 <= 65535) ? (grpcPort + 1000) : Math.max(1024, grpcPort - 1000);
+    }
+
+    // =========================================================================
+    // BUCKETS ILIMITADOS, ESTRUCTURAS (NONE / DEFINED) E ÍNDICES POR BUCKET
+    // =========================================================================
+
+    public io.jettra.store.core.JettraBucketSchema.BucketMetadata createBucket(
+            String databaseName,
+            String engineType,
+            String bucketName,
+            io.jettra.store.core.JettraBucketSchema.StructureType structureType,
+            List<io.jettra.store.core.JettraBucketSchema.AttributeRule> attributes) {
+        return getDatabase(databaseName).createBucket(engineType, bucketName, structureType, attributes);
+    }
+
+    public io.jettra.store.core.JettraBucketSchema.BucketMetadata createBucket(
+            String databaseName,
+            String engineType,
+            String bucketName,
+            String structureType,
+            String attributesJson) {
+        var st = io.jettra.store.core.JettraBucketSchema.StructureType.fromString(structureType);
+        var attrs = (st == io.jettra.store.core.JettraBucketSchema.StructureType.DEFINED)
+                ? io.jettra.store.core.JettraBucketSchema.parseAttributesJson(attributesJson)
+                : List.<io.jettra.store.core.JettraBucketSchema.AttributeRule>of();
+        return createBucket(databaseName, engineType, bucketName, st, attrs);
+    }
+
+    public io.jettra.store.core.JettraBucketSchema.BucketMetadata getBucketMetadata(String databaseName, String engineType, String bucketName) {
+        return getDatabase(databaseName).getBucketMetadata(engineType, bucketName);
+    }
+
+    public List<io.jettra.store.core.JettraBucketSchema.BucketMetadata> listBuckets(String databaseName) {
+        return getDatabase(databaseName).listBuckets();
+    }
+
+    public List<io.jettra.store.core.JettraBucketSchema.BucketMetadata> listBucketsByEngine(String databaseName, String engineType) {
+        return getDatabase(databaseName).listBucketsByEngine(engineType);
+    }
+
+    public boolean dropBucket(String databaseName, String engineType, String bucketName) {
+        return getDatabase(databaseName).dropBucket(engineType, bucketName);
+    }
+
+    public io.jettra.store.core.JettraBucketSchema.ValidationResult validateBucketRecord(
+            String databaseName, String engineType, String bucketName, Map<String, Object> record) {
+        return getDatabase(databaseName).validateBucketRecord(engineType, bucketName, record);
+    }
+
+    public String upsertBucketRecord(
+            String databaseName, String engineType, String bucketName, String id, Map<String, Object> record) {
+        return getDatabase(databaseName).upsertBucketRecord(engineType, bucketName, id, record);
+    }
+
+    public boolean deleteBucketRecord(String databaseName, String engineType, String bucketName, String id) {
+        return getDatabase(databaseName).deleteBucketRecord(engineType, bucketName, id);
+    }
+
+    public JettraIndexManager.IndexInfo createBucketIndex(
+            String databaseName, String bucketName, String indexName, String field, String type, boolean unique) {
+        return createIndex(databaseName, bucketName, indexName, field, type, unique);
+    }
+
+    public List<JettraIndexManager.IndexInfo> listBucketIndexes(String databaseName, String bucketName) {
+        return listIndexes(databaseName, bucketName);
+    }
+
+    public JettraIndexManager.IndexInfo getBucketIndex(String databaseName, String indexName) {
+        return getDatabase(databaseName).getIndexManager().getIndex(indexName);
+    }
+
+    public boolean dropBucketIndex(String databaseName, String indexName) {
+        return dropIndex(databaseName, indexName);
+    }
+
+    public Set<String> findIdsByBucketIndex(String databaseName, String bucketName, String field, Object value) {
+        return getDatabase(databaseName).getIndexManager().findDocIds(bucketName, field, value);
+    }
 }

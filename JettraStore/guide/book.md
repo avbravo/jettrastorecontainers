@@ -3091,3 +3091,37 @@ Para aplicar el binario corregido a tus nodos locales:
 Detén los nodos que sigan en ejecución (node-01, etc.).
 Ejecuta ./script/create-nodes.sh (o copia JettraStore/target/JettraStore-1.0-SNAPSHOT-uber.jar a cada directorio ~/jettra-node-01..04/).
 Inicia tus 3 nodos y añade node-04 desde JettraStoreExplorer o JettraStoreShell: cluster.config y las bases de datos se sincronizarán en todos los nodos sin detener ningún SECONDARY.
+
+
+---
+
+## Capítulo 22: Buckets Ilimitados (`NONE` vs `DEFINED`), Índices por Bucket y Consistencia Zero-Downtime
+
+### 22.1 Arquitectura de Buckets Ilimitados por Engine (`JettraBucketSchema`)
+Cada base de datos de **JettraStore** permite crear una cantidad **ilimitada de buckets** dentro de cada uno de sus motores (`DOCUMENT`, `JAVA_RECORD`, `KEY_VALUE`, `VECTOR`, `GRAPH`, `TIMESERIES`, `COLUMNAR`, `GEOSPATIAL`, `RELATIONAL`). Los metadatos del catálogo de buckets se persisten de forma atómica en `<jettra.storage.path>/<db>_buckets.json`.
+
+Cada bucket opera bajo uno de dos modos de estructura:
+
+1. **`NONE` (Esquema libre / flexible):** Permite insertar documentos o registros con cualquier conjunto de atributos sin validación rígida.
+   - *Ejemplo:* Base `pruebadb`, engine `DOCUMENT`, bucket `Persona`, estructura `NONE`:
+     - Registro 1: `{"id": 1, "name": "aristides"}`
+     - Registro 2: `{"apellido": "Perez", "pais": "Panama"}`
+2. **`DEFINED` (Estructura definida y validada):** Almacena una especificación de atributos y reglas de negocio que todo registro debe cumplir antes de ser persistido:
+   - *Ejemplo:* Base `pruebadb`, engine `JAVA_RECORD`, bucket `Pais`, estructura `DEFINED`:
+     ```json
+     [
+       { "atribute_name": "name", "type_atribute": "String", "jettra_rules": "NOT_NULL", "description": "nombre" },
+       { "atribute_name": "siglas", "type_atribute": "String", "jettra_rules": "NOT_NULL", "description": "siglas" }
+     ]
+     ```
+   - **Tipos soportados (`type_atribute`):** `String`, `Integer`/`Int`, `Long`, `Double`/`Float`/`Decimal`, `Boolean`, `List`/`Array`, `Map`/`JSON`, `Date`/`Object`.
+   - **Reglas soportadas (`jettra_rules`, separables por coma):** `NOT_NULL`, `REQUIRED`, `NOT_EMPTY`, `NOT_BLANK`, `POSITIVE`, `NON_NEGATIVE`, `EMAIL`, `UNIQUE`, `MIN:<n>`, `MAX:<n>`, `MIN_LENGTH:<n>`, `MAX_LENGTH:<n>`, `REGEX:<patrón>`.
+
+### 22.2 Índices por Bucket (`JettraIndexManager`)
+Cada bucket puede mantener múltiples índices secundarios (`BTREE`, `HASH`, `SPARSE`, `VECTOR_HNSW`, `SPATIAL_R_TREE`, únicos o no únicos). Las operaciones `upsertBucketRecord` y `deleteBucketRecord` en `JettraDatabase` actualizan automáticamente el índice invertido en memoria (`onDocumentUpsert` / `onDocumentDelete`) y propagan la creación o eliminación de índices en el clúster Raft.
+
+### 22.3 Cambios de Membresía Zero-Downtime y Reconciliación sin Paradas
+Al incorporar un nuevo nodo o remover un nodo detenido mediante `TYPE_SYNC_CLUSTER_CONFIG`:
+- **Conciliación de rol (Anti Split-Brain):** Si un nodo recién incorporado inició aislado como `PRIMARY`, al recibir el `cluster.config` canónico donde figura como `SECONDARY` se degrada automáticamente a `SECONDARY` sin detenerse.
+- **Idempotencia estricta y Anti-Eco:** Si el archivo `cluster.config` no presenta diferencias respecto al ya persistido, no se re-difunden tramas ni se relanzan sincronizaciones; el `PRIMARY` nunca rebota actualizaciones originadas en otro nodo miembro.
+- **Coalescencia de sincronización:** Los nodos `SECONDARY` utilizan `triggerAsyncSynchronizeFromPrimary()` y `loadFromDisk` sincronizado para converger bases de datos y metadatos sin detener ningún nodo activo del clúster.

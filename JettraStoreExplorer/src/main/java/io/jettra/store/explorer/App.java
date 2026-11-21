@@ -344,8 +344,20 @@ public class App {
             redirect(resp, "/cluster?msg=node_started");
             return;
         } else if ("remove_node".equalsIgnoreCase(action)) {
+            JettraUser currentUser = plugin.findUser(getLoggedUser(req)).orElse(null);
+            if (currentUser == null || currentUser.getGlobalRole() != JettraUser.GlobalRole.ADMIN) {
+                redirect(resp, "/cluster?msg=" + java.net.URLEncoder.encode(
+                        "Acceso denegado: solo usuarios con rol ADMIN pueden remover nodos del clúster.", java.nio.charset.StandardCharsets.UTF_8));
+                return;
+            }
             String nodeId = req.getQueryParam("nodeId");
-            if (nodeId != null) plugin.removeNode(nodeId);
+            boolean ok = nodeId != null && plugin.removeNode(nodeId);
+            if (!ok) {
+                String err = plugin.getLastNodeOperationError();
+                redirect(resp, "/cluster?msg=" + java.net.URLEncoder.encode(
+                        err != null ? err : "No se pudo remover el nodo.", java.nio.charset.StandardCharsets.UTF_8));
+                return;
+            }
             redirect(resp, "/cluster?msg=node_removed");
             return;
         } else if ("check_nodes".equalsIgnoreCase(action) || "refresh".equalsIgnoreCase(action)) {
@@ -650,9 +662,17 @@ public class App {
             }
             redirect(resp, "/explorer?db=" + db + "&bucket=" + bucket);
             return;
+        } else if ("delete_bucket_index".equalsIgnoreCase(action)) {
+            String indexName = req.getQueryParam("indexName");
+            if (db != null && bucket != null && indexName != null) {
+                plugin.deleteIndex(db, bucket, indexName);
+            }
+            redirect(resp, "/explorer?db=" + db + "&bucket=" + bucket + "&msg=index_deleted");
+            return;
         }
 
         boolean isNew = "new".equalsIgnoreCase(action);
+        boolean isNewBucket = "new_bucket".equalsIgnoreCase(action);
         String editId = req.getQueryParam("edit_id");
         String viewId = req.getQueryParam("view_id");
         String historyId = req.getQueryParam("history_id");
@@ -677,8 +697,12 @@ public class App {
         else if ("record_updated".equals(msg)) messageText = "Registro actualizado correctamente.";
         else if ("record_deleted".equals(msg)) messageText = "Registro eliminado del bucket.";
         else if ("version_restored".equals(msg)) messageText = "Versión previa restaurada exitosamente como nueva versión activa.";
+        else if ("bucket_created".equals(msg)) messageText = "Bucket creado exitosamente con su estructura configurada.";
+        else if ("index_created".equals(msg)) messageText = "Índice secundario creado en el bucket.";
+        else if ("index_deleted".equals(msg)) messageText = "Índice eliminado del bucket.";
+        else if (msg != null && !msg.isBlank()) messageText = msg;
 
-        Widget content = new RecordExplorerFluxView(db, bucket, q, editId, viewId, historyId, isNew, messageText, page, pageSize);
+        Widget content = new RecordExplorerFluxView(db, bucket, q, editId, viewId, historyId, isNew, isNewBucket, messageText, page, pageSize);
         renderTemplate(resp, server, getLoggedUser(req), "Explorador de Registros CRUD", "explorer", content);
     }
 
@@ -690,10 +714,39 @@ public class App {
         String bucket = form.get("bucket");
         JettraStorePlugin plugin = JettraStorePlugin.getInstance();
 
-        if ("save_new".equalsIgnoreCase(action)) {
+        if ("create_bucket".equalsIgnoreCase(action)) {
+            String newBucket = form.get("newBucketName");
+            String engineType = form.getOrDefault("engineType", "DOCUMENT");
+            String structureType = form.getOrDefault("structureType", "NONE");
+            String attributesJson = form.getOrDefault("attributesJson", "[]");
+            String description = form.get("description");
+            boolean ok = plugin.addBucket(db, newBucket, engineType, description, structureType, attributesJson);
+            if (!ok) {
+                String err = plugin.getLastBucketOperationError();
+                redirect(resp, "/explorer?db=" + db + "&bucket=" + (bucket != null ? bucket : "") + "&msg="
+                        + java.net.URLEncoder.encode(err != null ? err : "Error creando bucket", java.nio.charset.StandardCharsets.UTF_8));
+                return;
+            }
+            redirect(resp, "/explorer?db=" + db + "&bucket=" + newBucket.trim() + "&msg=bucket_created");
+            return;
+        } else if ("create_bucket_index".equalsIgnoreCase(action)) {
+            String idxName = form.get("indexName");
+            String idxField = form.get("indexField");
+            String idxType = form.getOrDefault("indexType", "BTREE");
+            boolean unique = "true".equalsIgnoreCase(form.get("indexUnique")) || "on".equalsIgnoreCase(form.get("indexUnique"));
+            boolean ok = plugin.addIndex(db, bucket, idxName, idxField, idxType, unique);
+            redirect(resp, "/explorer?db=" + db + "&bucket=" + bucket + "&msg=" + (ok ? "index_created" : "Error+creando+indice"));
+            return;
+        } else if ("save_new".equalsIgnoreCase(action)) {
             String recordId = form.get("recordId");
             String summary = form.get("summary");
             String details = io.jettra.store.explorer.pages.explorer.EngineRecordRenderer.buildDetailsFromForm(form, "");
+            var validation = plugin.validateRecordForBucket(db, bucket, details);
+            if (!validation.valid()) {
+                redirect(resp, "/explorer?db=" + db + "&bucket=" + bucket + "&msg="
+                        + java.net.URLEncoder.encode("Validación fallida: " + validation.getSummary(), java.nio.charset.StandardCharsets.UTF_8));
+                return;
+            }
 
             plugin.addRecord(db, bucket, recordId, summary, details);
             redirect(resp, "/explorer?db=" + db + "&bucket=" + bucket + "&msg=record_created");
@@ -704,6 +757,12 @@ public class App {
             io.jettra.store.explorer.model.EngineRecordInfo existing = plugin.getRecord(db, bucket, recordId);
             String details = io.jettra.store.explorer.pages.explorer.EngineRecordRenderer.buildDetailsFromForm(
                     form, existing != null ? existing.getDetails() : "");
+            var validation = plugin.validateRecordForBucket(db, bucket, details);
+            if (!validation.valid()) {
+                redirect(resp, "/explorer?db=" + db + "&bucket=" + bucket + "&msg="
+                        + java.net.URLEncoder.encode("Validación fallida: " + validation.getSummary(), java.nio.charset.StandardCharsets.UTF_8));
+                return;
+            }
 
             plugin.updateRecord(db, bucket, recordId, summary, details);
             redirect(resp, "/explorer?db=" + db + "&bucket=" + bucket + "&msg=record_updated");

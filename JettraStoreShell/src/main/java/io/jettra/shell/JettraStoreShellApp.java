@@ -1232,6 +1232,24 @@ public final class JettraStoreShellApp implements AutoCloseable {
             return handleStartNode(trimmed);
         } else if (upper.startsWith("STOP NODE ")) {
             return handleStopNode(trimmed);
+        } else if (upper.equals("SHOW CLUSTER CONFIG") || upper.equals("CLUSTER CONFIG")) {
+            return handleShowClusterConfig();
+        } else if (upper.equals("SYNC CLUSTER CONFIG") || upper.equals("CLUSTER SYNC CONFIG")) {
+            return handleSyncClusterConfig();
+        } else if (upper.startsWith("CREATE BUCKET ")) {
+            return handleCreateBucketCommand(trimmed);
+        } else if (upper.startsWith("DESCRIBE BUCKET ") || upper.startsWith("SHOW BUCKET SCHEMA ")) {
+            return handleDescribeBucketCommand(trimmed);
+        } else if (upper.startsWith("DROP BUCKET ")) {
+            return handleDropBucketCommand(trimmed);
+        } else if (upper.startsWith("INSERT BUCKET ")) {
+            return handleInsertBucketRecordCommand(trimmed);
+        } else if (upper.startsWith("CREATE BUCKET INDEX ")) {
+            return handleCreateBucketIndexCommand(trimmed);
+        } else if (upper.startsWith("SHOW BUCKET INDEXES ")) {
+            return handleShowBucketIndexesCommand(trimmed);
+        } else if (upper.startsWith("DROP BUCKET INDEX ")) {
+            return handleDropBucketIndexCommand(trimmed);
         } else if (upper.startsWith("CLUSTER-DISTRIBUTED") || upper.startsWith("CLUSTER_DISTRIBUTED")) {
             return handleClusterDistributed(trimmed);
         } else if (upper.equals("CLUSTER LIVE") || upper.startsWith("CLUSTER LIVE ") || upper.equals("CLUSTER-LIVE")
@@ -1842,7 +1860,14 @@ public final class JettraStoreShellApp implements AutoCloseable {
         return "PRIMARY".equals(r) || "LEADER".equals(r);
     }
 
+    private boolean hasAdminRole() {
+        return currentRole != null && ("ADMIN".equalsIgnoreCase(currentRole.trim()) || "SUPER_ADMIN".equalsIgnoreCase(currentRole.trim()));
+    }
+
     private String handleAddNode(String command) {
+        if (!hasAdminRole()) {
+            return "[DENIED] Acceso denegado: la administración de nodos del clúster está restringida exclusivamente a usuarios con rol 'admin'.";
+        }
         String clean = command.replaceAll("(?i)^(CLUSTER\\s+)?(ADD-NODE|ADD\\s+NODE|CLUSTER-ADD-NODE)\\s+", "").trim();
         String[] parts = clean.split("\\s+");
         if (parts.length < 3) {
@@ -1905,7 +1930,8 @@ public final class JettraStoreShellApp implements AutoCloseable {
         // bases de datos y objetos al nuevo nodo
         triggerPrimaryDatabaseSyncToNode(id, role.name(), host, port, restPort);
 
-        return String.format("[SUCCESS] Nodo '%s' (%s:%d, %s) agregado exitosamente al clúster Raft.%n%s",
+        return String.format(
+                "[SUCCESS] Nodo '%s' (%s:%d, %s) agregado exitosamente al clúster Raft (zero-downtime: ningún nodo activo fue detenido; la topología y los datos convergen automáticamente).%n%s",
                 id, host, port, role, replicationReport);
     }
 
@@ -1937,6 +1963,9 @@ public final class JettraStoreShellApp implements AutoCloseable {
     }
 
     private String handleRemoveNode(String command) {
+        if (!hasAdminRole()) {
+            return "[DENIED] Acceso denegado: remover nodos del clúster está restringido exclusivamente a usuarios con rol 'admin'.";
+        }
         String clean = cleanQuotes(command
                 .replaceAll("(?i)^(CLUSTER\\s+)?(REMOVE-NODE|REMOVE\\s+NODE|CLUSTER-REMOVE-NODE)\\s+", "").trim());
         if (clean.isBlank())
@@ -1945,6 +1974,33 @@ public final class JettraStoreShellApp implements AutoCloseable {
         if ("node-01".equalsIgnoreCase(id) || client.getRingEngine().getNodeId().equalsIgnoreCase(id)) {
             return "[ERROR] No se puede remover el nodo primario activo del clúster.";
         }
+
+        // Regla estricta: NO se permite remover un nodo que esté en ejecución (RUNNING / activo).
+        // Primero debe detenerse el nodo y luego removerlo.
+        String targetHost = null;
+        int targetGrpc = 0;
+        int targetRest = 0;
+        ClusterNode ringPeer = client.getRingEngine().getPeer(id);
+        if (ringPeer != null) {
+            targetHost = ringPeer.getIp();
+            targetGrpc = ringPeer.getPort();
+        }
+        for (JettraConfigValidator.ClusterNodeInfo cn : collectCurrentClusterNodesForValidation()) {
+            if (cn.id().equalsIgnoreCase(id)) {
+                if (targetHost == null || targetHost.isBlank()) targetHost = cn.ip();
+                if (targetGrpc <= 0) targetGrpc = cn.grpcPort();
+                targetRest = cn.restPort();
+                break;
+            }
+        }
+        if (targetHost != null && !targetHost.isBlank()
+                && (isNodeReachable(targetHost, targetGrpc, 250) || (targetRest > 0 && isNodeReachable(targetHost, targetRest, 250)))) {
+            return String.format(
+                "[ERROR] No se puede remover el nodo '%s' (%s:%d) porque actualmente está en ejecución (RUNNING / ACTIVO).%n" +
+                "        Primero debe detener el nodo (ej. STOP NODE %s) y luego ejecutar REMOVE NODE %s.",
+                id, targetHost, targetGrpc, id, id);
+        }
+
         boolean removedFromRing = client.getRingEngine().removePeer(id);
         boolean removedFromSaved = savedConnections.remove(id) != null;
         if (!removedFromSaved) {
@@ -1970,12 +2026,185 @@ public final class JettraStoreShellApp implements AutoCloseable {
 
         boolean ok = removedFromRing || removedFromSaved || removedFromConfig;
 
-        // Replicar cluster.config actualizado a todos los nodos: PRIMARY primero, luego
-        // los SECONDARY
+        // Replicar cluster.config actualizado a todos los nodos sin detener los nodos activos
         String replicationReport = replicateClusterConfigToQuorum(id, "SECONDARY", "", 0, 0, true);
 
-        return ok ? String.format("[SUCCESS] Nodo '%s' removido del anillo de réplicas y eliminado de cluster.config.%n%s", id, replicationReport)
+        return ok ? String.format(
+                "[SUCCESS] Nodo detenido '%s' removido del anillo y eliminado de cluster.config (zero-downtime: los demás nodos activos continúan operando y convergen automáticamente).%n%s",
+                id, replicationReport)
                 : String.format("[WARN] El nodo '%s' no existe en el registro del clúster.%n%s", id, replicationReport);
+    }
+
+    private String handleShowClusterConfig() {
+        if (!hasAdminRole()) {
+            return "[DENIED] Acceso denegado: la consulta de cluster.config del PRIMARY requiere rol 'admin'.";
+        }
+        String cfg = client.readPrimaryClusterConfig();
+        if (cfg == null || cfg.isBlank()) {
+            return "[WARN] No se encontró contenido en cluster.config.";
+        }
+        return "[CLUSTER.CONFIG (PRIMARY)]\n" + cfg;
+    }
+
+    private String handleSyncClusterConfig() {
+        if (!hasAdminRole()) {
+            return "[DENIED] Acceso denegado: sincronizar cluster.config requiere rol 'admin'.";
+        }
+        String cfg = client.readPrimaryClusterConfig();
+        if (cfg == null || cfg.isBlank()) {
+            return "[ERROR] No se pudo leer cluster.config para sincronizar.";
+        }
+        try {
+            int confirmed = client.updatePrimaryClusterConfig(cfg, true);
+            return String.format("[SUCCESS] cluster.config validado y sincronizado en %d nodo(s) activos sin detener ningún nodo.", confirmed);
+        } catch (Exception e) {
+            return "[ERROR] " + e.getMessage();
+        }
+    }
+
+    private String handleCreateBucketCommand(String command) {
+        // Sintaxis: CREATE BUCKET <name> [ENGINE <engineType>] [STRUCTURE NONE|DEFINED <json_attributes>]
+        String rest = command.substring("CREATE BUCKET ".length()).trim();
+        if (rest.isBlank()) {
+            return "[ERROR] Uso: CREATE BUCKET <nombre> [ENGINE DOCUMENT|JAVA_RECORD|KEY_VALUE|VECTOR|GRAPH|TIMESERIES|COLUMNAR|GEOSPATIAL] [STRUCTURE NONE|DEFINED <json_atributos>]";
+        }
+        String bucketName = rest.split("\\s+")[0].trim();
+        String engineType = "DOCUMENT";
+        String structure = "NONE";
+        String attrsJson = "[]";
+
+        java.util.regex.Matcher engM = java.util.regex.Pattern.compile("(?i)\\bENGINE\\s+([A-Za-z0-9_\\-]+)").matcher(rest);
+        if (engM.find()) {
+            engineType = engM.group(1).trim();
+        }
+        java.util.regex.Matcher stM = java.util.regex.Pattern.compile("(?i)\\bSTRUCTURE\\s+(NONE|DEFINED)(?:\\s+(\\[.*\\]))?").matcher(rest);
+        if (stM.find()) {
+            structure = stM.group(1).trim().toUpperCase();
+            if (stM.group(2) != null) {
+                attrsJson = stM.group(2).trim();
+            }
+        }
+        try {
+            var meta = client.createBucket(currentDatabase, engineType, bucketName, structure, attrsJson);
+            return String.format("[SUCCESS] Bucket '%s' creado en DB '%s' | Engine: %s | Estructura: %s (%d atributo(s)).",
+                    meta.bucketName(), meta.databaseName(), meta.engineType(), meta.structureType(), meta.attributes().size());
+        } catch (Exception e) {
+            return "[ERROR] No se pudo crear el bucket '" + bucketName + "': " + e.getMessage();
+        }
+    }
+
+    private String handleDescribeBucketCommand(String command) {
+        String bucketName = command.replaceAll("(?i)^(DESCRIBE\\s+BUCKET|SHOW\\s+BUCKET\\s+SCHEMA)\\s+", "").trim();
+        if (bucketName.isBlank()) {
+            return "[ERROR] Uso: DESCRIBE BUCKET <nombre>";
+        }
+        var meta = client.getDatabase(currentDatabase).findBucketMetadata(bucketName);
+        if (meta == null) {
+            return String.format("[INFO] Bucket '%s' en DB '%s' no tiene metadatos explícitos (opera con estructura NONE por defecto).",
+                    bucketName, currentDatabase);
+        }
+        StringBuilder sb = new StringBuilder();
+        sb.append(String.format("Bucket: %s | DB: %s | Engine: %s | Estructura: %s%n",
+                meta.bucketName(), meta.databaseName(), meta.engineType(), meta.structureType()));
+        if (meta.structureType() == io.jettra.store.core.JettraBucketSchema.StructureType.DEFINED) {
+            sb.append("Atributos definidos:\n");
+            for (var a : meta.attributes()) {
+                sb.append(String.format("  - %s (%s) | reglas: [%s] | %s%n",
+                        a.atribute_name(), a.type_atribute(), a.jettra_rules(), a.description()));
+            }
+        }
+        var idxs = client.listBucketIndexes(currentDatabase, meta.bucketName());
+        sb.append(String.format("Índices del bucket (%d):%n", idxs.size()));
+        for (var idx : idxs) {
+            sb.append(String.format("  - %s ON (%s) [%s%s] entradas=%d%n",
+                    idx.name(), idx.field(), idx.type(), idx.unique() ? " UNIQUE" : "", idx.entriesCount()));
+        }
+        return sb.toString();
+    }
+
+    private String handleDropBucketCommand(String command) {
+        String rest = command.substring("DROP BUCKET ".length()).trim();
+        if (rest.isBlank()) return "[ERROR] Uso: DROP BUCKET <nombre> [ENGINE <engineType>]";
+        String[] parts = rest.split("\\s+");
+        String bucketName = parts[0].trim();
+        String engineType = (parts.length >= 3 && "ENGINE".equalsIgnoreCase(parts[1])) ? parts[2].trim() : "DOCUMENT";
+        boolean ok = client.dropBucket(currentDatabase, engineType, bucketName);
+        return ok ? String.format("[SUCCESS] Bucket '%s' eliminado de la base de datos '%s'.", bucketName, currentDatabase)
+                  : String.format("[WARN] Bucket '%s' no encontrado en '%s'.", bucketName, currentDatabase);
+    }
+
+    private String handleInsertBucketRecordCommand(String command) {
+        // Sintaxis: INSERT BUCKET <bucketName> <json>
+        String rest = command.substring("INSERT BUCKET ".length()).trim();
+        int sp = rest.indexOf(' ');
+        if (sp <= 0) {
+            return "[ERROR] Uso: INSERT BUCKET <bucketName> {\"campo\":\"valor\",...}";
+        }
+        String bucketName = rest.substring(0, sp).trim();
+        String json = rest.substring(sp + 1).trim();
+        try {
+            io.jettra.json.JettraJson parser = new io.jettra.json.JettraJson();
+            Object parsed = parser.parse(json);
+            if (!(parsed instanceof Map<?, ?> rawMap)) {
+                return "[VALIDATION ERROR] El registro debe ser un objeto JSON válido {...}.";
+            }
+            Map<String, Object> record = new LinkedHashMap<>();
+            rawMap.forEach((k, v) -> record.put(String.valueOf(k), v));
+            var meta = client.getDatabase(currentDatabase).findBucketMetadata(bucketName);
+            String engineType = meta != null ? meta.engineType() : "DOCUMENT";
+            String id = client.upsertBucketRecord(currentDatabase, engineType, bucketName, null, record);
+            return String.format("[SUCCESS] Registro '%s' insertado y validado en bucket '%s' (%s).", id, bucketName, engineType);
+        } catch (IllegalArgumentException valEx) {
+            return "[VALIDATION ALERT] Registro rechazado por estructura del bucket '" + bucketName + "': " + valEx.getMessage();
+        } catch (Exception e) {
+            return "[ERROR] Error insertando en bucket '" + bucketName + "': " + e.getMessage();
+        }
+    }
+
+    private String handleCreateBucketIndexCommand(String command) {
+        // Sintaxis: CREATE BUCKET INDEX <indexName> ON <bucketName> (<field>) [TYPE BTREE|HASH|SPARSE] [UNIQUE]
+        java.util.regex.Matcher m = java.util.regex.Pattern
+                .compile("(?i)^CREATE\\s+BUCKET\\s+INDEX\\s+(\\S+)\\s+ON\\s+(\\S+)\\s*\\(([^)]+)\\)(.*)$")
+                .matcher(command.trim());
+        if (!m.find()) {
+            return "[ERROR] Uso: CREATE BUCKET INDEX <nombre> ON <bucket> (<campo>) [TYPE BTREE|HASH|SPARSE] [UNIQUE]";
+        }
+        String idxName = m.group(1).trim();
+        String bucket = m.group(2).trim();
+        String field = m.group(3).trim();
+        String tail = m.group(4) != null ? m.group(4).toUpperCase() : "";
+        String type = "BTREE";
+        if (tail.contains("HASH")) type = "HASH";
+        else if (tail.contains("SPARSE")) type = "SPARSE";
+        boolean unique = tail.contains("UNIQUE");
+        try {
+            var info = client.createBucketIndex(currentDatabase, bucket, idxName, field, type, unique);
+            return String.format("[SUCCESS] Índice '%s' creado en bucket '%s' (campo=%s, tipo=%s, unique=%s, entradas=%d).",
+                    info.name(), info.collection(), info.field(), info.type(), info.unique(), info.entriesCount());
+        } catch (Exception e) {
+            return "[ERROR] No se pudo crear el índice '" + idxName + "': " + e.getMessage();
+        }
+    }
+
+    private String handleShowBucketIndexesCommand(String command) {
+        String bucket = command.substring("SHOW BUCKET INDEXES ".length()).trim();
+        var idxs = client.listBucketIndexes(currentDatabase, bucket);
+        if (idxs.isEmpty()) {
+            return String.format("[INFO] El bucket '%s' en '%s' no tiene índices registrados.", bucket, currentDatabase);
+        }
+        StringBuilder sb = new StringBuilder(String.format("Índices del bucket '%s' (%d):%n", bucket, idxs.size()));
+        for (var idx : idxs) {
+            sb.append(String.format("  • %-20s | campo: %-15s | tipo: %-7s | unique: %-5s | entradas: %d%n",
+                    idx.name(), idx.field(), idx.type(), idx.unique(), idx.entriesCount()));
+        }
+        return sb.toString();
+    }
+
+    private String handleDropBucketIndexCommand(String command) {
+        String idxName = command.substring("DROP BUCKET INDEX ".length()).trim();
+        boolean ok = client.dropBucketIndex(currentDatabase, idxName);
+        return ok ? String.format("[SUCCESS] Índice '%s' eliminado correctamente.", idxName)
+                  : String.format("[WARN] No se encontró el índice '%s'.", idxName);
     }
 
     private String replicateClusterConfigToQuorum(String targetNodeId, String role, String host, int grpcPort,

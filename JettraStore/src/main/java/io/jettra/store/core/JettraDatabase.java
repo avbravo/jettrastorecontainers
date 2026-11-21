@@ -54,6 +54,7 @@ public final class JettraDatabase implements AutoCloseable {
     private final Map<String, GeospatialEngine> geospatialEngines = new ConcurrentHashMap<>();
     private final Map<String, ColumnarEngine> columnarEngines = new ConcurrentHashMap<>();
     private final Map<String, io.jettra.store.engine.models.RecordsEngine<?>> recordsEngines = new ConcurrentHashMap<>();
+    private final Map<String, JettraBucketSchema.BucketMetadata> bucketSchemas = new ConcurrentHashMap<>();
 
     public JettraDatabase(String databaseName, JettraStoreConfig config) {
         this(databaseName, config, null);
@@ -82,6 +83,7 @@ public final class JettraDatabase implements AutoCloseable {
 
         // 1. Cargar estado previo de disco si existe
         boolean loaded = loadFromDisk();
+        loadBucketsFromDisk();
 
         // 2. No cargar bases de datos de ejemplo automáticamente al ejecutar JettraStore
         // (solo se instalan si se habilita explícitamente -Djettra.samples.autoload=true)
@@ -2236,6 +2238,172 @@ public final class JettraDatabase implements AutoCloseable {
             io.jettra.store.calc.JettraAggregation.AggregateSpec... specs) {
         List<String> groups = (groupByField != null && !groupByField.isBlank()) ? List.of(groupByField) : Collections.emptyList();
         return aggregate(collection, groups, List.of(specs));
+    }
+
+    // =========================================================================
+    // GESTIÓN DE BUCKETS ILIMITADOS Y ESTRUCTURAS (NONE vs DEFINED)
+    // =========================================================================
+
+    private Path resolveBucketsCatalogFile() {
+        return Path.of(config.getStoragePath(), databaseName + "_buckets.json");
+    }
+
+    public final void loadBucketsFromDisk() {
+        try {
+            List<JettraBucketSchema.BucketMetadata> loaded = JettraBucketSchema.loadBucketsCatalog(resolveBucketsCatalogFile());
+            for (JettraBucketSchema.BucketMetadata meta : loaded) {
+                bucketSchemas.put(meta.compositeKey(), meta);
+                ensureEngineBucketAllocated(meta.engineType(), meta.bucketName());
+            }
+        } catch (Exception ignored) {}
+    }
+
+    public synchronized void saveBucketsToDisk() {
+        try {
+            JettraBucketSchema.saveBucketsCatalog(resolveBucketsCatalogFile(), bucketSchemas.values());
+        } catch (Exception ex) {
+            System.err.printf("[JettraDatabase:%s] Aviso persistiendo catálogo de buckets: %s%n", databaseName, ex.getMessage());
+        }
+    }
+
+    private void ensureEngineBucketAllocated(String engineType, String bucketName) {
+        if (bucketName == null || bucketName.isBlank()) return;
+        String norm = JettraBucketSchema.normalizeEngineType(engineType);
+        switch (norm) {
+            case "VECTOR" -> getVectorEngine(bucketName, 3);
+            case "GRAPH" -> getGraphEngine(bucketName);
+            case "TIMESERIES" -> getTimeSeriesEngine(bucketName);
+            case "KEY_VALUE" -> getKeyValueEngine(bucketName);
+            case "COLUMNAR" -> getColumnarEngine(bucketName);
+            case "GEOSPATIAL" -> getGeospatialEngine(bucketName);
+            default -> getDocumentEngine(bucketName);
+        }
+    }
+
+    /**
+     * Crea o actualiza un bucket dentro de un engine específico de esta base de datos,
+     * soportando buckets ilimitados con estructura {@code NONE} o {@code DEFINED}.
+     */
+    public synchronized JettraBucketSchema.BucketMetadata createBucket(
+            String engineType,
+            String bucketName,
+            JettraBucketSchema.StructureType structureType,
+            List<JettraBucketSchema.AttributeRule> attributes) {
+        assertWritable();
+        if (bucketName == null || bucketName.isBlank()) {
+            throw new IllegalArgumentException("El nombre del bucket es obligatorio.");
+        }
+        String normEngine = JettraBucketSchema.normalizeEngineType(engineType);
+        JettraBucketSchema.StructureType effectiveType = structureType != null ? structureType : JettraBucketSchema.StructureType.NONE;
+        List<JettraBucketSchema.AttributeRule> effectiveAttrs =
+                (effectiveType == JettraBucketSchema.StructureType.DEFINED && attributes != null)
+                        ? attributes : List.of();
+        if (effectiveType == JettraBucketSchema.StructureType.DEFINED && effectiveAttrs.isEmpty()) {
+            throw new IllegalArgumentException("Un bucket con estructura DEFINED debe definir al menos un atributo.");
+        }
+        JettraBucketSchema.BucketMetadata meta = new JettraBucketSchema.BucketMetadata(
+                databaseName, normEngine, bucketName.trim(), effectiveType, effectiveAttrs, System.currentTimeMillis());
+        bucketSchemas.put(meta.compositeKey(), meta);
+        ensureEngineBucketAllocated(normEngine, bucketName.trim());
+        saveBucketsToDisk();
+        saveToDisk();
+        return meta;
+    }
+
+    public synchronized boolean dropBucket(String engineType, String bucketName) {
+        assertWritable();
+        if (bucketName == null || bucketName.isBlank()) return false;
+        String key = JettraBucketSchema.buildKey(engineType, bucketName);
+        boolean removedMeta = bucketSchemas.remove(key) != null;
+        boolean removedCol = dropCollection(bucketName.trim());
+        if (removedMeta) {
+            saveBucketsToDisk();
+        }
+        return removedMeta || removedCol;
+    }
+
+    public JettraBucketSchema.BucketMetadata getBucketMetadata(String engineType, String bucketName) {
+        if (bucketName == null || bucketName.isBlank()) return null;
+        JettraBucketSchema.BucketMetadata exact = bucketSchemas.get(JettraBucketSchema.buildKey(engineType, bucketName));
+        if (exact != null) return exact;
+        return findBucketMetadata(bucketName);
+    }
+
+    public JettraBucketSchema.BucketMetadata findBucketMetadata(String bucketName) {
+        if (bucketName == null || bucketName.isBlank()) return null;
+        for (JettraBucketSchema.BucketMetadata m : bucketSchemas.values()) {
+            if (m.bucketName().equalsIgnoreCase(bucketName.trim())) {
+                return m;
+            }
+        }
+        return null;
+    }
+
+    public List<JettraBucketSchema.BucketMetadata> listBuckets() {
+        List<JettraBucketSchema.BucketMetadata> out = new ArrayList<>(bucketSchemas.values());
+        out.sort(Comparator.comparing(JettraBucketSchema.BucketMetadata::engineType)
+                .thenComparing(JettraBucketSchema.BucketMetadata::bucketName, String.CASE_INSENSITIVE_ORDER));
+        return out;
+    }
+
+    public List<JettraBucketSchema.BucketMetadata> listBucketsByEngine(String engineType) {
+        String norm = JettraBucketSchema.normalizeEngineType(engineType);
+        List<JettraBucketSchema.BucketMetadata> out = new ArrayList<>();
+        for (JettraBucketSchema.BucketMetadata m : bucketSchemas.values()) {
+            if (m.engineType().equalsIgnoreCase(norm)) {
+                out.add(m);
+            }
+        }
+        out.sort(Comparator.comparing(JettraBucketSchema.BucketMetadata::bucketName, String.CASE_INSENSITIVE_ORDER));
+        return out;
+    }
+
+    public JettraBucketSchema.ValidationResult validateBucketRecord(String engineType, String bucketName, Map<String, Object> record) {
+        JettraBucketSchema.BucketMetadata meta = getBucketMetadata(engineType, bucketName);
+        return JettraBucketSchema.validateRecord(meta, record);
+    }
+
+    /**
+     * Inserta o actualiza un registro en un bucket aplicando validación de estructura ({@code NONE}/{@code DEFINED}),
+     * manteniendo coherentes los índices secundarios del bucket y persistiendo en disco.
+     */
+    public synchronized String upsertBucketRecord(String engineType, String bucketName, String id, Map<String, Object> record) {
+        assertWritable();
+        JettraBucketSchema.ValidationResult val = validateBucketRecord(engineType, bucketName, record);
+        if (!val.valid()) {
+            throw new IllegalArgumentException("Validación de estructura fallida para bucket '" + bucketName + "': " + val.getSummary());
+        }
+        String effectiveId = (id != null && !id.isBlank())
+                ? id.trim()
+                : (record != null && record.get("_id") != null ? String.valueOf(record.get("_id")) : UUID.randomUUID().toString());
+        Map<String, Object> payload = new LinkedHashMap<>();
+        if (record != null) payload.putAll(record);
+        payload.put("_id", effectiveId);
+
+        DocumentEngine docEngine = getDocumentEngine(bucketName.trim());
+        Map<String, Object> previous = docEngine.findById(effectiveId);
+        if (previous != null) {
+            indexManager.onDocumentDelete(bucketName.trim(), effectiveId, previous);
+            docEngine.update(effectiveId, payload);
+        } else {
+            docEngine.insert(effectiveId, payload);
+        }
+        indexManager.onDocumentInsert(bucketName.trim(), effectiveId, payload);
+        saveToDisk();
+        return effectiveId;
+    }
+
+    public synchronized boolean deleteBucketRecord(String engineType, String bucketName, String id) {
+        assertWritable();
+        if (bucketName == null || id == null) return false;
+        DocumentEngine docEngine = getDocumentEngine(bucketName.trim());
+        Map<String, Object> previous = docEngine.findById(id);
+        boolean deleted = docEngine.delete(id);
+        if (deleted) {
+            indexManager.onDocumentDelete(bucketName.trim(), id, previous);
+            saveToDisk();
+        }
+        return deleted;
     }
 
 }

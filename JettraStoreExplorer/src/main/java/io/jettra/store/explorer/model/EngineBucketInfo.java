@@ -14,6 +14,8 @@ public class EngineBucketInfo implements Serializable {
     private long totalObjects;
     private long totalBytes;
     private String description;
+    private String structureType = "NONE"; // NONE o DEFINED
+    private List<io.jettra.store.core.JettraBucketSchema.AttributeRule> attributes = new ArrayList<>();
     private List<EngineRecordInfo> sampleRecords = new ArrayList<>();
     private List<EngineIndexInfo> indexes = new ArrayList<>();
     private final Map<String, EngineRecordInfo> recordOverrides = new ConcurrentHashMap<>();
@@ -37,6 +39,14 @@ public class EngineBucketInfo implements Serializable {
     public void setTotalObjects(long o) { this.totalObjects = o; }
     public long getTotalBytes() { return totalBytes; }
     public String getDescription() { return description; }
+    public String getStructureType() { return structureType != null ? structureType : "NONE"; }
+    public void setStructureType(String structureType) {
+        this.structureType = (structureType != null && "DEFINED".equalsIgnoreCase(structureType.trim())) ? "DEFINED" : "NONE";
+    }
+    public List<io.jettra.store.core.JettraBucketSchema.AttributeRule> getAttributes() { return attributes; }
+    public void setAttributes(List<io.jettra.store.core.JettraBucketSchema.AttributeRule> attributes) {
+        this.attributes = attributes != null ? new ArrayList<>(attributes) : new ArrayList<>();
+    }
     public List<EngineRecordInfo> getSampleRecords() { return sampleRecords; }
     public List<EngineIndexInfo> getIndexes() { return indexes; }
     public Map<String, EngineRecordInfo> getRecordOverrides() { return recordOverrides; }

@@ -51,3 +51,21 @@ Cuando desde `/cluster` se agrega un nuevo nodo o se expulsa un nodo secundario:
 
 ## 3. Diseño Responsivo con JettraFlux
 Todas las vistas están construidas exclusivamente con componentes **JettraFlux** (`FluxView`, `Div`, `Datatable`, `Modal`, `JettraButton`, `SelectOne`, etc.), incluyendo soporte de tema claro/oscuro, diálogos superpuestos sobre el formulario origen y tablas responsive adaptadas a resoluciones móviles (ej. `360x780`).
+
+
+---
+
+## 4. Administración de Nodos con Rol `ADMIN` y Zero-Downtime (`/cluster` y `/cluster-config`)
+- **Protección de rol `ADMIN`:** Añadir nodos, remover nodos, apagar nodos y editar/sincronizar `cluster.config` en `/cluster-config` requieren rol global `ADMIN`.
+- **Bloqueo de remoción de nodos activos:** En la vista `/cluster`, si un nodo se encuentra `ACTIVE` (`RUNNING`), el botón **Expulsar** se muestra bloqueado (`Expulsar (Detener primero)`) e informa al operador que primero debe detener el nodo con **Apagar Nodo**. Solo los nodos en estado `INACTIVE` / `OFFLINE` pueden removerse del clúster.
+- **Continuidad operativa (Zero-Downtime):** Al añadir un nuevo nodo o remover un nodo detenido, ni el nodo `PRIMARY` ni los `SECONDARY` activos se detienen; `cluster.config` y las bases de datos convergen automáticamente en segundo plano.
+
+---
+
+## 5. Navegación Jerárquica en Árbol (`Tree`), Buckets `NONE`/`DEFINED` e Índices por Bucket (`/explorer`)
+- **Árbol jerárquico en `/explorer`:** Panel lateral construido con componentes JettraFlux que organiza la navegación en 4 niveles:
+  `Base de Datos` → `Tipo de Engine` (`DOCUMENT`, `JAVA_RECORD`, `KEY_VALUE`, `VECTOR`, `GRAPH`, `TIMESERIES`, `COLUMNAR`, `GEOSPATIAL`, `RELATIONAL`) → `Bucket [NONE | DEFINED]` → `Registros`.
+- **Creación de Buckets ilimitados (`+ Nuevo Bucket`):** Permite crear buckets dentro de cualquier engine eligiendo:
+  - **`NONE`**: esquema flexible sin validación rígida.
+  - **`DEFINED`**: esquema estructurado mediante atributos JSON (`atribute_name`, `type_atribute`, `jettra_rules`, `description`). Al insertar o editar registros, `JettraStoreExplorer` valida el contenido contra las reglas del bucket y muestra una alerta clara en caso de incumplimiento.
+- **Panel de Índices por Bucket (`Accion-4`):** Debajo de la tabla de registros del bucket activo se muestra su esquema (`NONE` o tabla de atributos `DEFINED`), la tabla de índices asociados (`Nombre`, `Campo(s)`, `Tipo`, `Unicidad`, `Estado`, botón `Eliminar`) y un formulario directo para crear nuevos índices (`+ Crear Índice`).

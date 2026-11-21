@@ -1280,3 +1280,74 @@ public class IndexManagementDemo {
 | **Distribución** | `clusterDistributed(db)`, `clusterDistributedAll()` | Sincronización Raft de bases de datos y registros. |
 | **Salud del Clúster**| `checkClusterHealth()` | Diagnóstico de disponibilidad de nodos. |
 
+
+
+---
+
+## Capítulo 15: Administración Zero-Downtime de Nodos (Rol `admin`), Buckets `NONE`/`DEFINED` e Índices por Bucket
+
+### 15.1 Control de Acceso por Rol `admin`
+Las operaciones de administración de topología del clúster y de gestión de `cluster.config` en `JettraClient` están **restringidas exclusivamente a usuarios con rol `admin`** (o `super_admin`). Si un cliente configurado con otro rol intenta invocarlas, el driver lanza `SecurityException`.
+
+```java
+JettraClientConfig adminCfg = JettraClientConfig.builder()
+        .addClusterNode("127.0.0.1", 50001)
+        .credentials("admin", "admin-jettra")
+        .role("admin")
+        .build();
+
+JettraClient client = JettraClient.connect(adminCfg);
+```
+
+### 15.2 Añadir y Remover Nodos sin Detener Nodos Activos (Zero-Downtime)
+- **`addClusterNode(nodeId, ip, grpcPort, restPort, role)`**: Valida rol `admin` y unicidad de ID/puertos, actualiza atómicamente `cluster.config` y propaga la topología al `PRIMARY` y a los `SECONDARY` **sin detener ni reiniciar ningún nodo en ejecución**.
+- **`removeStoppedClusterNode(nodeId)`**: **Regla estricta:** verifica conectividad TCP/REST antes de proceder. Si el nodo objetivo está en ejecución (`RUNNING`), rechaza la operación con `IllegalStateException` indicando que primero debe detenerse. Si está detenido, lo elimina de `cluster.config` y del anillo y converge el clúster sin afectar a los demás nodos activos.
+- **`readPrimaryClusterConfig()` / `updatePrimaryClusterConfig(content, syncToCluster)`**: Lectura, validación de integridad, escritura atómica y propagación del archivo `cluster.config` del nodo `PRIMARY` (requiere rol `admin`).
+
+```java
+// Añadir nodo-04 en caliente (zero-downtime)
+client.addClusterNode("node-04", "127.0.0.1", 50004, 60004, "SECONDARY");
+
+// Remover un nodo (solo si está DETENIDO; lanza IllegalStateException si sigue RUNNING)
+client.removeStoppedClusterNode("node-04");
+
+// Leer y actualizar cluster.config del PRIMARY (solo rol admin)
+String cfg = client.readPrimaryClusterConfig();
+client.updatePrimaryClusterConfig(cfg, true);
+```
+
+### 15.3 Buckets Ilimitados (`NONE` vs `DEFINED`) y Validación
+```java
+// 1. Bucket con estructura NONE (esquema libre)
+client.createBucket("pruebadb", "DOCUMENT", "Persona", "NONE", "[]");
+client.upsertBucketRecord("pruebadb", "DOCUMENT", "Persona", null, Map.of("id", 1, "name", "aristides"));
+client.upsertBucketRecord("pruebadb", "DOCUMENT", "Persona", null, Map.of("apellido", "Perez", "pais", "Panama"));
+
+// 2. Bucket con estructura DEFINED (validación de tipos y jettra_rules)
+String paisSchema = """
+    [
+      { "atribute_name": "name", "type_atribute": "String", "jettra_rules": "NOT_NULL", "description": "nombre" },
+      { "atribute_name": "siglas", "type_atribute": "String", "jettra_rules": "NOT_NULL", "description": "siglas" }
+    ]
+    """;
+client.createBucket("pruebadb", "JAVA_RECORD", "Pais", "DEFINED", paisSchema);
+
+// Inserción válida
+client.upsertBucketRecord("pruebadb", "JAVA_RECORD", "Pais", "pa-1", Map.of("name", "Panama", "siglas", "PA"));
+
+// Inserción inválida (falta 'siglas' NOT_NULL -> lanza IllegalArgumentException descriptiva)
+client.upsertBucketRecord("pruebadb", "JAVA_RECORD", "Pais", "pa-2", Map.of("name", "Costa Rica"));
+```
+
+### 15.4 Administración de Índices por Bucket (`Accion-4`)
+```java
+// Crear índice secundario sobre un bucket específico
+client.createBucketIndex("pruebadb", "Pais", "idx_pais_siglas", "siglas", "BTREE", true);
+
+// Listar índices del bucket y buscar por índice
+var indices = client.listBucketIndexes("pruebadb", "Pais");
+var ids = client.findIdsByBucketIndex("pruebadb", "Pais", "siglas", "PA");
+
+// Eliminar índice
+client.dropBucketIndex("pruebadb", "idx_pais_siglas");
+```

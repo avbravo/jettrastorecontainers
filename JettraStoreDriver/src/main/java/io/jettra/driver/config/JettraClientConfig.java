@@ -9,6 +9,7 @@ public final class JettraClientConfig {
     private final List<String> clusterEndpoints;
     private final String username;
     private final String password;
+    private final String role;
     private final Duration connectionTimeout;
     private final boolean enableVirtualThreads;
     private final boolean clusterMultinodeActive;
@@ -19,6 +20,11 @@ public final class JettraClientConfig {
         this.clusterEndpoints = List.copyOf(builder.clusterEndpoints);
         this.username = builder.username;
         this.password = builder.password;
+        if (builder.role != null && !builder.role.isBlank()) {
+            this.role = builder.role.trim();
+        } else {
+            this.role = "admin".equalsIgnoreCase(builder.username) ? "admin" : "user";
+        }
         this.connectionTimeout = builder.connectionTimeout;
         this.enableVirtualThreads = builder.enableVirtualThreads;
         this.clusterMultinodeActive = builder.clusterMultinodeActive;
@@ -34,6 +40,10 @@ public final class JettraClientConfig {
     public List<String> getClusterEndpoints() { return clusterEndpoints; }
     public String getUsername() { return username; }
     public String getPassword() { return password; }
+    public String getRole() { return role; }
+    public boolean isAdmin() {
+        return role != null && ("admin".equalsIgnoreCase(role) || "super_admin".equalsIgnoreCase(role));
+    }
     public Duration getConnectionTimeout() { return connectionTimeout; }
     public boolean isEnableVirtualThreads() { return enableVirtualThreads; }
     public boolean isClusterMultinodeActive() { return clusterMultinodeActive; }
@@ -45,6 +55,7 @@ public final class JettraClientConfig {
         private final List<String> clusterEndpoints = new ArrayList<>();
         private String username = "admin";
         private String password = "admin-jettra";
+        private String role;
         private Duration connectionTimeout = Duration.ofMillis(1000);
         private boolean enableVirtualThreads = true;
         private boolean clusterMultinodeActive = true;
@@ -64,6 +75,11 @@ public final class JettraClientConfig {
         public Builder credentials(String username, String password) {
             this.username = username;
             this.password = password;
+            return this;
+        }
+
+        public Builder role(String role) {
+            this.role = role;
             return this;
         }
 

@@ -2568,3 +2568,47 @@ Cada vez que el usuario ejecuta alguno de los siguientes comandos en `JettraStor
 | `REMOVE NODE <nodeId>` | Remueve el nodo del anillo Raft y lo elimina de `cluster.nodes`. |
 
 > También puede especificarse un archivo externo mediante la propiedad JVM `-Djettra.shell.config.file=/ruta/microprofile-config.properties` o `-Dmicroprofile.config.file=/ruta/microprofile-config.properties`.
+
+
+---
+
+## Capítulo 19: Administración de Nodos con Validación de Estado, Buckets (`NONE`/`DEFINED`) e Índices por Bucket
+
+### 19.1 Control de Acceso `admin` y Regla Estricta de Remoción de Nodos
+Los comandos administrativos del clúster están restringidos exclusivamente a sesiones con rol `admin` / `SUPER_ADMIN`:
+- `ADD NODE <nodeId> <host> <grpcPort> [PRIMARY|SECONDARY] [restPort]` — Agrega el nodo en caliente (**zero-downtime**, sin detener ningún nodo activo), replica `cluster.config` y sincroniza las bases de datos hacia el nuevo nodo.
+- `REMOVE NODE <nodeId>` / `CLUSTER REMOVE-NODE <nodeId>` — **Regla estricta:** antes de remover, la consola comprueba si el nodo está activo (`RUNNING`). Si el nodo sigue encendido, **bloquea la remoción** e informa:
+  ```text
+  [ERROR] No se puede remover el nodo 'node-04' (127.0.0.1:50004) porque actualmente está en ejecución (RUNNING / ACTIVO).
+          Primero debe detener el nodo (ej. STOP NODE node-04) y luego ejecutar REMOVE NODE node-04.
+  ```
+  Una vez detenido, la remoción actualiza `cluster.config` y `microprofile-config.properties` sin detener los demás nodos activos.
+- `SHOW CLUSTER CONFIG` — Muestra el archivo `cluster.config` vigente en el nodo `PRIMARY` (solo `admin`).
+- `SYNC CLUSTER CONFIG` — Valida y sincroniza `cluster.config` en todos los nodos activos sin detener ninguno (solo `admin`).
+
+### 19.2 Gestión de Buckets Ilimitados y Validación de Estructuras (`NONE` vs `DEFINED`)
+```sql
+-- Bucket con estructura libre (NONE)
+CREATE BUCKET Persona ENGINE DOCUMENT STRUCTURE NONE
+INSERT BUCKET Persona {"id": 1, "name": "aristides"}
+INSERT BUCKET Persona {"apellido": "Perez", "pais": "Panama"}
+
+-- Bucket con estructura definida (DEFINED)
+CREATE BUCKET Pais ENGINE JAVA_RECORD STRUCTURE DEFINED [{"atribute_name":"name","type_atribute":"String","jettra_rules":"NOT_NULL","description":"nombre"},{"atribute_name":"siglas","type_atribute":"String","jettra_rules":"NOT_NULL","description":"siglas"}]
+
+-- Consultar estructura e índices del bucket
+DESCRIBE BUCKET Pais
+
+-- Inserción válida
+INSERT BUCKET Pais {"name": "Panama", "siglas": "PA"}
+
+-- Inserción inválida -> la consola emite alerta clara [VALIDATION ALERT]
+INSERT BUCKET Pais {"name": "Panama"}
+```
+
+### 19.3 Administración de Índices por Bucket (`Accion-4`)
+```sql
+CREATE BUCKET INDEX idx_pais_siglas ON Pais (siglas) TYPE BTREE UNIQUE
+SHOW BUCKET INDEXES Pais
+DROP BUCKET INDEX idx_pais_siglas
+```

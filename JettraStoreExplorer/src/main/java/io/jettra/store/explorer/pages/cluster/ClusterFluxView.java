@@ -303,9 +303,21 @@ public class ClusterFluxView extends FluxView {
         actionWidgets.add(exploreBtn);
 
         if (!"node-01".equalsIgnoreCase(node.getId())) {
-            Link deleteBtn = Link.of("/cluster?action=remove_node&nodeId=" + node.getId(), "Expulsar");
-            deleteBtn.modifier(new Modifier().cssClass("app-btn-danger").attribute("onclick", "return confirm('¿Está seguro de expulsar este nodo del clúster?');"));
-            actionWidgets.add(deleteBtn);
+            if (isActive) {
+                JettraButton blockedRemoveBtn = JettraButton.of("Expulsar (Detener primero)").severity(JettraButton.Severity.SECONDARY);
+                blockedRemoveBtn.modifier(new Modifier()
+                    .cssClass("app-btn-secondary")
+                    .style("opacity: 0.6; cursor: not-allowed;")
+                    .attribute("title", "No se puede remover un nodo activo (RUNNING). Primero debe detener el nodo y luego removerlo.")
+                    .attribute("onclick", "alert('Operación bloqueada: El nodo " + jsSafeId + " está ACTIVO (RUNNING). Primero debe detenerlo con el botón Apagar Nodo y luego removerlo del clúster.'); return false;"));
+                actionWidgets.add(blockedRemoveBtn);
+            } else {
+                Link deleteBtn = Link.of("/cluster?action=remove_node&nodeId=" + node.getId(), "Expulsar");
+                deleteBtn.modifier(new Modifier()
+                    .cssClass("app-btn-danger")
+                    .attribute("onclick", "return confirm('¿Está seguro de remover el nodo detenido " + jsSafeId + " del clúster? Los demás nodos activos seguirán operando sin interrupciones.');"));
+                actionWidgets.add(deleteBtn);
+            }
         }
 
         Row actionsRow = Row.of(actionWidgets.toArray(new Widget[0]));

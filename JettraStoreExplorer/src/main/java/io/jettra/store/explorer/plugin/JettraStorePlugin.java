@@ -1606,7 +1606,14 @@ public class JettraStorePlugin {
         String cleanId = id.trim();
         ServerNodeInfo existing = getNodeById(cleanId);
         if (existing != null) {
-            lifecycleManager.shutdownNode(existing);
+            // Regla estricta: NO se permite remover un nodo en ejecución (RUNNING / activo).
+            // Primero debe detenerse el nodo y luego removerlo.
+            if (existing.isActive()) {
+                this.lastNodeOperationError = "No se puede remover el nodo '" + cleanId
+                        + "' porque se encuentra en ejecución (RUNNING / ACTIVO). Primero debe detener el nodo con 'Apagar Nodo' y luego removerlo del clúster.";
+                logPoliceIncident("Raft Quorum K9", "Remoción bloqueada [" + cleanId + "]: el nodo sigue ACTIVO", "WARN", "Primero detener el nodo");
+                return false;
+            }
         }
         boolean removed = serverNodes.removeIf(n -> n.getId().equalsIgnoreCase(cleanId));
         boolean removedFromDiskConfig = io.jettra.store.core.JettraConfigValidator.removeDynamicNodeFromClusterConfig(cleanId);
@@ -1616,11 +1623,11 @@ public class JettraStorePlugin {
             saveClusterNodes();
             persistClusterNodesToMicroprofileConfig();
             replicateClusterConfigToNodes();
-            logPoliceIncident("Raft Quorum K9", "Nodo expulsado del clúster y limpiado de cluster.config: " + cleanId, "WARN", "microprofile-config.properties y cluster.config replicados en el clúster");
+            logPoliceIncident("Raft Quorum K9", "Nodo detenido expulsado del clúster y limpiado de cluster.config (zero-downtime): " + cleanId, "WARN", "microprofile-config.properties y cluster.config replicados sin detener nodos activos");
             try {
                 io.jettra.store.cluster.JettraClusterEventBus.getInstance().publish(
                     io.jettra.store.cluster.ClusterLiveEvent.TYPE_NODE_OFFLINE,
-                    cleanId, "cluster", "Nodo expulsado del quórum", "");
+                    cleanId, "cluster", "Nodo detenido removido del quórum (zero-downtime)", "");
             } catch (Throwable ignored) {}
         }
         return removed || removedFromDiskConfig;
@@ -2209,22 +2216,79 @@ public class JettraStorePlugin {
         return removed;
     }
 
+    private volatile String lastBucketOperationError;
+
+    public String getLastBucketOperationError() {
+        return lastBucketOperationError;
+    }
+
     public synchronized boolean addBucket(String dbName, String bucketName, String engineType, String description) {
-        if (dbName == null || bucketName == null || bucketName.isBlank()) return false;
-        List<EngineBucketInfo> buckets = databasesCatalog.get(dbName);
-        if (buckets == null) return false;
-        for (EngineBucketInfo b : buckets) {
-            if (b.getBucketName().equalsIgnoreCase(bucketName.trim())) return false;
+        return addBucket(dbName, bucketName, engineType, description, "NONE", "[]");
+    }
+
+    public synchronized boolean addBucket(String dbName, String bucketName, String engineType, String description,
+                                          String structureType, String attributesJson) {
+        this.lastBucketOperationError = null;
+        if (dbName == null || bucketName == null || bucketName.isBlank()) {
+            this.lastBucketOperationError = "La base de datos y el nombre del bucket son obligatorios.";
+            return false;
         }
-        String eType = (engineType != null && !engineType.isBlank()) ? engineType.trim().toUpperCase() : "DOCUMENT";
-        String desc = (description != null && !description.isBlank()) ? description.trim() : "Bucket " + bucketName;
-        EngineBucketInfo newB = new EngineBucketInfo(dbName, bucketName.trim(), eType, 0L, 0L, desc);
+        List<EngineBucketInfo> buckets = databasesCatalog.computeIfAbsent(dbName.trim(), k -> new ArrayList<>());
+        String eType = io.jettra.store.core.JettraBucketSchema.normalizeEngineType(engineType);
+        for (EngineBucketInfo b : buckets) {
+            if (b.getBucketName().equalsIgnoreCase(bucketName.trim()) && b.getEngineType().equalsIgnoreCase(eType)) {
+                this.lastBucketOperationError = "Ya existe el bucket '" + bucketName.trim() + "' en el engine '" + eType + "'.";
+                return false;
+            }
+        }
+        var st = io.jettra.store.core.JettraBucketSchema.StructureType.fromString(structureType);
+        List<io.jettra.store.core.JettraBucketSchema.AttributeRule> parsedAttrs = List.of();
+        if (st == io.jettra.store.core.JettraBucketSchema.StructureType.DEFINED) {
+            parsedAttrs = io.jettra.store.core.JettraBucketSchema.parseAttributesJson(attributesJson);
+            if (parsedAttrs.isEmpty()) {
+                this.lastBucketOperationError = "Un bucket con estructura DEFINED debe incluir al menos un atributo JSON válido.";
+                return false;
+            }
+        }
+        String desc = (description != null && !description.isBlank())
+                ? description.trim()
+                : "Bucket " + bucketName.trim() + " [" + st.name() + "]";
+        EngineBucketInfo newB = new EngineBucketInfo(dbName.trim(), bucketName.trim(), eType, 0L, 0L, desc);
+        newB.setStructureType(st.name());
+        newB.setAttributes(parsedAttrs);
         newB.getIndexes().add(new EngineIndexInfo("idx_" + bucketName.toLowerCase().replaceAll("[^a-z0-9]", "_") + "_id", "id", "BTREE", true, "READY"));
         buckets.add(newB);
         sendFrameToPrimaryNode(io.jettra.store.cluster.JettraRaftFrame.createEngine(
             1L, 0L, "jettra-explorer", dbName.trim(), bucketName.trim(), eType, new byte[0]));
-        logPoliceIncident("Catalog Patrol", "Nuevo Bucket/Motor '" + bucketName + "' [" + eType + "] añadido a " + dbName, "OK", "MemTable y Bloom Filters asignados");
+        logPoliceIncident("Catalog Patrol",
+            "Nuevo Bucket '" + bucketName + "' [" + eType + " | " + st.name() + "] añadido a " + dbName,
+            "OK", parsedAttrs.size() + " atributo(s) definidos");
         return true;
+    }
+
+    public io.jettra.store.core.JettraBucketSchema.ValidationResult validateRecordForBucket(String dbName, String bucketName, String detailsJson) {
+        EngineBucketInfo bucket = getBucket(dbName, bucketName);
+        if (bucket == null || !"DEFINED".equalsIgnoreCase(bucket.getStructureType())) {
+            return io.jettra.store.core.JettraBucketSchema.ValidationResult.ok();
+        }
+        Map<String, Object> recordMap = new LinkedHashMap<>();
+        if (detailsJson != null && !detailsJson.isBlank()) {
+            try {
+                io.jettra.json.JettraJson parser = new io.jettra.json.JettraJson();
+                Object parsed = parser.parse(detailsJson.trim());
+                if (parsed instanceof Map<?, ?> m) {
+                    m.forEach((k, v) -> recordMap.put(String.valueOf(k), v));
+                }
+            } catch (Exception e) {
+                return io.jettra.store.core.JettraBucketSchema.ValidationResult.fail(
+                        List.of("JSON inválido para bucket DEFINED '" + bucketName + "': " + e.getMessage()));
+            }
+        }
+        var meta = new io.jettra.store.core.JettraBucketSchema.BucketMetadata(
+                dbName, bucket.getEngineType(), bucket.getBucketName(),
+                io.jettra.store.core.JettraBucketSchema.StructureType.DEFINED,
+                bucket.getAttributes(), 0L);
+        return io.jettra.store.core.JettraBucketSchema.validateRecord(meta, recordMap);
     }
 
     public synchronized boolean deleteBucket(String dbName, String bucketName) {
