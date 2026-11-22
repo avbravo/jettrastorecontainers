@@ -118,7 +118,21 @@ public class JettraStoreShellTest {
 
     @Test
     @DisplayName("Debe procesar status, administración de nodos y lazy reference")
-    public void testStatusNodesAndLazyReference() {
+    public void testStatusNodesAndLazyReference() throws Exception {
+        java.nio.file.Path tempCluster = java.nio.file.Files.createTempFile("jettra_status_cluster_", ".config");
+        java.nio.file.Path tempMp = java.nio.file.Files.createTempFile("jettra_status_mp_", ".properties");
+        String prevCluster = System.getProperty("cluster.config.path");
+        String prevMp = System.getProperty("jettra.shell.config.file");
+        java.nio.file.Files.writeString(tempCluster,
+                "cluster.multinode.active=on\n"
+                        + "cluster.node.1.id=node-01\ncluster.node.1.role=PRIMARY\ncluster.node.1.ip=127.0.0.1\ncluster.node.1.grpc.port=58101\ncluster.node.1.rest.port=63101\n"
+                        + "cluster.node.2.id=node-02\ncluster.node.2.role=SECONDARY\ncluster.node.2.ip=127.0.0.1\ncluster.node.2.grpc.port=58102\ncluster.node.2.rest.port=63102\n"
+                        + "cluster.node.3.id=node-03\ncluster.node.3.role=SECONDARY\ncluster.node.3.ip=127.0.0.1\ncluster.node.3.grpc.port=58103\ncluster.node.3.rest.port=63103\n");
+        java.nio.file.Files.writeString(tempMp,
+                "cluster.nodes=node-01:127.0.0.1:58101,node-02:127.0.0.1:58102,node-03:127.0.0.1:58103\n");
+        System.setProperty("cluster.config.path", tempCluster.toAbsolutePath().toString());
+        System.setProperty("jettra.shell.config.file", tempMp.toAbsolutePath().toString());
+        try {
         JettraStoreShellApp shell = new JettraStoreShellApp(true);
 
         // 1. Telemetría de recursos con status
@@ -170,6 +184,14 @@ public class JettraStoreShellTest {
 
         String smRam = shell.executeCommand("STORAGE_MODE JVM_RAM");
         assertTrue(smRam.contains("JVM-RAM"));
+        } finally {
+            if (prevCluster == null) System.clearProperty("cluster.config.path");
+            else System.setProperty("cluster.config.path", prevCluster);
+            if (prevMp == null) System.clearProperty("jettra.shell.config.file");
+            else System.setProperty("jettra.shell.config.file", prevMp);
+            java.nio.file.Files.deleteIfExists(tempCluster);
+            java.nio.file.Files.deleteIfExists(tempMp);
+        }
     }
 
     @Test
@@ -463,7 +485,16 @@ public class JettraStoreShellTest {
 
     @Test
     @DisplayName("show dbs debe ejecutarse de forma perezosa (lazy) sin cargar todo el contenido a RAM")
-    public void testShowDatabasesLazyLoadingAndNoOOM() {
+    public void testShowDatabasesLazyLoadingAndNoOOM() throws Exception {
+        java.nio.file.Path tempStorage = java.nio.file.Files.createTempDirectory("jettra_lazy_dbs_");
+        java.nio.file.Path tempCluster = java.nio.file.Files.createTempFile("jettra_lazy_cluster_", ".config");
+        java.nio.file.Files.writeString(tempCluster,
+                "cluster.multinode.active=off\ncluster.node.1.id=node-01\ncluster.node.1.role=PRIMARY\ncluster.node.1.ip=127.0.0.1\ncluster.node.1.grpc.port=59201\ncluster.node.1.rest.port=64201\n",
+                java.nio.charset.StandardCharsets.UTF_8);
+        String prevStorage = System.getProperty("jettra.storage.path");
+        String prevCluster = System.getProperty("cluster.config.path");
+        System.setProperty("jettra.storage.path", tempStorage.toAbsolutePath().toString());
+        System.setProperty("cluster.config.path", tempCluster.toAbsolutePath().toString());
         try (JettraClient client = JettraClient.connect("127.0.0.1", 59201, "admin", "admin-jettra")) {
             JettraStoreShellApp shell = new JettraStoreShellApp(client);
 
@@ -483,6 +514,18 @@ public class JettraStoreShellTest {
             String showDatabases = shell.executeCommand("show databases");
             assertTrue(showDatabases.contains("lazy_test_db"));
             shell.executeCommand("DROP DATABASE lazy_test_db");
+        } finally {
+            if (prevStorage == null) {
+                System.clearProperty("jettra.storage.path");
+            } else {
+                System.setProperty("jettra.storage.path", prevStorage);
+            }
+            if (prevCluster == null) {
+                System.clearProperty("cluster.config.path");
+            } else {
+                System.setProperty("cluster.config.path", prevCluster);
+            }
+            java.nio.file.Files.deleteIfExists(tempCluster);
         }
     }
 
@@ -928,23 +971,31 @@ public class JettraStoreShellTest {
     @DisplayName("Debe cargar cluster.nodes desde microprofile-config.properties y actualizarlo al agregar o remover nodos/conexiones")
     public void testMicroprofileClusterNodesLoadAndPersist() throws Exception {
         java.nio.file.Path tempMp = java.nio.file.Files.createTempFile("jettra_shell_mp_", ".properties");
+        java.nio.file.Path tempCluster = java.nio.file.Files.createTempFile("jettra_shell_cluster_", ".config");
         String prevCfg = System.getProperty("jettra.shell.config.file");
+        String prevCluster = System.getProperty("cluster.config.path");
         try {
+            java.nio.file.Files.writeString(tempCluster,
+                    "cluster.multinode.active=on\n"
+                            + "cluster.node.1.id=node-01\ncluster.node.1.role=PRIMARY\ncluster.node.1.ip=127.0.0.1\ncluster.node.1.grpc.port=55001\ncluster.node.1.rest.port=65001\n"
+                            + "cluster.node.2.id=node-02\ncluster.node.2.role=SECONDARY\ncluster.node.2.ip=127.0.0.1\ncluster.node.2.grpc.port=55002\ncluster.node.2.rest.port=65002\n",
+                    java.nio.charset.StandardCharsets.UTF_8);
+            System.setProperty("cluster.config.path", tempCluster.toAbsolutePath().toString());
             java.nio.file.Files.writeString(tempMp,
-                    "# JettraStore Shell Test Config\napp.title=JettraStore Shell\ncluster.nodes=node-01:127.0.0.1:50001,node-02:127.0.0.1:50002\n",
+                    "# JettraStore Shell Test Config\napp.title=JettraStore Shell\ncluster.nodes=node-01:127.0.0.1:55001,node-02:127.0.0.1:55002\n",
                     java.nio.charset.StandardCharsets.UTF_8);
             System.setProperty("jettra.shell.config.file", tempMp.toAbsolutePath().toString());
 
-            try (JettraClient client = JettraClient.connect("127.0.0.1", 50001, "admin", "admin-jettra")) {
+            try (JettraClient client = JettraClient.connect("127.0.0.1", 55001, "admin", "admin-jettra")) {
                 JettraStoreShellApp shell = new JettraStoreShellApp(client);
 
                 // 1. Verificar carga inicial desde microprofile-config.properties en menú de
                 // conexiones y LIST CONNECTIONS
                 String menuBefore = shell.getConnectionsMenuDisplay();
                 assertTrue(menuBefore.contains("node-01"));
-                assertTrue(menuBefore.contains("127.0.0.1:50001"));
+                assertTrue(menuBefore.contains("127.0.0.1:55001"));
                 assertTrue(menuBefore.contains("node-02"));
-                assertTrue(menuBefore.contains("127.0.0.1:50002"));
+                assertTrue(menuBefore.contains("127.0.0.1:55002"));
                 assertEquals(2, shell.getOrderedConnectionsList().size());
 
                 String listBefore = shell.executeCommand("LIST CONNECTIONS");
@@ -953,24 +1004,24 @@ public class JettraStoreShellTest {
 
                 // 2. Guardar nueva conexión y verificar actualización en
                 // microprofile-config.properties
-                String saveRes = shell.executeCommand("SAVE CONNECTION node-04 127.0.0.1 50004 admin");
+                String saveRes = shell.executeCommand("SAVE CONNECTION node-04 127.0.0.1 55004 admin");
                 assertTrue(saveRes.contains("[SUCCESS]"));
                 String mpAfterSave = java.nio.file.Files.readString(tempMp, java.nio.charset.StandardCharsets.UTF_8);
-                assertTrue(mpAfterSave.contains("node-04:127.0.0.1:50004"));
+                assertTrue(mpAfterSave.contains("node-04:127.0.0.1:55004"));
 
                 // 3. Agregar nodo con ADD NODE y verificar actualización en
                 // microprofile-config.properties
-                String addRes = shell.executeCommand("ADD NODE node-05 127.0.0.1 50005 SECONDARY");
+                String addRes = shell.executeCommand("ADD NODE node-05 127.0.0.1 55005 SECONDARY 65005");
                 assertTrue(addRes.contains("[SUCCESS]"));
                 String mpAfterAdd = java.nio.file.Files.readString(tempMp, java.nio.charset.StandardCharsets.UTF_8);
-                assertTrue(mpAfterAdd.contains("node-05:127.0.0.1:50005"));
+                assertTrue(mpAfterAdd.contains("node-05:127.0.0.1:55005"));
 
                 // 4. Remover nodo con REMOVE NODE y verificar eliminación en
                 // microprofile-config.properties
                 String remRes = shell.executeCommand("REMOVE NODE node-05");
                 assertTrue(remRes.contains("[SUCCESS]"));
                 String mpAfterRem = java.nio.file.Files.readString(tempMp, java.nio.charset.StandardCharsets.UTF_8);
-                assertFalse(mpAfterRem.contains("node-05:127.0.0.1:50005"));
+                assertFalse(mpAfterRem.contains("node-05:127.0.0.1:55005"));
 
                 // Limpiar node-04
                 shell.executeCommand("REMOVE CONNECTION node-04");
@@ -981,6 +1032,12 @@ public class JettraStoreShellTest {
             } else {
                 System.setProperty("jettra.shell.config.file", prevCfg);
             }
+            if (prevCluster == null) {
+                System.clearProperty("cluster.config.path");
+            } else {
+                System.setProperty("cluster.config.path", prevCluster);
+            }
+            java.nio.file.Files.deleteIfExists(tempCluster);
             java.nio.file.Files.deleteIfExists(tempMp);
         }
     }

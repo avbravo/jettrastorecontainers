@@ -109,6 +109,102 @@ public final class JettraStoreShellApp implements AutoCloseable {
         this.currentPort = 50001;
         if (this.client != null) {
             registerSentinelListener();
+            registerClusterConfigSyncListener();
+        }
+    }
+
+    private final java.util.concurrent.atomic.AtomicBoolean clusterConfigSyncInProgress = new java.util.concurrent.atomic.AtomicBoolean(false);
+    private volatile boolean clusterEventListenerRegistered = false;
+
+    private void registerClusterConfigSyncListener() {
+        if (clusterEventListenerRegistered) return;
+        clusterEventListenerRegistered = true;
+        try {
+            io.jettra.store.cluster.JettraClusterEventBus.getInstance().subscribe(event -> {
+                if (event == null || event.type() == null) return;
+                String t = event.type();
+                if (io.jettra.store.cluster.ClusterLiveEvent.TYPE_NODE_ONLINE.equals(t)
+                        || io.jettra.store.cluster.ClusterLiveEvent.TYPE_NODE_OFFLINE.equals(t)
+                        || io.jettra.store.cluster.ClusterLiveEvent.TYPE_LEADER_PROMOTED.equals(t)
+                        || (io.jettra.store.cluster.ClusterLiveEvent.TYPE_DATA_TRANSFER.equals(t)
+                            && "cluster.config".equalsIgnoreCase(event.details()))) {
+                    Thread.ofVirtual().name("jettra-shell-cluster-cfg-sync").start(this::syncLocalClusterConfigFromPrimary);
+                }
+            });
+        } catch (Throwable ignored) {}
+    }
+
+    /**
+     * Obtiene el archivo cluster.config vigente directamente del nodo PRIMARY al que está conectada
+     * la consola y lo persiste atómicamente en disco local para mantener sincronizado el clúster.
+     */
+    public boolean syncLocalClusterConfigFromPrimary() {
+        if (!clusterConfigSyncInProgress.compareAndSet(false, true)) {
+            return false;
+        }
+        try {
+            List<String> candidates = new ArrayList<>();
+            if (client != null && client.getConfig() != null && !client.getConfig().getClusterEndpoints().isEmpty()) {
+                for (String ep : client.getConfig().getClusterEndpoints()) {
+                    if (ep != null && !ep.isBlank() && !candidates.contains(ep.trim())) {
+                        candidates.add(ep.trim());
+                    }
+                }
+            } else if (currentHost != null && !currentHost.isBlank() && currentPort > 0) {
+                candidates.add(currentHost.trim() + ":" + currentPort);
+            }
+            for (String ep : candidates) {
+                String[] parts = ep.split(":");
+                if (parts.length < 2) continue;
+                String h = parts[0].trim();
+                int p;
+                try { p = Integer.parseInt(parts[1].trim()); } catch (Exception e) { continue; }
+                try (Socket s = new Socket()) {
+                    s.setTcpNoDelay(true);
+                    s.connect(new InetSocketAddress(h, p), 400);
+                    s.setSoTimeout(600);
+                    try (BufferedOutputStream bos = new BufferedOutputStream(s.getOutputStream(), 8192);
+                         BufferedInputStream bis = new BufferedInputStream(s.getInputStream(), 8192)) {
+                        JettraClusterProtocol.writeFrame(bos, JettraRaftFrame.getClusterConfigReq(1L, "jettra-shell-sync"));
+                        JettraRaftFrame resp = JettraClusterProtocol.readFrame(bis);
+                        if (resp != null && resp.frameType() == JettraRaftFrame.TYPE_GET_CLUSTER_CONFIG_RESP
+                                && resp.payload() != null && resp.payload().length > 0) {
+                            byte[] cfgBytes = resp.payload();
+                            if (JettraConfigValidator.validateClusterConfigIntegrity(cfgBytes).isValid()) {
+                                Path localFile = JettraConfigValidator.locateClusterConfigFile();
+                                if (localFile == null) {
+                                    localFile = Path.of(JettraConfigValidator.DEFAULT_CLUSTER_CONFIG_PATH);
+                                }
+                                JettraConfigValidator.writeClusterConfigAtomically(localFile, cfgBytes);
+                                Properties props = new Properties();
+                                try (var bais = new java.io.ByteArrayInputStream(cfgBytes)) {
+                                    props.load(bais);
+                                }
+                                List<JettraConfigValidator.ClusterNodeInfo> parsed = JettraConfigValidator.parseClusterNodes(props);
+                                if (!parsed.isEmpty() && client != null && client.getRingEngine() != null) {
+                                    Set<String> liveIds = new HashSet<>();
+                                    for (var cn : parsed) {
+                                        liveIds.add(cn.id().toLowerCase(Locale.ROOT));
+                                        ClusterNode.Role r = "PRIMARY".equalsIgnoreCase(cn.role()) ? ClusterNode.Role.PRIMARY : ClusterNode.Role.SECONDARY;
+                                        if (client.getRingEngine().getPeer(cn.id()) == null) {
+                                            client.getRingEngine().registerPeer(new ClusterNode(cn.id(), cn.ip(), cn.grpcPort(), r));
+                                        }
+                                    }
+                                    for (ClusterNode existing : new ArrayList<>(client.getRingEngine().getPeers())) {
+                                        if (!liveIds.contains(existing.getId().toLowerCase(Locale.ROOT))) {
+                                            client.getRingEngine().removePeer(existing.getId());
+                                        }
+                                    }
+                                }
+                                return true;
+                            }
+                        }
+                    }
+                } catch (Exception ignored) {}
+            }
+            return false;
+        } finally {
+            clusterConfigSyncInProgress.set(false);
         }
     }
 
@@ -681,7 +777,8 @@ public final class JettraStoreShellApp implements AutoCloseable {
             if (pTrimUpper.equals("COUNT") && (bucketPrefix.isEmpty() || "*".startsWith(bucketPrefix))) {
                 candidates.add(verb + "*");
             }
-            if (client != null && currentDatabase != null && !currentDatabase.isBlank() && client.isDatabaseLoaded(currentDatabase)) {
+            if (client != null && currentDatabase != null && !currentDatabase.isBlank()
+                    && client.isDatabaseLoaded(currentDatabase)) {
                 try {
                     JettraDatabase db = client.getDatabase(currentDatabase);
                     if (db != null) {
@@ -1236,6 +1333,14 @@ public final class JettraStoreShellApp implements AutoCloseable {
             return handleShowClusterConfig();
         } else if (upper.equals("SYNC CLUSTER CONFIG") || upper.equals("CLUSTER SYNC CONFIG")) {
             return handleSyncClusterConfig();
+        } else if (upper.startsWith("CREATE BUCKET INDEX ")) {
+            return handleCreateBucketIndexCommand(trimmed);
+        } else if (upper.startsWith("SHOW BUCKET INDEXES ")) {
+            return handleShowBucketIndexesCommand(trimmed);
+        } else if (upper.startsWith("DROP BUCKET INDEX ")) {
+            return handleDropBucketIndexCommand(trimmed);
+        } else if (upper.startsWith("FIND NUMERIC ")) {
+            return handleFindNumericRangeCommand(trimmed);
         } else if (upper.startsWith("CREATE BUCKET ")) {
             return handleCreateBucketCommand(trimmed);
         } else if (upper.startsWith("DESCRIBE BUCKET ") || upper.startsWith("SHOW BUCKET SCHEMA ")) {
@@ -1244,12 +1349,6 @@ public final class JettraStoreShellApp implements AutoCloseable {
             return handleDropBucketCommand(trimmed);
         } else if (upper.startsWith("INSERT BUCKET ")) {
             return handleInsertBucketRecordCommand(trimmed);
-        } else if (upper.startsWith("CREATE BUCKET INDEX ")) {
-            return handleCreateBucketIndexCommand(trimmed);
-        } else if (upper.startsWith("SHOW BUCKET INDEXES ")) {
-            return handleShowBucketIndexesCommand(trimmed);
-        } else if (upper.startsWith("DROP BUCKET INDEX ")) {
-            return handleDropBucketIndexCommand(trimmed);
         } else if (upper.startsWith("CLUSTER-DISTRIBUTED") || upper.startsWith("CLUSTER_DISTRIBUTED")) {
             return handleClusterDistributed(trimmed);
         } else if (upper.equals("CLUSTER LIVE") || upper.startsWith("CLUSTER LIVE ") || upper.equals("CLUSTER-LIVE")
@@ -1472,6 +1571,8 @@ public final class JettraStoreShellApp implements AutoCloseable {
             this.authenticated = true;
             this.currentUser = user;
             registerSentinelListener();
+            registerClusterConfigSyncListener();
+            syncLocalClusterConfigFromPrimary();
             var claims = client.getSecurityManager().validateToken(client.getSessionToken());
             this.currentRole = claims.role();
             return true;
@@ -1673,6 +1774,79 @@ public final class JettraStoreShellApp implements AutoCloseable {
         }
     }
 
+    private static int deriveSafeRestPort(int grpcPort, int fallbackIdx) {
+        if (grpcPort >= 50001 && grpcPort <= 50999)
+            return 60000 + (grpcPort - 50000);
+        if (grpcPort >= 9091 && grpcPort <= 9999)
+            return 8080 + (grpcPort - 9090);
+        return 60000 + Math.max(1, fallbackIdx);
+    }
+
+    /**
+     * Consulta en vivo el archivo cluster.config autoritativo directamente del nodo
+     * PRIMARY activo
+     * vía trama Raft TYPE_GET_CLUSTER_CONFIG_REQ, asegurando que JettraStoreShell
+     * refleje siempre
+     * los cambios realizados desde JettraStoreExplorer u otros clientes.
+     */
+    private List<JettraConfigValidator.ClusterNodeInfo> fetchLivePrimaryClusterNodes() {
+        List<String> candidates = new ArrayList<>();
+        if (client != null && client.getConfig() != null && !client.getConfig().getClusterEndpoints().isEmpty()) {
+            for (String ep : client.getConfig().getClusterEndpoints()) {
+                if (ep != null && !ep.isBlank() && !candidates.contains(ep.trim())) {
+                    candidates.add(ep.trim());
+                }
+            }
+        } else {
+            if (currentHost != null && !currentHost.isBlank() && currentPort > 0) {
+                candidates.add(currentHost.trim() + ":" + currentPort);
+            }
+            for (SavedConnection sc : savedConnections.values()) {
+                String ep = sc.host() + ":" + sc.port();
+                if (!candidates.contains(ep))
+                    candidates.add(ep);
+            }
+        }
+
+        for (String ep : candidates) {
+            String[] parts = ep.split(":");
+            if (parts.length < 2)
+                continue;
+            String h = parts[0].trim();
+            int p;
+            try {
+                p = Integer.parseInt(parts[1].trim());
+            } catch (Exception e) {
+                continue;
+            }
+            try (Socket s = new Socket()) {
+                s.setTcpNoDelay(true);
+                s.connect(new InetSocketAddress(h, p), 300);
+                s.setSoTimeout(500);
+                try (BufferedOutputStream bos = new BufferedOutputStream(s.getOutputStream(), 8192);
+                        BufferedInputStream bis = new BufferedInputStream(s.getInputStream(), 8192)) {
+                    JettraClusterProtocol.writeFrame(bos,
+                            JettraRaftFrame.getClusterConfigReq(1L, "jettra-shell-topology"));
+                    JettraRaftFrame resp = JettraClusterProtocol.readFrame(bis);
+                    if (resp != null && resp.frameType() == JettraRaftFrame.TYPE_GET_CLUSTER_CONFIG_RESP
+                            && resp.payload() != null && resp.payload().length > 0) {
+                        Properties props = new Properties();
+                        try (var bais = new java.io.ByteArrayInputStream(resp.payload())) {
+                            props.load(bais);
+                        }
+                        List<JettraConfigValidator.ClusterNodeInfo> parsed = JettraConfigValidator
+                                .parseClusterNodes(props);
+                        if (!parsed.isEmpty()) {
+                            return parsed;
+                        }
+                    }
+                }
+            } catch (Exception ignored) {
+            }
+        }
+        return List.of();
+    }
+
     private String handleShowNodes() {
         DynamicRingEngine ring = client.getRingEngine();
         StringBuilder sb = new StringBuilder();
@@ -1687,52 +1861,70 @@ public final class JettraStoreShellApp implements AutoCloseable {
         }
         Map<String, TargetNode> topology = new LinkedHashMap<>();
 
-        // 1. Cargar topología completa desde jettra.config si existe
-        try {
-            Path clusterPath = JettraConfigValidator.locateJettraConfigFile();
-            if (clusterPath != null && Files.exists(clusterPath)) {
-                Properties clusterProps = JettraConfigValidator.loadProperties(clusterPath, "/jettra.config");
-                List<JettraConfigValidator.ClusterNodeInfo> nodes = JettraConfigValidator
-                        .parseClusterNodes(clusterProps);
-                for (JettraConfigValidator.ClusterNodeInfo n : nodes) {
-                    String host = (n.ip() != null && !n.ip().isBlank()) ? n.ip() : "127.0.0.1";
-                    int gPort = n.grpcPort() > 0 ? n.grpcPort() : 50001;
-                    int rPort = n.restPort() > 0 ? n.restPort() : 8080;
-                    topology.put(n.id(), new TargetNode(n.id(), host, gPort, rPort, n.role()));
+        // 0. Fuente de verdad autoritativa: consultar cluster.config en vivo del nodo
+        // PRIMARY
+        List<JettraConfigValidator.ClusterNodeInfo> livePrimaryNodes = fetchLivePrimaryClusterNodes();
+        boolean loadedFromLivePrimary = !livePrimaryNodes.isEmpty();
+        if (loadedFromLivePrimary) {
+            Set<String> liveIds = new HashSet<>();
+            int idx = 1;
+            for (JettraConfigValidator.ClusterNodeInfo n : livePrimaryNodes) {
+                String host = (n.ip() != null && !n.ip().isBlank()) ? n.ip().trim() : "127.0.0.1";
+                int gPort = n.grpcPort() > 0 ? n.grpcPort() : (50000 + idx);
+                int rPort = n.restPort() > 0 ? n.restPort() : deriveSafeRestPort(gPort, idx);
+                topology.put(n.id(), new TargetNode(n.id(), host, gPort, rPort, n.role()));
+                liveIds.add(n.id().toLowerCase(Locale.ROOT));
+                idx++;
+            }
+            // Limpiar peers fantasma en ringEngine que ya fueron eliminados desde
+            // JettraStoreExplorer u otro cliente
+            for (ClusterNode existingPeer : new ArrayList<>(ring.getPeers())) {
+                if (!liveIds.contains(existingPeer.getId().toLowerCase(Locale.ROOT))) {
+                    ring.removePeer(existingPeer.getId());
                 }
             }
-        } catch (Exception ignored) {
-        }
-
-        // Fallbacks conocidos si no se cargó jettra.config o para entornos con puertos
-        // mapeados (Docker Compose / Local)
-        Map<String, TargetNode> standardDockerPorts = Map.of(
-                "node-01", new TargetNode("node-01", "127.0.0.1", 50001, 8081, "PRIMARY"),
-                "node-02", new TargetNode("node-02", "127.0.0.1", 50002, 8082, "SECONDARY"),
-                "node-03", new TargetNode("node-03", "127.0.0.1", 50003, 8083, "SECONDARY"));
-        if (topology.isEmpty()) {
-            topology.putAll(standardDockerPorts);
         } else {
-            // Si los puertos gRPC o REST en jettra.config coinciden todos en 50001/8080
-            // (modelo contenedor puro),
-            // ajustar a los puertos expuestos de mapeo de puertos estándar si los puertos
-            // mapeados responden
-            for (Map.Entry<String, TargetNode> entry : standardDockerPorts.entrySet()) {
-                String id = entry.getKey();
-                TargetNode defNode = entry.getValue();
-                TargetNode cur = topology.get(id);
-                if (cur != null && isNodeReachable(defNode.ip(), defNode.grpcPort(), 150)) {
-                    topology.put(id, new TargetNode(id, defNode.ip(), defNode.grpcPort(), defNode.restPort(),
-                            cur.configuredRole()));
+            // 1. Fallback local: cargar topología desde cluster.config / jettra.config si
+            // el PRIMARY no respondió
+            try {
+                Path clusterPath = JettraConfigValidator.locateClusterConfigFile();
+                if (clusterPath == null || !Files.exists(clusterPath)) {
+                    clusterPath = JettraConfigValidator.locateJettraConfigFile();
                 }
+                if (clusterPath != null && Files.exists(clusterPath)) {
+                    Properties clusterProps = JettraConfigValidator.loadProperties(clusterPath, "/cluster.config",
+                            "/jettra.config");
+                    List<JettraConfigValidator.ClusterNodeInfo> nodes = JettraConfigValidator
+                            .parseClusterNodes(clusterProps);
+                    int idx = 1;
+                    for (JettraConfigValidator.ClusterNodeInfo n : nodes) {
+                        String host = (n.ip() != null && !n.ip().isBlank()) ? n.ip() : "127.0.0.1";
+                        int gPort = n.grpcPort() > 0 ? n.grpcPort() : (50000 + idx);
+                        int rPort = n.restPort() > 0 ? n.restPort() : deriveSafeRestPort(gPort, idx);
+                        topology.put(n.id(), new TargetNode(n.id(), host, gPort, rPort, n.role()));
+                        idx++;
+                    }
+                }
+            } catch (Exception ignored) {
             }
-        }
 
-        // Incorporar nodos pares registrados dinámicamente en ringEngine
-        for (ClusterNode peer : ring.getPeers()) {
-            if (!topology.containsKey(peer.getId())) {
-                topology.put(peer.getId(),
-                        new TargetNode(peer.getId(), peer.getIp(), peer.getPort(), 8080, peer.getRole().name()));
+            Map<String, TargetNode> standardDockerPorts = Map.of(
+                    "node-01", new TargetNode("node-01", "127.0.0.1", 50001, 60001, "PRIMARY"),
+                    "node-02", new TargetNode("node-02", "127.0.0.1", 50002, 60002, "SECONDARY"),
+                    "node-03", new TargetNode("node-03", "127.0.0.1", 50003, 60003, "SECONDARY"));
+            if (topology.isEmpty()) {
+                topology.putAll(standardDockerPorts);
+            }
+
+            // Incorporar nodos pares registrados dinámicamente en ringEngine solo en modo
+            // fallback local
+            int idx = topology.size() + 1;
+            for (ClusterNode peer : ring.getPeers()) {
+                if (!topology.containsKey(peer.getId())) {
+                    topology.put(peer.getId(),
+                            new TargetNode(peer.getId(), peer.getIp(), peer.getPort(),
+                                    deriveSafeRestPort(peer.getPort(), idx++), peer.getRole().name()));
+                }
             }
         }
 
@@ -1757,7 +1949,7 @@ public final class JettraStoreShellApp implements AutoCloseable {
                 try {
                     java.net.http.HttpRequest req = java.net.http.HttpRequest.newBuilder()
                             .uri(java.net.URI.create(String.format("http://%s:%d/api/v1/health", node.ip(), p)))
-                            .timeout(java.time.Duration.ofMillis(120))
+                            .timeout(java.time.Duration.ofMillis(250))
                             .GET()
                             .build();
                     java.net.http.HttpResponse<String> resp = sharedHealthHttpClient.send(req,
@@ -1782,19 +1974,57 @@ public final class JettraStoreShellApp implements AutoCloseable {
         }
 
         try {
-            CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).get(250, TimeUnit.MILLISECONDS);
+            CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).get(600, TimeUnit.MILLISECONDS);
         } catch (Exception ignored) {
         }
 
-        // Si ningún nodo online fue marcado como PRIMARY, pero hay nodos activos, el
-        // primer nodo activo asume LEADER
-        boolean hasPrimary = liveStates.values().stream().anyMatch(s -> s.isUp() && "PRIMARY".equals(s.role()));
-        if (!hasPrimary) {
+        // Invariante de líder único (Single-Leader Reconciliation):
+        // Garantizar que como máximo UN nodo activo sea reportado como PRIMARY/LEADER,
+        // eliminando estados duplicados (ej. node-01 y node-04 ambos como PRIMARY tras
+        // split-brain transitorio).
+        List<TargetNode> activePrimaryCandidates = new ArrayList<>();
+        for (TargetNode node : topology.values()) {
+            LiveStatus ls = liveStates.get(node.id());
+            if (ls != null && ls.isUp() && "PRIMARY".equals(ls.role())) {
+                activePrimaryCandidates.add(node);
+            }
+        }
+        String authoritativePrimaryId = null;
+        if (!activePrimaryCandidates.isEmpty()) {
+            // Priorizar el nodo configurado como PRIMARY en cluster.config si está activo;
+            // si no, menor ID lexicográfico
+            TargetNode chosen = activePrimaryCandidates.stream()
+                    .filter(n -> "PRIMARY".equalsIgnoreCase(n.configuredRole()))
+                    .findFirst()
+                    .orElseGet(() -> activePrimaryCandidates.stream()
+                            .min(Comparator.comparing(TargetNode::id, String.CASE_INSENSITIVE_ORDER))
+                            .orElse(activePrimaryCandidates.get(0)));
+            authoritativePrimaryId = chosen.id();
+        } else {
+            // Ningún nodo online reportó PRIMARY: elegir el primer nodo activo
+            // (preferentemente configurado PRIMARY)
+            TargetNode fallback = topology.values().stream()
+                    .filter(n -> {
+                        LiveStatus ls = liveStates.get(n.id());
+                        return ls != null && ls.isUp();
+                    })
+                    .sorted(Comparator.comparing((TargetNode n) -> !"PRIMARY".equalsIgnoreCase(n.configuredRole()))
+                            .thenComparing(TargetNode::id, String.CASE_INSENSITIVE_ORDER))
+                    .findFirst()
+                    .orElse(null);
+            if (fallback != null) {
+                authoritativePrimaryId = fallback.id();
+            }
+        }
+        if (authoritativePrimaryId != null) {
             for (TargetNode node : topology.values()) {
                 LiveStatus ls = liveStates.get(node.id());
                 if (ls != null && ls.isUp()) {
-                    liveStates.put(node.id(), new LiveStatus(true, "PRIMARY", "LEADER", ls.offloadBytes()));
-                    break;
+                    if (node.id().equalsIgnoreCase(authoritativePrimaryId)) {
+                        liveStates.put(node.id(), new LiveStatus(true, "PRIMARY", "LEADER", ls.offloadBytes()));
+                    } else {
+                        liveStates.put(node.id(), new LiveStatus(true, "SECONDARY", "FOLLOWER", ls.offloadBytes()));
+                    }
                 }
             }
         }
@@ -1861,7 +2091,8 @@ public final class JettraStoreShellApp implements AutoCloseable {
     }
 
     private boolean hasAdminRole() {
-        return currentRole != null && ("ADMIN".equalsIgnoreCase(currentRole.trim()) || "SUPER_ADMIN".equalsIgnoreCase(currentRole.trim()));
+        return currentRole != null
+                && ("ADMIN".equalsIgnoreCase(currentRole.trim()) || "SUPER_ADMIN".equalsIgnoreCase(currentRole.trim()));
     }
 
     private String handleAddNode(String command) {
@@ -1899,7 +2130,8 @@ public final class JettraStoreShellApp implements AutoCloseable {
             restPort = port + 10000 <= 65535 ? port + 10000 : port - 1000;
         }
 
-        // Validar que no exista ID de nodo duplicado ni puertos gRPC/REST duplicados en la misma IP
+        // Validar que no exista ID de nodo duplicado ni puertos gRPC/REST duplicados en
+        // la misma IP
         List<JettraConfigValidator.ClusterNodeInfo> currentNodes = collectCurrentClusterNodesForValidation();
         JettraConfigValidator.ValidationResult nodeCheck = JettraConfigValidator.validateCandidateNode(
                 currentNodes, id, host, port, restPort, false);
@@ -1940,20 +2172,23 @@ public final class JettraStoreShellApp implements AutoCloseable {
         Path clusterConfigFile = JettraConfigValidator.locateClusterConfigFile();
         if (clusterConfigFile != null && Files.exists(clusterConfigFile)) {
             try {
-                Properties props = JettraConfigValidator.loadProperties(clusterConfigFile, "/cluster.config", "/jettra.config");
+                Properties props = JettraConfigValidator.loadProperties(clusterConfigFile, "/cluster.config",
+                        "/jettra.config");
                 for (JettraConfigValidator.ClusterNodeInfo cn : JettraConfigValidator.parseClusterNodes(props)) {
                     if (cn.id() != null && !cn.id().isBlank()) {
                         merged.put(cn.id().toLowerCase(), cn);
                     }
                 }
-            } catch (Exception ignored) {}
+            } catch (Exception ignored) {
+            }
         }
         int idx = merged.size() + 1;
         for (SavedConnection sc : savedConnections.values()) {
             String key = sc.name().toLowerCase();
             if (!merged.containsKey(key)) {
                 int rp = (sc.port() >= 50001 && sc.port() <= 50009) ? (60000 + (sc.port() - 50000))
-                        : (sc.port() >= 9091 && sc.port() <= 9099 ? (60000 + (sc.port() - 9090)) : (sc.port() + 10000 <= 65535 ? sc.port() + 10000 : sc.port() - 1000));
+                        : (sc.port() >= 9091 && sc.port() <= 9099 ? (60000 + (sc.port() - 9090))
+                                : (sc.port() + 10000 <= 65535 ? sc.port() + 10000 : sc.port() - 1000));
                 merged.put(key, new JettraConfigValidator.ClusterNodeInfo(
                         sc.name(), "node-01".equalsIgnoreCase(sc.name()) ? "PRIMARY" : "SECONDARY",
                         sc.host(), sc.port(), rp, "~/jettra/data", String.valueOf(idx++)));
@@ -1975,7 +2210,8 @@ public final class JettraStoreShellApp implements AutoCloseable {
             return "[ERROR] No se puede remover el nodo primario activo del clúster.";
         }
 
-        // Regla estricta: NO se permite remover un nodo que esté en ejecución (RUNNING / activo).
+        // Regla estricta: NO se permite remover un nodo que esté en ejecución (RUNNING
+        // / activo).
         // Primero debe detenerse el nodo y luego removerlo.
         String targetHost = null;
         int targetGrpc = 0;
@@ -1985,20 +2221,39 @@ public final class JettraStoreShellApp implements AutoCloseable {
             targetHost = ringPeer.getIp();
             targetGrpc = ringPeer.getPort();
         }
+        // Verificar también en la topología viva del PRIMARY para reflejar nodos
+        // gestionados desde Explorer
+        boolean existedInPrimary = false;
+        for (JettraConfigValidator.ClusterNodeInfo cn : fetchLivePrimaryClusterNodes()) {
+            if (cn.id() != null && cn.id().equalsIgnoreCase(id)) {
+                existedInPrimary = true;
+                if (targetHost == null || targetHost.isBlank())
+                    targetHost = cn.ip();
+                if (targetGrpc <= 0)
+                    targetGrpc = cn.grpcPort();
+                if (targetRest <= 0)
+                    targetRest = cn.restPort();
+                break;
+            }
+        }
         for (JettraConfigValidator.ClusterNodeInfo cn : collectCurrentClusterNodesForValidation()) {
             if (cn.id().equalsIgnoreCase(id)) {
-                if (targetHost == null || targetHost.isBlank()) targetHost = cn.ip();
-                if (targetGrpc <= 0) targetGrpc = cn.grpcPort();
+                if (targetHost == null || targetHost.isBlank())
+                    targetHost = cn.ip();
+                if (targetGrpc <= 0)
+                    targetGrpc = cn.grpcPort();
                 targetRest = cn.restPort();
                 break;
             }
         }
         if (targetHost != null && !targetHost.isBlank()
-                && (isNodeReachable(targetHost, targetGrpc, 250) || (targetRest > 0 && isNodeReachable(targetHost, targetRest, 250)))) {
+                && (isNodeReachable(targetHost, targetGrpc, 250)
+                        || (targetRest > 0 && isNodeReachable(targetHost, targetRest, 250)))) {
             return String.format(
-                "[ERROR] No se puede remover el nodo '%s' (%s:%d) porque actualmente está en ejecución (RUNNING / ACTIVO).%n" +
-                "        Primero debe detener el nodo (ej. STOP NODE %s) y luego ejecutar REMOVE NODE %s.",
-                id, targetHost, targetGrpc, id, id);
+                    "[ERROR] No se puede remover el nodo '%s' (%s:%d) porque actualmente está en ejecución (RUNNING / ACTIVO).%n"
+                            +
+                            "        Primero debe detener el nodo (ej. STOP NODE %s) y luego ejecutar REMOVE NODE %s.",
+                    id, targetHost, targetGrpc, id, id);
         }
 
         boolean removedFromRing = client.getRingEngine().removePeer(id);
@@ -2017,16 +2272,18 @@ public final class JettraStoreShellApp implements AutoCloseable {
             persistClusterNodesToMicroprofileConfig();
         }
 
-        // Remover de cluster.config local (limpiando todas las entradas del nodo y re-indexando)
+        // Remover de cluster.config local (limpiando todas las entradas del nodo y
+        // re-indexando)
         boolean removedFromConfig = false;
         try {
             removedFromConfig = JettraConfigValidator.removeDynamicNodeFromClusterConfig(id);
         } catch (Exception ignored) {
         }
 
-        boolean ok = removedFromRing || removedFromSaved || removedFromConfig;
+        boolean ok = existedInPrimary || removedFromRing || removedFromSaved || removedFromConfig;
 
-        // Replicar cluster.config actualizado a todos los nodos sin detener los nodos activos
+        // Replicar cluster.config actualizado a todos los nodos sin detener los nodos
+        // activos
         String replicationReport = replicateClusterConfigToQuorum(id, "SECONDARY", "", 0, 0, true);
 
         return ok ? String.format(
@@ -2056,14 +2313,21 @@ public final class JettraStoreShellApp implements AutoCloseable {
         }
         try {
             int confirmed = client.updatePrimaryClusterConfig(cfg, true);
-            return String.format("[SUCCESS] cluster.config validado y sincronizado en %d nodo(s) activos sin detener ningún nodo.", confirmed);
+            return String.format(
+                    "[SUCCESS] cluster.config validado y sincronizado en %d nodo(s) activos sin detener ningún nodo.",
+                    confirmed);
         } catch (Exception e) {
             return "[ERROR] " + e.getMessage();
         }
     }
 
+    private String resolveActiveDb() {
+        return (currentDatabase != null && !currentDatabase.isBlank()) ? currentDatabase : client.getDefaultDatabase();
+    }
+
     private String handleCreateBucketCommand(String command) {
-        // Sintaxis: CREATE BUCKET <name> [ENGINE <engineType>] [STRUCTURE NONE|DEFINED <json_attributes>]
+        // Sintaxis: CREATE BUCKET <name> [ENGINE <engineType>] [STRUCTURE NONE|DEFINED
+        // <json_attributes>]
         String rest = command.substring("CREATE BUCKET ".length()).trim();
         if (rest.isBlank()) {
             return "[ERROR] Uso: CREATE BUCKET <nombre> [ENGINE DOCUMENT|JAVA_RECORD|KEY_VALUE|VECTOR|GRAPH|TIMESERIES|COLUMNAR|GEOSPATIAL] [STRUCTURE NONE|DEFINED <json_atributos>]";
@@ -2073,11 +2337,13 @@ public final class JettraStoreShellApp implements AutoCloseable {
         String structure = "NONE";
         String attrsJson = "[]";
 
-        java.util.regex.Matcher engM = java.util.regex.Pattern.compile("(?i)\\bENGINE\\s+([A-Za-z0-9_\\-]+)").matcher(rest);
+        java.util.regex.Matcher engM = java.util.regex.Pattern.compile("(?i)\\bENGINE\\s+([A-Za-z0-9_\\-]+)")
+                .matcher(rest);
         if (engM.find()) {
             engineType = engM.group(1).trim();
         }
-        java.util.regex.Matcher stM = java.util.regex.Pattern.compile("(?i)\\bSTRUCTURE\\s+(NONE|DEFINED)(?:\\s+(\\[.*\\]))?").matcher(rest);
+        java.util.regex.Matcher stM = java.util.regex.Pattern
+                .compile("(?i)\\bSTRUCTURE\\s+(NONE|DEFINED)(?:\\s+(\\[.*\\]))?").matcher(rest);
         if (stM.find()) {
             structure = stM.group(1).trim().toUpperCase();
             if (stM.group(2) != null) {
@@ -2085,9 +2351,11 @@ public final class JettraStoreShellApp implements AutoCloseable {
             }
         }
         try {
-            var meta = client.createBucket(currentDatabase, engineType, bucketName, structure, attrsJson);
-            return String.format("[SUCCESS] Bucket '%s' creado en DB '%s' | Engine: %s | Estructura: %s (%d atributo(s)).",
-                    meta.bucketName(), meta.databaseName(), meta.engineType(), meta.structureType(), meta.attributes().size());
+            var meta = client.createBucket(resolveActiveDb(), engineType, bucketName, structure, attrsJson);
+            return String.format(
+                    "[SUCCESS] Bucket '%s' creado en DB '%s' | Engine: %s | Estructura: %s (%d atributo(s)).",
+                    meta.bucketName(), meta.databaseName(), meta.engineType(), meta.structureType(),
+                    meta.attributes().size());
         } catch (Exception e) {
             return "[ERROR] No se pudo crear el bucket '" + bucketName + "': " + e.getMessage();
         }
@@ -2098,10 +2366,12 @@ public final class JettraStoreShellApp implements AutoCloseable {
         if (bucketName.isBlank()) {
             return "[ERROR] Uso: DESCRIBE BUCKET <nombre>";
         }
-        var meta = client.getDatabase(currentDatabase).findBucketMetadata(bucketName);
+        String dbName = resolveActiveDb();
+        var meta = client.getDatabase(dbName).findBucketMetadata(bucketName);
         if (meta == null) {
-            return String.format("[INFO] Bucket '%s' en DB '%s' no tiene metadatos explícitos (opera con estructura NONE por defecto).",
-                    bucketName, currentDatabase);
+            return String.format(
+                    "[INFO] Bucket '%s' en DB '%s' no tiene metadatos explícitos (opera con estructura NONE por defecto).",
+                    bucketName, dbName);
         }
         StringBuilder sb = new StringBuilder();
         sb.append(String.format("Bucket: %s | DB: %s | Engine: %s | Estructura: %s%n",
@@ -2113,7 +2383,7 @@ public final class JettraStoreShellApp implements AutoCloseable {
                         a.atribute_name(), a.type_atribute(), a.jettra_rules(), a.description()));
             }
         }
-        var idxs = client.listBucketIndexes(currentDatabase, meta.bucketName());
+        var idxs = client.listBucketIndexes(dbName, meta.bucketName());
         sb.append(String.format("Índices del bucket (%d):%n", idxs.size()));
         for (var idx : idxs) {
             sb.append(String.format("  - %s ON (%s) [%s%s] entradas=%d%n",
@@ -2124,13 +2394,15 @@ public final class JettraStoreShellApp implements AutoCloseable {
 
     private String handleDropBucketCommand(String command) {
         String rest = command.substring("DROP BUCKET ".length()).trim();
-        if (rest.isBlank()) return "[ERROR] Uso: DROP BUCKET <nombre> [ENGINE <engineType>]";
+        if (rest.isBlank())
+            return "[ERROR] Uso: DROP BUCKET <nombre> [ENGINE <engineType>]";
         String[] parts = rest.split("\\s+");
         String bucketName = parts[0].trim();
         String engineType = (parts.length >= 3 && "ENGINE".equalsIgnoreCase(parts[1])) ? parts[2].trim() : "DOCUMENT";
-        boolean ok = client.dropBucket(currentDatabase, engineType, bucketName);
-        return ok ? String.format("[SUCCESS] Bucket '%s' eliminado de la base de datos '%s'.", bucketName, currentDatabase)
-                  : String.format("[WARN] Bucket '%s' no encontrado en '%s'.", bucketName, currentDatabase);
+        String dbName = resolveActiveDb();
+        boolean ok = client.dropBucket(dbName, engineType, bucketName);
+        return ok ? String.format("[SUCCESS] Bucket '%s' eliminado de la base de datos '%s'.", bucketName, dbName)
+                : String.format("[WARN] Bucket '%s' no encontrado en '%s'.", bucketName, dbName);
     }
 
     private String handleInsertBucketRecordCommand(String command) {
@@ -2142,45 +2414,65 @@ public final class JettraStoreShellApp implements AutoCloseable {
         }
         String bucketName = rest.substring(0, sp).trim();
         String json = rest.substring(sp + 1).trim();
+        String dbName = resolveActiveDb();
         try {
             io.jettra.json.JettraJson parser = new io.jettra.json.JettraJson();
             Object parsed = parser.parse(json);
-            if (!(parsed instanceof Map<?, ?> rawMap)) {
+            Map<String, Object> record = new LinkedHashMap<>();
+            if (parsed instanceof io.jettra.json.JsonObject jo) {
+                jo.getMap().forEach((k, v) -> record.put(String.valueOf(k), v));
+            } else if (parsed instanceof Map<?, ?> rawMap) {
+                rawMap.forEach((k, v) -> record.put(String.valueOf(k), v));
+            } else {
                 return "[VALIDATION ERROR] El registro debe ser un objeto JSON válido {...}.";
             }
-            Map<String, Object> record = new LinkedHashMap<>();
-            rawMap.forEach((k, v) -> record.put(String.valueOf(k), v));
-            var meta = client.getDatabase(currentDatabase).findBucketMetadata(bucketName);
+            var meta = client.getDatabase(dbName).findBucketMetadata(bucketName);
             String engineType = meta != null ? meta.engineType() : "DOCUMENT";
-            String id = client.upsertBucketRecord(currentDatabase, engineType, bucketName, null, record);
-            return String.format("[SUCCESS] Registro '%s' insertado y validado en bucket '%s' (%s).", id, bucketName, engineType);
+            String id = client.upsertBucketRecord(dbName, engineType, bucketName, null, record);
+            return String.format("[SUCCESS] Registro '%s' insertado y validado en bucket '%s' (%s).", id, bucketName,
+                    engineType);
         } catch (IllegalArgumentException valEx) {
-            return "[VALIDATION ALERT] Registro rechazado por estructura del bucket '" + bucketName + "': " + valEx.getMessage();
+            return "[VALIDATION ALERT] Registro rechazado por estructura del bucket '" + bucketName + "': "
+                    + valEx.getMessage();
         } catch (Exception e) {
             return "[ERROR] Error insertando en bucket '" + bucketName + "': " + e.getMessage();
         }
     }
 
     private String handleCreateBucketIndexCommand(String command) {
-        // Sintaxis: CREATE BUCKET INDEX <indexName> ON <bucketName> (<field>) [TYPE BTREE|HASH|SPARSE] [UNIQUE]
+        // Sintaxis: CREATE BUCKET INDEX <indexName> ON <bucketName> (<field>) [TYPE
+        // BTREE|HASH|NUMERIC|AUTO_INCREMENT|SPARSE] [UNIQUE]
         java.util.regex.Matcher m = java.util.regex.Pattern
                 .compile("(?i)^CREATE\\s+BUCKET\\s+INDEX\\s+(\\S+)\\s+ON\\s+(\\S+)\\s*\\(([^)]+)\\)(.*)$")
                 .matcher(command.trim());
         if (!m.find()) {
-            return "[ERROR] Uso: CREATE BUCKET INDEX <nombre> ON <bucket> (<campo>) [TYPE BTREE|HASH|SPARSE] [UNIQUE]";
+            return "[ERROR] Uso: CREATE BUCKET INDEX <nombre> ON <bucket> (<campo>) [TYPE BTREE|HASH|NUMERIC|AUTO_INCREMENT|SPARSE] [UNIQUE]";
         }
         String idxName = m.group(1).trim();
         String bucket = m.group(2).trim();
         String field = m.group(3).trim();
         String tail = m.group(4) != null ? m.group(4).toUpperCase() : "";
         String type = "BTREE";
-        if (tail.contains("HASH")) type = "HASH";
-        else if (tail.contains("SPARSE")) type = "SPARSE";
-        boolean unique = tail.contains("UNIQUE");
+        if (tail.contains("AUTO_INCREMENT") || tail.contains("AUTOINCREMENT"))
+            type = "AUTO_INCREMENT";
+        else if (tail.contains("NUMERIC") || tail.contains("INTEGER") || tail.contains("LONG")
+                || tail.contains("DOUBLE"))
+            type = "NUMERIC";
+        else if (tail.contains("HASH"))
+            type = "HASH";
+        else if (tail.contains("SPARSE"))
+            type = "SPARSE";
+        boolean unique = tail.contains("UNIQUE") || "AUTO_INCREMENT".equals(type);
+        String dbName = resolveActiveDb();
         try {
-            var info = client.createBucketIndex(currentDatabase, bucket, idxName, field, type, unique);
-            return String.format("[SUCCESS] Índice '%s' creado en bucket '%s' (campo=%s, tipo=%s, unique=%s, entradas=%d).",
-                    info.name(), info.collection(), info.field(), info.type(), info.unique(), info.entriesCount());
+            var info = client.createBucketIndex(dbName, bucket, idxName, field, type, unique);
+            String seqInfo = "AUTO_INCREMENT".equals(info.type())
+                    ? String.format(", secuencia_actual=%d", client.getAutoIncrementCurrentValue(dbName, bucket, field))
+                    : "";
+            return String.format(
+                    "[SUCCESS] Índice '%s' creado en bucket '%s' (campo=%s, tipo=%s, unique=%s, entradas=%d%s).",
+                    info.name(), info.collection(), info.field(), info.type(), info.unique(), info.entriesCount(),
+                    seqInfo);
         } catch (Exception e) {
             return "[ERROR] No se pudo crear el índice '" + idxName + "': " + e.getMessage();
         }
@@ -2188,82 +2480,143 @@ public final class JettraStoreShellApp implements AutoCloseable {
 
     private String handleShowBucketIndexesCommand(String command) {
         String bucket = command.substring("SHOW BUCKET INDEXES ".length()).trim();
-        var idxs = client.listBucketIndexes(currentDatabase, bucket);
+        String dbName = resolveActiveDb();
+        var idxs = client.listBucketIndexes(dbName, bucket);
         if (idxs.isEmpty()) {
-            return String.format("[INFO] El bucket '%s' en '%s' no tiene índices registrados.", bucket, currentDatabase);
+            return String.format("[INFO] El bucket '%s' en '%s' no tiene índices registrados.", bucket, dbName);
         }
         StringBuilder sb = new StringBuilder(String.format("Índices del bucket '%s' (%d):%n", bucket, idxs.size()));
         for (var idx : idxs) {
-            sb.append(String.format("  • %-20s | campo: %-15s | tipo: %-7s | unique: %-5s | entradas: %d%n",
-                    idx.name(), idx.field(), idx.type(), idx.unique(), idx.entriesCount()));
+            String seqInfo = io.jettra.store.engine.index.JettraIndexManager.isAutoIncrementType(idx.type())
+                    ? " | seq=" + client.getAutoIncrementCurrentValue(dbName, bucket, idx.field())
+                    : "";
+            sb.append(String.format("  • %-20s | campo: %-15s | tipo: %-14s | unique: %-5s | entradas: %d%s%n",
+                    idx.name(), idx.field(), idx.type(), idx.unique(), idx.entriesCount(), seqInfo));
         }
         return sb.toString();
     }
 
+    private String handleFindNumericRangeCommand(String command) {
+        // Sintaxis: FIND NUMERIC <bucket> <campo> <min> <max>
+        String[] parts = command.substring("FIND NUMERIC ".length()).trim().split("\\s+");
+        if (parts.length < 4) {
+            return "[ERROR] Uso: FIND NUMERIC <bucket> <campo> <min> <max>";
+        }
+        String bucket = parts[0].trim();
+        String field = parts[1].trim();
+        String dbName = resolveActiveDb();
+        try {
+            double min = Double.parseDouble(parts[2].trim());
+            double max = Double.parseDouble(parts[3].trim());
+            Set<String> ids = client.findIdsByNumericRange(dbName, bucket, field, min, max);
+            if (ids.isEmpty()) {
+                return String.format("[INFO] Sin registros en '%s' donde %s esté en [%s, %s].", bucket, field, min,
+                        max);
+            }
+            return String.format("[NUMERIC INDEX] %d registro(s) en '%s' (%s en [%s, %s]): %s",
+                    ids.size(), bucket, field, min, max, String.join(", ", ids));
+        } catch (NumberFormatException nfe) {
+            return "[ERROR] Los límites min y max deben ser numéricos. Uso: FIND NUMERIC <bucket> <campo> <min> <max>";
+        }
+    }
+
     private String handleDropBucketIndexCommand(String command) {
         String idxName = command.substring("DROP BUCKET INDEX ".length()).trim();
-        boolean ok = client.dropBucketIndex(currentDatabase, idxName);
+        boolean ok = client.dropBucketIndex(resolveActiveDb(), idxName);
         return ok ? String.format("[SUCCESS] Índice '%s' eliminado correctamente.", idxName)
-                  : String.format("[WARN] No se encontró el índice '%s'.", idxName);
+                : String.format("[WARN] No se encontró el índice '%s'.", idxName);
     }
 
     private String replicateClusterConfigToQuorum(String targetNodeId, String role, String host, int grpcPort,
             int restPort, boolean isRemoval) {
         Map<String, ShellClusterNode> clusterTopology = new LinkedHashMap<>();
 
-        // 1. Cargar nodos existentes desde cluster.config
+        // 1. Cargar nodos existentes: priorizar topología viva del PRIMARY, fallback a
+        // cluster.config local
         Path clusterConfigFile = JettraConfigValidator.locateClusterConfigFile();
-        if (clusterConfigFile != null && Files.exists(clusterConfigFile)) {
+        List<JettraConfigValidator.ClusterNodeInfo> livePrimary = fetchLivePrimaryClusterNodes();
+        if (!livePrimary.isEmpty()) {
+            int idx = 1;
+            for (JettraConfigValidator.ClusterNodeInfo cn : livePrimary) {
+                if (cn.id() == null || cn.id().isBlank())
+                    continue;
+                String h = (cn.ip() != null && !cn.ip().isBlank()) ? cn.ip().trim() : "127.0.0.1";
+                int gp = cn.grpcPort() > 0 ? cn.grpcPort() : (50000 + idx);
+                int rp = cn.restPort() > 0 ? cn.restPort() : deriveSafeRestPort(gp, idx);
+                String r = (cn.role() != null && !cn.role().isBlank()) ? cn.role().toUpperCase() : "SECONDARY";
+                clusterTopology.put(cn.id().toLowerCase(), new ShellClusterNode(cn.id(), r, h, gp, rp));
+                idx++;
+            }
+        } else if (clusterConfigFile != null && Files.exists(clusterConfigFile)) {
             try {
                 Properties props = JettraConfigValidator.loadProperties(clusterConfigFile, "/cluster.config",
                         "/jettra.config");
                 List<JettraConfigValidator.ClusterNodeInfo> parsed = JettraConfigValidator.parseClusterNodes(props);
+                int idx = 1;
                 for (JettraConfigValidator.ClusterNodeInfo cn : parsed) {
                     if (cn.id() == null || cn.id().isBlank())
                         continue;
                     String h = (cn.ip() != null && !cn.ip().isBlank()) ? cn.ip().trim() : "127.0.0.1";
-                    int gp = cn.grpcPort() > 0 ? cn.grpcPort() : 50001;
-                    int rp = cn.restPort() > 0 ? cn.restPort() : 60001;
+                    int gp = cn.grpcPort() > 0 ? cn.grpcPort() : (50000 + idx);
+                    int rp = cn.restPort() > 0 ? cn.restPort() : deriveSafeRestPort(gp, idx);
                     String r = (cn.role() != null && !cn.role().isBlank()) ? cn.role().toUpperCase() : "SECONDARY";
                     clusterTopology.put(cn.id().toLowerCase(), new ShellClusterNode(cn.id(), r, h, gp, rp));
+                    idx++;
                 }
             } catch (Exception ignored) {
             }
         }
 
-        // 2. Incorporar conexiones guardadas como fallback si no estuvieran en
-        // cluster.config (evitando re-introducir un nodo que se está eliminando)
-        int fallbackRestOffset = 1;
-        for (SavedConnection sc : savedConnections.values()) {
-            String key = sc.name().toLowerCase();
-            if (isRemoval && key.equalsIgnoreCase(targetNodeId)) {
-                continue;
+        // 2. Incorporar conexiones guardadas solo si no se cargó topología viva del
+        // PRIMARY
+        if (livePrimary.isEmpty()) {
+            int fallbackRestOffset = 1;
+            for (SavedConnection sc : savedConnections.values()) {
+                String key = sc.name().toLowerCase();
+                if (isRemoval && key.equalsIgnoreCase(targetNodeId)) {
+                    continue;
+                }
+                if (!clusterTopology.containsKey(key)) {
+                    String r = key.contains("primary") || "node-01".equalsIgnoreCase(key) ? "PRIMARY" : "SECONDARY";
+                    int rp = deriveSafeRestPort(sc.port(), fallbackRestOffset);
+                    clusterTopology.put(key, new ShellClusterNode(sc.name(), r, sc.host(), sc.port(), rp));
+                }
+                fallbackRestOffset++;
             }
-            if (!clusterTopology.containsKey(key)) {
-                String r = key.contains("primary") || "node-01".equalsIgnoreCase(key) ? "PRIMARY" : "SECONDARY";
-                int rp = (sc.port() >= 50001 && sc.port() <= 50009) ? (60000 + (sc.port() - 50000))
-                        : (sc.port() >= 9091 && sc.port() <= 9099 ? (60000 + (sc.port() - 9090)) : (60000 + fallbackRestOffset));
-                clusterTopology.put(key, new ShellClusterNode(sc.name(), r, sc.host(), sc.port(), rp));
-            }
-            fallbackRestOffset++;
         }
 
         // 3. Ajustar topología según la operación
         if (isRemoval) {
             clusterTopology.remove(targetNodeId.toLowerCase());
         } else {
+            int safeRest = restPort > 0 ? restPort : deriveSafeRestPort(grpcPort, clusterTopology.size() + 1);
             clusterTopology.put(targetNodeId.toLowerCase(),
-                    new ShellClusterNode(targetNodeId, role.toUpperCase(), host, grpcPort, restPort));
+                    new ShellClusterNode(targetNodeId, role.toUpperCase(), host, grpcPort, safeRest));
         }
 
-        // 4. Generar bytes canónicos actualizados de cluster.config y validar integridad antes de distribuir
+        // 4. Generar bytes canónicos actualizados de cluster.config garantizando
+        // unicidad de puertos REST
         List<JettraConfigValidator.ClusterNodeInfo> canonicalNodes = new ArrayList<>();
+        Set<String> usedEndpoints = new HashSet<>();
+        for (ShellClusterNode n : clusterTopology.values()) {
+            String ipKey = (n.host() != null ? n.host().trim() : "127.0.0.1").toLowerCase(Locale.ROOT);
+            usedEndpoints.add(ipKey + ":" + n.grpcPort());
+        }
         int idx = 1;
         for (ShellClusterNode n : clusterTopology.values()) {
             String normRole = isPrimaryRole(n.role()) ? "PRIMARY" : "SECONDARY";
-            int rp = n.restPort() > 0 ? n.restPort() : (60000 + idx);
+            String ip = (n.host() != null && !n.host().isBlank()) ? n.host().trim() : "127.0.0.1";
+            String ipKey = ip.toLowerCase(Locale.ROOT);
+            int rp = n.restPort();
+            if (rp <= 0 || rp == n.grpcPort() || usedEndpoints.contains(ipKey + ":" + rp)) {
+                rp = deriveSafeRestPort(n.grpcPort(), idx);
+                while (rp == n.grpcPort() || usedEndpoints.contains(ipKey + ":" + rp)) {
+                    rp++;
+                }
+            }
+            usedEndpoints.add(ipKey + ":" + rp);
             canonicalNodes.add(new JettraConfigValidator.ClusterNodeInfo(
-                    n.id(), normRole, n.host(), n.grpcPort(), rp, "~/jettra/data", String.valueOf(idx)));
+                    n.id(), normRole, ip, n.grpcPort(), rp, "~/jettra/data", String.valueOf(idx)));
             idx++;
         }
         Properties baseProps = (clusterConfigFile != null && Files.exists(clusterConfigFile))
@@ -2271,7 +2624,8 @@ public final class JettraStoreShellApp implements AutoCloseable {
                 : new Properties();
         byte[] cfgBytes = JettraConfigValidator.buildCanonicalClusterConfigBytes(canonicalNodes, baseProps);
 
-        JettraConfigValidator.ValidationResult integrity = JettraConfigValidator.validateClusterConfigIntegrity(cfgBytes);
+        JettraConfigValidator.ValidationResult integrity = JettraConfigValidator
+                .validateClusterConfigIntegrity(cfgBytes);
         if (!integrity.isValid()) {
             return "[ERROR] Integridad de cluster.config fallida. Distribución abortada: " + integrity.getSummary();
         }
@@ -2365,18 +2719,29 @@ public final class JettraStoreShellApp implements AutoCloseable {
     }
 
     private String handleStartNode(String command) {
+        if (!hasAdminRole()) {
+            return "[DENIED] Acceso denegado: iniciar nodos del clúster está restringido exclusivamente a usuarios con rol 'admin'.";
+        }
         String id = cleanQuotes(command.substring("START NODE ".length()).trim());
         if (id.isBlank())
             return "[ERROR] Uso: START NODE <nodeId>";
-        boolean ok = client.getRingEngine().startPeer(id);
-        if (ok) {
-            io.jettra.store.cluster.ClusterNode peer = client.getRingEngine().getPeer(id);
-            if (peer != null) {
-                triggerPrimaryDatabaseSyncToNode(peer.getId(), peer.getRole().name(), peer.getIp(), peer.getPort(), 0);
+        try {
+            client.setActiveRole(currentRole);
+            var res = client.startClusterNode(id);
+            if (res.success()) {
+                io.jettra.store.cluster.ClusterNode peer = client.getRingEngine().getPeer(id);
+                if (peer != null) {
+                    triggerPrimaryDatabaseSyncToNode(peer.getId(), peer.getRole().name(), peer.getIp(), peer.getPort(),
+                            0);
+                }
+                return String.format(
+                        "[SUCCESS] %s (mecanismo: %s). Ejecute 'show nodes' para verificar el estado en tiempo real.",
+                        res.message(), res.mechanism());
             }
+            return "[ERROR] " + res.message();
+        } catch (Exception e) {
+            return "[ERROR] Error al iniciar nodo '" + id + "': " + e.getMessage();
         }
-        return ok ? "[SUCCESS] Nodo '" + id + "' iniciado (RUNNING) y sincronización con PRIMARY solicitada."
-                : "[ERROR] No se pudo iniciar el nodo '" + id + "' (nodo no encontrado).";
     }
 
     // --- 4.b Distribución y Migración de Datos en Clúster Raft ---
@@ -2587,15 +2952,24 @@ public final class JettraStoreShellApp implements AutoCloseable {
     }
 
     private String handleStopNode(String command) {
+        if (!hasAdminRole()) {
+            return "[DENIED] Acceso denegado: detener nodos del clúster está restringido exclusivamente a usuarios con rol 'admin'.";
+        }
         String id = cleanQuotes(command.substring("STOP NODE ".length()).trim());
         if (id.isBlank())
             return "[ERROR] Uso: STOP NODE <nodeId>";
-        if ("node-01".equalsIgnoreCase(id) || client.getRingEngine().getNodeId().equalsIgnoreCase(id)) {
-            return "[ERROR] No se puede detener el nodo primario local en ejecución.";
+        try {
+            client.setActiveRole(currentRole);
+            var res = client.stopClusterNode(id);
+            if (res.success()) {
+                return String.format(
+                        "[SUCCESS] %s (mecanismo: %s). Ejecute 'show nodes' para verificar el quórum y estado.",
+                        res.message(), res.mechanism());
+            }
+            return "[ERROR] " + res.message();
+        } catch (Exception e) {
+            return "[ERROR] Error al detener nodo '" + id + "': " + e.getMessage();
         }
-        boolean ok = client.getRingEngine().stopPeer(id);
-        return ok ? "[SUCCESS] Nodo '" + id + "' detenido (STOPPED). Tráfico de anillo pausado para este nodo."
-                : "[ERROR] No se pudo detener el nodo '" + id + "' (nodo no encontrado).";
     }
 
     // --- 5. Control de Bases de Datos & Detección en Nodo PRIMARY ---
@@ -2615,13 +2989,16 @@ public final class JettraStoreShellApp implements AutoCloseable {
             } else {
                 colCount = client.getLightweightCollectionCount(db);
             }
-            String tipo = db.startsWith("sample_") || db.startsWith("example_") ? "SAMPLE" : (db.equals("system_metadata_db") ? "SYSTEM" : "USER");
+            String tipo = db.startsWith("sample_") || db.startsWith("example_") ? "SAMPLE"
+                    : (db.equals("system_metadata_db") ? "SYSTEM" : "USER");
             String status = db.equals(currentDatabase) ? "* ACTIVA" : (loaded ? "EN MEMORIA" : "EN PRIMARY");
             sb.append(String.format("| %-34s | %-8s | %-11d | %-14s |\n", db, tipo, colCount, status));
         }
         sb.append("+------------------------------------+----------+-------------+----------------+\n");
-        String activeLabel = (currentDatabase != null && !currentDatabase.isBlank()) ? currentDatabase : "(ninguna seleccionada)";
-        sb.append(String.format("Total: %d base(s) de datos almacenadas en el nodo PRIMARY. Base activa: '%s'\n", dbs.size(), activeLabel));
+        String activeLabel = (currentDatabase != null && !currentDatabase.isBlank()) ? currentDatabase
+                : "(ninguna seleccionada)";
+        sb.append(String.format("Total: %d base(s) de datos almacenadas en el nodo PRIMARY. Base activa: '%s'\n",
+                dbs.size(), activeLabel));
         return sb.toString();
     }
 
@@ -5224,9 +5601,10 @@ public final class JettraStoreShellApp implements AutoCloseable {
 
         while (true) {
             String dbLabel = (shell.getCurrentDatabase() != null && !shell.getCurrentDatabase().isBlank())
-                    ? shell.getCurrentDatabase() : "no-db";
+                    ? shell.getCurrentDatabase()
+                    : "no-db";
             String prompt = String.format("jettra-shell [%s@%s:%d/%s]> ",
-                shell.getCurrentUser(), shell.getCurrentHost(), shell.getCurrentPort(), dbLabel);
+                    shell.getCurrentUser(), shell.getCurrentHost(), shell.getCurrentPort(), dbLabel);
             String line = null;
             if (lineReader != null) {
                 try {

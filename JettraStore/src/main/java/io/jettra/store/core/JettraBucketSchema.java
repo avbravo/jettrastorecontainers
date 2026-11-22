@@ -137,7 +137,9 @@ public final class JettraBucketSchema {
             Object value = record.get(attr);
             List<String> rules = parseRules(rule.jettra_rules());
 
-            boolean required = rules.stream().anyMatch(r ->
+            boolean autoInc = rules.stream().anyMatch(r ->
+                    r.equalsIgnoreCase("AUTO_INCREMENT") || r.equalsIgnoreCase("AUTOINCREMENT"));
+            boolean required = !autoInc && rules.stream().anyMatch(r ->
                     r.equalsIgnoreCase("NOT_NULL")
                     || r.equalsIgnoreCase("REQUIRED")
                     || r.equalsIgnoreCase("NOT_EMPTY")

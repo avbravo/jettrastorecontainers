@@ -2612,3 +2612,13 @@ CREATE BUCKET INDEX idx_pais_siglas ON Pais (siglas) TYPE BTREE UNIQUE
 SHOW BUCKET INDEXES Pais
 DROP BUCKET INDEX idx_pais_siglas
 ```
+
+
+---
+
+## Capítulo 20: Sincronización Automática de `cluster.config` con el Nodo `PRIMARY`
+
+`JettraStoreShell` mantiene sincronizado su archivo `cluster.config` local de forma automática:
+1. **Al conectar (`connectAndLogin`)**: solicita el archivo `cluster.config` vigente al nodo `PRIMARY` mediante `TYPE_GET_CLUSTER_CONFIG_REQ`, valida su integridad y lo persiste atómicamente en disco local.
+2. **Ante eventos de clúster (`ADD NODE`, `REMOVE NODE`, failover o cambios desde `JettraStoreExplorer`)**: un listener sobre `JettraClusterEventBus` detecta los eventos de membresía y refresca `cluster.config` y `ringEngine` automáticamente sin intervención manual.
+3. **En `SHOW NODES`**: consulta siempre la topología viva del `PRIMARY` y aplica el invariante de líder único (nunca duplica `PRIMARY`/`LEADER` ni muestra nodos fantasma eliminados desde otro cliente).

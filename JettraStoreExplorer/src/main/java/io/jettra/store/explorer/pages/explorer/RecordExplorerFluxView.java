@@ -37,30 +37,45 @@ public class RecordExplorerFluxView extends FluxView {
 
     private final String activeDb;
     private final String activeBucket;
+    private final String activeSection; // records, schema, indexes
     private final String searchQuery;
     private final String editRecordId;
     private final String viewRecordId;
     private final String historyRecordId;
     private final boolean showCreateForm;
     private final boolean showCreateBucketForm;
+    private final boolean showEditSchemaForm;
+    private final boolean showViewSchemaModal;
     private final String message;
     private final int requestedPage;
     private final int pageSize;
 
-    public RecordExplorerFluxView(String activeDb, String activeBucket, String searchQuery,
+    public RecordExplorerFluxView(String activeDb, String activeBucket, String activeSection, String searchQuery,
                                   String editRecordId, String viewRecordId, String historyRecordId,
-                                  boolean showCreateForm, boolean showCreateBucketForm, String message, int page, int pageSize) {
+                                  boolean showCreateForm, boolean showCreateBucketForm,
+                                  boolean showEditSchemaForm, boolean showViewSchemaModal,
+                                  String message, int page, int pageSize) {
         this.activeDb = activeDb;
         this.activeBucket = activeBucket;
+        this.activeSection = (activeSection != null && !activeSection.isBlank()) ? activeSection.trim().toLowerCase() : "records";
         this.searchQuery = searchQuery != null ? searchQuery : "";
         this.editRecordId = editRecordId;
         this.viewRecordId = viewRecordId;
         this.historyRecordId = historyRecordId;
         this.showCreateForm = showCreateForm;
         this.showCreateBucketForm = showCreateBucketForm;
+        this.showEditSchemaForm = showEditSchemaForm;
+        this.showViewSchemaModal = showViewSchemaModal;
         this.message = message;
         this.requestedPage = Math.max(1, page);
         this.pageSize = pageSize > 0 ? Math.min(100, pageSize) : DEFAULT_PAGE_SIZE;
+    }
+
+    public RecordExplorerFluxView(String activeDb, String activeBucket, String searchQuery,
+                                  String editRecordId, String viewRecordId, String historyRecordId,
+                                  boolean showCreateForm, boolean showCreateBucketForm, String message, int page, int pageSize) {
+        this(activeDb, activeBucket, "records", searchQuery, editRecordId, viewRecordId, historyRecordId,
+             showCreateForm, showCreateBucketForm, false, false, message, page, pageSize);
     }
 
     public RecordExplorerFluxView(String activeDb, String activeBucket, String searchQuery,
@@ -122,16 +137,20 @@ public class RecordExplorerFluxView extends FluxView {
         // 3. Barra de Búsqueda y Botones "+ Nuevo Bucket" / "+ Nuevo Registro"
         Widget searchAndActions = buildSearchToolbar(currentDb, currentBucket, searchQuery, totalRecords, currentPage, totalPages, pageSize, isStreamed);
 
-        // 4. Panel Formulario Crear Bucket / Crear / Editar Registro si está activo
+        // 4. Panel Formulario Crear Bucket / CRUD Estructura / Crear / Editar Registro si está activo
         Widget formPanel = null;
         if (showCreateBucketForm) {
             formPanel = buildCreateBucketForm(currentDb, currentBucket);
+        } else if (showEditSchemaForm) {
+            formPanel = buildEditSchemaModal(currentDb, bucketInfo);
+        } else if (showViewSchemaModal) {
+            formPanel = buildViewSchemaModal(currentDb, bucketInfo);
         } else if (showCreateForm) {
-            formPanel = buildCreateRecordForm(currentDb, currentBucket, bucketInfo != null ? bucketInfo.getEngineType() : "DOCUMENT");
+            formPanel = buildCreateRecordForm(currentDb, currentBucket, bucketInfo);
         } else if (editRecordId != null && !editRecordId.isBlank()) {
             EngineRecordInfo rec = plugin.getRecord(currentDb, currentBucket, editRecordId);
             if (rec != null) {
-                formPanel = buildEditRecordForm(currentDb, currentBucket, rec);
+                formPanel = buildEditRecordForm(currentDb, currentBucket, bucketInfo, rec);
             }
         } else if (viewRecordId != null && !viewRecordId.isBlank()) {
             EngineRecordInfo rec = plugin.getRecord(currentDb, currentBucket, viewRecordId);
@@ -145,28 +164,53 @@ public class RecordExplorerFluxView extends FluxView {
             }
         }
 
-        // 5. Tabla de Registros CRUD con Paginación Streaming + Panel de Esquema e Índices del Bucket
+        // 5. Secciones del Bucket: Estructura (CRUD), Índices (NUMERIC/AUTO_INCREMENT) y Registros
         Widget recordsTable = buildRecordsTable(pageRecords, totalRecords, currentDb, currentBucket, searchQuery, currentPage, totalPages, pageSize, isStreamed);
-        Widget bucketSchemaAndIndexes = buildBucketSchemaAndIndexesPanel(currentDb, bucketInfo);
+        Widget schemaPanel = buildBucketSchemaPanel(currentDb, bucketInfo);
+        Widget indexesPanel = buildBucketIndexesPanel(currentDb, bucketInfo);
 
         List<Widget> mainColChildren = new java.util.ArrayList<>();
         if (flashWidget != null) mainColChildren.add(flashWidget);
         mainColChildren.add(dbSelector);
         mainColChildren.add(bucketSelector);
-        mainColChildren.add(searchAndActions);
         if (formPanel != null) {
             Modal dialog = Modal.of(formPanel).open(true);
             dialog.id("explorerActionDialog");
             mainColChildren.add(dialog);
         }
-        mainColChildren.add(recordsTable);
-        mainColChildren.add(bucketSchemaAndIndexes);
+        if ("schema".equals(activeSection)) {
+            mainColChildren.add(schemaPanel);
+            mainColChildren.add(indexesPanel);
+            mainColChildren.add(searchAndActions);
+            mainColChildren.add(recordsTable);
+        } else if ("indexes".equals(activeSection)) {
+            mainColChildren.add(indexesPanel);
+            mainColChildren.add(schemaPanel);
+            mainColChildren.add(searchAndActions);
+            mainColChildren.add(recordsTable);
+        } else {
+            mainColChildren.add(searchAndActions);
+            mainColChildren.add(recordsTable);
+            mainColChildren.add(schemaPanel);
+            mainColChildren.add(indexesPanel);
+        }
 
         Div mainCol = Div.of(mainColChildren.toArray(new Widget[0]));
-        mainCol.modifier(new Modifier().style("flex: 1; min-width: 0;"));
+        mainCol.modifier(new Modifier().cssClass("explorer-main-col").style("flex: 1; min-width: 0; overflow-x: auto;"));
 
-        Div layout = Div.of(treeNav, mainCol);
-        layout.modifier(new Modifier().style("display: flex; gap: 1.25rem; align-items: flex-start; flex-wrap: wrap;"));
+        Widget responsiveCss = FluxUi.styleSheet("""
+                .explorer-layout { display: flex; gap: 1.25rem; align-items: flex-start; flex-wrap: nowrap; width: 100%; box-sizing: border-box; }
+                .explorer-tree-sidebar { width: 270px; flex-shrink: 0; position: sticky; top: 1rem; max-height: calc(100vh - 130px); overflow-y: auto; box-sizing: border-box; }
+                .explorer-form-card { width: min(92vw, 720px); max-width: 100%; box-sizing: border-box; padding: 1.25rem; }
+                .explorer-form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 0.9rem; margin-bottom: 1rem; }
+                @media (max-width: 920px) {
+                    .explorer-layout { flex-direction: column; }
+                    .explorer-tree-sidebar { width: 100% !important; position: static !important; max-height: 260px !important; }
+                }
+                """);
+
+        Div layout = Div.of(responsiveCss, treeNav, mainCol);
+        layout.modifier(new Modifier().cssClass("explorer-layout"));
         return layout;
     }
 
@@ -203,12 +247,36 @@ public class RecordExplorerFluxView extends FluxView {
                     for (EngineBucketInfo b : entry.getValue()) {
                         boolean activeB = b.getBucketName().equalsIgnoreCase(currentBucket);
                         String stTag = "DEFINED".equalsIgnoreCase(b.getStructureType()) ? "DEFINED" : "NONE";
-                        Link bLink = Link.of("/explorer?db=" + db + "&bucket=" + b.getBucketName(),
-                                "📦 " + b.getBucketName() + " [" + stTag + "] (" + b.getTotalObjects() + ")");
+                        Link bLink = Link.of("/explorer?db=" + db + "&bucket=" + b.getBucketName() + "&section=records",
+                                (activeB ? "▾ 📦 " : "▸ 📦 ") + b.getBucketName() + " [" + stTag + "]");
                         bLink.modifier(new Modifier().style(
-                                "display: block; padding: 0.25rem 0.5rem 0.25rem 1.75rem; border-radius: 5px; text-decoration: none; font-size: 0.78rem; "
-                                + (activeB ? "background: rgba(16, 185, 129, 0.18); color: #10b981; font-weight: 700;" : "color: var(--text-muted);")));
+                                "display: block; padding: 0.3rem 0.5rem 0.3rem 1.35rem; border-radius: 5px; text-decoration: none; font-size: 0.8rem; "
+                                + (activeB ? "background: rgba(16, 185, 129, 0.18); color: #10b981; font-weight: 700;" : "color: var(--text-main);")));
                         treeNodes.add(bLink);
+
+                        // Subárbol explícito por Bucket: Estructura, Índices y Registros
+                        if (activeB) {
+                            String subBase = "display: block; padding: 0.22rem 0.45rem 0.22rem 0.75rem; border-radius: 5px; text-decoration: none; font-size: 0.76rem; margin-bottom: 2px; ";
+                            Link schemaNode = Link.of("/explorer?db=" + db + "&bucket=" + b.getBucketName() + "&section=schema",
+                                    "📐 Estructura (" + ("DEFINED".equalsIgnoreCase(stTag) ? b.getAttributes().size() + " campos" : "NONE") + ")");
+                            schemaNode.modifier(new Modifier().style(subBase
+                                    + ("schema".equals(activeSection) ? "background: rgba(0, 212, 255, 0.16); color: #00d4ff; font-weight: 700;" : "color: var(--text-muted);")));
+
+                            Link indexesNode = Link.of("/explorer?db=" + db + "&bucket=" + b.getBucketName() + "&section=indexes",
+                                    "⚡ Índices (" + b.getIndexes().size() + ")");
+                            indexesNode.modifier(new Modifier().style(subBase
+                                    + ("indexes".equals(activeSection) ? "background: rgba(168, 85, 247, 0.18); color: #c084fc; font-weight: 700;" : "color: var(--text-muted);")));
+
+                            Link recordsNode = Link.of("/explorer?db=" + db + "&bucket=" + b.getBucketName() + "&section=records",
+                                    "📄 Registros (" + b.getTotalObjects() + ")");
+                            recordsNode.modifier(new Modifier().style(subBase
+                                    + ("records".equals(activeSection) ? "background: rgba(16, 185, 129, 0.16); color: #34d399; font-weight: 700;" : "color: var(--text-muted);")));
+
+                            Div subTree = Div.of(schemaNode, indexesNode, recordsNode);
+                            subTree.modifier(new Modifier().style(
+                                    "margin-left: 1.7rem; padding-left: 0.45rem; border-left: 1px dashed rgba(148, 163, 184, 0.4); margin-top: 2px; margin-bottom: 4px;"));
+                            treeNodes.add(subTree);
+                        }
                     }
                 }
             }
@@ -216,8 +284,8 @@ public class RecordExplorerFluxView extends FluxView {
 
         Div sidebar = Div.of(treeNodes.toArray(new Widget[0]));
         sidebar.modifier(new Modifier()
-                .cssClass("ui-card")
-                .style("width: 265px; flex-shrink: 0; padding: 1rem; border-left: 3px solid #00d4ff;"));
+                .cssClass("ui-card explorer-tree-sidebar")
+                .style("padding: 1rem; border-left: 3px solid #00d4ff;"));
         return sidebar;
     }
 
@@ -255,16 +323,86 @@ public class RecordExplorerFluxView extends FluxView {
         return card;
     }
 
-    private Widget buildBucketSchemaAndIndexesPanel(String currentDb, EngineBucketInfo bucketInfo) {
+    private Widget buildEditSchemaModal(String currentDb, EngineBucketInfo bucketInfo) {
+        String bucketName = bucketInfo != null ? bucketInfo.getBucketName() : activeBucket;
+        boolean hasSchema = bucketInfo != null && "DEFINED".equalsIgnoreCase(bucketInfo.getStructureType()) && !bucketInfo.getAttributes().isEmpty();
+        String existingJson = hasSchema
+                ? io.jettra.store.core.JettraBucketSchema.toAttributesJson(bucketInfo.getAttributes())
+                : "[\n"
+                + "  {\"atribute_name\": \"codigo\", \"type_atribute\": \"Long\", \"jettra_rules\": \"AUTO_INCREMENT\", \"description\": \"Código secuencial\"},\n"
+                + "  {\"atribute_name\": \"name\", \"type_atribute\": \"String\", \"jettra_rules\": \"NOT_NULL\", \"description\": \"Nombre\"},\n"
+                + "  {\"atribute_name\": \"precio\", \"type_atribute\": \"Double\", \"jettra_rules\": \"POSITIVE\", \"description\": \"Valor numérico\"}\n"
+                + "]";
+
+        Header title = Header.of(3, (hasSchema ? "✏️ Editar Estructura DEFINED" : "➕ Crear Estructura DEFINED") + " • " + currentDb + "." + bucketName);
+        title.modifier(new Modifier().style("margin: 0 0 0.75rem 0; color: #00d4ff;"));
+
+        Form form = Form.of(
+                FluxUi.hidden("action", "save_schema"),
+                FluxUi.hidden("db", currentDb),
+                FluxUi.hidden("bucket", bucketName),
+                FluxUi.fieldColumn("Definición JSON de Atributos (atribute_name, type_atribute, jettra_rules, description)",
+                        FluxUi.textArea("attributesJson", existingJson, 9, true, ""), "margin-bottom: 1rem;"),
+                Row.of(
+                        FluxUi.submitButton("💾 Guardar Estructura", "app-btn-primary", ""),
+                        FluxUi.linkButton("/explorer?db=" + currentDb + "&bucket=" + bucketName + "&section=schema", "Cancelar", "app-btn-secondary", "")
+                ).modifier(new Modifier().style("display: flex; gap: 0.75rem; justify-content: flex-end;"))
+        ).action("/explorer").method("POST");
+
+        Div card = Div.of(title, form);
+        card.modifier(new Modifier().cssClass("ui-card explorer-form-card").style("border-left: 4px solid #00d4ff;"));
+        return card;
+    }
+
+    private Widget buildViewSchemaModal(String currentDb, EngineBucketInfo bucketInfo) {
+        String bucketName = bucketInfo != null ? bucketInfo.getBucketName() : activeBucket;
+        String json = (bucketInfo != null && !bucketInfo.getAttributes().isEmpty())
+                ? io.jettra.store.core.JettraBucketSchema.toAttributesJson(bucketInfo.getAttributes())
+                : "[]";
+        Header title = Header.of(3, "👁️ Definición JSON de Estructura • " + currentDb + "." + bucketName);
+        title.modifier(new Modifier().style("margin: 0 0 0.75rem 0; color: #00d4ff;"));
+        Div card = Div.of(
+                title,
+                FluxUi.preBlock(json, "background: rgba(0,0,0,0.25); padding: 1rem; border-radius: 8px; margin-bottom: 1rem;"),
+                Row.of(
+                        FluxUi.linkButton("/explorer?db=" + currentDb + "&bucket=" + bucketName + "&section=schema&action=edit_schema", "✏️ Editar Estructura", "app-btn-primary", ""),
+                        FluxUi.linkButton("/explorer?db=" + currentDb + "&bucket=" + bucketName + "&section=schema", "Cerrar", "app-btn-secondary", "")
+                ).modifier(new Modifier().style("display: flex; gap: 0.75rem; justify-content: flex-end;"))
+        );
+        card.modifier(new Modifier().cssClass("ui-card explorer-form-card").style("border-left: 4px solid #10b981;"));
+        return card;
+    }
+
+    private Widget buildBucketSchemaPanel(String currentDb, EngineBucketInfo bucketInfo) {
         if (bucketInfo == null) return Div.of();
         List<Widget> children = new ArrayList<>();
+        boolean isDefined = "DEFINED".equalsIgnoreCase(bucketInfo.getStructureType()) && !bucketInfo.getAttributes().isEmpty();
+        String bName = bucketInfo.getBucketName();
 
-        String stType = bucketInfo.getStructureType();
-        Header h = Header.of(4, "📐 Esquema (" + stType + ") e Índices del Bucket '" + bucketInfo.getBucketName() + "' [" + bucketInfo.getEngineType() + "]");
-        h.modifier(new Modifier().style("margin: 0 0 0.75rem 0; color: #00d4ff;"));
-        children.add(h);
+        Header h = Header.of(4, "📐 Estructura del Bucket '" + bName + "' [" + bucketInfo.getEngineType() + " • " + (isDefined ? "DEFINED" : "NONE") + "]");
+        h.modifier(new Modifier().style("margin: 0; color: #00d4ff;"));
 
-        if ("DEFINED".equalsIgnoreCase(stType) && !bucketInfo.getAttributes().isEmpty()) {
+        List<Widget> crudBtns = new ArrayList<>();
+        if (!isDefined) {
+            crudBtns.add(FluxUi.linkButton("/explorer?db=" + currentDb + "&bucket=" + bName + "&section=schema&action=new_schema",
+                    "➕ Crear Estructura (DEFINED)", "app-btn-primary", "padding: 0.35rem 0.75rem; font-size: 0.8rem;"));
+        } else {
+            crudBtns.add(FluxUi.linkButton("/explorer?db=" + currentDb + "&bucket=" + bName + "&section=schema&action=view_schema",
+                    "👁️ Ver JSON", "app-btn-secondary", "padding: 0.35rem 0.7rem; font-size: 0.8rem;"));
+            crudBtns.add(FluxUi.linkButton("/explorer?db=" + currentDb + "&bucket=" + bName + "&section=schema&action=edit_schema",
+                    "✏️ Editar Estructura", "app-btn-primary", "padding: 0.35rem 0.7rem; font-size: 0.8rem;"));
+            Link delSchema = FluxUi.linkButton("/explorer?db=" + currentDb + "&bucket=" + bName + "&section=schema&action=delete_schema",
+                    "🗑️ Eliminar Estructura", "app-btn-danger", "padding: 0.35rem 0.7rem; font-size: 0.8rem;");
+            delSchema.modifier(new Modifier().cssClass("app-btn-danger").style("padding: 0.35rem 0.7rem; font-size: 0.8rem;")
+                    .attribute("onclick", "return confirm('¿Eliminar la estructura DEFINED de " + escapeHtml(bName) + " y volver a modo NONE?');"));
+            crudBtns.add(delSchema);
+        }
+
+        Div headerRow = Div.of(h, Row.of(crudBtns.toArray(new Widget[0])).modifier(new Modifier().style("display: flex; gap: 0.5rem; flex-wrap: wrap;")));
+        headerRow.modifier(new Modifier().style("display: flex; justify-content: space-between; align-items: center; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 0.85rem;"));
+        children.add(headerRow);
+
+        if (isDefined) {
             List<List<Widget>> attrRows = new ArrayList<>();
             for (var a : bucketInfo.getAttributes()) {
                 attrRows.add(List.of(
@@ -276,21 +414,36 @@ public class RecordExplorerFluxView extends FluxView {
             }
             children.add(Datatable.ofWidgets(List.of(Text.of("Atributo"), Text.of("Tipo"), Text.of("Jettra Rules"), Text.of("Descripción")), attrRows));
         } else {
-            Paragraph freeP = Paragraph.of("Estructura NONE (esquema flexible): admite registros con atributos libres sin restricción rígida.");
-            freeP.modifier(new Modifier().style("font-size: 0.82rem; color: var(--text-muted); margin-bottom: 0.75rem;"));
+            Paragraph freeP = Paragraph.of("Estructura NONE (esquema flexible): admite registros con atributos libres sin restricción rígida. Use '➕ Crear Estructura (DEFINED)' para definir atributos y validaciones.");
+            freeP.modifier(new Modifier().style("font-size: 0.82rem; color: var(--text-muted); margin: 0;"));
             children.add(freeP);
         }
 
-        // Tabla de índices del bucket
+        Div panel = Div.of(children.toArray(new Widget[0]));
+        panel.modifier(new Modifier().cssClass("ui-card").style("margin-top: 1.25rem; padding: 1rem; border-top: 3px solid #00d4ff;"));
+        return panel;
+    }
+
+    private Widget buildBucketIndexesPanel(String currentDb, EngineBucketInfo bucketInfo) {
+        if (bucketInfo == null) return Div.of();
+        List<Widget> children = new ArrayList<>();
+        String bName = bucketInfo.getBucketName();
+
+        Header h = Header.of(4, "⚡ Índices del Bucket '" + bName + "' (Soporte Estándar, NUMERIC y AUTO_INCREMENT)");
+        h.modifier(new Modifier().style("margin: 0 0 0.75rem 0; color: #c084fc;"));
+        children.add(h);
+
         List<List<Widget>> idxRows = new ArrayList<>();
         for (var idx : bucketInfo.getIndexes()) {
-            Link dropIdx = Link.of("/explorer?db=" + currentDb + "&bucket=" + bucketInfo.getBucketName()
+            Link dropIdx = Link.of("/explorer?db=" + currentDb + "&bucket=" + bName
                     + "&action=delete_bucket_index&indexName=" + idx.getName(), "Eliminar");
             dropIdx.modifier(new Modifier().cssClass("app-btn-danger").style("padding: 0.25rem 0.6rem; font-size: 0.75rem;"));
+            String typeColor = "AUTO_INCREMENT".equalsIgnoreCase(idx.getType()) ? "#f59e0b"
+                    : ("NUMERIC".equalsIgnoreCase(idx.getType()) ? "#38bdf8" : "#00d4ff");
             idxRows.add(List.of(
                     Text.of(idx.getName()),
                     Text.of(idx.getFields()),
-                    FluxUi.pillBadge(idx.getType(), "#00d4ff"),
+                    FluxUi.pillBadge(idx.getType(), typeColor),
                     FluxUi.pillBadge(idx.isUnique() ? "UNIQUE" : "NON-UNIQUE", idx.isUnique() ? "#ffd700" : "#10b981"),
                     FluxUi.pillBadge(idx.getStatus(), "#10b981"),
                     dropIdx
@@ -300,15 +453,28 @@ public class RecordExplorerFluxView extends FluxView {
             children.add(Datatable.ofWidgets(List.of(Text.of("Índice"), Text.of("Campo(s)"), Text.of("Tipo"), Text.of("Unicidad"), Text.of("Estado"), Text.of("Acciones")), idxRows));
         }
 
-        // Formulario rápido para crear un índice en el bucket actual
+        // Detectar campos del esquema (resaltando numéricos y AUTO_INCREMENT)
+        List<String> schemaFieldOptions = new ArrayList<>();
+        for (var a : bucketInfo.getAttributes()) {
+            if (!a.atribute_name().isBlank()) {
+                schemaFieldOptions.add(a.atribute_name());
+            }
+        }
+        Widget fieldInput = schemaFieldOptions.isEmpty()
+                ? FluxUi.textInput("indexField", "", "Campo(s) (ej: codigo, precio)", true)
+                : Row.of(
+                        FluxUi.dropdown("indexFieldSelect", schemaFieldOptions, schemaFieldOptions.get(0)),
+                        FluxUi.textInput("indexField", "", "o campo personalizado", false)
+                  ).modifier(new Modifier().style("display: flex; gap: 0.4rem; align-items: center;"));
+
         Form idxForm = Form.of(
                 FluxUi.hidden("action", "create_bucket_index"),
                 FluxUi.hidden("db", currentDb),
-                FluxUi.hidden("bucket", bucketInfo.getBucketName()),
+                FluxUi.hidden("bucket", bName),
                 Row.of(
-                        FluxUi.textInput("indexName", "", "Nombre índice (ej: idx_name)", true),
-                        FluxUi.textInput("indexField", "", "Campo(s) (ej: name)", true),
-                        FluxUi.dropdown("indexType", List.of("BTREE", "HASH", "SPARSE", "VECTOR_HNSW", "SPATIAL_R_TREE"), "BTREE"),
+                        FluxUi.textInput("indexName", "", "Nombre índice (ej: idx_precio)", true),
+                        fieldInput,
+                        FluxUi.dropdown("indexType", List.of("BTREE", "HASH", "NUMERIC", "AUTO_INCREMENT", "SPARSE", "VECTOR_HNSW", "SPATIAL_R_TREE"), "NUMERIC"),
                         FluxUi.dropdown("indexUnique", List.of("false", "true"), "false"),
                         FluxUi.submitButton("+ Crear Índice", "app-btn-primary", "")
                 ).modifier(new Modifier().style("display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; margin-top: 0.85rem;"))
@@ -405,61 +571,134 @@ public class RecordExplorerFluxView extends FluxView {
                 .modifier(new Modifier().style("display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.75rem; margin-bottom: 1.25rem;"));
     }
 
-    private Widget buildCreateRecordForm(String currentDb, String currentBucket, String engineType) {
+    private Widget buildStructuredFieldsSection(EngineBucketInfo bucketInfo, Map<String, Object> existingValues) {
+        List<Widget> fieldWidgets = new ArrayList<>();
+        Paragraph banner = Paragraph.of("📐 Estructura DEFINED activa: complete los campos según su tipo y reglas (jettra_rules).");
+        banner.modifier(new Modifier().style("font-size: 0.82rem; color: #10b981; margin: 0 0 0.75rem 0; font-weight: 600;"));
+        fieldWidgets.add(banner);
+
+        List<Widget> gridItems = new ArrayList<>();
+        for (var attr : bucketInfo.getAttributes()) {
+            String name = attr.atribute_name();
+            String type = attr.type_atribute() != null ? attr.type_atribute() : "String";
+            String rules = attr.jettra_rules() != null ? attr.jettra_rules() : "";
+            String desc = attr.description() != null && !attr.description().isBlank() ? attr.description() : name;
+            String upperRules = rules.toUpperCase();
+            boolean isAutoInc = upperRules.contains("AUTO_INCREMENT") || upperRules.contains("AUTOINCREMENT");
+            boolean isRequired = !isAutoInc && (upperRules.contains("NOT_NULL") || upperRules.contains("REQUIRED")
+                    || upperRules.contains("NOT_EMPTY") || upperRules.contains("NOT_BLANK"));
+            String val = existingValues != null && existingValues.get(name) != null ? String.valueOf(existingValues.get(name)) : "";
+
+            String labelText = name + " (" + type + ")" + (isRequired ? " *" : "") + (isAutoInc ? " [AUTO_INCREMENT]" : "");
+            Widget control;
+            String lowerType = type.toLowerCase();
+            if (lowerType.equals("boolean") || lowerType.equals("bool")) {
+                control = FluxUi.dropdown("struct_" + name, List.of("true", "false"), val.isBlank() ? "true" : val);
+            } else {
+                String placeholder = isAutoInc ? "Autogenerado automáticamente si se omite" : (desc + (rules.isBlank() ? "" : " [" + rules + "]"));
+                var input = FluxUi.textInput("struct_" + name, val, placeholder, isRequired);
+                Modifier mod = new Modifier().cssClass("app-input");
+                if (lowerType.equals("int") || lowerType.equals("integer") || lowerType.equals("long")) {
+                    mod.attribute("type", "number").attribute("step", "1");
+                } else if (lowerType.equals("double") || lowerType.equals("float") || lowerType.equals("decimal") || lowerType.equals("number")) {
+                    mod.attribute("type", "number").attribute("step", "any");
+                } else if (upperRules.contains("EMAIL")) {
+                    mod.attribute("type", "email");
+                } else {
+                    mod.attribute("type", "text");
+                }
+                if (isRequired) mod.attribute("required", "required");
+                if (upperRules.contains("POSITIVE")) mod.attribute("min", "0.0001");
+                else if (upperRules.contains("NON_NEGATIVE")) mod.attribute("min", "0");
+                input.modifier(mod);
+                control = input;
+            }
+            gridItems.add(FluxUi.fieldColumn(labelText, control, null));
+        }
+
+        Div grid = Div.of(gridItems.toArray(new Widget[0]));
+        grid.modifier(new Modifier().cssClass("explorer-form-grid"));
+        fieldWidgets.add(grid);
+
+        Div box = Div.of(fieldWidgets.toArray(new Widget[0]));
+        box.modifier(new Modifier().style("background: rgba(16, 185, 129, 0.06); border: 1px solid rgba(16, 185, 129, 0.35); border-radius: 8px; padding: 0.9rem; margin-bottom: 1rem;"));
+        return box;
+    }
+
+    private Widget buildCreateRecordForm(String currentDb, String currentBucket, EngineBucketInfo bucketInfo) {
+        String engineType = bucketInfo != null ? bucketInfo.getEngineType() : "DOCUMENT";
         String normalizedEngine = EngineRecordRenderer.normalizeEngine(engineType);
-        Header header = Header.of(3, "➕ Crear Nuevo Registro en [" + currentDb + " / " + currentBucket + "] • Motor: " + normalizedEngine);
-        header.modifier(new Modifier().style("font-size: 1.15rem; color: #00d4ff; margin: 0 0 1rem 0;"));
+        boolean isDefined = bucketInfo != null && "DEFINED".equalsIgnoreCase(bucketInfo.getStructureType()) && !bucketInfo.getAttributes().isEmpty();
+
+        Header header = Header.of(3, "➕ Crear Nuevo Registro en [" + currentDb + " / " + currentBucket + "] • Motor: " + normalizedEngine
+                + (isDefined ? " • Estructura: DEFINED" : " • Estructura: NONE"));
+        header.modifier(new Modifier().style("font-size: 1.1rem; color: #00d4ff; margin: 0 0 1rem 0;"));
 
         Widget topGrid = Div.of(
                 FluxUi.fieldColumn("Identificador Único (ID / Clave Primaria)", FluxUi.textInput("recordId", "", "REG-2026-001", true), null),
                 FluxUi.fieldColumn("Descripción / Resumen Corto", FluxUi.textInput("summary", "", "Descripción breve del documento o entidad", true), null)
-        ).modifier(new Modifier().style("display: grid; grid-template-columns: 1fr 2fr; gap: 1rem; margin-bottom: 1rem;"));
+        ).modifier(new Modifier().cssClass("explorer-form-grid"));
 
-        Widget engineCreatorWidget = EngineRecordRenderer.renderCreateFieldsWidget(normalizedEngine);
+        Widget fieldsWidget = isDefined
+                ? buildStructuredFieldsSection(bucketInfo, null)
+                : EngineRecordRenderer.renderCreateFieldsWidget(normalizedEngine);
 
         Widget btns = Div.of(
                 FluxUi.linkButton("/explorer?db=" + currentDb + "&bucket=" + currentBucket, "Cancelar", "app-btn-secondary", null),
                 FluxUi.submitButton("💾 Guardar Registro", "app-btn-primary", null)
-        ).modifier(new Modifier().style("display: flex; gap: 0.75rem; justify-content: flex-end;"));
+        ).modifier(new Modifier().style("display: flex; gap: 0.75rem; justify-content: flex-end; margin-top: 0.75rem;"));
 
         Form form = Form.of(
                 FluxUi.hidden("action", "save_new"),
                 FluxUi.hidden("db", currentDb),
                 FluxUi.hidden("bucket", currentBucket),
-                topGrid, engineCreatorWidget, btns
+                topGrid, fieldsWidget, btns
         ).action("/explorer").method("POST");
 
         Widget card = Div.of(header, form);
-        card.modifier(new Modifier().cssClass("ui-card").style("margin-bottom: 1.5rem; border-left: 4px solid #00d4ff; background: var(--bg-subtle);"));
+        card.modifier(new Modifier().cssClass("ui-card explorer-form-card").style("border-left: 4px solid #00d4ff; background: var(--bg-subtle);"));
         return card;
     }
 
-    private Widget buildEditRecordForm(String currentDb, String currentBucket, EngineRecordInfo rec) {
+    private Widget buildEditRecordForm(String currentDb, String currentBucket, EngineBucketInfo bucketInfo, EngineRecordInfo rec) {
+        boolean isDefined = bucketInfo != null && "DEFINED".equalsIgnoreCase(bucketInfo.getStructureType()) && !bucketInfo.getAttributes().isEmpty();
         Header header = Header.of(3, "✏️ Modificar Registro [" + rec.getId() + "] (v" + rec.getVersion() + ") • Motor: " + rec.getEngineType());
-        header.modifier(new Modifier().style("font-size: 1.15rem; color: #ffd700; margin: 0 0 1rem 0;"));
+        header.modifier(new Modifier().style("font-size: 1.1rem; color: #ffd700; margin: 0 0 1rem 0;"));
 
         Widget topGrid = Div.of(
                 FluxUi.fieldColumn("Identificador (Solo Lectura)", FluxUi.disabledInput(rec.getId()), null),
                 FluxUi.fieldColumn("Descripción / Resumen Corto", FluxUi.textInput("summary", rec.getSummary(), "", true), null)
-        ).modifier(new Modifier().style("display: grid; grid-template-columns: 1fr 2fr; gap: 1rem; margin-bottom: 1rem;"));
+        ).modifier(new Modifier().cssClass("explorer-form-grid"));
 
-        Widget engineEditorWidget = EngineRecordRenderer.renderEditFieldsWidget(rec);
+        Widget fieldsWidget;
+        if (isDefined) {
+            Map<String, Object> existingMap = new java.util.LinkedHashMap<>();
+            if (rec.getDetails() != null && !rec.getDetails().isBlank()) {
+                try {
+                    Object parsed = new io.jettra.json.JettraJson().parse(rec.getDetails().trim());
+                    if (parsed instanceof io.jettra.json.JsonObject jo) existingMap.putAll(jo.getMap());
+                } catch (Exception ignored) {}
+            }
+            fieldsWidget = buildStructuredFieldsSection(bucketInfo, existingMap);
+        } else {
+            fieldsWidget = EngineRecordRenderer.renderEditFieldsWidget(rec);
+        }
 
         Widget btns = Div.of(
                 FluxUi.linkButton("/explorer?db=" + currentDb + "&bucket=" + currentBucket, "Cancelar", "app-btn-secondary", null),
                 FluxUi.submitButton("💾 Actualizar Registro", "app-btn-primary", "background:#ffd700; color:#050b14;")
-        ).modifier(new Modifier().style("display: flex; gap: 0.75rem; justify-content: flex-end;"));
+        ).modifier(new Modifier().style("display: flex; gap: 0.75rem; justify-content: flex-end; margin-top: 0.75rem;"));
 
         Form form = Form.of(
                 FluxUi.hidden("action", "save_edit"),
                 FluxUi.hidden("db", currentDb),
                 FluxUi.hidden("bucket", currentBucket),
                 FluxUi.hidden("recordId", rec.getId()),
-                topGrid, engineEditorWidget, btns
+                topGrid, fieldsWidget, btns
         ).action("/explorer").method("POST");
 
         Widget card = Div.of(header, form);
-        card.modifier(new Modifier().cssClass("ui-card").style("margin-bottom: 1.5rem; border-left: 4px solid #ffd700; background: var(--bg-subtle);"));
+        card.modifier(new Modifier().cssClass("ui-card explorer-form-card").style("border-left: 4px solid #ffd700; background: var(--bg-subtle);"));
         return card;
     }
 

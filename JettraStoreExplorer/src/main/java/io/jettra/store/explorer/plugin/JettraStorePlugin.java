@@ -91,7 +91,8 @@ public class JettraStorePlugin {
     private final AtomicBoolean heartbeatRunning = new AtomicBoolean(false);
     private volatile Thread heartbeatThread;
     private volatile long heartbeatIntervalMs = Long.getLong("jettra.explorer.heartbeat.interval.ms", 3000L);
-    private final String clusterNodesConfigPath = System.getProperty("jettra.explorer.cluster.nodes.file", "memory/cluster_nodes.json");
+    private final String clusterNodesConfigPath = System.getProperty("jettra.explorer.cluster.nodes.file",
+            "memory/cluster_nodes.json");
 
     private JettraStorePlugin() {
         this.mapper = new ObjectMapper();
@@ -106,13 +107,16 @@ public class JettraStorePlugin {
         startClusterHeartbeatMonitor();
     }
 
-    // --- Configuración leída desde META-INF/microprofile-config.properties y microprofile-config.properties ---
+    // --- Configuración leída desde META-INF/microprofile-config.properties y
+    // microprofile-config.properties ---
     private void loadMicroprofileConfig() {
         Properties props = new Properties();
 
-        // 1. Cargar desde todos los recursos microprofile-config.properties presentes en el classpath
+        // 1. Cargar desde todos los recursos microprofile-config.properties presentes
+        // en el classpath
         try {
-            java.util.Enumeration<java.net.URL> urls = getClass().getClassLoader().getResources("META-INF/microprofile-config.properties");
+            java.util.Enumeration<java.net.URL> urls = getClass().getClassLoader()
+                    .getResources("META-INF/microprofile-config.properties");
             while (urls.hasMoreElements()) {
                 java.net.URL u = urls.nextElement();
                 try (var is = u.openStream()) {
@@ -123,12 +127,15 @@ public class JettraStorePlugin {
                     } else if (!props.containsKey("app.title")) {
                         props.putAll(p);
                     }
-                } catch (Exception ignored) {}
+                } catch (Exception ignored) {
+                }
             }
-        } catch (Exception ignored) {}
+        } catch (Exception ignored) {
+        }
 
         try {
-            java.util.Enumeration<java.net.URL> urls = getClass().getClassLoader().getResources("microprofile-config.properties");
+            java.util.Enumeration<java.net.URL> urls = getClass().getClassLoader()
+                    .getResources("microprofile-config.properties");
             while (urls.hasMoreElements()) {
                 java.net.URL u = urls.nextElement();
                 try (var is = u.openStream()) {
@@ -139,9 +146,11 @@ public class JettraStorePlugin {
                     } else if (!props.containsKey("app.title")) {
                         props.putAll(p);
                     }
-                } catch (Exception ignored) {}
+                } catch (Exception ignored) {
+                }
             }
-        } catch (Exception ignored) {}
+        } catch (Exception ignored) {
+        }
 
         // Fallback directo a recurso empaquetado de JettraStoreExplorer
         try (var is = getClass().getResourceAsStream("/META-INF/microprofile-config.properties")) {
@@ -152,7 +161,8 @@ public class JettraStorePlugin {
                     props.putAll(p);
                 }
             }
-        } catch (Exception ignored) {}
+        } catch (Exception ignored) {
+        }
 
         try (var is = getClass().getResourceAsStream("/microprofile-config.properties")) {
             if (is != null) {
@@ -162,17 +172,19 @@ public class JettraStorePlugin {
                     props.putAll(p);
                 }
             }
-        } catch (Exception ignored) {}
+        } catch (Exception ignored) {
+        }
 
-        // Sobreescrituras locales en disco si existen (solo si pertenecen a Explorer o especifican propiedades explícitas)
+        // Sobreescrituras locales en disco si existen (solo si pertenecen a Explorer o
+        // especifican propiedades explícitas)
         List<String> localCandidates = new ArrayList<>(List.of(
-            "src/main/resources/META-INF/microprofile-config.properties",
-            "src/main/resources/microprofile-config.properties",
-            "./microprofile-config.properties",
-            "./META-INF/microprofile-config.properties",
-            "./config/microprofile-config.properties"
-        ));
-        String explicitMpFile = System.getProperty("jettra.explorer.config.file", System.getProperty("microprofile.config.file"));
+                "src/main/resources/META-INF/microprofile-config.properties",
+                "src/main/resources/microprofile-config.properties",
+                "./microprofile-config.properties",
+                "./META-INF/microprofile-config.properties",
+                "./config/microprofile-config.properties"));
+        String explicitMpFile = System.getProperty("jettra.explorer.config.file",
+                System.getProperty("microprofile.config.file"));
         if (explicitMpFile != null && !explicitMpFile.isBlank()) {
             localCandidates.add(explicitMpFile.trim());
         }
@@ -185,7 +197,8 @@ public class JettraStorePlugin {
                     if ("JettraStore Explorer".equals(p.getProperty("app.title")) || p.containsKey("cluster.nodes")) {
                         props.putAll(p);
                     }
-                } catch (Exception ignored) {}
+                } catch (Exception ignored) {
+                }
             }
         }
 
@@ -194,11 +207,13 @@ public class JettraStorePlugin {
 
         // 1. Host y puerto del servidor web JettraStoreExplorer
         String h = System.getProperty("server.host", System.getenv("SERVER_HOST"));
-        if (h == null || h.isBlank()) h = props.getProperty("server.host", "127.0.0.1");
+        if (h == null || h.isBlank())
+            h = props.getProperty("server.host", "127.0.0.1");
         this.serverHost = h.trim();
 
         String p = System.getProperty("server.port", System.getenv("PORT"));
-        if (p == null || p.isBlank()) p = props.getProperty("server.port", "8085");
+        if (p == null || p.isBlank())
+            p = props.getProperty("server.port", "8085");
         try {
             this.serverPort = Integer.parseInt(p.trim());
         } catch (Exception ignored) {
@@ -208,9 +223,12 @@ public class JettraStorePlugin {
         this.explorerBindPort = this.serverPort;
 
         // 2. ContextPath del servidor
-        String cp = System.getProperty("server.contextpath", System.getProperty("server.context-path", System.getenv("SERVER_CONTEXT_PATH")));
-        if (cp == null || cp.isBlank()) cp = props.getProperty("server.contextpath", props.getProperty("server.context-path", "/"));
-        if (!cp.startsWith("/")) cp = "/" + cp;
+        String cp = System.getProperty("server.contextpath",
+                System.getProperty("server.context-path", System.getenv("SERVER_CONTEXT_PATH")));
+        if (cp == null || cp.isBlank())
+            cp = props.getProperty("server.contextpath", props.getProperty("server.context-path", "/"));
+        if (!cp.startsWith("/"))
+            cp = "/" + cp;
         this.serverContextPath = cp.trim();
 
         // 3. Multinodo y timeout de healthcheck
@@ -222,7 +240,8 @@ public class JettraStorePlugin {
             this.multinodeActive = "on".equalsIgnoreCase(val.trim()) || "true".equalsIgnoreCase(val.trim());
         }
 
-        String timeoutStr = System.getProperty("cluster.healthcheck.timeout.ms", props.getProperty("cluster.healthcheck.timeout.ms", "1000"));
+        String timeoutStr = System.getProperty("cluster.healthcheck.timeout.ms",
+                props.getProperty("cluster.healthcheck.timeout.ms", "1000"));
         try {
             int t = Integer.parseInt(timeoutStr.trim());
             this.healthCheckTimeoutMs = Math.max(200, Math.min(5000, t));
@@ -230,7 +249,8 @@ public class JettraStorePlugin {
             this.healthCheckTimeoutMs = 1000;
         }
 
-        String hbIntervalStr = System.getProperty("cluster.heartbeat.interval.ms", props.getProperty("cluster.heartbeat.interval.ms", "1000"));
+        String hbIntervalStr = System.getProperty("cluster.heartbeat.interval.ms",
+                props.getProperty("cluster.heartbeat.interval.ms", "1000"));
         try {
             long hi = Long.parseLong(hbIntervalStr.trim());
             this.heartbeatIntervalMs = Math.max(300L, Math.min(60000L, hi));
@@ -255,9 +275,10 @@ public class JettraStorePlugin {
         this.multinodeActive = active;
         System.setProperty("cluster.multinode.active", active ? "on" : "off");
 
-        logPoliceIncident("Raft Quorum K9", 
-            "cluster.multinode.active conmutado a " + (active ? "ON (Consenso Raft Distribuido)" : "OFF (Modo Standalone Mononodo)"),
-            "INFO", "Topología del clúster reconfigurada en caliente según microprofile-config.properties");
+        logPoliceIncident("Raft Quorum K9",
+                "cluster.multinode.active conmutado a "
+                        + (active ? "ON (Consenso Raft Distribuido)" : "OFF (Modo Standalone Mononodo)"),
+                "INFO", "Topología del clúster reconfigurada en caliente según microprofile-config.properties");
     }
 
     public boolean isMultinodeActive() {
@@ -274,24 +295,30 @@ public class JettraStorePlugin {
         File f = new File(connectionsPath);
         if (f.exists() && f.length() > 0) {
             try {
-                List<ConnectionProfile> list = mapper.readValue(f, new TypeReference<List<ConnectionProfile>>() {});
-                if (list != null) connectionProfiles.addAll(list);
+                List<ConnectionProfile> list = mapper.readValue(f, new TypeReference<List<ConnectionProfile>>() {
+                });
+                if (list != null)
+                    connectionProfiles.addAll(list);
             } catch (Exception e) {
                 System.err.println("[WARN] Error cargando conexiones: " + e.getMessage());
             }
         }
         if (connectionProfiles.isEmpty()) {
-            connectionProfiles.add(new ConnectionProfile("conn_local", "JettraStore Local Master", "tcp://127.0.0.1:8765", "admin", "admin123", true));
-            connectionProfiles.add(new ConnectionProfile("conn_replica", "JettraStore Cluster Node 2", "tcp://192.168.1.102:8765", "operator", "jettraPass!", false));
+            connectionProfiles.add(new ConnectionProfile("conn_local", "JettraStore Local Master",
+                    "tcp://127.0.0.1:8765", "admin", "admin123", true));
+            connectionProfiles.add(new ConnectionProfile("conn_replica", "JettraStore Cluster Node 2",
+                    "tcp://192.168.1.102:8765", "operator", "jettraPass!", false));
             saveConnections();
         }
-        activeConnection = connectionProfiles.stream().filter(ConnectionProfile::isDefault).findFirst().orElse(connectionProfiles.get(0));
+        activeConnection = connectionProfiles.stream().filter(ConnectionProfile::isDefault).findFirst()
+                .orElse(connectionProfiles.get(0));
     }
 
     public synchronized void saveConnections() {
         try {
             Path p = Paths.get(connectionsPath);
-            if (p.getParent() != null) Files.createDirectories(p.getParent());
+            if (p.getParent() != null)
+                Files.createDirectories(p.getParent());
             mapper.writeValue(new File(connectionsPath), connectionProfiles);
         } catch (IOException e) {
             System.err.println("[ERROR] No se pudo guardar " + connectionsPath + ": " + e.getMessage());
@@ -311,7 +338,9 @@ public class JettraStorePlugin {
             if (p.getId().equalsIgnoreCase(id)) {
                 this.activeConnection = p;
                 this.connected = true;
-                logPoliceIncident("Security Patrol", "Conexión conmutada exitosamente a " + p.getName() + " (" + p.getUrl() + ")", "OK", "Sesión de telemetría sincronizada");
+                logPoliceIncident("Security Patrol",
+                        "Conexión conmutada exitosamente a " + p.getName() + " (" + p.getUrl() + ")", "OK",
+                        "Sesión de telemetría sincronizada");
                 return;
             }
         }
@@ -336,12 +365,14 @@ public class JettraStorePlugin {
             }
         }
         if (p.isDefault()) {
-            for (ConnectionProfile cp : connectionProfiles) cp.setDefault(false);
+            for (ConnectionProfile cp : connectionProfiles)
+                cp.setDefault(false);
         }
         if (idx >= 0) {
             connectionProfiles.set(idx, p);
         } else {
-            if (connectionProfiles.isEmpty()) p.setDefault(true);
+            if (connectionProfiles.isEmpty())
+                p.setDefault(true);
             connectionProfiles.add(p);
         }
         saveConnections();
@@ -367,14 +398,17 @@ public class JettraStorePlugin {
         File f = new File(usersPath);
         if (f.exists() && f.length() > 0) {
             try {
-                List<JettraUser> list = mapper.readValue(f, new TypeReference<List<JettraUser>>() {});
-                if (list != null) users.addAll(list);
+                List<JettraUser> list = mapper.readValue(f, new TypeReference<List<JettraUser>>() {
+                });
+                if (list != null)
+                    users.addAll(list);
             } catch (Exception e) {
                 System.err.println("[WARN] Error cargando usuarios: " + e.getMessage());
             }
         }
         if (users.isEmpty()) {
-            JettraUser admin = new JettraUser("admin", "admin123", "Superadministrador del Clúster JettraStore", JettraUser.GlobalRole.ADMIN);
+            JettraUser admin = new JettraUser("admin", "admin123", "Superadministrador del Clúster JettraStore",
+                    JettraUser.GlobalRole.ADMIN);
             admin.setRoleForDatabase("example_factura_db", JettraDatabaseRole.ADMIN);
             admin.setRoleForDatabase("samples_hostipal_db", JettraDatabaseRole.ADMIN);
             admin.setRoleForDatabase("samples_ambiental_db", JettraDatabaseRole.ADMIN);
@@ -387,7 +421,8 @@ public class JettraStorePlugin {
     public synchronized void saveUsers() {
         try {
             Path p = Paths.get(usersPath);
-            if (p.getParent() != null) Files.createDirectories(p.getParent());
+            if (p.getParent() != null)
+                Files.createDirectories(p.getParent());
             mapper.writeValue(new File(usersPath), users);
         } catch (IOException e) {
             System.err.println("[ERROR] No se pudo guardar " + usersPath + ": " + e.getMessage());
@@ -399,8 +434,10 @@ public class JettraStorePlugin {
     }
 
     public synchronized Optional<JettraUser> authenticate(String username, String password) {
-        return users.stream().filter(u -> u.getUsername().equalsIgnoreCase(username) && 
-            (u.getPassword().equals(password) || ("admin".equalsIgnoreCase(u.getUsername()) && ("admin".equals(password) || "admin123".equals(password))))).findFirst();
+        return users.stream().filter(u -> u.getUsername().equalsIgnoreCase(username) &&
+                (u.getPassword().equals(password) || ("admin".equalsIgnoreCase(u.getUsername())
+                        && ("admin".equals(password) || "admin123".equals(password)))))
+                .findFirst();
     }
 
     public synchronized void saveOrUpdateUser(JettraUser u) {
@@ -411,24 +448,30 @@ public class JettraStorePlugin {
                 break;
             }
         }
-        if (idx >= 0) users.set(idx, u);
-        else users.add(u);
+        if (idx >= 0)
+            users.set(idx, u);
+        else
+            users.add(u);
         saveUsers();
-        logPoliceIncident("Security Patrol", "Credenciales/Roles actualizados para usuario '" + u.getUsername() + "'", "OK", "Permisos de base de datos sincronizados");
+        logPoliceIncident("Security Patrol", "Credenciales/Roles actualizados para usuario '" + u.getUsername() + "'",
+                "OK", "Permisos de base de datos sincronizados");
     }
 
     public synchronized boolean deleteUser(String username) {
-        if ("admin".equalsIgnoreCase(username)) return false; // Proteger superadmin
+        if ("admin".equalsIgnoreCase(username))
+            return false; // Proteger superadmin
         boolean removed = users.removeIf(u -> u.getUsername().equalsIgnoreCase(username));
         if (removed) {
             saveUsers();
-            logPoliceIncident("Security Patrol", "Usuario '" + username + "' revocado del sistema", "WARN", "Revocación de tokens de acceso");
+            logPoliceIncident("Security Patrol", "Usuario '" + username + "' revocado del sistema", "WARN",
+                    "Revocación de tokens de acceso");
         }
         return removed;
     }
 
     public synchronized Optional<JettraUser> findUser(String username) {
-        if (username == null || username.isBlank()) return Optional.empty();
+        if (username == null || username.isBlank())
+            return Optional.empty();
         return users.stream().filter(u -> u.getUsername().equalsIgnoreCase(username.trim())).findFirst();
     }
 
@@ -437,7 +480,8 @@ public class JettraStorePlugin {
             return false;
         }
         Optional<JettraUser> opt = findUser(username);
-        if (opt.isEmpty()) return false;
+        if (opt.isEmpty())
+            return false;
         JettraUser u = opt.get();
         if (role == JettraDatabaseRole.NONE) {
             u.getDatabaseRoles().remove(dbName);
@@ -445,7 +489,9 @@ public class JettraStorePlugin {
             u.setRoleForDatabase(dbName, role);
         }
         saveUsers();
-        logPoliceIncident("Security Patrol", "Usuario '" + u.getUsername() + "' asignado a base de datos '" + dbName + "' con rol " + role.name(), "OK", "ACL de base de datos actualizado");
+        logPoliceIncident("Security Patrol",
+                "Usuario '" + u.getUsername() + "' asignado a base de datos '" + dbName + "' con rol " + role.name(),
+                "OK", "ACL de base de datos actualizado");
         return true;
     }
 
@@ -454,11 +500,14 @@ public class JettraStorePlugin {
             return false;
         }
         Optional<JettraUser> opt = findUser(username);
-        if (opt.isEmpty()) return false;
+        if (opt.isEmpty())
+            return false;
         JettraUser u = opt.get();
         u.getDatabaseRoles().remove(dbName);
         saveUsers();
-        logPoliceIncident("Security Patrol", "Usuario '" + u.getUsername() + "' removido de la base de datos '" + dbName + "'", "WARN", "Permiso de acceso revocado en BD");
+        logPoliceIncident("Security Patrol",
+                "Usuario '" + u.getUsername() + "' removido de la base de datos '" + dbName + "'", "WARN",
+                "Permiso de acceso revocado en BD");
         return true;
     }
 
@@ -469,7 +518,8 @@ public class JettraStorePlugin {
             loadMicroprofileConfig();
         }
 
-        // 1. Conexión inicial al clúster tomada desde microprofile-config.properties (propiedad cluster.nodes)
+        // 1. Conexión inicial al clúster tomada desde microprofile-config.properties
+        // (propiedad cluster.nodes)
         String nodesConfig = System.getProperty("cluster.nodes", loadedConfigProps.getProperty("cluster.nodes"));
         if (nodesConfig != null && !nodesConfig.isBlank()) {
             String[] entries = nodesConfig.split(",");
@@ -480,8 +530,12 @@ public class JettraStorePlugin {
                     String id = parts[0].trim();
                     String host = parts[1].trim();
                     int port = 50001;
-                    try { port = Integer.parseInt(parts[2].trim()); } catch (Exception ignored) {}
-                    if (id.isBlank() || host.isBlank() || port <= 0) continue;
+                    try {
+                        port = Integer.parseInt(parts[2].trim());
+                    } catch (Exception ignored) {
+                    }
+                    if (id.isBlank() || host.isBlank() || port <= 0)
+                        continue;
 
                     String role;
                     if (parts.length >= 4 && !parts[3].isBlank()) {
@@ -495,19 +549,25 @@ public class JettraStorePlugin {
                         primaryAssigned = true;
                     }
                     String displayName = isPrimaryRole(role) ? id + "-primary" : id + "-replica";
-                    serverNodes.add(new ServerNodeInfo(id, displayName, role, host, port, 18.0f, 380, 2048, 980, 12000, 240, 14000, 0.0f, 8, false));
+                    serverNodes.add(new ServerNodeInfo(id, displayName, role, host, port, 18.0f, 380, 2048, 980, 12000,
+                            240, 14000, 0.0f, 8, false));
                 }
             }
         }
 
-        // Fallback únicamente si cluster.nodes no estaba definido en microprofile-config.properties
+        // Fallback únicamente si cluster.nodes no estaba definido en
+        // microprofile-config.properties
         if (serverNodes.isEmpty()) {
-            serverNodes.add(new ServerNodeInfo("node-01", "node-01-primary", "PRIMARY", "127.0.0.1", 50001, 24.5f, 480, 2048, 1280, 14200, 312, 18450, 0.0f, 8, false));
-            serverNodes.add(new ServerNodeInfo("node-02", "node-02-replica", "SECONDARY", "127.0.0.1", 50002, 18.2f, 390, 2048, 980, 12800, 245, 14200, 0.0f, 8, false));
-            serverNodes.add(new ServerNodeInfo("node-03", "node-03-replica", "SECONDARY", "127.0.0.1", 50003, 21.0f, 420, 2048, 1100, 13400, 280, 15600, 0.0f, 8, false));
+            serverNodes.add(new ServerNodeInfo("node-01", "node-01-primary", "PRIMARY", "127.0.0.1", 50001, 24.5f, 480,
+                    2048, 1280, 14200, 312, 18450, 0.0f, 8, false));
+            serverNodes.add(new ServerNodeInfo("node-02", "node-02-replica", "SECONDARY", "127.0.0.1", 50002, 18.2f,
+                    390, 2048, 980, 12800, 245, 14200, 0.0f, 8, false));
+            serverNodes.add(new ServerNodeInfo("node-03", "node-03-replica", "SECONDARY", "127.0.0.1", 50003, 21.0f,
+                    420, 2048, 1100, 13400, 280, 15600, 0.0f, 8, false));
         }
 
-        // Descubrir cualquier nodo adicional persistido en memory/cluster_nodes.json o propiedades
+        // Descubrir cualquier nodo adicional persistido en memory/cluster_nodes.json o
+        // propiedades
         autoDiscoverClusterNodes();
 
         // Sincronizar cluster.node.<N>.storage.path desde cluster.config
@@ -518,8 +578,10 @@ public class JettraStorePlugin {
     }
 
     /**
-     * Registra el host y puerto real del servidor Web UI JettraStoreExplorer para evitar falsos positivos
-     * por auto-sondeo (self-loop), sin alterar el host/puerto de destino del nodo primario de base de datos.
+     * Registra el host y puerto real del servidor Web UI JettraStoreExplorer para
+     * evitar falsos positivos
+     * por auto-sondeo (self-loop), sin alterar el host/puerto de destino del nodo
+     * primario de base de datos.
      */
     public synchronized void setExplorerServerEndpoint(String host, int port) {
         if (host != null && !host.isBlank()) {
@@ -536,7 +598,8 @@ public class JettraStorePlugin {
             if (host != null && !host.isBlank() && !"0.0.0.0".equals(host)) {
                 n.setHost(host.trim());
             }
-            if (port > 0) n.setPort(port);
+            if (port > 0)
+                n.setPort(port);
             checkNodeRealReachability(n, this.healthCheckTimeoutMs);
         }
     }
@@ -554,14 +617,16 @@ public class JettraStorePlugin {
     }
 
     private boolean isLocalAddress(String host) {
-        if (host == null) return false;
+        if (host == null)
+            return false;
         String h = host.trim().toLowerCase();
         return "127.0.0.1".equals(h) || "localhost".equals(h) || "0.0.0.0".equals(h) || "::1".equals(h)
                 || h.equalsIgnoreCase(this.explorerBindHost);
     }
 
     public boolean checkNodeRealReachability(ServerNodeInfo node, int timeoutMs) {
-        if (node == null) return false;
+        if (node == null)
+            return false;
         int effectiveTimeout = timeoutMs > 0 ? timeoutMs : this.healthCheckTimeoutMs;
         boolean wasOnline = node.isOnline();
         boolean isPrimary = isPrimaryRole(node.getRole());
@@ -578,7 +643,8 @@ public class JettraStorePlugin {
             return false;
         }
 
-        // Protección anti auto-sondeo: el servidor Web UI de JettraStoreExplorer no es un nodo JettraStore
+        // Protección anti auto-sondeo: el servidor Web UI de JettraStoreExplorer no es
+        // un nodo JettraStore
         if (this.explorerBindPort > 0 && port == this.explorerBindPort && isLocalAddress(host)) {
             node.setOnline(false);
             node.setLatencyMs(0.0f);
@@ -594,7 +660,8 @@ public class JettraStorePlugin {
             try (Socket probeSocket = new Socket()) {
                 probeSocket.connect(new InetSocketAddress(host, port), probeTimeout);
                 isLiveNow = true;
-            } catch (Exception ignored) {}
+            } catch (Exception ignored) {
+            }
 
             if (isLiveNow) {
                 lifecycleManager.clearStopped(node.getId());
@@ -638,13 +705,16 @@ public class JettraStorePlugin {
                 if (!wasOnline) {
                     String roleLabel = isPrimaryRole(node.getRole()) ? "PRIMARY" : node.getRole();
                     logPoliceIncident("Raft Quorum K9",
-                        "Nodo " + roleLabel + " detectado y conectado (ACTIVE): " + node.getName() + " (" + host + ":" + port + ")",
-                        "OK", "Latido TCP restablecido (" + String.format(Locale.US, "%.2f ms", node.getLatencyMs()) + ")");
+                            "Nodo " + roleLabel + " detectado y conectado (ACTIVE): " + node.getName() + " (" + host
+                                    + ":" + port + ")",
+                            "OK", "Latido TCP restablecido (" + String.format(Locale.US, "%.2f ms", node.getLatencyMs())
+                                    + ")");
                     try {
                         io.jettra.store.cluster.JettraClusterEventBus.getInstance().publish(
-                            io.jettra.store.cluster.ClusterLiveEvent.TYPE_NODE_ONLINE,
-                            node.getId(), "cluster", "Nodo en estado ACTIVE", host + ":" + port);
-                    } catch (Throwable ignored) {}
+                                io.jettra.store.cluster.ClusterLiveEvent.TYPE_NODE_ONLINE,
+                                node.getId(), "cluster", "Nodo en estado ACTIVE", host + ":" + port);
+                    } catch (Throwable ignored) {
+                    }
                     reconcilePrimaryLeadership();
                     notifyClusterChanged();
                     triggerPrimaryReplicaSyncToNode(node);
@@ -680,14 +750,16 @@ public class JettraStorePlugin {
         if (wasOnline) {
             String roleLabel = isPrimary ? "PRIMARY" : node.getRole();
             logPoliceIncident("Raft Quorum K9",
-                "¡ALERTA! Nodo " + roleLabel + " desconectado (INACTIVE): " + node.getName() + " (" + host + ":" + port + ")",
-                isPrimary ? "ERROR" : "WARN",
-                node.getLastError());
+                    "¡ALERTA! Nodo " + roleLabel + " desconectado (INACTIVE): " + node.getName() + " (" + host + ":"
+                            + port + ")",
+                    isPrimary ? "ERROR" : "WARN",
+                    node.getLastError());
             try {
                 io.jettra.store.cluster.JettraClusterEventBus.getInstance().publish(
-                    io.jettra.store.cluster.ClusterLiveEvent.TYPE_NODE_OFFLINE,
-                    node.getId(), "cluster", "Nodo en estado INACTIVE: " + node.getLastError(), host + ":" + port);
-            } catch (Throwable ignored) {}
+                        io.jettra.store.cluster.ClusterLiveEvent.TYPE_NODE_OFFLINE,
+                        node.getId(), "cluster", "Nodo en estado INACTIVE: " + node.getLastError(), host + ":" + port);
+            } catch (Throwable ignored) {
+            }
             reconcilePrimaryLeadership();
             notifyClusterChanged();
         }
@@ -695,7 +767,8 @@ public class JettraStorePlugin {
     }
 
     /**
-     * Consulta /api/v1/health del nodo JettraStore (misma fuente de consenso que JettraStoreShell show nodes)
+     * Consulta /api/v1/health del nodo JettraStore (misma fuente de consenso que
+     * JettraStoreShell show nodes)
      * para sincronizar el rol Raft real (PRIMARY/LEADER vs SECONDARY/FOLLOWER).
      */
     private boolean probeRestHealthRole(ServerNodeInfo node, String host, int gRpcPort, int timeoutMs) {
@@ -705,12 +778,16 @@ public class JettraStorePlugin {
         }
         if (gRpcPort >= 50001 && gRpcPort <= 50009) {
             int mapped = 60000 + (gRpcPort - 50000); // 50001->60001, 50002->60002, 50003->60003
-            if (!candidates.contains(mapped)) candidates.add(mapped);
-            if (!candidates.contains(60001)) candidates.add(60001);
+            if (!candidates.contains(mapped))
+                candidates.add(mapped);
+            if (!candidates.contains(60001))
+                candidates.add(60001);
         } else if (gRpcPort >= 9091 && gRpcPort <= 9099) {
             int mapped = gRpcPort - 1010; // 9091->8081, 9092->8082, 9093->8083
-            if (!candidates.contains(mapped)) candidates.add(mapped);
-            if (gRpcPort == 9091 && !candidates.contains(8080)) candidates.add(8080);
+            if (!candidates.contains(mapped))
+                candidates.add(mapped);
+            if (gRpcPort == 9091 && !candidates.contains(8080))
+                candidates.add(8080);
         } else if (host != null && host.toLowerCase(Locale.ROOT).startsWith("jettra-") && !candidates.contains(60001)) {
             candidates.add(60001);
         }
@@ -733,7 +810,8 @@ public class JettraStorePlugin {
                 HttpResponse<String> resp = healthHttpClient.send(req, HttpResponse.BodyHandlers.ofString());
                 if (resp.statusCode() == 200 && resp.body() != null && !resp.body().isBlank()) {
                     var json = mapper.readTree(resp.body());
-                    String role = json.hasNonNull("role") ? json.get("role").asText().trim().toUpperCase(Locale.ROOT) : "";
+                    String role = json.hasNonNull("role") ? json.get("role").asText().trim().toUpperCase(Locale.ROOT)
+                            : "";
                     if (!role.isEmpty()) {
                         boolean primary = isPrimaryRole(role);
                         node.setRole(primary ? "PRIMARY" : "SECONDARY");
@@ -762,10 +840,14 @@ public class JettraStorePlugin {
         if (heartbeatRunning.compareAndSet(false, true)) {
             try {
                 io.jettra.store.cluster.JettraClusterEventBus.getInstance().subscribe(this::handleClusterLiveEvent);
-            } catch (Throwable ignored) {}
+            } catch (Throwable ignored) {
+            }
 
-            this.heartbeatThread = Thread.ofVirtual().name("jettra-cluster-heartbeat-worker").start(this::runClusterHeartbeatLoop);
-            System.out.println("[JettraStore Explorer] Monitor de latidos y autodescubrimiento del clúster iniciado en Virtual Thread Loom. Intervalo: " + this.heartbeatIntervalMs + " ms");
+            this.heartbeatThread = Thread.ofVirtual().name("jettra-cluster-heartbeat-worker")
+                    .start(this::runClusterHeartbeatLoop);
+            System.out.println(
+                    "[JettraStore Explorer] Monitor de latidos y autodescubrimiento del clúster iniciado en Virtual Thread Loom. Intervalo: "
+                            + this.heartbeatIntervalMs + " ms");
         }
     }
 
@@ -823,19 +905,25 @@ public class JettraStorePlugin {
                     String id = parts[0].trim();
                     String host = parts[1].trim();
                     int port = 50001;
-                    try { port = Integer.parseInt(parts[2].trim()); } catch (Exception ignored) {}
+                    try {
+                        port = Integer.parseInt(parts[2].trim());
+                    } catch (Exception ignored) {
+                    }
                     ServerNodeInfo existing = getNodeById(id);
                     if (existing == null && !id.isBlank() && port > 0) {
                         String role = (parts.length >= 4 && !parts[3].isBlank())
-                            ? parts[3].trim().toUpperCase()
-                            : (id.toLowerCase().contains("edge") ? "EDGE" : (id.toLowerCase().contains("primary") ? "PRIMARY" : "SECONDARY"));
-                        ServerNodeInfo newNode = new ServerNodeInfo(id, id + "-replica", role, host, port, 15.0f, 320, 2048, 850, 10000, 200, 10000, 0.0f, 8, false);
+                                ? parts[3].trim().toUpperCase()
+                                : (id.toLowerCase().contains("edge") ? "EDGE"
+                                        : (id.toLowerCase().contains("primary") ? "PRIMARY" : "SECONDARY"));
+                        ServerNodeInfo newNode = new ServerNodeInfo(id, id + "-replica", role, host, port, 15.0f, 320,
+                                2048, 850, 10000, 200, 10000, 0.0f, 8, false);
                         serverNodes.add(newNode);
                         checkNodeRealReachability(newNode, this.healthCheckTimeoutMs);
                         logPoliceIncident("Raft Quorum K9",
-                            "Nuevo nodo descubierto automáticamente (Dynamic Discovery): " + id + " (" + host + ":" + port + ") [" + newNode.getStatus() + "]",
-                            newNode.isActive() ? "OK" : "WARN",
-                            "Incorporado dinámicamente a la topología del clúster");
+                                "Nuevo nodo descubierto automáticamente (Dynamic Discovery): " + id + " (" + host + ":"
+                                        + port + ") [" + newNode.getStatus() + "]",
+                                newNode.isActive() ? "OK" : "WARN",
+                                "Incorporado dinámicamente a la topología del clúster");
                     }
                 }
             }
@@ -845,7 +933,8 @@ public class JettraStorePlugin {
         File f = new File(clusterNodesConfigPath);
         if (f.exists() && f.length() > 0) {
             try {
-                List<Map<String, Object>> list = mapper.readValue(f, new TypeReference<List<Map<String, Object>>>() {});
+                List<Map<String, Object>> list = mapper.readValue(f, new TypeReference<List<Map<String, Object>>>() {
+                });
                 if (list != null) {
                     boolean hasPrimaryAlready = serverNodes.stream().anyMatch(n -> isPrimaryRole(n.getRole()));
                     for (Map<String, Object> map : list) {
@@ -859,7 +948,8 @@ public class JettraStorePlugin {
                             String host = (String) map.getOrDefault("host", "127.0.0.1");
                             int port = ((Number) map.getOrDefault("port", 8770)).intValue();
                             long ram = ((Number) map.getOrDefault("heapMaxMb", 2048L)).longValue();
-                            ServerNodeInfo n = new ServerNodeInfo(id, name, role, host, port, 15.0f, 300, ram, 800, 9000, 200, 9000, 0.0f, 8, false);
+                            ServerNodeInfo n = new ServerNodeInfo(id, name, role, host, port, 15.0f, 300, ram, 800,
+                                    9000, 200, 9000, 0.0f, 8, false);
                             Object sp = map.get("storagePath");
                             if (sp instanceof String s && !s.isBlank()) {
                                 n.setStoragePath(s);
@@ -869,19 +959,22 @@ public class JettraStorePlugin {
                         }
                     }
                 }
-            } catch (Exception ignored) {}
+            } catch (Exception ignored) {
+            }
         }
 
         // 3. Revisar topología persistida en cluster.config en disco
         try {
             Path clusterFile = io.jettra.store.core.JettraConfigValidator.locateClusterConfigFile();
             if (clusterFile != null && Files.exists(clusterFile)) {
-                Properties cProps = io.jettra.store.core.JettraConfigValidator.loadProperties(clusterFile, "/cluster.config", "/jettra.config");
-                List<io.jettra.store.core.JettraConfigValidator.ClusterNodeInfo> parsedNodes =
-                    io.jettra.store.core.JettraConfigValidator.parseClusterNodes(cProps);
+                Properties cProps = io.jettra.store.core.JettraConfigValidator.loadProperties(clusterFile,
+                        "/cluster.config", "/jettra.config");
+                List<io.jettra.store.core.JettraConfigValidator.ClusterNodeInfo> parsedNodes = io.jettra.store.core.JettraConfigValidator
+                        .parseClusterNodes(cProps);
                 boolean hasPrimary = serverNodes.stream().anyMatch(n -> isPrimaryRole(n.getRole()));
                 for (io.jettra.store.core.JettraConfigValidator.ClusterNodeInfo cn : parsedNodes) {
-                    if (cn.id() == null || cn.id().isBlank()) continue;
+                    if (cn.id() == null || cn.id().isBlank())
+                        continue;
                     ServerNodeInfo existing = getNodeById(cn.id());
                     if (existing == null) {
                         String r = (cn.role() != null && !cn.role().isBlank()) ? cn.role().toUpperCase() : "SECONDARY";
@@ -890,8 +983,10 @@ public class JettraStorePlugin {
                         }
                         String h = (cn.ip() != null && !cn.ip().isBlank()) ? cn.ip().trim() : "127.0.0.1";
                         int p = cn.grpcPort() > 0 ? cn.grpcPort() : 50001;
-                        ServerNodeInfo newNode = new ServerNodeInfo(cn.id(), cn.id() + "-" + r.toLowerCase(), r, h, p, 15.0f, 320, 2048, 850, 10000, 200, 10000, 0.0f, 8, false);
-                        if (cn.restPort() > 0) newNode.setRestPort(cn.restPort());
+                        ServerNodeInfo newNode = new ServerNodeInfo(cn.id(), cn.id() + "-" + r.toLowerCase(), r, h, p,
+                                15.0f, 320, 2048, 850, 10000, 200, 10000, 0.0f, 8, false);
+                        if (cn.restPort() > 0)
+                            newNode.setRestPort(cn.restPort());
                         serverNodes.add(newNode);
                         checkNodeRealReachability(newNode, this.healthCheckTimeoutMs);
                         saveClusterNodes();
@@ -902,30 +997,36 @@ public class JettraStorePlugin {
                     }
                 }
             }
-        } catch (Exception ignored) {}
+        } catch (Exception ignored) {
+        }
     }
 
     public void addClusterListener(Runnable listener) {
-        if (listener != null) clusterListeners.addIfAbsent(listener);
+        if (listener != null)
+            clusterListeners.addIfAbsent(listener);
     }
 
     public void removeClusterListener(Runnable listener) {
-        if (listener != null) clusterListeners.remove(listener);
+        if (listener != null)
+            clusterListeners.remove(listener);
     }
 
     public void notifyClusterChanged() {
         for (Runnable r : clusterListeners) {
             try {
                 r.run();
-            } catch (Throwable ignored) {}
+            } catch (Throwable ignored) {
+            }
         }
     }
 
     public void handleClusterLiveEvent(io.jettra.store.cluster.ClusterLiveEvent event) {
-        if (event == null) return;
+        if (event == null)
+            return;
         String type = event.type();
         String srcNodeId = event.sourceNodeId();
-        if (srcNodeId == null || srcNodeId.isBlank() || "local".equalsIgnoreCase(srcNodeId) || "cluster".equalsIgnoreCase(srcNodeId)) {
+        if (srcNodeId == null || srcNodeId.isBlank() || "local".equalsIgnoreCase(srcNodeId)
+                || "cluster".equalsIgnoreCase(srcNodeId)) {
             return;
         }
 
@@ -947,7 +1048,10 @@ public class JettraStorePlugin {
                 if (details != null && details.contains(":")) {
                     String[] parts = details.trim().split(":");
                     host = parts[0].trim();
-                    try { port = Integer.parseInt(parts[1].trim()); } catch (Exception ignored) {}
+                    try {
+                        port = Integer.parseInt(parts[1].trim());
+                    } catch (Exception ignored) {
+                    }
                 }
                 addNode(srcNodeId, srcNodeId, "FOLLOWER", host, port, 2048);
                 notifyClusterChanged();
@@ -983,8 +1087,9 @@ public class JettraStorePlugin {
                 }
                 this.lastRefreshEpochMs = System.currentTimeMillis();
                 logPoliceIncident("Raft Quorum K9",
-                    "Nuevo nodo PRIMARY elegido por consenso Raft: " + elected.getId() + " (" + elected.getHost() + ":" + elected.getPort() + ")",
-                    "OK", event.message() != null ? event.message() : "Liderazgo transferido dinámicamente");
+                        "Nuevo nodo PRIMARY elegido por consenso Raft: " + elected.getId() + " (" + elected.getHost()
+                                + ":" + elected.getPort() + ")",
+                        "OK", event.message() != null ? event.message() : "Liderazgo transferido dinámicamente");
                 notifyClusterChanged();
             }
         }
@@ -993,7 +1098,8 @@ public class JettraStorePlugin {
     private synchronized void saveClusterNodes() {
         try {
             Path p = Paths.get(clusterNodesConfigPath);
-            if (p.getParent() != null) Files.createDirectories(p.getParent());
+            if (p.getParent() != null)
+                Files.createDirectories(p.getParent());
             List<Map<String, Object>> list = new ArrayList<>();
             for (ServerNodeInfo n : serverNodes) {
                 if (!"node-01".equalsIgnoreCase(n.getId())) {
@@ -1011,7 +1117,8 @@ public class JettraStorePlugin {
                 }
             }
             mapper.writeValue(new File(clusterNodesConfigPath), list);
-        } catch (Exception ignored) {}
+        } catch (Exception ignored) {
+        }
     }
 
     public void refreshAllNodeStatuses() {
@@ -1044,7 +1151,8 @@ public class JettraStorePlugin {
                 for (Future<Boolean> f : futures) {
                     try {
                         f.get();
-                    } catch (Exception ignored) {}
+                    } catch (Exception ignored) {
+                    }
                 }
             }
             if (reconcilePrimaryLeadership()) {
@@ -1056,10 +1164,12 @@ public class JettraStorePlugin {
 
     /**
      * Reconcilia el rol PRIMARY/LEADER entre los nodos activos del quórum Raft,
-     * alineando exactamente la vista web con la lógica de JettraStoreShell show nodes.
+     * alineando exactamente la vista web con la lógica de JettraStoreShell show
+     * nodes.
      */
     public synchronized boolean reconcilePrimaryLeadership() {
-        if (serverNodes.isEmpty()) return false;
+        if (serverNodes.isEmpty())
+            return false;
 
         List<ServerNodeInfo> activeNodes = new ArrayList<>();
         ServerNodeInfo activePrimary = null;
@@ -1074,7 +1184,8 @@ public class JettraStorePlugin {
 
         boolean changed = false;
         if (activeNodes.isEmpty()) {
-            // Todos los nodos están INACTIVE: restaurar designación de PRIMARY en node-01 para reflejar estado OFFLINE real
+            // Todos los nodos están INACTIVE: restaurar designación de PRIMARY en node-01
+            // para reflejar estado OFFLINE real
             ServerNodeInfo defaultPrimary = getNodeById("node-01");
             if (defaultPrimary == null && !serverNodes.isEmpty()) {
                 defaultPrimary = serverNodes.get(0);
@@ -1115,8 +1226,8 @@ public class JettraStorePlugin {
                     n.setRole("PRIMARY");
                     changed = true;
                     logPoliceIncident("Raft Quorum K9",
-                        "Liderazgo Raft promovido a " + n.getId() + " (" + n.getHost() + ":" + n.getPort() + ")",
-                        "OK", "Reconciliación dinámica del quórum");
+                            "Liderazgo Raft promovido a " + n.getId() + " (" + n.getHost() + ":" + n.getPort() + ")",
+                            "OK", "Reconciliación dinámica del quórum");
                 }
                 if (!"LEADER".equalsIgnoreCase(n.getRaftState())) {
                     n.setRaftState("LEADER");
@@ -1139,7 +1250,8 @@ public class JettraStorePlugin {
     }
 
     /**
-     * Devuelve el nodo PRIMARY vigente (priorizando el nodo activo con liderazgo Raft).
+     * Devuelve el nodo PRIMARY vigente (priorizando el nodo activo con liderazgo
+     * Raft).
      */
     public ServerNodeInfo getPrimaryNode() {
         for (ServerNodeInfo n : serverNodes) {
@@ -1153,7 +1265,8 @@ public class JettraStorePlugin {
             }
         }
         ServerNodeInfo node01 = getNodeById("node-01");
-        if (node01 != null) return node01;
+        if (node01 != null)
+            return node01;
         return serverNodes.isEmpty() ? null : serverNodes.get(0);
     }
 
@@ -1175,31 +1288,36 @@ public class JettraStorePlugin {
     public synchronized void syncStoragePathsFromClusterConfig() {
         try {
             Path clusterFile = io.jettra.store.core.JettraConfigValidator.locateClusterConfigFile();
-            Properties props = io.jettra.store.core.JettraConfigValidator.loadProperties(clusterFile, "/cluster.config", "/jettra.config");
-            List<io.jettra.store.core.JettraConfigValidator.ClusterNodeInfo> parsed =
-                io.jettra.store.core.JettraConfigValidator.parseClusterNodes(props);
+            Properties props = io.jettra.store.core.JettraConfigValidator.loadProperties(clusterFile, "/cluster.config",
+                    "/jettra.config");
+            List<io.jettra.store.core.JettraConfigValidator.ClusterNodeInfo> parsed = io.jettra.store.core.JettraConfigValidator
+                    .parseClusterNodes(props);
             for (io.jettra.store.core.JettraConfigValidator.ClusterNodeInfo cn : parsed) {
                 ServerNodeInfo existing = getNodeById(cn.id());
                 if (existing != null && existing.getRestPort() <= 0 && cn.restPort() > 0) {
                     existing.setRestPort(cn.restPort());
                 }
             }
-        } catch (Throwable ignored) {}
+        } catch (Throwable ignored) {
+        }
     }
 
     public synchronized String getClusterNodesPropertyValue() {
         StringBuilder sb = new StringBuilder();
         for (int i = 0; i < serverNodes.size(); i++) {
             ServerNodeInfo n = serverNodes.get(i);
-            if (i > 0) sb.append(",");
+            if (i > 0)
+                sb.append(",");
             sb.append(n.getId()).append(":").append(n.getHost()).append(":").append(n.getPort());
         }
         return sb.toString();
     }
 
     /**
-     * Actualiza la propiedad cluster.nodes en los archivos microprofile-config.properties
-     * de JettraStoreExplorer manteniendo intactas el resto de propiedades y comentarios.
+     * Actualiza la propiedad cluster.nodes en los archivos
+     * microprofile-config.properties
+     * de JettraStoreExplorer manteniendo intactas el resto de propiedades y
+     * comentarios.
      */
     public synchronized void persistClusterNodesToMicroprofileConfig() {
         String clusterNodesValue = getClusterNodesPropertyValue();
@@ -1209,11 +1327,12 @@ public class JettraStorePlugin {
         }
 
         List<Path> targets = new ArrayList<>();
-        String customFile = System.getProperty("jettra.explorer.config.file", System.getProperty("microprofile.config.file"));
+        String customFile = System.getProperty("jettra.explorer.config.file",
+                System.getProperty("microprofile.config.file"));
         if (customFile != null && !customFile.isBlank()) {
             targets.add(Paths.get(customFile.trim()));
         } else {
-            for (String candidate : new String[]{
+            for (String candidate : new String[] {
                     "src/main/resources/microprofile-config.properties",
                     "src/main/resources/META-INF/microprofile-config.properties",
                     "target/classes/microprofile-config.properties",
@@ -1234,8 +1353,8 @@ public class JettraStorePlugin {
                     Files.createDirectories(target.getParent());
                 }
                 List<String> lines = Files.exists(target)
-                    ? new ArrayList<>(Files.readAllLines(target, java.nio.charset.StandardCharsets.UTF_8))
-                    : new ArrayList<>();
+                        ? new ArrayList<>(Files.readAllLines(target, java.nio.charset.StandardCharsets.UTF_8))
+                        : new ArrayList<>();
                 boolean replaced = false;
                 for (int i = 0; i < lines.size(); i++) {
                     String trimmed = lines.get(i).trim();
@@ -1249,7 +1368,8 @@ public class JettraStorePlugin {
                     lines.add("cluster.nodes=" + clusterNodesValue);
                 }
                 Files.write(target, lines, java.nio.charset.StandardCharsets.UTF_8);
-            } catch (Exception ignored) {}
+            } catch (Exception ignored) {
+            }
         }
     }
 
@@ -1260,9 +1380,11 @@ public class JettraStorePlugin {
             String content,
             boolean valid,
             List<String> errors,
-            List<io.jettra.store.core.JettraConfigValidator.ClusterNodeInfo> parsedNodes) {}
+            List<io.jettra.store.core.JettraConfigValidator.ClusterNodeInfo> parsedNodes) {
+    }
 
-    public record ClusterSyncReport(boolean success, String message, List<String> nodeResults) {}
+    public record ClusterSyncReport(boolean success, String message, List<String> nodeResults) {
+    }
 
     private volatile String lastNodeOperationError;
 
@@ -1271,8 +1393,10 @@ public class JettraStorePlugin {
     }
 
     /**
-     * Genera el contenido actualizado del archivo cluster.config a partir de la topología actual de nodos
-     * (sin propiedades cluster.node.<N>.storage.path), validando puertos REST sin colisiones.
+     * Genera el contenido actualizado del archivo cluster.config a partir de la
+     * topología actual de nodos
+     * (sin propiedades cluster.node.<N>.storage.path), validando puertos REST sin
+     * colisiones.
      */
     public synchronized byte[] buildClusterConfigBytesFromNodes() {
         List<io.jettra.store.core.JettraConfigValidator.ClusterNodeInfo> canonical = new ArrayList<>();
@@ -1293,7 +1417,8 @@ public class JettraStorePlugin {
         }
         Path clusterFile = io.jettra.store.core.JettraConfigValidator.locateClusterConfigFile();
         Properties baseProps = (clusterFile != null && Files.exists(clusterFile))
-                ? io.jettra.store.core.JettraConfigValidator.loadProperties(clusterFile, "/cluster.config", "/jettra.config")
+                ? io.jettra.store.core.JettraConfigValidator.loadProperties(clusterFile, "/cluster.config",
+                        "/jettra.config")
                 : new Properties();
         return io.jettra.store.core.JettraConfigValidator.buildCanonicalClusterConfigBytes(canonical, baseProps);
     }
@@ -1321,35 +1446,39 @@ public class JettraStorePlugin {
     }
 
     /**
-     * Valida la integridad de cluster.config, lo persiste atómicamente en disco local y lo distribuye
+     * Valida la integridad de cluster.config, lo persiste atómicamente en disco
+     * local y lo distribuye
      * a todos los nodos del clúster (PRIMARY primero, luego SECONDARY).
      */
     public synchronized ClusterSyncReport validateAndDistributeClusterConfigBytes(byte[] cfgBytes) {
-        io.jettra.store.core.JettraConfigValidator.ValidationResult integrity =
-                io.jettra.store.core.JettraConfigValidator.validateClusterConfigIntegrity(cfgBytes);
+        io.jettra.store.core.JettraConfigValidator.ValidationResult integrity = io.jettra.store.core.JettraConfigValidator
+                .validateClusterConfigIntegrity(cfgBytes);
         if (!integrity.isValid()) {
             this.lastNodeOperationError = integrity.getSummary();
-            return new ClusterSyncReport(false, "Validación de integridad fallida: " + integrity.getSummary(), integrity.getErrors());
+            return new ClusterSyncReport(false, "Validación de integridad fallida: " + integrity.getSummary(),
+                    integrity.getErrors());
         }
         Path clusterFile = io.jettra.store.core.JettraConfigValidator.locateClusterConfigFile();
         if (clusterFile != null) {
             try {
                 io.jettra.store.core.JettraConfigValidator.writeClusterConfigAtomically(clusterFile, cfgBytes);
-            } catch (Exception ignored) {}
+            } catch (Exception ignored) {
+            }
         }
 
-        io.jettra.store.cluster.JettraRaftFrame frame =
-            io.jettra.store.cluster.JettraRaftFrame.syncClusterConfig(1L, "jettra-explorer-config", cfgBytes);
+        io.jettra.store.cluster.JettraRaftFrame frame = io.jettra.store.cluster.JettraRaftFrame.syncClusterConfig(1L,
+                "jettra-explorer-config", cfgBytes);
 
-        // Construir lista de destinos: todos los nodos configurados en cluster.config + serverNodes actuales
+        // Construir lista de destinos: todos los nodos configurados en cluster.config +
+        // serverNodes actuales
         Map<String, ServerNodeInfo> targetMap = new LinkedHashMap<>();
         try {
             Properties parsedProps = new Properties();
             try (var bais = new java.io.ByteArrayInputStream(cfgBytes)) {
                 parsedProps.load(bais);
             }
-            for (io.jettra.store.core.JettraConfigValidator.ClusterNodeInfo cn :
-                    io.jettra.store.core.JettraConfigValidator.parseClusterNodes(parsedProps)) {
+            for (io.jettra.store.core.JettraConfigValidator.ClusterNodeInfo cn : io.jettra.store.core.JettraConfigValidator
+                    .parseClusterNodes(parsedProps)) {
                 ServerNodeInfo existing = getNodeById(cn.id());
                 if (existing != null) {
                     targetMap.put(cn.id().toLowerCase(), existing);
@@ -1360,7 +1489,8 @@ public class JettraStorePlugin {
                     targetMap.put(cn.id().toLowerCase(), temp);
                 }
             }
-        } catch (Exception ignored) {}
+        } catch (Exception ignored) {
+        }
         for (ServerNodeInfo n : serverNodes) {
             targetMap.putIfAbsent(n.getId().toLowerCase(), n);
         }
@@ -1371,34 +1501,42 @@ public class JettraStorePlugin {
         List<String> results = new ArrayList<>();
         int syncedCount = 0;
         for (ServerNodeInfo target : targets) {
-            if (target.getHost() == null || target.getHost().isBlank() || target.getPort() <= 0) continue;
+            if (target.getHost() == null || target.getHost().isBlank() || target.getPort() <= 0)
+                continue;
             String roleTag = isPrimaryRole(target.getRole()) ? "PRIMARY" : "SECONDARY";
             try (java.net.Socket s = new java.net.Socket()) {
                 s.setTcpNoDelay(true);
                 s.connect(new java.net.InetSocketAddress(target.getHost(), target.getPort()), 1200);
                 s.setSoTimeout(1500);
                 try (java.io.BufferedOutputStream bos = new java.io.BufferedOutputStream(s.getOutputStream(), 8192);
-                     java.io.BufferedInputStream bis = new java.io.BufferedInputStream(s.getInputStream(), 8192)) {
+                        java.io.BufferedInputStream bis = new java.io.BufferedInputStream(s.getInputStream(), 8192)) {
                     io.jettra.store.cluster.JettraClusterProtocol.writeFrame(bos, frame);
-                    io.jettra.store.cluster.JettraRaftFrame ack = io.jettra.store.cluster.JettraClusterProtocol.readFrame(bis);
+                    io.jettra.store.cluster.JettraRaftFrame ack = io.jettra.store.cluster.JettraClusterProtocol
+                            .readFrame(bis);
                     if (ack != null && ack.frameType() == io.jettra.store.cluster.JettraRaftFrame.TYPE_NACK) {
-                        results.add("❌ [" + roleTag + "] " + target.getId() + " (" + target.getHost() + ":" + target.getPort() + "): rechazado — " + ack.getPayloadAsString());
+                        results.add("❌ [" + roleTag + "] " + target.getId() + " (" + target.getHost() + ":"
+                                + target.getPort() + "): rechazado — " + ack.getPayloadAsString());
                     } else {
                         syncedCount++;
-                        results.add("✅ [" + roleTag + "] " + target.getId() + " (" + target.getHost() + ":" + target.getPort() + "): cluster.config sincronizado");
+                        results.add("✅ [" + roleTag + "] " + target.getId() + " (" + target.getHost() + ":"
+                                + target.getPort() + "): cluster.config sincronizado");
                     }
                 }
             } catch (Exception ex) {
-                results.add("⚠️ [" + roleTag + "] " + target.getId() + " (" + target.getHost() + ":" + target.getPort() + "): no alcanzable (" + ex.getMessage() + ")");
+                results.add("⚠️ [" + roleTag + "] " + target.getId() + " (" + target.getHost() + ":" + target.getPort()
+                        + "): no alcanzable (" + ex.getMessage() + ")");
             }
         }
-        String summary = String.format("cluster.config verificado y sincronizado (%d/%d nodo(s) confirmados).", syncedCount, targets.size());
+        String summary = String.format("cluster.config verificado y sincronizado (%d/%d nodo(s) confirmados).",
+                syncedCount, targets.size());
         return new ClusterSyncReport(true, summary, results);
     }
 
     /**
-     * Obtiene el contenido del archivo cluster.config directamente del nodo PRIMARY activo
-     * (con fallback al archivo local cluster.config si el PRIMARY no es alcanzable).
+     * Obtiene el contenido del archivo cluster.config directamente del nodo PRIMARY
+     * activo
+     * (con fallback al archivo local cluster.config si el PRIMARY no es
+     * alcanzable).
      */
     public synchronized ClusterConfigSnapshot fetchPrimaryClusterConfig() {
         ServerNodeInfo primary = getPrimaryNode();
@@ -1413,11 +1551,14 @@ public class JettraStorePlugin {
                 s.connect(new java.net.InetSocketAddress(primary.getHost(), primary.getPort()), 1200);
                 s.setSoTimeout(1500);
                 try (java.io.BufferedOutputStream bos = new java.io.BufferedOutputStream(s.getOutputStream(), 8192);
-                     java.io.BufferedInputStream bis = new java.io.BufferedInputStream(s.getInputStream(), 8192)) {
+                        java.io.BufferedInputStream bis = new java.io.BufferedInputStream(s.getInputStream(), 8192)) {
                     io.jettra.store.cluster.JettraClusterProtocol.writeFrame(
-                            bos, io.jettra.store.cluster.JettraRaftFrame.getClusterConfigReq(1L, "jettra-explorer-admin"));
-                    io.jettra.store.cluster.JettraRaftFrame resp = io.jettra.store.cluster.JettraClusterProtocol.readFrame(bis);
-                    if (resp != null && resp.frameType() == io.jettra.store.cluster.JettraRaftFrame.TYPE_GET_CLUSTER_CONFIG_RESP
+                            bos,
+                            io.jettra.store.cluster.JettraRaftFrame.getClusterConfigReq(1L, "jettra-explorer-admin"));
+                    io.jettra.store.cluster.JettraRaftFrame resp = io.jettra.store.cluster.JettraClusterProtocol
+                            .readFrame(bis);
+                    if (resp != null
+                            && resp.frameType() == io.jettra.store.cluster.JettraRaftFrame.TYPE_GET_CLUSTER_CONFIG_RESP
                             && resp.payload() != null && resp.payload().length > 0) {
                         content = new String(resp.payload(), java.nio.charset.StandardCharsets.UTF_8);
                         fromRemote = true;
@@ -1426,7 +1567,8 @@ public class JettraStorePlugin {
                         }
                     }
                 }
-            } catch (Exception ignored) {}
+            } catch (Exception ignored) {
+            }
         }
 
         if (content == null || content.isBlank()) {
@@ -1435,7 +1577,8 @@ public class JettraStorePlugin {
                 try {
                     content = Files.readString(localFile, java.nio.charset.StandardCharsets.UTF_8);
                     sourceAddress = localFile.toAbsolutePath().normalize().toString();
-                } catch (Exception ignored) {}
+                } catch (Exception ignored) {
+                }
             }
         }
         if (content == null || content.isBlank()) {
@@ -1443,30 +1586,35 @@ public class JettraStorePlugin {
             sourceAddress = "memoria-runtime";
         }
 
-        io.jettra.store.core.JettraConfigValidator.ValidationResult val =
-                io.jettra.store.core.JettraConfigValidator.validateClusterConfigIntegrity(content);
+        io.jettra.store.core.JettraConfigValidator.ValidationResult val = io.jettra.store.core.JettraConfigValidator
+                .validateClusterConfigIntegrity(content);
         List<io.jettra.store.core.JettraConfigValidator.ClusterNodeInfo> parsedNodes = List.of();
         try {
             Properties props = new Properties();
-            try (var bais = new java.io.ByteArrayInputStream(content.getBytes(java.nio.charset.StandardCharsets.UTF_8))) {
+            try (var bais = new java.io.ByteArrayInputStream(
+                    content.getBytes(java.nio.charset.StandardCharsets.UTF_8))) {
                 props.load(bais);
             }
             parsedNodes = io.jettra.store.core.JettraConfigValidator.parseClusterNodes(props);
-        } catch (Exception ignored) {}
+        } catch (Exception ignored) {
+        }
 
-        return new ClusterConfigSnapshot(sourceNodeId, sourceAddress, fromRemote, content, val.isValid(), val.getErrors(), parsedNodes);
+        return new ClusterConfigSnapshot(sourceNodeId, sourceAddress, fromRemote, content, val.isValid(),
+                val.getErrors(), parsedNodes);
     }
 
     /**
-     * Valida y guarda un contenido editado de cluster.config (solo rol administrador),
+     * Valida y guarda un contenido editado de cluster.config (solo rol
+     * administrador),
      * actualizando el catálogo local de nodos y microprofile-config.properties.
      */
     public synchronized ClusterSyncReport saveClusterConfigContent(String content, boolean distributeToAllNodes) {
-        io.jettra.store.core.JettraConfigValidator.ValidationResult val =
-                io.jettra.store.core.JettraConfigValidator.validateClusterConfigIntegrity(content);
+        io.jettra.store.core.JettraConfigValidator.ValidationResult val = io.jettra.store.core.JettraConfigValidator
+                .validateClusterConfigIntegrity(content);
         if (!val.isValid()) {
             this.lastNodeOperationError = val.getSummary();
-            return new ClusterSyncReport(false, "No se pudo guardar cluster.config: " + val.getSummary(), val.getErrors());
+            return new ClusterSyncReport(false, "No se pudo guardar cluster.config: " + val.getSummary(),
+                    val.getErrors());
         }
 
         byte[] bytes = content.getBytes(java.nio.charset.StandardCharsets.UTF_8);
@@ -1477,17 +1625,19 @@ public class JettraStorePlugin {
         try {
             io.jettra.store.core.JettraConfigValidator.writeClusterConfigAtomically(clusterFile, bytes);
         } catch (Exception ex) {
-            return new ClusterSyncReport(false, "Error al escribir cluster.config: " + ex.getMessage(), List.of(ex.getMessage()));
+            return new ClusterSyncReport(false, "Error al escribir cluster.config: " + ex.getMessage(),
+                    List.of(ex.getMessage()));
         }
 
-        // Sincronizar lista runtime de serverNodes y microprofile-config.properties con el cluster.config validado
+        // Sincronizar lista runtime de serverNodes y microprofile-config.properties con
+        // el cluster.config validado
         try {
             Properties props = new Properties();
             try (var bais = new java.io.ByteArrayInputStream(bytes)) {
                 props.load(bais);
             }
-            List<io.jettra.store.core.JettraConfigValidator.ClusterNodeInfo> parsed =
-                    io.jettra.store.core.JettraConfigValidator.parseClusterNodes(props);
+            List<io.jettra.store.core.JettraConfigValidator.ClusterNodeInfo> parsed = io.jettra.store.core.JettraConfigValidator
+                    .parseClusterNodes(props);
             List<ServerNodeInfo> updatedNodes = new ArrayList<>();
             for (io.jettra.store.core.JettraConfigValidator.ClusterNodeInfo cn : parsed) {
                 ServerNodeInfo existing = getNodeById(cn.id());
@@ -1511,19 +1661,24 @@ public class JettraStorePlugin {
                 saveClusterNodes();
                 persistClusterNodesToMicroprofileConfig();
             }
-        } catch (Exception ignored) {}
+        } catch (Exception ignored) {
+        }
 
         if (distributeToAllNodes) {
             ClusterSyncReport report = validateAndDistributeClusterConfigBytes(bytes);
-            logPoliceIncident("Cluster Config Sync", report.message(), report.success() ? "OK" : "WARN", "Sincronización manual por Administrador");
+            logPoliceIncident("Cluster Config Sync", report.message(), report.success() ? "OK" : "WARN",
+                    "Sincronización manual por Administrador");
             return report;
         }
-        logPoliceIncident("Cluster Config Edit", "cluster.config guardado y validado (" + bytes.length + " bytes)", "OK", "Editado por Administrador");
-        return new ClusterSyncReport(true, "Archivo cluster.config guardado y validado correctamente (sin duplicados).", List.of());
+        logPoliceIncident("Cluster Config Edit", "cluster.config guardado y validado (" + bytes.length + " bytes)",
+                "OK", "Editado por Administrador");
+        return new ClusterSyncReport(true, "Archivo cluster.config guardado y validado correctamente (sin duplicados).",
+                List.of());
     }
 
     /**
-     * Sincroniza todos los archivos de configuración del clúster tomando como fuente el cluster.config
+     * Sincroniza todos los archivos de configuración del clúster tomando como
+     * fuente el cluster.config
      * validado del nodo PRIMARY (o el contenido editado si se proporciona).
      */
     public synchronized ClusterSyncReport synchronizeAllClusterConfigFiles(String optionalContent) {
@@ -1544,7 +1699,8 @@ public class JettraStorePlugin {
         return addNode(id, name, role, host, port, heapMaxMb, null);
     }
 
-    public synchronized boolean addNode(String id, String name, String role, String host, int port, long heapMaxMb, String storagePath) {
+    public synchronized boolean addNode(String id, String name, String role, String host, int port, long heapMaxMb,
+            String storagePath) {
         this.lastNodeOperationError = null;
         if (id == null || id.isBlank()) {
             this.lastNodeOperationError = "El ID del nodo es obligatorio.";
@@ -1556,7 +1712,8 @@ public class JettraStorePlugin {
         int p = port > 0 ? port : 8770;
         long maxM = heapMaxMb > 0 ? heapMaxMb : 2048;
 
-        // Validar que no se ingrese ID duplicado ni puertos gRPC/REST duplicados en la misma IP
+        // Validar que no se ingrese ID duplicado ni puertos gRPC/REST duplicados en la
+        // misma IP
         List<io.jettra.store.core.JettraConfigValidator.ClusterNodeInfo> existingConfigNodes = new ArrayList<>();
         int idx = 1;
         for (ServerNodeInfo n : serverNodes) {
@@ -1566,30 +1723,36 @@ public class JettraStorePlugin {
             idx++;
         }
         int candidateRestPort = deriveRestPort(p, idx);
-        io.jettra.store.core.JettraConfigValidator.ValidationResult candidateCheck =
-                io.jettra.store.core.JettraConfigValidator.validateCandidateNode(
+        io.jettra.store.core.JettraConfigValidator.ValidationResult candidateCheck = io.jettra.store.core.JettraConfigValidator
+                .validateCandidateNode(
                         existingConfigNodes, cleanId, h, p, candidateRestPort, false);
         if (!candidateCheck.isValid()) {
             this.lastNodeOperationError = candidateCheck.getSummary();
-            logPoliceIncident("Raft Quorum K9", "Registro de nodo rechazado [" + cleanId + "]: " + candidateCheck.getSummary(), "WARN", "Duplicado bloqueado");
+            logPoliceIncident("Raft Quorum K9",
+                    "Registro de nodo rechazado [" + cleanId + "]: " + candidateCheck.getSummary(), "WARN",
+                    "Duplicado bloqueado");
             return false;
         }
 
-        ServerNodeInfo node = new ServerNodeInfo(cleanId, (name != null && !name.isBlank()) ? name.trim() : cleanId, r, h, p, 15.0f, 320, maxM, 850, 5000, 200, 10500, 0.65f, 8, true);
+        ServerNodeInfo node = new ServerNodeInfo(cleanId, (name != null && !name.isBlank()) ? name.trim() : cleanId, r,
+                h, p, 15.0f, 320, maxM, 850, 5000, 200, 10500, 0.65f, 8, true);
         node.setRestPort(candidateRestPort);
         serverNodes.add(node);
         saveClusterNodes();
         persistClusterNodesToMicroprofileConfig();
         replicateClusterConfigToNodes();
         triggerPrimaryReplicaSyncToNode(node);
-        logPoliceIncident("Raft Quorum K9", "Nuevo nodo registrado en clúster: " + cleanId + " (" + h + ":" + p + ") [" + node.getStatus() + "]", "OK", "microprofile-config.properties y cluster.config sincronizados en el clúster");
+        logPoliceIncident("Raft Quorum K9",
+                "Nuevo nodo registrado en clúster: " + cleanId + " (" + h + ":" + p + ") [" + node.getStatus() + "]",
+                "OK", "microprofile-config.properties y cluster.config sincronizados en el clúster");
         try {
             if (node.isActive()) {
                 io.jettra.store.cluster.JettraClusterEventBus.getInstance().publish(
-                    io.jettra.store.cluster.ClusterLiveEvent.TYPE_NODE_ONLINE,
-                    node.getId(), "cluster", "Nuevo nodo incorporado y ACTIVE", h + ":" + p);
+                        io.jettra.store.cluster.ClusterLiveEvent.TYPE_NODE_ONLINE,
+                        node.getId(), "cluster", "Nuevo nodo incorporado y ACTIVE", h + ":" + p);
             }
-        } catch (Throwable ignored) {}
+        } catch (Throwable ignored) {
+        }
         return true;
     }
 
@@ -1606,29 +1769,35 @@ public class JettraStorePlugin {
         String cleanId = id.trim();
         ServerNodeInfo existing = getNodeById(cleanId);
         if (existing != null) {
-            // Regla estricta: NO se permite remover un nodo en ejecución (RUNNING / activo).
+            // Regla estricta: NO se permite remover un nodo en ejecución (RUNNING /
+            // activo).
             // Primero debe detenerse el nodo y luego removerlo.
             if (existing.isActive()) {
                 this.lastNodeOperationError = "No se puede remover el nodo '" + cleanId
                         + "' porque se encuentra en ejecución (RUNNING / ACTIVO). Primero debe detener el nodo con 'Apagar Nodo' y luego removerlo del clúster.";
-                logPoliceIncident("Raft Quorum K9", "Remoción bloqueada [" + cleanId + "]: el nodo sigue ACTIVO", "WARN", "Primero detener el nodo");
+                logPoliceIncident("Raft Quorum K9", "Remoción bloqueada [" + cleanId + "]: el nodo sigue ACTIVO",
+                        "WARN", "Primero detener el nodo");
                 return false;
             }
         }
         boolean removed = serverNodes.removeIf(n -> n.getId().equalsIgnoreCase(cleanId));
-        boolean removedFromDiskConfig = io.jettra.store.core.JettraConfigValidator.removeDynamicNodeFromClusterConfig(cleanId);
+        boolean removedFromDiskConfig = io.jettra.store.core.JettraConfigValidator
+                .removeDynamicNodeFromClusterConfig(cleanId);
         if (removed || removedFromDiskConfig) {
             lifecycleManager.clearStopped(cleanId);
             reconcilePrimaryLeadership();
             saveClusterNodes();
             persistClusterNodesToMicroprofileConfig();
             replicateClusterConfigToNodes();
-            logPoliceIncident("Raft Quorum K9", "Nodo detenido expulsado del clúster y limpiado de cluster.config (zero-downtime): " + cleanId, "WARN", "microprofile-config.properties y cluster.config replicados sin detener nodos activos");
+            logPoliceIncident("Raft Quorum K9",
+                    "Nodo detenido expulsado del clúster y limpiado de cluster.config (zero-downtime): " + cleanId,
+                    "WARN", "microprofile-config.properties y cluster.config replicados sin detener nodos activos");
             try {
                 io.jettra.store.cluster.JettraClusterEventBus.getInstance().publish(
-                    io.jettra.store.cluster.ClusterLiveEvent.TYPE_NODE_OFFLINE,
-                    cleanId, "cluster", "Nodo detenido removido del quórum (zero-downtime)", "");
-            } catch (Throwable ignored) {}
+                        io.jettra.store.cluster.ClusterLiveEvent.TYPE_NODE_OFFLINE,
+                        cleanId, "cluster", "Nodo detenido removido del quórum (zero-downtime)", "");
+            } catch (Throwable ignored) {
+            }
         }
         return removed || removedFromDiskConfig;
     }
@@ -1646,9 +1815,9 @@ public class JettraStorePlugin {
         }
         this.lastRefreshEpochMs = System.currentTimeMillis();
         logPoliceIncident("Raft Quorum K9",
-            "Apagado de nodo ejecutado [" + id + "]: " + outcome.mechanism(),
-            outcome.offlineVerified() ? "WARN" : "INFO",
-            outcome.message());
+                "Apagado de nodo ejecutado [" + id + "]: " + outcome.mechanism(),
+                outcome.offlineVerified() ? "WARN" : "INFO",
+                outcome.message());
         return outcome;
     }
 
@@ -1662,9 +1831,9 @@ public class JettraStorePlugin {
         notifyClusterChanged();
         this.lastRefreshEpochMs = System.currentTimeMillis();
         logPoliceIncident("Raft Quorum K9",
-            "Reinicio / verificación de nodo [" + id + "]: " + (outcome.onlineVerified() ? "ONLINE" : "OFFLINE"),
-            outcome.onlineVerified() ? "OK" : "WARN",
-            outcome.message());
+                "Reinicio / verificación de nodo [" + id + "]: " + (outcome.onlineVerified() ? "ONLINE" : "OFFLINE"),
+                outcome.onlineVerified() ? "OK" : "WARN",
+                outcome.message());
         return outcome;
     }
 
@@ -1680,27 +1849,28 @@ public class JettraStorePlugin {
     }
 
     public static final List<String> SUPPORTED_ENGINES = List.of(
-        "DOCUMENT", "KEY_VALUE", "COLUMNAR", "TIMESERIES", "GEOSPATIAL",
-        "GRAPH", "VECTOR", "JAVA_RECORD", "OBJECT"
-    );
+            "DOCUMENT", "KEY_VALUE", "COLUMNAR", "TIMESERIES", "GEOSPATIAL",
+            "GRAPH", "VECTOR", "JAVA_RECORD", "OBJECT");
 
     public record ExampleDatabaseInfo(
             String id,
             String title,
             String description,
             String enginesSummary,
-            boolean installed
-    ) {}
+            boolean installed) {
+    }
 
     // --- Catálogo Multimodelo y Buckets ---
     private void initDatabaseCatalog() {
-        // Iniciar limpio sin bases de datos de ejemplo preinstaladas y sincronizar con el nodo PRIMARY si está activo.
+        // Iniciar limpio sin bases de datos de ejemplo preinstaladas y sincronizar con
+        // el nodo PRIMARY si está activo.
         databasesCatalog.clear();
         syncDatabasesFromPrimary(true);
     }
 
     /**
-     * Consulta directamente al nodo PRIMARY activo (trama Raft TYPE_SYNC_CATALOG_REQ)
+     * Consulta directamente al nodo PRIMARY activo (trama Raft
+     * TYPE_SYNC_CATALOG_REQ)
      * para reflejar exactamente las bases de datos almacenadas en el nodo PRIMARY.
      */
     public synchronized boolean syncDatabasesFromPrimary(boolean force) {
@@ -1719,13 +1889,14 @@ public class JettraStorePlugin {
             s.connect(new java.net.InetSocketAddress(primary.getHost(), primary.getPort()), 800);
             s.setSoTimeout(1500);
             try (java.io.BufferedOutputStream bos = new java.io.BufferedOutputStream(s.getOutputStream(), 8192);
-                 java.io.BufferedInputStream bis = new java.io.BufferedInputStream(s.getInputStream(), 8192)) {
-                io.jettra.store.cluster.JettraRaftFrame req =
-                        io.jettra.store.cluster.JettraRaftFrame.syncCatalogReq(1L, "jettra-explorer");
+                    java.io.BufferedInputStream bis = new java.io.BufferedInputStream(s.getInputStream(), 8192)) {
+                io.jettra.store.cluster.JettraRaftFrame req = io.jettra.store.cluster.JettraRaftFrame.syncCatalogReq(1L,
+                        "jettra-explorer");
                 io.jettra.store.cluster.JettraClusterProtocol.writeFrame(bos, req);
-                io.jettra.store.cluster.JettraRaftFrame resp =
-                        io.jettra.store.cluster.JettraClusterProtocol.readFrame(bis);
-                if (resp != null && resp.frameType() == io.jettra.store.cluster.JettraRaftFrame.TYPE_SYNC_CATALOG_RESP) {
+                io.jettra.store.cluster.JettraRaftFrame resp = io.jettra.store.cluster.JettraClusterProtocol
+                        .readFrame(bis);
+                if (resp != null
+                        && resp.frameType() == io.jettra.store.cluster.JettraRaftFrame.TYPE_SYNC_CATALOG_RESP) {
                     String csv = resp.payload() != null
                             ? new String(resp.payload(), java.nio.charset.StandardCharsets.UTF_8).trim()
                             : "";
@@ -1738,10 +1909,12 @@ public class JettraStorePlugin {
                             }
                         }
                     }
-                    // Remover del catálogo local las bases que ya no están almacenadas en el PRIMARY
+                    // Remover del catálogo local las bases que ya no están almacenadas en el
+                    // PRIMARY
                     databasesCatalog.keySet().removeIf(existing -> !primaryDbs.contains(existing));
 
-                    // Incorporar las bases almacenadas en el PRIMARY que aún no están en el catálogo local
+                    // Incorporar las bases almacenadas en el PRIMARY que aún no están en el
+                    // catálogo local
                     Map<String, List<EngineBucketInfo>> exampleTemplates = null;
                     for (String dbName : primaryDbs) {
                         if (!databasesCatalog.containsKey(dbName)) {
@@ -1753,8 +1926,7 @@ public class JettraStorePlugin {
                             if (buckets == null) {
                                 buckets = buildDefaultNineEngineBuckets(
                                         dbName,
-                                        "Base de datos almacenada en nodo PRIMARY (" + primary.getId() + ")"
-                                );
+                                        "Base de datos almacenada en nodo PRIMARY (" + primary.getId() + ")");
                             }
                             databasesCatalog.put(dbName, buckets);
                         }
@@ -1771,19 +1943,23 @@ public class JettraStorePlugin {
     private List<EngineBucketInfo> buildDefaultNineEngineBuckets(String cleanName, String baseDesc) {
         List<EngineBucketInfo> buckets = new ArrayList<>();
         String[][] nineEngines = {
-            {"DOCUMENT",    "Documents",   "BTREE",           "id",          "Motor Documental (JSON / BSON) — " + baseDesc},
-            {"KEY_VALUE",   "KeyValue",    "HASH",            "key",         "Motor Clave-Valor Off-Heap — " + baseDesc},
-            {"COLUMNAR",    "Columnar",    "BTREE",           "chunk_id",    "Motor Analítico Columnar OLAP — " + baseDesc},
-            {"TIMESERIES",  "TimeSeries",  "TIMESERIES_BRIN", "timestamp",   "Motor de Series Temporales e IoT — " + baseDesc},
-            {"GEOSPATIAL",  "Geospatial",  "SPATIAL_R_TREE",  "coordinates", "Motor Geoespacial GeoJSON & R-Tree — " + baseDesc},
-            {"GRAPH",       "Graph",       "GRAPH_ADJACENCY", "source_node", "Motor de Grafos (Nodos y Aristas) — " + baseDesc},
-            {"VECTOR",      "Vector",      "VECTOR_HNSW",     "embedding",   "Motor Vectorial HNSW Embeddings — " + baseDesc},
-            {"JAVA_RECORD", "JavaRecords", "BTREE",           "recordId",    "Motor Java 25 Canonical Records — " + baseDesc},
-            {"OBJECT",      "Objects",     "HASH",            "uuid",        "Motor de Objetos y Entidades POJO — " + baseDesc}
+                { "DOCUMENT", "Documents", "BTREE", "id", "Motor Documental (JSON / BSON) — " + baseDesc },
+                { "KEY_VALUE", "KeyValue", "HASH", "key", "Motor Clave-Valor Off-Heap — " + baseDesc },
+                { "COLUMNAR", "Columnar", "BTREE", "chunk_id", "Motor Analítico Columnar OLAP — " + baseDesc },
+                { "TIMESERIES", "TimeSeries", "TIMESERIES_BRIN", "timestamp",
+                        "Motor de Series Temporales e IoT — " + baseDesc },
+                { "GEOSPATIAL", "Geospatial", "SPATIAL_R_TREE", "coordinates",
+                        "Motor Geoespacial GeoJSON & R-Tree — " + baseDesc },
+                { "GRAPH", "Graph", "GRAPH_ADJACENCY", "source_node",
+                        "Motor de Grafos (Nodos y Aristas) — " + baseDesc },
+                { "VECTOR", "Vector", "VECTOR_HNSW", "embedding", "Motor Vectorial HNSW Embeddings — " + baseDesc },
+                { "JAVA_RECORD", "JavaRecords", "BTREE", "recordId", "Motor Java 25 Canonical Records — " + baseDesc },
+                { "OBJECT", "Objects", "HASH", "uuid", "Motor de Objetos y Entidades POJO — " + baseDesc }
         };
         for (String[] eng : nineEngines) {
             EngineBucketInfo b = new EngineBucketInfo(cleanName, eng[1], eng[0], 0L, 0L, eng[4]);
-            b.getIndexes().add(new EngineIndexInfo("idx_" + eng[1].toLowerCase() + "_" + eng[3], eng[3], eng[2], true, "READY"));
+            b.getIndexes().add(
+                    new EngineIndexInfo("idx_" + eng[1].toLowerCase() + "_" + eng[3], eng[3], eng[2], true, "READY"));
             buckets.add(b);
         }
         return buckets;
@@ -1792,59 +1968,60 @@ public class JettraStorePlugin {
     public synchronized List<ExampleDatabaseInfo> getAvailableExampleDatabases() {
         syncDatabasesFromPrimary(false);
         return List.of(
-            new ExampleDatabaseInfo(
-                "example_factura_db",
-                "Facturación Electrónica y Clientes",
-                "Comprobantes CFDI, catálogo de clientes, registros Java, objetos y sesiones clave-valor.",
-                "DOCUMENT, RELATIONAL, KEY_VALUE, OBJECT, JAVA_RECORD",
-                databasesCatalog.containsKey("example_factura_db")
-            ),
-            new ExampleDatabaseInfo(
-                "samples_hostipal_db",
-                "Hospital Clínico y Red Epidemiológica",
-                "Historias clínicas de pacientes, grafo epidemiológico y embeddings vectoriales diagnósticos.",
-                "DOCUMENT, GRAPH, VECTOR",
-                databasesCatalog.containsKey("samples_hostipal_db")
-            ),
-            new ExampleDatabaseInfo(
-                "samples_ambiental_db",
-                "Monitoreo Ambiental IoT y Geoespacial",
-                "Métricas IoT de sensores (CO2, PM2.5, temperatura) y estaciones geoespaciales.",
-                "TIMESERIES, GEOSPATIAL",
-                databasesCatalog.containsKey("samples_ambiental_db")
-            ),
-            new ExampleDatabaseInfo(
-                "system_metadata_db",
-                "Metadatos de Clúster y WAL Raft",
-                "Entradas de consenso Raft y transacciones WAL en almacenamiento columnar.",
-                "COLUMNAR",
-                databasesCatalog.containsKey("system_metadata_db")
-            )
-        );
+                new ExampleDatabaseInfo(
+                        "example_factura_db",
+                        "Facturación Electrónica y Clientes",
+                        "Comprobantes CFDI, catálogo de clientes, registros Java, objetos y sesiones clave-valor.",
+                        "DOCUMENT, RELATIONAL, KEY_VALUE, OBJECT, JAVA_RECORD",
+                        databasesCatalog.containsKey("example_factura_db")),
+                new ExampleDatabaseInfo(
+                        "samples_hostipal_db",
+                        "Hospital Clínico y Red Epidemiológica",
+                        "Historias clínicas de pacientes, grafo epidemiológico y embeddings vectoriales diagnósticos.",
+                        "DOCUMENT, GRAPH, VECTOR",
+                        databasesCatalog.containsKey("samples_hostipal_db")),
+                new ExampleDatabaseInfo(
+                        "samples_ambiental_db",
+                        "Monitoreo Ambiental IoT y Geoespacial",
+                        "Métricas IoT de sensores (CO2, PM2.5, temperatura) y estaciones geoespaciales.",
+                        "TIMESERIES, GEOSPATIAL",
+                        databasesCatalog.containsKey("samples_ambiental_db")),
+                new ExampleDatabaseInfo(
+                        "system_metadata_db",
+                        "Metadatos de Clúster y WAL Raft",
+                        "Entradas de consenso Raft y transacciones WAL en almacenamiento columnar.",
+                        "COLUMNAR",
+                        databasesCatalog.containsKey("system_metadata_db")));
     }
 
     public synchronized boolean installExampleDatabase(String exampleId) {
-        if (exampleId == null || exampleId.isBlank()) return false;
+        if (exampleId == null || exampleId.isBlank())
+            return false;
         String cleanId = exampleId.trim();
         Map<String, List<EngineBucketInfo>> templates = new LinkedHashMap<>();
         populateExampleDatabases(templates);
         List<EngineBucketInfo> buckets = templates.get(cleanId);
-        if (buckets == null) return false;
+        if (buckets == null)
+            return false;
         databasesCatalog.put(cleanId, buckets);
         syncDatabaseCreationToPrimary(cleanId, buckets);
         lastCatalogSyncMs = 0L;
-        logPoliceIncident("Examples Manager", "Base de datos de ejemplo '" + cleanId + "' instalada correctamente", "OK", "Persistida y replicada en clúster");
+        logPoliceIncident("Examples Manager", "Base de datos de ejemplo '" + cleanId + "' instalada correctamente",
+                "OK", "Persistida y replicada en clúster");
         return true;
     }
 
     public synchronized boolean uninstallExampleDatabase(String exampleId) {
-        if (exampleId == null || exampleId.isBlank()) return false;
+        if (exampleId == null || exampleId.isBlank())
+            return false;
         String cleanId = exampleId.trim();
         boolean removed = databasesCatalog.remove(cleanId) != null;
-        sendFrameToPrimaryNode(io.jettra.store.cluster.JettraRaftFrame.dropDatabase(1L, 0L, "jettra-explorer", cleanId));
+        sendFrameToPrimaryNode(
+                io.jettra.store.cluster.JettraRaftFrame.dropDatabase(1L, 0L, "jettra-explorer", cleanId));
         lastCatalogSyncMs = 0L;
         if (removed) {
-            logPoliceIncident("Examples Manager", "Base de datos de ejemplo '" + cleanId + "' eliminada", "WARN", "Eliminada del catálogo y del clúster");
+            logPoliceIncident("Examples Manager", "Base de datos de ejemplo '" + cleanId + "' eliminada", "WARN",
+                    "Eliminada del catálogo y del clúster");
         }
         return removed;
     }
@@ -1866,9 +2043,11 @@ public class JettraStorePlugin {
     }
 
     private void sendFrameToPrimaryNode(io.jettra.store.cluster.JettraRaftFrame frame) {
-        if (frame == null) return;
+        if (frame == null)
+            return;
         ServerNodeInfo primary = getPrimaryNode();
-        if (primary == null || !primary.isActive() || primary.getHost() == null || primary.getHost().isBlank() || primary.getPort() <= 0) {
+        if (primary == null || !primary.isActive() || primary.getHost() == null || primary.getHost().isBlank()
+                || primary.getPort() <= 0) {
             return;
         }
         try (java.net.Socket s = new java.net.Socket()) {
@@ -1876,44 +2055,49 @@ public class JettraStorePlugin {
             s.connect(new java.net.InetSocketAddress(primary.getHost(), primary.getPort()), 1200);
             s.setSoTimeout(2000);
             try (java.io.BufferedOutputStream bos = new java.io.BufferedOutputStream(s.getOutputStream(), 8192);
-                 java.io.BufferedInputStream bis = new java.io.BufferedInputStream(s.getInputStream(), 8192)) {
+                    java.io.BufferedInputStream bis = new java.io.BufferedInputStream(s.getInputStream(), 8192)) {
                 io.jettra.store.cluster.JettraClusterProtocol.writeFrame(bos, frame);
                 io.jettra.store.cluster.JettraClusterProtocol.readFrame(bis);
             }
-        } catch (Exception ignored) {}
+        } catch (Exception ignored) {
+        }
     }
 
     public void triggerPrimaryReplicaSyncToNode(ServerNodeInfo node) {
-        if (node == null || isPrimaryRole(node.getRole())) return;
+        if (node == null || isPrimaryRole(node.getRole()))
+            return;
         Thread.ofVirtual().name("jettra-explorer-sync-" + node.getId()).start(() -> {
             try {
                 ServerNodeInfo primary = getPrimaryNode();
-                if (primary == null || !primary.isActive() || primary.getId().equalsIgnoreCase(node.getId())) return;
+                if (primary == null || !primary.isActive() || primary.getId().equalsIgnoreCase(node.getId()))
+                    return;
                 int grpcPort = node.getPort();
                 int restPort = node.getRestPort() > 0 ? node.getRestPort() : (grpcPort > 1000 ? grpcPort - 1000 : 8080);
-                io.jettra.store.cluster.JettraRaftFrame joinReq = io.jettra.store.cluster.JettraRaftFrame.joinClusterReq(
-                    1L, node.getId(), node.getRole(), node.getHost(), grpcPort, restPort
-                );
+                io.jettra.store.cluster.JettraRaftFrame joinReq = io.jettra.store.cluster.JettraRaftFrame
+                        .joinClusterReq(
+                                1L, node.getId(), node.getRole(), node.getHost(), grpcPort, restPort);
                 try (java.net.Socket s = new java.net.Socket()) {
                     s.setTcpNoDelay(true);
                     s.connect(new java.net.InetSocketAddress(primary.getHost(), primary.getPort()), 1500);
                     s.setSoTimeout(3000);
                     try (var bos = new java.io.BufferedOutputStream(s.getOutputStream(), 8192);
-                         var bis = new java.io.BufferedInputStream(s.getInputStream(), 8192)) {
+                            var bis = new java.io.BufferedInputStream(s.getInputStream(), 8192)) {
                         io.jettra.store.cluster.JettraClusterProtocol.writeFrame(bos, joinReq);
                         io.jettra.store.cluster.JettraClusterProtocol.readFrame(bis);
                     }
                 }
-            } catch (Exception ignored) {}
+            } catch (Exception ignored) {
+            }
         });
     }
 
     private void syncDatabaseCreationToPrimary(String dbName, List<EngineBucketInfo> buckets) {
-        sendFrameToPrimaryNode(io.jettra.store.cluster.JettraRaftFrame.createDatabase(1L, 0L, "jettra-explorer", dbName, new byte[0]));
+        sendFrameToPrimaryNode(
+                io.jettra.store.cluster.JettraRaftFrame.createDatabase(1L, 0L, "jettra-explorer", dbName, new byte[0]));
         if (buckets != null) {
             for (EngineBucketInfo b : buckets) {
                 sendFrameToPrimaryNode(io.jettra.store.cluster.JettraRaftFrame.createEngine(
-                    1L, 0L, "jettra-explorer", dbName, b.getBucketName(), b.getEngineType(), new byte[0]));
+                        1L, 0L, "jettra-explorer", dbName, b.getBucketName(), b.getEngineType(), new byte[0]));
             }
         }
     }
@@ -1921,60 +2105,76 @@ public class JettraStorePlugin {
     private void populateExampleDatabases(Map<String, List<EngineBucketInfo>> targetCatalog) {
         // 1. example_factura_db
         List<EngineBucketInfo> facturaBuckets = new ArrayList<>();
-        EngineBucketInfo facturas = new EngineBucketInfo("example_factura_db", "Facturas", "DOCUMENT", 1_000_025L, 420_000_000L, "CFDI y comprobantes fiscales electrónicos");
+        EngineBucketInfo facturas = new EngineBucketInfo("example_factura_db", "Facturas", "DOCUMENT", 1_000_025L,
+                420_000_000L, "CFDI y comprobantes fiscales electrónicos");
         facturas.getIndexes().add(new EngineIndexInfo("idx_factura_uuid", "uuid, folio", "BTREE", true, "READY"));
-        facturas.getIndexes().add(new EngineIndexInfo("idx_factura_rfc", "emisorRfc, receptorRfc", "HASH", false, "READY"));
+        facturas.getIndexes()
+                .add(new EngineIndexInfo("idx_factura_rfc", "emisorRfc, receptorRfc", "HASH", false, "READY"));
         facturas.getIndexes().add(new EngineIndexInfo("idx_factura_fecha", "fechaEmision", "BTREE", false, "READY"));
 
-        facturas.getSampleRecords().add(new EngineRecordInfo("FAC-2026-001", "DOCUMENT", "Facturas", "Factura Corp Global $1,160.00 MXN",
-            "{\n  \"folio\": \"FAC-2026-001\",\n  \"emisor\": \"Corp Global SA\",\n  \"rfc\": \"CGL990101XYZ\",\n  \"receptor\": \"Distribuidora Norte\",\n  \"subtotal\": 1000.00,\n  \"iva\": 160.00,\n  \"total\": 1160.00,\n  \"metodoPago\": \"TRANSFERENCIA_SPEI\",\n  \"estado\": \"TIMBRADO_VALIDADO\"\n}", "2026-10-03 14:22:10", 1));
-        facturas.getSampleRecords().add(new EngineRecordInfo("FAC-2026-002", "DOCUMENT", "Facturas", "Factura TechSolutions $5,800.00 MXN",
-            "{\n  \"folio\": \"FAC-2026-002\",\n  \"emisor\": \"TechSolutions SRL\",\n  \"rfc\": \"TSO120404AB1\",\n  \"receptor\": \"Hotel Miramar\",\n  \"subtotal\": 5000.00,\n  \"iva\": 800.00,\n  \"total\": 5800.00,\n  \"metodoPago\": \"TARJETA_EMPRESARIAL\",\n  \"estado\": \"TIMBRADO_VALIDADO\"\n}", "2026-10-03 15:40:02", 1));
-        facturas.getSampleRecords().add(new EngineRecordInfo("FAC-2026-003", "DOCUMENT", "Facturas", "Factura Logística Express $320.50 MXN",
-            "{\n  \"folio\": \"FAC-2026-003\",\n  \"emisor\": \"Logística Express\",\n  \"rfc\": \"LEX050505MN9\",\n  \"receptor\": \"Consorcio Valle\",\n  \"subtotal\": 276.29,\n  \"iva\": 44.21,\n  \"total\": 320.50,\n  \"metodoPago\": \"TRANSFERENCIA_SPEI\",\n  \"estado\": \"PENDIENTE_PAGO\"\n}", "2026-10-03 17:05:44", 2));
+        facturas.getSampleRecords().add(new EngineRecordInfo("FAC-2026-001", "DOCUMENT", "Facturas",
+                "Factura Corp Global $1,160.00 MXN",
+                "{\n  \"folio\": \"FAC-2026-001\",\n  \"emisor\": \"Corp Global SA\",\n  \"rfc\": \"CGL990101XYZ\",\n  \"receptor\": \"Distribuidora Norte\",\n  \"subtotal\": 1000.00,\n  \"iva\": 160.00,\n  \"total\": 1160.00,\n  \"metodoPago\": \"TRANSFERENCIA_SPEI\",\n  \"estado\": \"TIMBRADO_VALIDADO\"\n}",
+                "2026-10-03 14:22:10", 1));
+        facturas.getSampleRecords().add(new EngineRecordInfo("FAC-2026-002", "DOCUMENT", "Facturas",
+                "Factura TechSolutions $5,800.00 MXN",
+                "{\n  \"folio\": \"FAC-2026-002\",\n  \"emisor\": \"TechSolutions SRL\",\n  \"rfc\": \"TSO120404AB1\",\n  \"receptor\": \"Hotel Miramar\",\n  \"subtotal\": 5000.00,\n  \"iva\": 800.00,\n  \"total\": 5800.00,\n  \"metodoPago\": \"TARJETA_EMPRESARIAL\",\n  \"estado\": \"TIMBRADO_VALIDADO\"\n}",
+                "2026-10-03 15:40:02", 1));
+        facturas.getSampleRecords().add(new EngineRecordInfo("FAC-2026-003", "DOCUMENT", "Facturas",
+                "Factura Logística Express $320.50 MXN",
+                "{\n  \"folio\": \"FAC-2026-003\",\n  \"emisor\": \"Logística Express\",\n  \"rfc\": \"LEX050505MN9\",\n  \"receptor\": \"Consorcio Valle\",\n  \"subtotal\": 276.29,\n  \"iva\": 44.21,\n  \"total\": 320.50,\n  \"metodoPago\": \"TRANSFERENCIA_SPEI\",\n  \"estado\": \"PENDIENTE_PAGO\"\n}",
+                "2026-10-03 17:05:44", 2));
         for (int i = 4; i <= 25; i++) {
             String folio = String.format("FAC-2026-%03d", i);
             double sub = 450.00 + (i * 175.00);
             double iva = Math.round(sub * 0.16 * 100.0) / 100.0;
             double tot = Math.round((sub + iva) * 100.0) / 100.0;
-            String emisor = (i % 3 == 0) ? "Corp Global SA" : ((i % 2 == 0) ? "TechSolutions SRL" : "Servicios Industriales del Pacífico");
+            String emisor = (i % 3 == 0) ? "Corp Global SA"
+                    : ((i % 2 == 0) ? "TechSolutions SRL" : "Servicios Industriales del Pacífico");
             String estado = (i % 4 == 0) ? "PENDIENTE_PAGO" : "TIMBRADO_VALIDADO";
             facturas.getSampleRecords().add(new EngineRecordInfo(
-                folio, "DOCUMENT", "Facturas",
-                String.format(Locale.US, "Factura %s $%,.2f MXN", emisor, tot),
-                String.format(Locale.US, "{\n  \"folio\": \"%s\",\n  \"emisor\": \"%s\",\n  \"rfc\": \"EMP9901%02dXYZ\",\n  \"receptor\": \"Cliente Corporativo #%d\",\n  \"subtotal\": %.2f,\n  \"iva\": %.2f,\n  \"total\": %.2f,\n  \"metodoPago\": \"TRANSFERENCIA_SPEI\",\n  \"estado\": \"%s\"\n}",
-                    folio, emisor, i, i, sub, iva, tot, estado),
-                String.format("2026-10-03 18:%02d:15", i), 1
-            ));
+                    folio, "DOCUMENT", "Facturas",
+                    String.format(Locale.US, "Factura %s $%,.2f MXN", emisor, tot),
+                    String.format(Locale.US,
+                            "{\n  \"folio\": \"%s\",\n  \"emisor\": \"%s\",\n  \"rfc\": \"EMP9901%02dXYZ\",\n  \"receptor\": \"Cliente Corporativo #%d\",\n  \"subtotal\": %.2f,\n  \"iva\": %.2f,\n  \"total\": %.2f,\n  \"metodoPago\": \"TRANSFERENCIA_SPEI\",\n  \"estado\": \"%s\"\n}",
+                            folio, emisor, i, i, sub, iva, tot, estado),
+                    String.format("2026-10-03 18:%02d:15", i), 1));
         }
 
-        EngineBucketInfo clientes = new EngineBucketInfo("example_factura_db", "Clientes", "RELATIONAL", 48_500L, 18_000_000L, "Catálogo maestro de contribuyentes y clientes");
+        EngineBucketInfo clientes = new EngineBucketInfo("example_factura_db", "Clientes", "RELATIONAL", 48_500L,
+                18_000_000L, "Catálogo maestro de contribuyentes y clientes");
         clientes.getIndexes().add(new EngineIndexInfo("idx_cliente_pk", "cliente_id", "BTREE", true, "READY"));
-        clientes.getSampleRecords().add(new EngineRecordInfo("CLI-1001", "RELATIONAL", "Clientes", "Distribuidora Norte SA de CV",
-            "{\n  \"cliente_id\": 1001,\n  \"razon_social\": \"Distribuidora Norte SA de CV\",\n  \"rfc\": \"DNO101010AA2\",\n  \"ciudad\": \"Monterrey\",\n  \"limite_credito\": 500000.00\n}", "2026-10-02 09:15:00", 1));
+        clientes.getSampleRecords().add(new EngineRecordInfo("CLI-1001", "RELATIONAL", "Clientes",
+                "Distribuidora Norte SA de CV",
+                "{\n  \"cliente_id\": 1001,\n  \"razon_social\": \"Distribuidora Norte SA de CV\",\n  \"rfc\": \"DNO101010AA2\",\n  \"ciudad\": \"Monterrey\",\n  \"limite_credito\": 500000.00\n}",
+                "2026-10-02 09:15:00", 1));
         for (int i = 2; i <= 15; i++) {
             int cid = 1000 + i;
             clientes.getSampleRecords().add(new EngineRecordInfo(
-                "CLI-" + cid, "RELATIONAL", "Clientes",
-                "Grupo Empresarial Comercial #" + i + " SA de CV",
-                String.format(Locale.US, "{\n  \"cliente_id\": %d,\n  \"razon_social\": \"Grupo Empresarial Comercial #%d SA de CV\",\n  \"rfc\": \"GEC1502%02dBB%d\",\n  \"ciudad\": \"%s\",\n  \"limite_credito\": %.2f\n}",
-                    cid, i, i, (i % 9) + 1, (i % 2 == 0 ? "Guadalajara" : "Ciudad de México"), 150000.00 + (i * 25000.00)),
-                String.format("2026-10-02 10:%02d:00", i), 1
-            ));
+                    "CLI-" + cid, "RELATIONAL", "Clientes",
+                    "Grupo Empresarial Comercial #" + i + " SA de CV",
+                    String.format(Locale.US,
+                            "{\n  \"cliente_id\": %d,\n  \"razon_social\": \"Grupo Empresarial Comercial #%d SA de CV\",\n  \"rfc\": \"GEC1502%02dBB%d\",\n  \"ciudad\": \"%s\",\n  \"limite_credito\": %.2f\n}",
+                            cid, i, i, (i % 9) + 1, (i % 2 == 0 ? "Guadalajara" : "Ciudad de México"),
+                            150000.00 + (i * 25000.00)),
+                    String.format("2026-10-02 10:%02d:00", i), 1));
         }
 
-        EngineBucketInfo ledger = new EngineBucketInfo("example_factura_db", "BalanceCache", "KEY_VALUE", 125_000L, 8_500_000L, "Saldos y balances contables en memoria rápida");
-        ledger.getSampleRecords().add(new EngineRecordInfo("BAL_ACC_4001", "KEY_VALUE", "BalanceCache", "Balance Actual Cuenta #4001",
-            "{\n  \"account\": \"4001\",\n  \"currency\": \"MXN\",\n  \"cleared_balance\": 482910.45,\n  \"last_recon\": \"2026-10-03T21:00:00Z\"\n}", "2026-10-03 21:00:00", 1));
+        EngineBucketInfo ledger = new EngineBucketInfo("example_factura_db", "BalanceCache", "KEY_VALUE", 125_000L,
+                8_500_000L, "Saldos y balances contables en memoria rápida");
+        ledger.getSampleRecords().add(new EngineRecordInfo("BAL_ACC_4001", "KEY_VALUE", "BalanceCache",
+                "Balance Actual Cuenta #4001",
+                "{\n  \"account\": \"4001\",\n  \"currency\": \"MXN\",\n  \"cleared_balance\": 482910.45,\n  \"last_recon\": \"2026-10-03T21:00:00Z\"\n}",
+                "2026-10-03 21:00:00", 1));
         for (int i = 2; i <= 15; i++) {
             int acc = 4000 + i;
             ledger.getSampleRecords().add(new EngineRecordInfo(
-                "BAL_ACC_" + acc, "KEY_VALUE", "BalanceCache",
-                "Balance Actual Cuenta #" + acc,
-                String.format(Locale.US, "{\n  \"account\": \"%d\",\n  \"currency\": \"%s\",\n  \"cleared_balance\": %.2f,\n  \"last_recon\": \"2026-10-03T21:%02d:00Z\"\n}",
-                    acc, (i % 3 == 0 ? "USD" : "MXN"), 85000.00 + (i * 14320.50), i),
-                String.format("2026-10-03 21:%02d:00", i), 1
-            ));
+                    "BAL_ACC_" + acc, "KEY_VALUE", "BalanceCache",
+                    "Balance Actual Cuenta #" + acc,
+                    String.format(Locale.US,
+                            "{\n  \"account\": \"%d\",\n  \"currency\": \"%s\",\n  \"cleared_balance\": %.2f,\n  \"last_recon\": \"2026-10-03T21:%02d:00Z\"\n}",
+                            acc, (i % 3 == 0 ? "USD" : "MXN"), 85000.00 + (i * 14320.50), i),
+                    String.format("2026-10-03 21:%02d:00", i), 1));
         }
 
         facturaBuckets.add(facturas);
@@ -1982,34 +2182,40 @@ public class JettraStorePlugin {
         facturaBuckets.add(ledger);
 
         // Buckets para motores JAVA_RECORD y OBJECT
-        EngineBucketInfo javaRecords = new EngineBucketInfo("example_factura_db", "CustomerRecords", "JAVA_RECORD", 15_200L, 5_400_000L, "Java 25 Canonical Records inmutables");
+        EngineBucketInfo javaRecords = new EngineBucketInfo("example_factura_db", "CustomerRecords", "JAVA_RECORD",
+                15_200L, 5_400_000L, "Java 25 Canonical Records inmutables");
         javaRecords.getIndexes().add(new EngineIndexInfo("idx_rec_id", "recordId", "BTREE", true, "READY"));
-        javaRecords.getSampleRecords().add(new EngineRecordInfo("REC-ORD-501", "JAVA_RECORD", "CustomerRecords", "OrderSummary[id=501, client=Distribuidora]",
-            "{\n  \"recordClass\": \"io.jettra.store.domain.OrderSummary\",\n  \"components\": {\n    \"orderId\": 501,\n    \"clientName\": \"Distribuidora Norte\",\n    \"total\": 12450.00,\n    \"currency\": \"USD\",\n    \"status\": \"APPROVED\"\n  }\n}", "2026-10-03 16:00:00", 1));
+        javaRecords.getSampleRecords().add(new EngineRecordInfo("REC-ORD-501", "JAVA_RECORD", "CustomerRecords",
+                "OrderSummary[id=501, client=Distribuidora]",
+                "{\n  \"recordClass\": \"io.jettra.store.domain.OrderSummary\",\n  \"components\": {\n    \"orderId\": 501,\n    \"clientName\": \"Distribuidora Norte\",\n    \"total\": 12450.00,\n    \"currency\": \"USD\",\n    \"status\": \"APPROVED\"\n  }\n}",
+                "2026-10-03 16:00:00", 1));
         for (int i = 2; i <= 15; i++) {
             int ordId = 500 + i;
             javaRecords.getSampleRecords().add(new EngineRecordInfo(
-                "REC-ORD-" + ordId, "JAVA_RECORD", "CustomerRecords",
-                "OrderSummary[id=" + ordId + ", client=Corporativo_" + i + "]",
-                String.format(Locale.US, "{\n  \"recordClass\": \"io.jettra.store.domain.OrderSummary\",\n  \"components\": {\n    \"orderId\": %d,\n    \"clientName\": \"Corporativo_%d\",\n    \"total\": %.2f,\n    \"currency\": \"USD\",\n    \"status\": \"APPROVED\"\n  }\n}",
-                    ordId, i, 2400.00 + (i * 850.00)),
-                String.format("2026-10-03 16:%02d:00", i), 1
-            ));
+                    "REC-ORD-" + ordId, "JAVA_RECORD", "CustomerRecords",
+                    "OrderSummary[id=" + ordId + ", client=Corporativo_" + i + "]",
+                    String.format(Locale.US,
+                            "{\n  \"recordClass\": \"io.jettra.store.domain.OrderSummary\",\n  \"components\": {\n    \"orderId\": %d,\n    \"clientName\": \"Corporativo_%d\",\n    \"total\": %.2f,\n    \"currency\": \"USD\",\n    \"status\": \"APPROVED\"\n  }\n}",
+                            ordId, i, 2400.00 + (i * 850.00)),
+                    String.format("2026-10-03 16:%02d:00", i), 1));
         }
 
-        EngineBucketInfo objectsBucket = new EngineBucketInfo("example_factura_db", "DomainEntities", "OBJECT", 8_500L, 3_800_000L, "Entidades POJO / Objetos Java nativos");
+        EngineBucketInfo objectsBucket = new EngineBucketInfo("example_factura_db", "DomainEntities", "OBJECT", 8_500L,
+                3_800_000L, "Entidades POJO / Objetos Java nativos");
         objectsBucket.getIndexes().add(new EngineIndexInfo("idx_obj_uuid", "uuid", "HASH", false, "READY"));
-        objectsBucket.getSampleRecords().add(new EngineRecordInfo("OBJ-ENT-101", "OBJECT", "DomainEntities", "FiscalEntity[uuid=98a1-41fb, category=GENERAL]",
-            "{\n  \"className\": \"io.jettra.model.FiscalEntity\",\n  \"serialVersion\": 1,\n  \"properties\": {\n    \"entityId\": \"ENT-101\",\n    \"taxCategory\": \"GENERAL_CORPORATE\",\n    \"auditState\": \"SYNCHRONIZED\",\n    \"lastCheckEpoch\": 1762194000\n  }\n}", "2026-10-03 16:30:00", 1));
+        objectsBucket.getSampleRecords().add(new EngineRecordInfo("OBJ-ENT-101", "OBJECT", "DomainEntities",
+                "FiscalEntity[uuid=98a1-41fb, category=GENERAL]",
+                "{\n  \"className\": \"io.jettra.model.FiscalEntity\",\n  \"serialVersion\": 1,\n  \"properties\": {\n    \"entityId\": \"ENT-101\",\n    \"taxCategory\": \"GENERAL_CORPORATE\",\n    \"auditState\": \"SYNCHRONIZED\",\n    \"lastCheckEpoch\": 1762194000\n  }\n}",
+                "2026-10-03 16:30:00", 1));
         for (int i = 2; i <= 15; i++) {
             int entId = 100 + i;
             objectsBucket.getSampleRecords().add(new EngineRecordInfo(
-                "OBJ-ENT-" + entId, "OBJECT", "DomainEntities",
-                "FiscalEntity[uuid=98a1-" + (4100 + i) + ", category=GENERAL]",
-                String.format(Locale.US, "{\n  \"className\": \"io.jettra.model.FiscalEntity\",\n  \"serialVersion\": 1,\n  \"properties\": {\n    \"entityId\": \"ENT-%d\",\n    \"taxCategory\": \"GENERAL_CORPORATE\",\n    \"auditState\": \"SYNCHRONIZED\",\n    \"lastCheckEpoch\": %d\n  }\n}",
-                    entId, 1762194000 + (i * 60)),
-                String.format("2026-10-03 16:%02d:00", 30 + i), 1
-            ));
+                    "OBJ-ENT-" + entId, "OBJECT", "DomainEntities",
+                    "FiscalEntity[uuid=98a1-" + (4100 + i) + ", category=GENERAL]",
+                    String.format(Locale.US,
+                            "{\n  \"className\": \"io.jettra.model.FiscalEntity\",\n  \"serialVersion\": 1,\n  \"properties\": {\n    \"entityId\": \"ENT-%d\",\n    \"taxCategory\": \"GENERAL_CORPORATE\",\n    \"auditState\": \"SYNCHRONIZED\",\n    \"lastCheckEpoch\": %d\n  }\n}",
+                            entId, 1762194000 + (i * 60)),
+                    String.format("2026-10-03 16:%02d:00", 30 + i), 1));
         }
 
         facturaBuckets.add(javaRecords);
@@ -2018,49 +2224,60 @@ public class JettraStorePlugin {
 
         // 2. samples_hostipal_db
         List<EngineBucketInfo> hospBuckets = new ArrayList<>();
-        EngineBucketInfo pacientes = new EngineBucketInfo("samples_hostipal_db", "Pacientes", "DOCUMENT", 350_000L, 180_000_000L, "Historias clínicas, diagnósticos y triaje");
+        EngineBucketInfo pacientes = new EngineBucketInfo("samples_hostipal_db", "Pacientes", "DOCUMENT", 350_000L,
+                180_000_000L, "Historias clínicas, diagnósticos y triaje");
         pacientes.getIndexes().add(new EngineIndexInfo("idx_paciente_hc", "numero_historia", "HASH", true, "READY"));
-        pacientes.getSampleRecords().add(new EngineRecordInfo("HC-98210", "DOCUMENT", "Pacientes", "Paciente Juan Pérez - Traumatología",
-            "{\n  \"hc\": \"HC-98210\",\n  \"nombre\": \"Juan Pérez\",\n  \"edad\": 42,\n  \"tipo_sangre\": \"O+\",\n  \"alergias\": [\"Penicilina\"],\n  \"servicio\": \"UCI_TRAUMA\",\n  \"estado\": \"ESTABLE\"\n}", "2026-10-03 11:10:00", 3));
+        pacientes.getSampleRecords().add(new EngineRecordInfo("HC-98210", "DOCUMENT", "Pacientes",
+                "Paciente Juan Pérez - Traumatología",
+                "{\n  \"hc\": \"HC-98210\",\n  \"nombre\": \"Juan Pérez\",\n  \"edad\": 42,\n  \"tipo_sangre\": \"O+\",\n  \"alergias\": [\"Penicilina\"],\n  \"servicio\": \"UCI_TRAUMA\",\n  \"estado\": \"ESTABLE\"\n}",
+                "2026-10-03 11:10:00", 3));
         for (int i = 1; i <= 14; i++) {
             int hcNum = 98210 + i;
             pacientes.getSampleRecords().add(new EngineRecordInfo(
-                "HC-" + hcNum, "DOCUMENT", "Pacientes",
-                "Paciente Clínico #" + i + " - Cardiología / Medicina Interna",
-                String.format(Locale.US, "{\n  \"hc\": \"HC-%d\",\n  \"nombre\": \"Paciente Clínico %d\",\n  \"edad\": %d,\n  \"tipo_sangre\": \"%s\",\n  \"servicio\": \"CARDIOLOGIA\",\n  \"estado\": \"ESTABLE\"\n}",
-                    hcNum, i, 25 + (i * 2), (i % 2 == 0 ? "A+" : "O+")),
-                String.format("2026-10-03 11:%02d:00", 10 + i), 1
-            ));
+                    "HC-" + hcNum, "DOCUMENT", "Pacientes",
+                    "Paciente Clínico #" + i + " - Cardiología / Medicina Interna",
+                    String.format(Locale.US,
+                            "{\n  \"hc\": \"HC-%d\",\n  \"nombre\": \"Paciente Clínico %d\",\n  \"edad\": %d,\n  \"tipo_sangre\": \"%s\",\n  \"servicio\": \"CARDIOLOGIA\",\n  \"estado\": \"ESTABLE\"\n}",
+                            hcNum, i, 25 + (i * 2), (i % 2 == 0 ? "A+" : "O+")),
+                    String.format("2026-10-03 11:%02d:00", 10 + i), 1));
         }
 
-        EngineBucketInfo contagios = new EngineBucketInfo("samples_hostipal_db", "RedEpidemiologica", "GRAPH", 85_000L, 45_000_000L, "Grafo de transmisión, contactos y cerco sanitario");
-        contagios.getIndexes().add(new EngineIndexInfo("idx_graph_adj", "source_node, target_node", "GRAPH_ADJACENCY", false, "READY"));
-        contagios.getSampleRecords().add(new EngineRecordInfo("EDGE-4401", "GRAPH", "RedEpidemiologica", "Nodo A01 ──[CONTACTO_DIRECTO]──> Nodo B14",
-            "{\n  \"edge_id\": \"EDGE-4401\",\n  \"source\": \"P-98210\",\n  \"target\": \"P-99104\",\n  \"rel\": \"CONTACTO_DIRECTO_UCI\",\n  \"fecha_contacto\": \"2026-10-01\",\n  \"probabilidad_infeccion\": 0.87\n}", "2026-10-02 18:30:00", 1));
+        EngineBucketInfo contagios = new EngineBucketInfo("samples_hostipal_db", "RedEpidemiologica", "GRAPH", 85_000L,
+                45_000_000L, "Grafo de transmisión, contactos y cerco sanitario");
+        contagios.getIndexes().add(
+                new EngineIndexInfo("idx_graph_adj", "source_node, target_node", "GRAPH_ADJACENCY", false, "READY"));
+        contagios.getSampleRecords().add(new EngineRecordInfo("EDGE-4401", "GRAPH", "RedEpidemiologica",
+                "Nodo A01 ──[CONTACTO_DIRECTO]──> Nodo B14",
+                "{\n  \"edge_id\": \"EDGE-4401\",\n  \"source\": \"P-98210\",\n  \"target\": \"P-99104\",\n  \"rel\": \"CONTACTO_DIRECTO_UCI\",\n  \"fecha_contacto\": \"2026-10-01\",\n  \"probabilidad_infeccion\": 0.87\n}",
+                "2026-10-02 18:30:00", 1));
         for (int i = 2; i <= 15; i++) {
             int edgeNum = 4400 + i;
             contagios.getSampleRecords().add(new EngineRecordInfo(
-                "EDGE-" + edgeNum, "GRAPH", "RedEpidemiologica",
-                String.format("Nodo A%02d ──[CONTACTO_DIRECTO]──> Nodo B%02d", i, i + 14),
-                String.format(Locale.US, "{\n  \"edge_id\": \"EDGE-%d\",\n  \"source\": \"P-%d\",\n  \"target\": \"P-%d\",\n  \"rel\": \"CONTACTO_DIRECTO_UCI\",\n  \"fecha_contacto\": \"2026-10-02\",\n  \"probabilidad_infeccion\": %.2f\n}",
-                    edgeNum, 98210 + i, 99104 + i, 0.35 + (i * 0.03)),
-                String.format("2026-10-02 18:%02d:00", 30 + i), 1
-            ));
+                    "EDGE-" + edgeNum, "GRAPH", "RedEpidemiologica",
+                    String.format("Nodo A%02d ──[CONTACTO_DIRECTO]──> Nodo B%02d", i, i + 14),
+                    String.format(Locale.US,
+                            "{\n  \"edge_id\": \"EDGE-%d\",\n  \"source\": \"P-%d\",\n  \"target\": \"P-%d\",\n  \"rel\": \"CONTACTO_DIRECTO_UCI\",\n  \"fecha_contacto\": \"2026-10-02\",\n  \"probabilidad_infeccion\": %.2f\n}",
+                            edgeNum, 98210 + i, 99104 + i, 0.35 + (i * 0.03)),
+                    String.format("2026-10-02 18:%02d:00", 30 + i), 1));
         }
 
-        EngineBucketInfo embeddings = new EngineBucketInfo("samples_hostipal_db", "DiagnosticoEmbeddings", "VECTOR", 40_000L, 95_000_000L, "Embeddings densos 1536d para búsqueda semántica diagnóstica");
-        embeddings.getIndexes().add(new EngineIndexInfo("idx_vector_hnsw", "vector_embedding", "VECTOR_HNSW", false, "READY"));
-        embeddings.getSampleRecords().add(new EngineRecordInfo("VEC-MED-01", "VECTOR", "DiagnosticoEmbeddings", "Vector Diagnóstico TAC Pulmonar",
-            "{\n  \"id\": \"VEC-MED-01\",\n  \"dims\": 1536,\n  \"model\": \"biomed-clip-v3\",\n  \"embedding_preview\": [0.0421, -0.1982, 0.4421, 0.0891, -0.0024],\n  \"etiqueta\": \"Neumonia_Bilateral_Grave\"\n}", "2026-10-03 08:00:00", 1));
+        EngineBucketInfo embeddings = new EngineBucketInfo("samples_hostipal_db", "DiagnosticoEmbeddings", "VECTOR",
+                40_000L, 95_000_000L, "Embeddings densos 1536d para búsqueda semántica diagnóstica");
+        embeddings.getIndexes()
+                .add(new EngineIndexInfo("idx_vector_hnsw", "vector_embedding", "VECTOR_HNSW", false, "READY"));
+        embeddings.getSampleRecords().add(new EngineRecordInfo("VEC-MED-01", "VECTOR", "DiagnosticoEmbeddings",
+                "Vector Diagnóstico TAC Pulmonar",
+                "{\n  \"id\": \"VEC-MED-01\",\n  \"dims\": 1536,\n  \"model\": \"biomed-clip-v3\",\n  \"embedding_preview\": [0.0421, -0.1982, 0.4421, 0.0891, -0.0024],\n  \"etiqueta\": \"Neumonia_Bilateral_Grave\"\n}",
+                "2026-10-03 08:00:00", 1));
         for (int i = 2; i <= 15; i++) {
             String vecId = String.format("VEC-MED-%02d", i);
             embeddings.getSampleRecords().add(new EngineRecordInfo(
-                vecId, "VECTOR", "DiagnosticoEmbeddings",
-                "Vector Diagnóstico Biomédico #" + i,
-                String.format(Locale.US, "{\n  \"id\": \"%s\",\n  \"dims\": 1536,\n  \"model\": \"biomed-clip-v3\",\n  \"embedding_preview\": [%.4f, -0.1520, 0.3810, 0.0912, -0.0110],\n  \"etiqueta\": \"Estudio_Imagenologia_%d\"\n}",
-                    vecId, 0.0200 + (i * 0.0115), i),
-                String.format("2026-10-03 08:%02d:00", i), 1
-            ));
+                    vecId, "VECTOR", "DiagnosticoEmbeddings",
+                    "Vector Diagnóstico Biomédico #" + i,
+                    String.format(Locale.US,
+                            "{\n  \"id\": \"%s\",\n  \"dims\": 1536,\n  \"model\": \"biomed-clip-v3\",\n  \"embedding_preview\": [%.4f, -0.1520, 0.3810, 0.0912, -0.0110],\n  \"etiqueta\": \"Estudio_Imagenologia_%d\"\n}",
+                            vecId, 0.0200 + (i * 0.0115), i),
+                    String.format("2026-10-03 08:%02d:00", i), 1));
         }
 
         hospBuckets.add(pacientes);
@@ -2070,35 +2287,43 @@ public class JettraStorePlugin {
 
         // 3. samples_ambiental_db
         List<EngineBucketInfo> ambBuckets = new ArrayList<>();
-        EngineBucketInfo sensores = new EngineBucketInfo("samples_ambiental_db", "SensorMetrics", "TIMESERIES", 4_500_000L, 210_000_000L, "Métricas IoT en tiempo real: CO2, PM2.5, Temperatura");
-        sensores.getIndexes().add(new EngineIndexInfo("idx_ts_brin", "timestamp, sensor_id", "TIMESERIES_BRIN", false, "READY"));
-        sensores.getSampleRecords().add(new EngineRecordInfo("TS-CO2-991", "TIMESERIES", "SensorMetrics", "Sensor Norte CO2: 412 ppm",
-            "{\n  \"sensor_id\": \"SN-01-NORTE\",\n  \"metric\": \"CO2_PPM\",\n  \"value\": 412.8,\n  \"temp_c\": 24.6,\n  \"hum_pct\": 58.2,\n  \"calidad_aire\": \"BUENA\"\n}", "2026-10-03 21:55:00", 1));
+        EngineBucketInfo sensores = new EngineBucketInfo("samples_ambiental_db", "SensorMetrics", "TIMESERIES",
+                4_500_000L, 210_000_000L, "Métricas IoT en tiempo real: CO2, PM2.5, Temperatura");
+        sensores.getIndexes()
+                .add(new EngineIndexInfo("idx_ts_brin", "timestamp, sensor_id", "TIMESERIES_BRIN", false, "READY"));
+        sensores.getSampleRecords().add(new EngineRecordInfo("TS-CO2-991", "TIMESERIES", "SensorMetrics",
+                "Sensor Norte CO2: 412 ppm",
+                "{\n  \"sensor_id\": \"SN-01-NORTE\",\n  \"metric\": \"CO2_PPM\",\n  \"value\": 412.8,\n  \"temp_c\": 24.6,\n  \"hum_pct\": 58.2,\n  \"calidad_aire\": \"BUENA\"\n}",
+                "2026-10-03 21:55:00", 1));
         for (int i = 2; i <= 15; i++) {
             int tsNum = 990 + i;
             double ppm = 410.0 + (i * 1.8);
             sensores.getSampleRecords().add(new EngineRecordInfo(
-                "TS-CO2-" + tsNum, "TIMESERIES", "SensorMetrics",
-                String.format(Locale.US, "Sensor Ambiental #%d CO2: %.1f ppm", i, ppm),
-                String.format(Locale.US, "{\n  \"sensor_id\": \"SN-%02d-ZONA\",\n  \"metric\": \"CO2_PPM\",\n  \"value\": %.1f,\n  \"temp_c\": %.1f,\n  \"hum_pct\": 55.0,\n  \"calidad_aire\": \"BUENA\"\n}",
-                    i, ppm, 22.0 + (i * 0.4)),
-                String.format("2026-10-03 21:%02d:00", 40 + i), 1
-            ));
+                    "TS-CO2-" + tsNum, "TIMESERIES", "SensorMetrics",
+                    String.format(Locale.US, "Sensor Ambiental #%d CO2: %.1f ppm", i, ppm),
+                    String.format(Locale.US,
+                            "{\n  \"sensor_id\": \"SN-%02d-ZONA\",\n  \"metric\": \"CO2_PPM\",\n  \"value\": %.1f,\n  \"temp_c\": %.1f,\n  \"hum_pct\": 55.0,\n  \"calidad_aire\": \"BUENA\"\n}",
+                            i, ppm, 22.0 + (i * 0.4)),
+                    String.format("2026-10-03 21:%02d:00", 40 + i), 1));
         }
 
-        EngineBucketInfo estaciones = new EngineBucketInfo("samples_ambiental_db", "EstacionesGeo", "GEOSPATIAL", 1_200L, 1_500_000L, "Estaciones meteorológicas y polígonos de alerta");
-        estaciones.getIndexes().add(new EngineIndexInfo("idx_geo_rtree", "coordinates", "SPATIAL_R_TREE", false, "READY"));
-        estaciones.getSampleRecords().add(new EngineRecordInfo("GEO-EST-01", "GEOSPATIAL", "EstacionesGeo", "Estación Central Valle de México",
-            "{\n  \"station_id\": \"EST-CENTRAL-01\",\n  \"lat\": 19.4326,\n  \"lng\": -99.1332,\n  \"altitud_m\": 2240,\n  \"zona\": \"Metropolitana Central\"\n}", "2026-10-01 00:00:00", 1));
+        EngineBucketInfo estaciones = new EngineBucketInfo("samples_ambiental_db", "EstacionesGeo", "GEOSPATIAL",
+                1_200L, 1_500_000L, "Estaciones meteorológicas y polígonos de alerta");
+        estaciones.getIndexes()
+                .add(new EngineIndexInfo("idx_geo_rtree", "coordinates", "SPATIAL_R_TREE", false, "READY"));
+        estaciones.getSampleRecords().add(new EngineRecordInfo("GEO-EST-01", "GEOSPATIAL", "EstacionesGeo",
+                "Estación Central Valle de México",
+                "{\n  \"station_id\": \"EST-CENTRAL-01\",\n  \"lat\": 19.4326,\n  \"lng\": -99.1332,\n  \"altitud_m\": 2240,\n  \"zona\": \"Metropolitana Central\"\n}",
+                "2026-10-01 00:00:00", 1));
         for (int i = 2; i <= 15; i++) {
             String geoId = String.format("GEO-EST-%02d", i);
             estaciones.getSampleRecords().add(new EngineRecordInfo(
-                geoId, "GEOSPATIAL", "EstacionesGeo",
-                "Estación Monitoreo Geoespacial #" + i,
-                String.format(Locale.US, "{\n  \"station_id\": \"EST-MET-%02d\",\n  \"lat\": %.4f,\n  \"lng\": %.4f,\n  \"altitud_m\": %d,\n  \"zona\": \"Sector Ambiental %d\"\n}",
-                    i, 19.4000 + (i * 0.015), -99.1000 - (i * 0.012), 2200 + (i * 5), i),
-                String.format("2026-10-01 00:%02d:00", i), 1
-            ));
+                    geoId, "GEOSPATIAL", "EstacionesGeo",
+                    "Estación Monitoreo Geoespacial #" + i,
+                    String.format(Locale.US,
+                            "{\n  \"station_id\": \"EST-MET-%02d\",\n  \"lat\": %.4f,\n  \"lng\": %.4f,\n  \"altitud_m\": %d,\n  \"zona\": \"Sector Ambiental %d\"\n}",
+                            i, 19.4000 + (i * 0.015), -99.1000 - (i * 0.012), 2200 + (i * 5), i),
+                    String.format("2026-10-01 00:%02d:00", i), 1));
         }
 
         ambBuckets.add(sensores);
@@ -2107,18 +2332,21 @@ public class JettraStorePlugin {
 
         // 4. system_metadata_db
         List<EngineBucketInfo> metaBuckets = new ArrayList<>();
-        EngineBucketInfo raft = new EngineBucketInfo("system_metadata_db", "RaftLogEntries", "COLUMNAR", 650_000L, 85_000_000L, "Entradas de consenso Raft y transacciones WAL");
-        raft.getSampleRecords().add(new EngineRecordInfo("WAL-TERM8-1004", "COLUMNAR", "RaftLogEntries", "Compromiso de Bloque Raft Term 8",
-            "{\n  \"term\": 8,\n  \"index\": 1004,\n  \"leader\": \"node-01\",\n  \"quorum_nodes\": [\"node-01\", \"node-02\", \"node-03\"],\n  \"status\": \"COMMITTED\"\n}", "2026-10-03 21:58:12", 1));
+        EngineBucketInfo raft = new EngineBucketInfo("system_metadata_db", "RaftLogEntries", "COLUMNAR", 650_000L,
+                85_000_000L, "Entradas de consenso Raft y transacciones WAL");
+        raft.getSampleRecords().add(new EngineRecordInfo("WAL-TERM8-1004", "COLUMNAR", "RaftLogEntries",
+                "Compromiso de Bloque Raft Term 8",
+                "{\n  \"term\": 8,\n  \"index\": 1004,\n  \"leader\": \"node-01\",\n  \"quorum_nodes\": [\"node-01\", \"node-02\", \"node-03\"],\n  \"status\": \"COMMITTED\"\n}",
+                "2026-10-03 21:58:12", 1));
         for (int i = 2; i <= 15; i++) {
             int walIdx = 1003 + i;
             raft.getSampleRecords().add(new EngineRecordInfo(
-                "WAL-TERM8-" + walIdx, "COLUMNAR", "RaftLogEntries",
-                "Compromiso de Bloque Raft Term 8 #" + walIdx,
-                String.format(Locale.US, "{\n  \"term\": 8,\n  \"index\": %d,\n  \"leader\": \"node-01\",\n  \"quorum_nodes\": [\"node-01\", \"node-02\", \"node-03\"],\n  \"status\": \"COMMITTED\"\n}",
-                    walIdx),
-                String.format("2026-10-03 21:58:%02d", 10 + i), 1
-            ));
+                    "WAL-TERM8-" + walIdx, "COLUMNAR", "RaftLogEntries",
+                    "Compromiso de Bloque Raft Term 8 #" + walIdx,
+                    String.format(Locale.US,
+                            "{\n  \"term\": 8,\n  \"index\": %d,\n  \"leader\": \"node-01\",\n  \"quorum_nodes\": [\"node-01\", \"node-02\", \"node-03\"],\n  \"status\": \"COMMITTED\"\n}",
+                            walIdx),
+                    String.format("2026-10-03 21:58:%02d", 10 + i), 1));
         }
 
         metaBuckets.add(raft);
@@ -2142,7 +2370,8 @@ public class JettraStorePlugin {
     public EngineBucketInfo getBucket(String dbName, String bucketName) {
         List<EngineBucketInfo> list = getBuckets(dbName);
         for (EngineBucketInfo b : list) {
-            if (b.getBucketName().equalsIgnoreCase(bucketName)) return b;
+            if (b.getBucketName().equalsIgnoreCase(bucketName))
+                return b;
         }
         return list.isEmpty() ? null : list.get(0);
     }
@@ -2151,37 +2380,48 @@ public class JettraStorePlugin {
         return createDatabase(dbName, null, null, description);
     }
 
-    public synchronized boolean createDatabase(String dbName, String defaultBucket, String engineType, String description) {
-        if (dbName == null || dbName.isBlank()) return false;
+    public synchronized boolean createDatabase(String dbName, String defaultBucket, String engineType,
+            String description) {
+        if (dbName == null || dbName.isBlank())
+            return false;
         String cleanName = dbName.trim().toLowerCase().replaceAll("[^a-z0-9_]", "_");
-        if (databasesCatalog.containsKey(cleanName)) return false;
+        if (databasesCatalog.containsKey(cleanName))
+            return false;
 
         String baseDesc = (description != null && !description.isBlank())
-            ? description.trim()
-            : "Base de datos multimodelo " + cleanName;
+                ? description.trim()
+                : "Base de datos multimodelo " + cleanName;
 
         List<EngineBucketInfo> buckets = new ArrayList<>();
 
         // Si se especificó un bucket explícito adicional, registrarlo primero
-        if (defaultBucket != null && !defaultBucket.isBlank() && !"DefaultBucket".equalsIgnoreCase(defaultBucket.trim())) {
+        if (defaultBucket != null && !defaultBucket.isBlank()
+                && !"DefaultBucket".equalsIgnoreCase(defaultBucket.trim())) {
             String customBucket = defaultBucket.trim();
-            String customEngine = (engineType != null && !engineType.isBlank()) ? engineType.trim().toUpperCase() : "DOCUMENT";
+            String customEngine = (engineType != null && !engineType.isBlank()) ? engineType.trim().toUpperCase()
+                    : "DOCUMENT";
             EngineBucketInfo custom = new EngineBucketInfo(cleanName, customBucket, customEngine, 0L, 0L, baseDesc);
-            custom.getIndexes().add(new EngineIndexInfo("idx_" + customBucket.toLowerCase().replaceAll("[^a-z0-9]", "_") + "_id", "id", "BTREE", true, "READY"));
+            custom.getIndexes()
+                    .add(new EngineIndexInfo("idx_" + customBucket.toLowerCase().replaceAll("[^a-z0-9]", "_") + "_id",
+                            "id", "BTREE", true, "READY"));
             buckets.add(custom);
         }
 
-        // Habilitar de forma nativa los 9 motores (engines) de JettraStore para la base de datos
+        // Habilitar de forma nativa los 9 motores (engines) de JettraStore para la base
+        // de datos
         String[][] nineEngines = {
-            {"DOCUMENT",    "Documents",   "BTREE",           "id",          "Motor Documental (JSON / BSON) — " + baseDesc},
-            {"KEY_VALUE",   "KeyValue",    "HASH",            "key",         "Motor Clave-Valor Off-Heap — " + baseDesc},
-            {"COLUMNAR",    "Columnar",    "BTREE",           "chunk_id",    "Motor Analítico Columnar OLAP — " + baseDesc},
-            {"TIMESERIES",  "TimeSeries",  "TIMESERIES_BRIN", "timestamp",   "Motor de Series Temporales e IoT — " + baseDesc},
-            {"GEOSPATIAL",  "Geospatial",  "SPATIAL_R_TREE",  "coordinates", "Motor Geoespacial GeoJSON & R-Tree — " + baseDesc},
-            {"GRAPH",       "Graph",       "GRAPH_ADJACENCY", "source_node", "Motor de Grafos (Nodos y Aristas) — " + baseDesc},
-            {"VECTOR",      "Vector",      "VECTOR_HNSW",     "embedding",   "Motor Vectorial HNSW Embeddings — " + baseDesc},
-            {"JAVA_RECORD", "JavaRecords", "BTREE",           "recordId",    "Motor Java 25 Canonical Records — " + baseDesc},
-            {"OBJECT",      "Objects",     "HASH",            "uuid",        "Motor de Objetos y Entidades POJO — " + baseDesc}
+                { "DOCUMENT", "Documents", "BTREE", "id", "Motor Documental (JSON / BSON) — " + baseDesc },
+                { "KEY_VALUE", "KeyValue", "HASH", "key", "Motor Clave-Valor Off-Heap — " + baseDesc },
+                { "COLUMNAR", "Columnar", "BTREE", "chunk_id", "Motor Analítico Columnar OLAP — " + baseDesc },
+                { "TIMESERIES", "TimeSeries", "TIMESERIES_BRIN", "timestamp",
+                        "Motor de Series Temporales e IoT — " + baseDesc },
+                { "GEOSPATIAL", "Geospatial", "SPATIAL_R_TREE", "coordinates",
+                        "Motor Geoespacial GeoJSON & R-Tree — " + baseDesc },
+                { "GRAPH", "Graph", "GRAPH_ADJACENCY", "source_node",
+                        "Motor de Grafos (Nodos y Aristas) — " + baseDesc },
+                { "VECTOR", "Vector", "VECTOR_HNSW", "embedding", "Motor Vectorial HNSW Embeddings — " + baseDesc },
+                { "JAVA_RECORD", "JavaRecords", "BTREE", "recordId", "Motor Java 25 Canonical Records — " + baseDesc },
+                { "OBJECT", "Objects", "HASH", "uuid", "Motor de Objetos y Entidades POJO — " + baseDesc }
         };
 
         for (String[] eng : nineEngines) {
@@ -2193,7 +2433,8 @@ public class JettraStorePlugin {
             boolean exists = buckets.stream().anyMatch(b -> b.getBucketName().equalsIgnoreCase(bName));
             if (!exists) {
                 EngineBucketInfo b = new EngineBucketInfo(cleanName, bName, eType, 0L, 0L, eDesc);
-                b.getIndexes().add(new EngineIndexInfo("idx_" + bName.toLowerCase() + "_" + idxField, idxField, idxType, true, "READY"));
+                b.getIndexes().add(new EngineIndexInfo("idx_" + bName.toLowerCase() + "_" + idxField, idxField, idxType,
+                        true, "READY"));
                 buckets.add(b);
             }
         }
@@ -2201,17 +2442,22 @@ public class JettraStorePlugin {
         databasesCatalog.put(cleanName, buckets);
         syncDatabaseCreationToPrimary(cleanName, buckets);
         lastCatalogSyncMs = 0L;
-        logPoliceIncident("Catalog Patrol", "Base de datos '" + cleanName + "' creada con soporte nativo para los 9 motores de JettraStore", "OK", "9 engines multimodelo registrados en catálogo");
+        logPoliceIncident("Catalog Patrol",
+                "Base de datos '" + cleanName + "' creada con soporte nativo para los 9 motores de JettraStore", "OK",
+                "9 engines multimodelo registrados en catálogo");
         return true;
     }
 
     public synchronized boolean deleteDatabase(String dbName) {
-        if (dbName == null || dbName.isBlank() || "system_metadata_db".equalsIgnoreCase(dbName)) return false;
+        if (dbName == null || dbName.isBlank() || "system_metadata_db".equalsIgnoreCase(dbName))
+            return false;
         boolean removed = databasesCatalog.remove(dbName.trim()) != null;
         if (removed) {
-            sendFrameToPrimaryNode(io.jettra.store.cluster.JettraRaftFrame.dropDatabase(1L, 0L, "jettra-explorer", dbName.trim()));
+            sendFrameToPrimaryNode(
+                    io.jettra.store.cluster.JettraRaftFrame.dropDatabase(1L, 0L, "jettra-explorer", dbName.trim()));
             lastCatalogSyncMs = 0L;
-            logPoliceIncident("Catalog Patrol", "Base de datos '" + dbName + "' eliminada del clúster", "WARN", "Recursos liberados en disco y memoria");
+            logPoliceIncident("Catalog Patrol", "Base de datos '" + dbName + "' eliminada del clúster", "WARN",
+                    "Recursos liberados en disco y memoria");
         }
         return removed;
     }
@@ -2227,7 +2473,7 @@ public class JettraStorePlugin {
     }
 
     public synchronized boolean addBucket(String dbName, String bucketName, String engineType, String description,
-                                          String structureType, String attributesJson) {
+            String structureType, String attributesJson) {
         this.lastBucketOperationError = null;
         if (dbName == null || bucketName == null || bucketName.isBlank()) {
             this.lastBucketOperationError = "La base de datos y el nombre del bucket son obligatorios.";
@@ -2237,7 +2483,8 @@ public class JettraStorePlugin {
         String eType = io.jettra.store.core.JettraBucketSchema.normalizeEngineType(engineType);
         for (EngineBucketInfo b : buckets) {
             if (b.getBucketName().equalsIgnoreCase(bucketName.trim()) && b.getEngineType().equalsIgnoreCase(eType)) {
-                this.lastBucketOperationError = "Ya existe el bucket '" + bucketName.trim() + "' en el engine '" + eType + "'.";
+                this.lastBucketOperationError = "Ya existe el bucket '" + bucketName.trim() + "' en el engine '" + eType
+                        + "'.";
                 return false;
             }
         }
@@ -2256,17 +2503,55 @@ public class JettraStorePlugin {
         EngineBucketInfo newB = new EngineBucketInfo(dbName.trim(), bucketName.trim(), eType, 0L, 0L, desc);
         newB.setStructureType(st.name());
         newB.setAttributes(parsedAttrs);
-        newB.getIndexes().add(new EngineIndexInfo("idx_" + bucketName.toLowerCase().replaceAll("[^a-z0-9]", "_") + "_id", "id", "BTREE", true, "READY"));
+        newB.getIndexes().add(new EngineIndexInfo(
+                "idx_" + bucketName.toLowerCase().replaceAll("[^a-z0-9]", "_") + "_id", "id", "BTREE", true, "READY"));
         buckets.add(newB);
         sendFrameToPrimaryNode(io.jettra.store.cluster.JettraRaftFrame.createEngine(
-            1L, 0L, "jettra-explorer", dbName.trim(), bucketName.trim(), eType, new byte[0]));
+                1L, 0L, "jettra-explorer", dbName.trim(), bucketName.trim(), eType, new byte[0]));
         logPoliceIncident("Catalog Patrol",
-            "Nuevo Bucket '" + bucketName + "' [" + eType + " | " + st.name() + "] añadido a " + dbName,
-            "OK", parsedAttrs.size() + " atributo(s) definidos");
+                "Nuevo Bucket '" + bucketName + "' [" + eType + " | " + st.name() + "] añadido a " + dbName,
+                "OK", parsedAttrs.size() + " atributo(s) definidos");
         return true;
     }
 
-    public io.jettra.store.core.JettraBucketSchema.ValidationResult validateRecordForBucket(String dbName, String bucketName, String detailsJson) {
+    public synchronized boolean saveBucketStructure(String dbName, String bucketName, String attributesJson) {
+        this.lastBucketOperationError = null;
+        EngineBucketInfo bucket = getBucket(dbName, bucketName);
+        if (bucket == null) {
+            this.lastBucketOperationError = "Bucket '" + bucketName + "' no encontrado en '" + dbName + "'.";
+            return false;
+        }
+        List<io.jettra.store.core.JettraBucketSchema.AttributeRule> parsed =
+                io.jettra.store.core.JettraBucketSchema.parseAttributesJson(attributesJson);
+        if (parsed.isEmpty()) {
+            this.lastBucketOperationError = "La estructura DEFINED debe definir al menos un atributo JSON válido.";
+            return false;
+        }
+        bucket.setStructureType("DEFINED");
+        bucket.setAttributes(parsed);
+        logPoliceIncident("Schema Patrol",
+                "Estructura DEFINED guardada en " + dbName + "." + bucketName + " (" + parsed.size() + " atributos)",
+                "OK", "Validación estricta activa");
+        return true;
+    }
+
+    public synchronized boolean deleteBucketStructure(String dbName, String bucketName) {
+        this.lastBucketOperationError = null;
+        EngineBucketInfo bucket = getBucket(dbName, bucketName);
+        if (bucket == null) {
+            this.lastBucketOperationError = "Bucket '" + bucketName + "' no encontrado en '" + dbName + "'.";
+            return false;
+        }
+        bucket.setStructureType("NONE");
+        bucket.setAttributes(List.of());
+        logPoliceIncident("Schema Patrol",
+                "Estructura eliminada en " + dbName + "." + bucketName + " (modo NONE flexible)",
+                "WARN", "Esquema libre restaurado");
+        return true;
+    }
+
+    public io.jettra.store.core.JettraBucketSchema.ValidationResult validateRecordForBucket(String dbName,
+            String bucketName, String detailsJson) {
         EngineBucketInfo bucket = getBucket(dbName, bucketName);
         if (bucket == null || !"DEFINED".equalsIgnoreCase(bucket.getStructureType())) {
             return io.jettra.store.core.JettraBucketSchema.ValidationResult.ok();
@@ -2276,7 +2561,9 @@ public class JettraStorePlugin {
             try {
                 io.jettra.json.JettraJson parser = new io.jettra.json.JettraJson();
                 Object parsed = parser.parse(detailsJson.trim());
-                if (parsed instanceof Map<?, ?> m) {
+                if (parsed instanceof io.jettra.json.JsonObject jo) {
+                    jo.getMap().forEach((k, v) -> recordMap.put(String.valueOf(k), v));
+                } else if (parsed instanceof Map<?, ?> m) {
                     m.forEach((k, v) -> recordMap.put(String.valueOf(k), v));
                 }
             } catch (Exception e) {
@@ -2293,15 +2580,18 @@ public class JettraStorePlugin {
 
     public synchronized boolean deleteBucket(String dbName, String bucketName) {
         List<EngineBucketInfo> buckets = databasesCatalog.get(dbName);
-        if (buckets == null || buckets.size() <= 1) return false;
+        if (buckets == null || buckets.size() <= 1)
+            return false;
         boolean removed = buckets.removeIf(b -> b.getBucketName().equalsIgnoreCase(bucketName.trim()));
         if (removed) {
-            logPoliceIncident("Catalog Patrol", "Bucket '" + bucketName + "' eliminado de " + dbName, "WARN", "Compactación forzada");
+            logPoliceIncident("Catalog Patrol", "Bucket '" + bucketName + "' eliminado de " + dbName, "WARN",
+                    "Compactación forzada");
         }
         return removed;
     }
 
-    public synchronized boolean addIndex(String dbName, String bucketName, String indexName, String fields, String type, boolean unique) {
+    public synchronized boolean addIndex(String dbName, String bucketName, String indexName, String fields, String type,
+            boolean unique) {
         EngineBucketInfo bucket = getBucket(dbName, bucketName);
         if (bucket == null || indexName == null || indexName.isBlank() || fields == null || fields.isBlank()) {
             return false;
@@ -2313,8 +2603,13 @@ public class JettraStorePlugin {
             }
         }
         String idxType = (type != null && !type.isBlank()) ? type.trim().toUpperCase(Locale.ROOT) : "BTREE";
-        bucket.getIndexes().add(new EngineIndexInfo(cleanName, fields.trim(), idxType, unique, "READY"));
-        logPoliceIncident("Index Patrol", "Índice '" + cleanName + "' [" + idxType + "] creado en " + dbName + "." + bucketName, "OK", "Índice Zero-Lock READY");
+        boolean effectiveUnique = unique || "AUTO_INCREMENT".equalsIgnoreCase(idxType);
+        bucket.getIndexes().add(new EngineIndexInfo(cleanName, fields.trim(), idxType, effectiveUnique, "READY"));
+        sendFrameToPrimaryNode(io.jettra.store.cluster.JettraRaftFrame.createIndex(
+                1L, 0L, "jettra-explorer", dbName, bucketName, cleanName, fields.trim(), idxType, effectiveUnique));
+        logPoliceIncident("Index Patrol",
+                "Índice '" + cleanName + "' [" + idxType + "] creado en " + dbName + "." + bucketName, "OK",
+                "Índice Zero-Lock READY");
         return true;
     }
 
@@ -2325,7 +2620,8 @@ public class JettraStorePlugin {
         }
         boolean removed = bucket.getIndexes().removeIf(idx -> idx.getName().equalsIgnoreCase(indexName.trim()));
         if (removed) {
-            logPoliceIncident("Index Patrol", "Índice '" + indexName + "' eliminado de " + dbName + "." + bucketName, "WARN", "Metadatos de índice liberados");
+            logPoliceIncident("Index Patrol", "Índice '" + indexName + "' eliminado de " + dbName + "." + bucketName,
+                    "WARN", "Metadatos de índice liberados");
         }
         return removed;
     }
@@ -2339,8 +2635,11 @@ public class JettraStorePlugin {
         for (int i = 0; i < list.size(); i++) {
             EngineIndexInfo idx = list.get(i);
             if (idx.getName().equalsIgnoreCase(indexName.trim())) {
-                list.set(i, new EngineIndexInfo(idx.getName(), idx.getFields(), idx.getType(), idx.isUnique(), "READY"));
-                logPoliceIncident("Index Patrol", "Índice '" + idx.getName() + "' reconstruido en caliente en " + dbName + "." + bucketName, "OK", "Reindexación Zero-Lock completada");
+                list.set(i,
+                        new EngineIndexInfo(idx.getName(), idx.getFields(), idx.getType(), idx.isUnique(), "READY"));
+                logPoliceIncident("Index Patrol",
+                        "Índice '" + idx.getName() + "' reconstruido en caliente en " + dbName + "." + bucketName, "OK",
+                        "Reindexación Zero-Lock completada");
                 return true;
             }
         }
@@ -2349,7 +2648,8 @@ public class JettraStorePlugin {
 
     public synchronized EngineRecordInfo getRecord(String dbName, String bucketName, String id) {
         EngineBucketInfo b = getBucket(dbName, bucketName);
-        if (b == null || id == null || id.isBlank()) return null;
+        if (b == null || id == null || id.isBlank())
+            return null;
         String key = id.trim().toUpperCase(Locale.ROOT);
         if (b.getDeletedRecordIds().contains(key)) {
             return null;
@@ -2359,15 +2659,19 @@ public class JettraStorePlugin {
             return overridden;
         }
         for (EngineRecordInfo r : b.getSampleRecords()) {
-            if (r.getId().equalsIgnoreCase(id)) return r;
+            if (r.getId().equalsIgnoreCase(id))
+                return r;
         }
         return resolveStreamedRecordById(b, id.trim());
     }
 
     // --- Paginación Optimizada por Streaming de Página ---
-    public record PagedRecordsResult(List<EngineRecordInfo> records, long totalRecords, int page, int pageSize, int totalPages, boolean streamed) {}
+    public record PagedRecordsResult(List<EngineRecordInfo> records, long totalRecords, int page, int pageSize,
+            int totalPages, boolean streamed) {
+    }
 
-    public synchronized PagedRecordsResult streamRecordsPage(String dbName, String bucketName, String query, int requestedPage, int pageSize) {
+    public synchronized PagedRecordsResult streamRecordsPage(String dbName, String bucketName, String query,
+            int requestedPage, int pageSize) {
         EngineBucketInfo bucket = getBucket(dbName, bucketName);
         int safeSize = Math.max(1, Math.min(100, pageSize));
         if (bucket == null) {
@@ -2382,7 +2686,8 @@ public class JettraStorePlugin {
             int currentPage = Math.max(1, Math.min(requestedPage, totalPages));
             int fromIndex = Math.max(0, Math.min((currentPage - 1) * safeSize, matched.size()));
             int toIndex = Math.min(fromIndex + safeSize, matched.size());
-            return new PagedRecordsResult(new ArrayList<>(matched.subList(fromIndex, toIndex)), total, currentPage, safeSize, totalPages, false);
+            return new PagedRecordsResult(new ArrayList<>(matched.subList(fromIndex, toIndex)), total, currentPage,
+                    safeSize, totalPages, false);
         }
 
         long totalRecords = Math.max(bucket.getTotalObjects(), bucket.getSampleRecords().size());
@@ -2404,7 +2709,8 @@ public class JettraStorePlugin {
                 rec = buildStreamedRecordAt(bucket, candidateIndex);
             }
             candidateIndex++;
-            if (rec == null) continue;
+            if (rec == null)
+                continue;
             String key = rec.getId().toUpperCase(Locale.ROOT);
             if (bucket.getDeletedRecordIds().contains(key)) {
                 continue;
@@ -2427,18 +2733,19 @@ public class JettraStorePlugin {
             double sub = 450.00 + ((seq % 500) * 175.00);
             double iva = Math.round(sub * 0.16 * 100.0) / 100.0;
             double tot = Math.round((sub + iva) * 100.0) / 100.0;
-            String emisor = (seq % 3 == 0) ? "Corp Global SA" : ((seq % 2 == 0) ? "TechSolutions SRL" : "Servicios Industriales del Pacífico");
+            String emisor = (seq % 3 == 0) ? "Corp Global SA"
+                    : ((seq % 2 == 0) ? "TechSolutions SRL" : "Servicios Industriales del Pacífico");
             String estado = (seq % 4 == 0) ? "PENDIENTE_PAGO" : "TIMBRADO_VALIDADO";
             int hour = (int) (seq % 24);
             int minute = (int) (seq % 60);
             int second = (int) ((seq * 7) % 60);
             return new EngineRecordInfo(
-                folio, engine, bucketName,
-                String.format(Locale.US, "Factura %s $%,.2f MXN", emisor, tot),
-                String.format(Locale.US, "{\n  \"folio\": \"%s\",\n  \"emisor\": \"%s\",\n  \"rfc\": \"EMP9901%02dXYZ\",\n  \"receptor\": \"Cliente Corporativo #%d\",\n  \"subtotal\": %.2f,\n  \"iva\": %.2f,\n  \"total\": %.2f,\n  \"metodoPago\": \"TRANSFERENCIA_SPEI\",\n  \"estado\": \"%s\"\n}",
-                    folio, emisor, (int) (seq % 99), seq, sub, iva, tot, estado),
-                String.format("2026-10-03 %02d:%02d:%02d", hour, minute, second), 1
-            );
+                    folio, engine, bucketName,
+                    String.format(Locale.US, "Factura %s $%,.2f MXN", emisor, tot),
+                    String.format(Locale.US,
+                            "{\n  \"folio\": \"%s\",\n  \"emisor\": \"%s\",\n  \"rfc\": \"EMP9901%02dXYZ\",\n  \"receptor\": \"Cliente Corporativo #%d\",\n  \"subtotal\": %.2f,\n  \"iva\": %.2f,\n  \"total\": %.2f,\n  \"metodoPago\": \"TRANSFERENCIA_SPEI\",\n  \"estado\": \"%s\"\n}",
+                            folio, emisor, (int) (seq % 99), seq, sub, iva, tot, estado),
+                    String.format("2026-10-03 %02d:%02d:%02d", hour, minute, second), 1);
         }
 
         String prefix = switch (bucketName) {
@@ -2456,16 +2763,19 @@ public class JettraStorePlugin {
         };
         long displayNum = ("Clientes".equalsIgnoreCase(bucketName) ? 1000L + seq
                 : ("BalanceCache".equalsIgnoreCase(bucketName) ? 4000L + seq
-                : ("CustomerRecords".equalsIgnoreCase(bucketName) ? 500L + seq
-                : ("DomainEntities".equalsIgnoreCase(bucketName) ? 100L + seq
-                : ("Pacientes".equalsIgnoreCase(bucketName) ? 98209L + seq
-                : ("RedEpidemiologica".equalsIgnoreCase(bucketName) ? 4400L + seq
-                : ("SensorMetrics".equalsIgnoreCase(bucketName) ? 990L + seq
-                : ("RaftLogEntries".equalsIgnoreCase(bucketName) ? 1003L + seq : seq))))))));
+                        : ("CustomerRecords".equalsIgnoreCase(bucketName) ? 500L + seq
+                                : ("DomainEntities".equalsIgnoreCase(bucketName) ? 100L + seq
+                                        : ("Pacientes".equalsIgnoreCase(bucketName) ? 98209L + seq
+                                                : ("RedEpidemiologica".equalsIgnoreCase(bucketName) ? 4400L + seq
+                                                        : ("SensorMetrics".equalsIgnoreCase(bucketName) ? 990L + seq
+                                                                : ("RaftLogEntries".equalsIgnoreCase(bucketName)
+                                                                        ? 1003L + seq
+                                                                        : seq))))))));
 
         String id = prefix + displayNum;
         String summary = String.format("%s [%s] #%d", bucketName, engine, seq);
-        String details = String.format(Locale.US, "{\n  \"id\": \"%s\",\n  \"bucket\": \"%s\",\n  \"engine\": \"%s\",\n  \"sequence\": %d,\n  \"streamedPageItem\": true\n}",
+        String details = String.format(Locale.US,
+                "{\n  \"id\": \"%s\",\n  \"bucket\": \"%s\",\n  \"engine\": \"%s\",\n  \"sequence\": %d,\n  \"streamedPageItem\": true\n}",
                 id, bucketName, engine, seq);
         return new EngineRecordInfo(id, engine, bucketName, summary, details, "2026-10-03 18:00:00", 1);
     }
@@ -2483,7 +2793,8 @@ public class JettraStorePlugin {
                 if (seq >= 1 && seq <= maxSeq) {
                     return buildStreamedRecordAt(bucket, seq - 1L);
                 }
-            } catch (NumberFormatException ignored) {}
+            } catch (NumberFormatException ignored) {
+            }
         }
 
         int dashIdx = upper.lastIndexOf('-');
@@ -2509,13 +2820,15 @@ public class JettraStorePlugin {
                         return candidate;
                     }
                 }
-            } catch (NumberFormatException ignored) {}
+            } catch (NumberFormatException ignored) {
+            }
         }
         return null;
     }
 
     // --- Consultas JettraSQL y JettraQL ---
-    public record QueryResult(List<EngineRecordInfo> records, String message, long elapsedMicros, boolean success) {}
+    public record QueryResult(List<EngineRecordInfo> records, String message, long elapsedMicros, boolean success) {
+    }
 
     public QueryResult executeQuery(String dbName, String bucketName, String query, boolean isSql) {
         long t0 = System.nanoTime();
@@ -2547,7 +2860,8 @@ public class JettraStorePlugin {
             } else {
                 for (EngineRecordInfo r : all) {
                     String key = r.getId().toUpperCase(Locale.ROOT);
-                    if (bucket.getDeletedRecordIds().contains(key)) continue;
+                    if (bucket.getDeletedRecordIds().contains(key))
+                        continue;
                     EngineRecordInfo eff = bucket.getRecordOverrides().getOrDefault(key, r);
                     if (evaluateCondition(eff, cond)) {
                         matched.add(eff);
@@ -2563,18 +2877,22 @@ public class JettraStorePlugin {
                 if (matched.isEmpty()) {
                     String candidateId = cond.replace(";", "").replaceAll("^['\"]|['\"]$", "").trim();
                     if (candidateId.contains("=")) {
-                        candidateId = candidateId.substring(candidateId.indexOf('=') + 1).replaceAll("^['\"]|['\"]$", "").trim();
+                        candidateId = candidateId.substring(candidateId.indexOf('=') + 1)
+                                .replaceAll("^['\"]|['\"]$", "").trim();
                     }
                     EngineRecordInfo streamedMatch = resolveStreamedRecordById(bucket, candidateId);
-                    if (streamedMatch != null && !bucket.getDeletedRecordIds().contains(streamedMatch.getId().toUpperCase(Locale.ROOT))) {
-                        matched.add(bucket.getRecordOverrides().getOrDefault(streamedMatch.getId().toUpperCase(Locale.ROOT), streamedMatch));
+                    if (streamedMatch != null
+                            && !bucket.getDeletedRecordIds().contains(streamedMatch.getId().toUpperCase(Locale.ROOT))) {
+                        matched.add(bucket.getRecordOverrides()
+                                .getOrDefault(streamedMatch.getId().toUpperCase(Locale.ROOT), streamedMatch));
                     }
                 }
             }
 
             long el = Math.max(1, (System.nanoTime() - t0) / 1000);
             String engineLabel = isSql ? "JettraSQL" : "JettraQL";
-            String msg = String.format("%s ejecutado en %.2f ms | %d registros encontrados", engineLabel, el / 1000.0, matched.size());
+            String msg = String.format("%s ejecutado en %.2f ms | %d registros encontrados", engineLabel, el / 1000.0,
+                    matched.size());
             return new QueryResult(matched, msg, el, true);
         } catch (Exception e) {
             long el = Math.max(1, (System.nanoTime() - t0) / 1000);
@@ -2584,7 +2902,8 @@ public class JettraStorePlugin {
 
     private boolean evaluateCondition(EngineRecordInfo r, String condition) {
         String c = condition.replace(";", "").trim();
-        if (c.isEmpty()) return true;
+        if (c.isEmpty())
+            return true;
 
         Pattern opPattern = Pattern.compile("([a-zA-Z0-9_]+)\\s*(>=|<=|!=|==|=|>|<|LIKE|like)\\s*(.*)");
         Matcher m = opPattern.matcher(c);
@@ -2629,7 +2948,8 @@ public class JettraStorePlugin {
         }
 
         String lower = c.toLowerCase();
-        return r.getId().toLowerCase().contains(lower) || r.getSummary().toLowerCase().contains(lower) || r.getDetails().toLowerCase().contains(lower);
+        return r.getId().toLowerCase().contains(lower) || r.getSummary().toLowerCase().contains(lower)
+                || r.getDetails().toLowerCase().contains(lower);
     }
 
     // --- Operaciones CRUD Registros ---
@@ -2640,9 +2960,12 @@ public class JettraStorePlugin {
             EngineRecordInfo r = new EngineRecordInfo(id, bucket.getEngineType(), bucketName, summary, details, now, 1);
             bucket.getSampleRecords().add(0, r);
             bucket.setTotalObjects(bucket.getTotalObjects() + 1);
-            byte[] docBytes = (details != null && !details.isBlank() ? details : "{\"id\":\"" + id + "\"}").getBytes(java.nio.charset.StandardCharsets.UTF_8);
-            sendFrameToPrimaryNode(io.jettra.store.cluster.JettraRaftFrame.putDocument(1L, 0L, "jettra-explorer", dbName, bucketName, id, docBytes));
-            logPoliceIncident("MemTable Purge Dog", "Nuevo registro '" + id + "' insertado en " + bucketName, "OK", "Escritura en WAL y MemTable");
+            byte[] docBytes = (details != null && !details.isBlank() ? details : "{\"id\":\"" + id + "\"}")
+                    .getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            sendFrameToPrimaryNode(io.jettra.store.cluster.JettraRaftFrame.putDocument(1L, 0L, "jettra-explorer",
+                    dbName, bucketName, id, docBytes));
+            logPoliceIncident("MemTable Purge Dog", "Nuevo registro '" + id + "' insertado en " + bucketName, "OK",
+                    "Escritura en WAL y MemTable");
         }
     }
 
@@ -2655,9 +2978,13 @@ public class JettraStorePlugin {
                 if (bucket.getSampleRecords().stream().noneMatch(r -> r.getId().equalsIgnoreCase(id))) {
                     bucket.getRecordOverrides().put(target.getId().toUpperCase(Locale.ROOT), target);
                 }
-                byte[] docBytes = (details != null && !details.isBlank() ? details : "{\"id\":\"" + id + "\"}").getBytes(java.nio.charset.StandardCharsets.UTF_8);
-                sendFrameToPrimaryNode(io.jettra.store.cluster.JettraRaftFrame.putDocument(1L, 0L, "jettra-explorer", dbName, bucketName, id, docBytes));
-                logPoliceIncident("MemTable Purge Dog", "Registro '" + id + "' actualizado a versión v" + target.getVersion(), "OK", "Mutación aplicada en Direct Memory");
+                byte[] docBytes = (details != null && !details.isBlank() ? details : "{\"id\":\"" + id + "\"}")
+                        .getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                sendFrameToPrimaryNode(io.jettra.store.cluster.JettraRaftFrame.putDocument(1L, 0L, "jettra-explorer",
+                        dbName, bucketName, id, docBytes));
+                logPoliceIncident("MemTable Purge Dog",
+                        "Registro '" + id + "' actualizado a versión v" + target.getVersion(), "OK",
+                        "Mutación aplicada en Direct Memory");
             }
         }
     }
@@ -2672,7 +2999,10 @@ public class JettraStorePlugin {
                     if (bucket.getSampleRecords().stream().noneMatch(r -> r.getId().equalsIgnoreCase(id))) {
                         bucket.getRecordOverrides().put(target.getId().toUpperCase(Locale.ROOT), target);
                     }
-                    logPoliceIncident("MemTable Purge Dog", "Registro '" + id + "' restaurado a versión previa v" + targetVersion + " (nueva versión v" + target.getVersion() + ")", "OK", "Restauración de versión completada");
+                    logPoliceIncident(
+                            "MemTable Purge Dog", "Registro '" + id + "' restaurado a versión previa v" + targetVersion
+                                    + " (nueva versión v" + target.getVersion() + ")",
+                            "OK", "Restauración de versión completada");
                     return true;
                 }
             }
@@ -2690,24 +3020,36 @@ public class JettraStorePlugin {
             if (removedSample || removedOverride || wasStreamed) {
                 bucket.getDeletedRecordIds().add(key);
                 bucket.setTotalObjects(Math.max(0, bucket.getTotalObjects() - 1));
-                sendFrameToPrimaryNode(io.jettra.store.cluster.JettraRaftFrame.deleteDocument(1L, 0L, "jettra-explorer", dbName, bucketName, id));
+                sendFrameToPrimaryNode(io.jettra.store.cluster.JettraRaftFrame.deleteDocument(1L, 0L, "jettra-explorer",
+                        dbName, bucketName, id));
             }
-            logPoliceIncident("MemTable Purge Dog", "Tombstone generado para registro '" + id + "' en " + bucketName, "WARN", "Marcado para compactación SSTable");
+            logPoliceIncident("MemTable Purge Dog", "Tombstone generado para registro '" + id + "' en " + bucketName,
+                    "WARN", "Marcado para compactación SSTable");
         }
     }
 
     // --- Centinelas JettraPolice ---
     private void initPoliceSentinels() {
         policeSentinels.clear();
-        policeSentinels.add(new PoliceSentinelInfo("Heap Sentinel", "Canino Centinela de Memoria", "node-01", "ACTIVO", 98, 0, "Monitorea saturación de Heap JVM y Memoria Directa Panama FFM", "#22c55e"));
-        policeSentinels.add(new PoliceSentinelInfo("Raft Quorum K9", "Perro Guardián de Réplicas", "node-02", "ACTIVO", 100, 0, "Vigila latidos de réplicas y desvía tráfico ante fallos", "#00d4ff"));
-        policeSentinels.add(new PoliceSentinelInfo("MemTable Purge Dog", "Auditor de Compactación SSTable", "node-03", "ACTIVO", 95, 2, "Audita flush de MemTable a archivos inmutables en disco", "#ffd700"));
-        policeSentinels.add(new PoliceSentinelInfo("Security Patrol", "Patrulla de Seguridad y Permisos", "node-01", "ACTIVO", 100, 0, "Supervisa accesos, tokens JWT y perfiles de base de datos", "#38bdf8"));
+        policeSentinels.add(new PoliceSentinelInfo("Heap Sentinel", "Canino Centinela de Memoria", "node-01", "ACTIVO",
+                98, 0, "Monitorea saturación de Heap JVM y Memoria Directa Panama FFM", "#22c55e"));
+        policeSentinels.add(new PoliceSentinelInfo("Raft Quorum K9", "Perro Guardián de Réplicas", "node-02", "ACTIVO",
+                100, 0, "Vigila latidos de réplicas y desvía tráfico ante fallos", "#00d4ff"));
+        policeSentinels.add(new PoliceSentinelInfo("MemTable Purge Dog", "Auditor de Compactación SSTable", "node-03",
+                "ACTIVO", 95, 2, "Audita flush de MemTable a archivos inmutables en disco", "#ffd700"));
+        policeSentinels.add(new PoliceSentinelInfo("Security Patrol", "Patrulla de Seguridad y Permisos", "node-01",
+                "ACTIVO", 100, 0, "Supervisa accesos, tokens JWT y perfiles de base de datos", "#38bdf8"));
 
         policeIncidents.clear();
-        policeIncidents.add(new PoliceIncident(LocalDateTime.now().minusMinutes(4).format(DateTimeFormatter.ofPattern("HH:mm:ss")), "Raft Quorum K9", "Verificación de latidos Quorum Raft (4/4 nodos en línea)", "OK", "Latidos sincronizados"));
-        policeIncidents.add(new PoliceIncident(LocalDateTime.now().minusMinutes(2).format(DateTimeFormatter.ofPattern("HH:mm:ss")), "Heap Sentinel", "Direct Memory Off-Heap estable en 1.28 GB (límite 4.0 GB)", "OK", "Zero GC pressure"));
-        policeIncidents.add(new PoliceIncident(LocalDateTime.now().minusMinutes(1).format(DateTimeFormatter.ofPattern("HH:mm:ss")), "Security Patrol", "Autenticación correcta usuario 'admin' desde 127.0.0.1", "OK", "Token de sesión emitido"));
+        policeIncidents.add(new PoliceIncident(
+                LocalDateTime.now().minusMinutes(4).format(DateTimeFormatter.ofPattern("HH:mm:ss")), "Raft Quorum K9",
+                "Verificación de latidos Quorum Raft (4/4 nodos en línea)", "OK", "Latidos sincronizados"));
+        policeIncidents.add(new PoliceIncident(
+                LocalDateTime.now().minusMinutes(2).format(DateTimeFormatter.ofPattern("HH:mm:ss")), "Heap Sentinel",
+                "Direct Memory Off-Heap estable en 1.28 GB (límite 4.0 GB)", "OK", "Zero GC pressure"));
+        policeIncidents.add(new PoliceIncident(
+                LocalDateTime.now().minusMinutes(1).format(DateTimeFormatter.ofPattern("HH:mm:ss")), "Security Patrol",
+                "Autenticación correcta usuario 'admin' desde 127.0.0.1", "OK", "Token de sesión emitido"));
     }
 
     public List<PoliceSentinelInfo> getPoliceSentinels() {
@@ -2733,35 +3075,53 @@ public class JettraStorePlugin {
     // --- Backups y Snapshots ---
     private void initBackupSnapshots() {
         backupSnapshots.clear();
-        backupSnapshots.add(new BackupSnapshotInfo("BKP-FAC-20261001-0800", "example_factura_db", "DOCUMENT", "2026-10-01 08:00:00", 1_000_025L, 1_250_000_000L, 380_000_000L, 3.29f, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", "ZSTD_SIMD", "~/jettra/backups/snapshot_example_factura_db_20261001.jbk", "VERIFIED"));
-        backupSnapshots.add(new BackupSnapshotInfo("BKP-HOSP-20261001-1200", "samples_hostipal_db", "MULTIMODEL_SNAPSHOT", "2026-10-01 12:00:00", 400_000L, 480_000_000L, 125_000_000L, 3.84f, "8f434346648f6b96df89dda901c5176b10a6d83961dd3c1ac88b59b2dc327aa4", "LZ4_PANAMA", "~/jettra/backups/snapshot_hospital_core_20261001.jbk", "VERIFIED"));
-        backupSnapshots.add(new BackupSnapshotInfo("BKP-META-20261002-0600", "system_metadata_db", "COLUMNAR", "2026-10-02 06:00:00", 25_000L, 45_000_000L, 12_000_000L, 3.75f, "a591a6d40bf420404a011733cfb7b190d62c65bf0bcda32b57b277d9ad9f146e", "ZSTD_SIMD", "~/jettra/backups/snapshot_system_metadata_20261002.jbk", "VERIFIED"));
+        backupSnapshots.add(new BackupSnapshotInfo("BKP-FAC-20261001-0800", "example_factura_db", "DOCUMENT",
+                "2026-10-01 08:00:00", 1_000_025L, 1_250_000_000L, 380_000_000L, 3.29f,
+                "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", "ZSTD_SIMD",
+                "~/jettra/backups/snapshot_example_factura_db_20261001.jbk", "VERIFIED"));
+        backupSnapshots.add(new BackupSnapshotInfo("BKP-HOSP-20261001-1200", "samples_hostipal_db",
+                "MULTIMODEL_SNAPSHOT", "2026-10-01 12:00:00", 400_000L, 480_000_000L, 125_000_000L, 3.84f,
+                "8f434346648f6b96df89dda901c5176b10a6d83961dd3c1ac88b59b2dc327aa4", "LZ4_PANAMA",
+                "~/jettra/backups/snapshot_hospital_core_20261001.jbk", "VERIFIED"));
+        backupSnapshots.add(new BackupSnapshotInfo("BKP-META-20261002-0600", "system_metadata_db", "COLUMNAR",
+                "2026-10-02 06:00:00", 25_000L, 45_000_000L, 12_000_000L, 3.75f,
+                "a591a6d40bf420404a011733cfb7b190d62c65bf0bcda32b57b277d9ad9f146e", "ZSTD_SIMD",
+                "~/jettra/backups/snapshot_system_metadata_20261002.jbk", "VERIFIED"));
     }
 
     public List<BackupSnapshotInfo> getBackupSnapshots() {
         return Collections.unmodifiableList(backupSnapshots);
     }
 
-    public synchronized BackupSnapshotInfo createBackup(String dbName, String engineType, String compressionAlgo, String destPath) {
+    public synchronized BackupSnapshotInfo createBackup(String dbName, String engineType, String compressionAlgo,
+            String destPath) {
         String now = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
-        String id = "BKP-" + dbName.substring(0, Math.min(4, dbName.length())).toUpperCase() + "-" + (System.currentTimeMillis() % 10000);
+        String id = "BKP-" + dbName.substring(0, Math.min(4, dbName.length())).toUpperCase() + "-"
+                + (System.currentTimeMillis() % 10000);
         long objs = 500_000L;
         long uncomp = 250_000_000L;
         float ratio = "ZSTD_SIMD".equalsIgnoreCase(compressionAlgo) ? 3.4f : 2.8f;
-        long comp = (long)(uncomp / ratio);
-        String finalPath = (destPath != null && !destPath.isBlank()) ? destPath : "~/jettra/backups/" + id.toLowerCase() + ".jbk";
+        long comp = (long) (uncomp / ratio);
+        String finalPath = (destPath != null && !destPath.isBlank()) ? destPath
+                : "~/jettra/backups/" + id.toLowerCase() + ".jbk";
         String sha = "sha256_" + Long.toHexString(System.currentTimeMillis());
 
-        BackupSnapshotInfo bkp = new BackupSnapshotInfo(id, dbName, engineType, now, objs, uncomp, comp, ratio, sha, compressionAlgo, finalPath, "VERIFIED");
+        BackupSnapshotInfo bkp = new BackupSnapshotInfo(id, dbName, engineType, now, objs, uncomp, comp, ratio, sha,
+                compressionAlgo, finalPath, "VERIFIED");
         backupSnapshots.add(0, bkp);
-        logPoliceIncident("Security Patrol", "Copia de respaldo '" + id + "' generada exitosamente (" + bkp.getFormattedSize() + ")", "OK", "Firma SHA-256 calculada");
+        logPoliceIncident("Security Patrol",
+                "Copia de respaldo '" + id + "' generada exitosamente (" + bkp.getFormattedSize() + ")", "OK",
+                "Firma SHA-256 calculada");
         return bkp;
     }
 
     public synchronized boolean restoreBackup(String id, String targetDb) {
-        BackupSnapshotInfo snap = backupSnapshots.stream().filter(s -> s.getId().equalsIgnoreCase(id)).findFirst().orElse(null);
+        BackupSnapshotInfo snap = backupSnapshots.stream().filter(s -> s.getId().equalsIgnoreCase(id)).findFirst()
+                .orElse(null);
         if (snap != null) {
-            logPoliceIncident("Heap Sentinel", "Restauración de '" + id + "' en base de datos '" + targetDb + "' completada", "OK", "Zero-Set Direct Memory cargada");
+            logPoliceIncident("Heap Sentinel",
+                    "Restauración de '" + id + "' en base de datos '" + targetDb + "' completada", "OK",
+                    "Zero-Set Direct Memory cargada");
             return true;
         }
         return false;
@@ -2772,8 +3132,19 @@ public class JettraStorePlugin {
     }
 
     // --- Métricas Globales ---
-    public long getTotalEvaluations() { return totalEvaluations; }
-    public long getTotalProcessedObjects() { return totalProcessedObjects; }
-    public String getLastPoliceStatus() { return lastPoliceStatus; }
-    public boolean isConnected() { return connected; }
+    public long getTotalEvaluations() {
+        return totalEvaluations;
+    }
+
+    public long getTotalProcessedObjects() {
+        return totalProcessedObjects;
+    }
+
+    public String getLastPoliceStatus() {
+        return lastPoliceStatus;
+    }
+
+    public boolean isConnected() {
+        return connected;
+    }
 }

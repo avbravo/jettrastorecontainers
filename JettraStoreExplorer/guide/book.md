@@ -69,3 +69,47 @@ Todas las vistas están construidas exclusivamente con componentes **JettraFlux*
   - **`NONE`**: esquema flexible sin validación rígida.
   - **`DEFINED`**: esquema estructurado mediante atributos JSON (`atribute_name`, `type_atribute`, `jettra_rules`, `description`). Al insertar o editar registros, `JettraStoreExplorer` valida el contenido contra las reglas del bucket y muestra una alerta clara en caso de incumplimiento.
 - **Panel de Índices por Bucket (`Accion-4`):** Debajo de la tabla de registros del bucket activo se muestra su esquema (`NONE` o tabla de atributos `DEFINED`), la tabla de índices asociados (`Nombre`, `Campo(s)`, `Tipo`, `Unicidad`, `Estado`, botón `Eliminar`) y un formulario directo para crear nuevos índices (`+ Crear Índice`).
+
+
+---
+
+## 6. Formulario Dinámico de Esquemas `DEFINED` e Índices `NUMERIC` / `AUTO_INCREMENT`
+- **Diseño responsivo corregido en `/explorer`**: el árbol jerárquico (`tree`) se fija en una barra lateral dedicada (`sticky`, con scroll independiente y adaptación automática a columna única en pantallas `< 920px`) junto al explorador principal y los modales de creación/edición sin desbordamientos.
+- **Carga dinámica de estructura (`DEFINED`)**: al crear o editar un registro en un bucket con estructura `DEFINED`, el formulario genera automáticamente los controles tipados para cada atributo (`number` con `step="1"` o `step="any"`, `email`, `dropdown` booleano, `required` para `NOT_NULL`, `min` para `POSITIVE`/`NON_NEGATIVE`, y etiqueta `[AUTO_INCREMENT]` para campos autogenerados), construye el JSON tipado y valida contra `JettraBucketSchema` antes de persistir.
+- **Gestor de índices numéricos y autoincrementables**: tanto en `/explorer` como en `/databases`, el selector de tipos de índice incluye `NUMERIC` y `AUTO_INCREMENT`, propagando la creación al nodo `PRIMARY` vía Raft.
+
+
+---
+
+## 7. Subárboles por Bucket y CRUD Completo de Estructura (`/explorer`)
+
+### 7.1 Jerarquía Completa del Árbol de Navegación
+Al abrir `/explorer`, la barra lateral izquierda muestra la jerarquía completa en cuatro niveles:
+```text
+📂 examplesedb
+  ⚙️ JAVA_RECORD
+    ▾ 📦 Pais [DEFINED]
+       ├─ 📐 Estructura (3 campos)   → /explorer?db=examplesedb&bucket=Pais&section=schema
+       ├─ ⚡ Índices (2)             → /explorer?db=examplesedb&bucket=Pais&section=indexes
+       └─ 📄 Registros (15)          → /explorer?db=examplesedb&bucket=Pais&section=records
+  ⚙️ DOCUMENT
+    ▸ 📦 NotasLibres [NONE]
+```
+
+### 7.2 CRUD Completo de Estructura (`NONE` ↔ `DEFINED`)
+Desde el subárbol **📐 Estructura** de cualquier bucket:
+- **Crear Estructura (`NONE` → `DEFINED`)**: clic en **`➕ Crear Estructura (DEFINED)`** y definir el arreglo JSON de atributos:
+  ```json
+  [
+    { "atribute_name": "codigo", "type_atribute": "Long", "jettra_rules": "AUTO_INCREMENT", "description": "Código secuencial" },
+    { "atribute_name": "name", "type_atribute": "String", "jettra_rules": "NOT_NULL", "description": "Nombre del país" },
+    { "atribute_name": "precio", "type_atribute": "Double", "jettra_rules": "POSITIVE", "description": "Valor numérico" }
+  ]
+  ```
+- **Consultar / Ver JSON**: clic en **`👁️ Ver JSON`** para inspeccionar la definición exacta del esquema.
+- **Editar / Actualizar Estructura**: clic en **`✏️ Editar Estructura`** para agregar, modificar o quitar atributos y reglas `jettra_rules`.
+- **Eliminar Estructura (`DEFINED` → `NONE`)**: clic en **`🗑️ Eliminar Estructura`** (con confirmación) para regresar el bucket a modo libre sin borrar los registros existentes.
+
+### 7.3 Validación Estricta de Registros e Índices Numéricos / Autoincrementables
+- Al abrir **`➕ Nuevo Registro`** o **`✏️ Editar`** sobre un bucket `DEFINED`, el formulario carga dinámicamente los campos de la estructura con sus restricciones (`required`, `number`, `step="1"`/`"any"`, `min`, `email`, `AUTO_INCREMENT`) y rechaza cualquier registro que incumpla una regla antes de persistir.
+- En el subárbol **⚡ Índices**, el selector de campos lista automáticamente los atributos del bucket (incluyendo campos numéricos y autoincrementables) junto con los tipos `NUMERIC`, `AUTO_INCREMENT`, `BTREE`, `HASH`, `SPARSE`, `VECTOR_HNSW` y `SPATIAL_R_TREE`.

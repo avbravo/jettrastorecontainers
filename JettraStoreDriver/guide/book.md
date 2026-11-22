@@ -1351,3 +1351,13 @@ var ids = client.findIdsByBucketIndex("pruebadb", "Pais", "siglas", "PA");
 // Eliminar índice
 client.dropBucketIndex("pruebadb", "idx_pais_siglas");
 ```
+
+
+---
+
+## Capítulo 16: Integración con `JettraRules`, Java `record` y Patrón Repository (`JettraStoreExampleSE`)
+
+El proyecto **`JettraStoreExampleSE`** demuestra el patrón recomendado para aplicaciones Java SE 25 con `JettraStoreDriver`:
+- **Modelos de dominio** como `record` anotados con `@NotBlank`, `@Size`, `@Positive` (`JettraRules`).
+- **Repositorios** (`PaisRepository`, `ProductoRepository`, `NotaLibreRepository`) que validan con `JettraRulesEngine.validate(entity)`, invocan `upsertBucketRecord` y aprovechan índices `AUTO_INCREMENT` y `NUMERIC` (`findIdsByNumericRange`).
+- **Ciclo de vida y resiliencia** desde el driver con `stopClusterNode(nodeId)`, `startClusterNode(nodeId)` y `removeStoppedClusterNode(nodeId)`.

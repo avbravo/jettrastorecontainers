@@ -1347,7 +1347,33 @@ cluster.index.max.inmemory.keys = 100000
             if (!removedAny || remaining.isEmpty()) {
                 return false;
             }
-            byte[] canonicalBytes = buildCanonicalClusterConfigBytes(remaining, props);
+            // Sanear posibles puertos REST heredados/duplicados en nodos restantes antes de validar
+            List<ClusterNodeInfo> sanitized = new ArrayList<>(remaining.size());
+            Set<String> usedEndpoints = new HashSet<>();
+            for (ClusterNodeInfo n : remaining) {
+                String ip = (n.ip() != null && !n.ip().isBlank()) ? n.ip().trim() : "127.0.0.1";
+                int gp = n.grpcPort() > 0 ? n.grpcPort() : 50001;
+                usedEndpoints.add(ip.toLowerCase(java.util.Locale.ROOT) + ":" + gp);
+            }
+            int idxFallback = 1;
+            for (ClusterNodeInfo n : remaining) {
+                String ip = (n.ip() != null && !n.ip().isBlank()) ? n.ip().trim() : "127.0.0.1";
+                String ipKey = ip.toLowerCase(java.util.Locale.ROOT);
+                int gp = n.grpcPort() > 0 ? n.grpcPort() : (50000 + idxFallback);
+                int rp = n.restPort();
+                if (rp <= 0 || rp == gp || usedEndpoints.contains(ipKey + ":" + rp)) {
+                    if (gp >= 50001 && gp <= 50999) rp = 60000 + (gp - 50000);
+                    else if (gp >= 9091 && gp <= 9999) rp = 8080 + (gp - 9090);
+                    else rp = 60000 + idxFallback;
+                    while (rp == gp || usedEndpoints.contains(ipKey + ":" + rp)) {
+                        rp++;
+                    }
+                }
+                usedEndpoints.add(ipKey + ":" + rp);
+                sanitized.add(new ClusterNodeInfo(n.id(), n.role(), ip, gp, rp, n.storagePath(), String.valueOf(idxFallback)));
+                idxFallback++;
+            }
+            byte[] canonicalBytes = buildCanonicalClusterConfigBytes(sanitized, props);
             ValidationResult integrity = validateClusterConfigIntegrity(canonicalBytes);
             if (!integrity.isValid()) {
                 System.err.printf("[JettraStore] Integridad fallida tras eliminar nodo '%s': %s%n",

@@ -490,7 +490,7 @@ public class DatabasesFluxView extends FluxView {
             children.add(idxHeader);
 
             List<String> indexTypes = List.of(
-                    "BTREE", "HASH", "NUMBER", "SEQUENTIAL", "FULLTEXT",
+                    "BTREE", "HASH", "NUMERIC", "AUTO_INCREMENT", "NUMBER", "SEQUENTIAL", "FULLTEXT",
                     "VECTOR_HNSW", "GRAPH_ADJACENCY", "TIMESERIES_BRIN", "SPATIAL_R_TREE"
             );
             Form addIndexForm = Form.of(

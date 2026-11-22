@@ -2380,6 +2380,9 @@ public final class JettraDatabase implements AutoCloseable {
         if (record != null) payload.putAll(record);
         payload.put("_id", effectiveId);
 
+        // Autogenerar valores AUTO_INCREMENT y validar índices numéricos / UNIQUE
+        indexManager.prepareAndValidateForInsert(bucketName.trim(), effectiveId, payload);
+
         DocumentEngine docEngine = getDocumentEngine(bucketName.trim());
         Map<String, Object> previous = docEngine.findById(effectiveId);
         if (previous != null) {

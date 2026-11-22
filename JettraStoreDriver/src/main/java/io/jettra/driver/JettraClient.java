@@ -1824,4 +1824,207 @@ public final class JettraClient implements AutoCloseable {
     public Set<String> findIdsByBucketIndex(String databaseName, String bucketName, String field, Object value) {
         return getDatabase(databaseName).getIndexManager().findDocIds(bucketName, field, value);
     }
+
+    // =========================================================================
+    // ÍNDICES NUMÉRICOS, AUTOINCREMENTABLES Y CICLO DE VIDA DE NODOS (RF-01)
+    // =========================================================================
+
+    public JettraIndexManager.IndexInfo createNumericIndex(
+            String databaseName, String bucketName, String indexName, String field, boolean unique) {
+        return createIndex(databaseName, bucketName, indexName, field, "NUMERIC", unique);
+    }
+
+    public JettraIndexManager.IndexInfo createAutoIncrementIndex(
+            String databaseName, String bucketName, String indexName, String field) {
+        return createIndex(databaseName, bucketName, indexName, field, "AUTO_INCREMENT", true);
+    }
+
+    public Set<String> findIdsByNumericRange(
+            String databaseName, String bucketName, String field, Double minInclusive, Double maxInclusive) {
+        return getDatabase(databaseName).getIndexManager().findDocIdsByNumericRange(bucketName, field, minInclusive, maxInclusive);
+    }
+
+    public long getAutoIncrementCurrentValue(String databaseName, String bucketName, String field) {
+        return getDatabase(databaseName).getIndexManager().getAutoIncrementCurrentValue(bucketName, field);
+    }
+
+    public long nextAutoIncrementValue(String databaseName, String bucketName, String field) {
+        return getDatabase(databaseName).getIndexManager().nextAutoIncrementValue(bucketName, field);
+    }
+
+    public record NodeLifecycleResult(boolean success, boolean verifiedState, String mechanism, String message) {}
+
+    /**
+     * Detiene un nodo remoto o local del clúster de forma limpia (requiere rol {@code admin}),
+     * enviando la trama Raft {@code TYPE_NODE_STOPPING} ({@code LIFECYCLE_SHUTDOWN:<nodeId>})
+     * y respaldo REST {@code POST /api/v1/cluster/shutdown}, verificando la parada del puerto.
+     */
+    public synchronized NodeLifecycleResult stopClusterNode(String nodeId) {
+        assertAdminRole("stopClusterNode");
+        if (nodeId == null || nodeId.isBlank()) {
+            return new NodeLifecycleResult(false, false, "NONE", "El ID del nodo es obligatorio.");
+        }
+        String cleanId = nodeId.trim();
+        String host = null;
+        int grpcPort = 0;
+        int restPort = 0;
+        ClusterNode peer = ringEngine.getPeer(cleanId);
+        if (peer != null) {
+            host = peer.getIp();
+            grpcPort = peer.getPort();
+        }
+        java.nio.file.Path clusterFile = io.jettra.store.core.JettraConfigValidator.locateClusterConfigFile();
+        if (clusterFile != null && java.nio.file.Files.exists(clusterFile)) {
+            Properties props = io.jettra.store.core.JettraConfigValidator.loadProperties(clusterFile, "/cluster.config", "/jettra.config");
+            var info = io.jettra.store.core.JettraConfigValidator.findNodeInCluster(
+                    io.jettra.store.core.JettraConfigValidator.parseClusterNodes(props), cleanId);
+            if (info != null) {
+                if (host == null || host.isBlank()) host = info.ip();
+                if (grpcPort <= 0) grpcPort = info.grpcPort();
+                restPort = info.restPort();
+            }
+        }
+        if (host == null || host.isBlank() || grpcPort <= 0) {
+            boolean stoppedLocal = ringEngine.stopPeer(cleanId);
+            if (stoppedLocal) {
+                return new NodeLifecycleResult(true, true, "RING_ENGINE", "Nodo '" + cleanId + "' marcado como STOPPED en el anillo.");
+            }
+            return new NodeLifecycleResult(false, false, "NOT_FOUND", "Nodo '" + cleanId + "' no encontrado en cluster.config ni en el anillo.");
+        }
+
+        boolean signalSent = false;
+        String mechanism = "NONE";
+        // 1. Trama Raft TYPE_NODE_STOPPING (LIFECYCLE_SHUTDOWN:<nodeId>)
+        try (java.net.Socket s = new java.net.Socket()) {
+            s.setTcpNoDelay(true);
+            s.connect(new java.net.InetSocketAddress(host, grpcPort), 1000);
+            s.setSoTimeout(1500);
+            try (var bos = new java.io.BufferedOutputStream(s.getOutputStream(), 8192);
+                 var bis = new java.io.BufferedInputStream(s.getInputStream(), 8192)) {
+                var stopFrame = new io.jettra.store.cluster.JettraRaftFrame(
+                        io.jettra.store.cluster.JettraRaftFrame.TYPE_NODE_STOPPING,
+                        1L, 0L, "jettra-driver-admin", "", "", "",
+                        ("LIFECYCLE_SHUTDOWN:" + cleanId).getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                        System.currentTimeMillis());
+                io.jettra.store.cluster.JettraClusterProtocol.writeFrame(bos, stopFrame);
+                io.jettra.store.cluster.JettraClusterProtocol.readFrame(bis);
+                signalSent = true;
+                mechanism = "RAFT_LIFECYCLE_SHUTDOWN";
+            }
+        } catch (Exception ignored) {}
+
+        // 2. Fallback REST /api/v1/cluster/shutdown si aún responde
+        if (!signalSent && restPort > 0) {
+            try {
+                java.net.http.HttpClient hc = java.net.http.HttpClient.newBuilder()
+                        .connectTimeout(java.time.Duration.ofMillis(500)).build();
+                java.net.http.HttpRequest req = java.net.http.HttpRequest.newBuilder()
+                        .uri(java.net.URI.create(String.format("http://%s:%d/api/v1/cluster/shutdown", host, restPort)))
+                        .timeout(java.time.Duration.ofMillis(800))
+                        .POST(java.net.http.HttpRequest.BodyPublishers.noBody())
+                        .build();
+                hc.send(req, java.net.http.HttpResponse.BodyHandlers.discarding());
+                signalSent = true;
+                mechanism = "REST_SHUTDOWN";
+            } catch (Exception ignored) {}
+        }
+
+        // 3. Esperar cierre limpio del puerto TCP
+        boolean offline = !isNodeRunning(host, grpcPort, restPort);
+        for (int i = 0; i < 10 && !offline; i++) {
+            try { Thread.sleep(150); } catch (InterruptedException e) { Thread.currentThread().interrupt(); break; }
+            offline = !isNodeRunning(host, grpcPort, restPort);
+        }
+
+        ringEngine.stopPeer(cleanId);
+        if (offline) {
+            return new NodeLifecycleResult(true, true, signalSent ? mechanism : "ALREADY_STOPPED",
+                    String.format("Nodo '%s' (%s:%d) detenido limpiamente (STOPPED).", cleanId, host, grpcPort));
+        }
+        return new NodeLifecycleResult(signalSent, false, mechanism,
+                String.format("Señal de apagado enviada a '%s' (%s:%d), pero el puerto sigue respondiendo.", cleanId, host, grpcPort));
+    }
+
+    /**
+     * Inicia o reconecta un nodo del clúster (requiere rol {@code admin}). Si existe un directorio
+     * local {@code ~/jettra-<nodeId>/start-node.sh}, lanza el proceso en segundo plano y verifica su arranque.
+     */
+    public synchronized NodeLifecycleResult startClusterNode(String nodeId) {
+        assertAdminRole("startClusterNode");
+        if (nodeId == null || nodeId.isBlank()) {
+            return new NodeLifecycleResult(false, false, "NONE", "El ID del nodo es obligatorio.");
+        }
+        String cleanId = nodeId.trim();
+        String host = null;
+        int grpcPort = 0;
+        int restPort = 0;
+        String role = "SECONDARY";
+        ClusterNode peer = ringEngine.getPeer(cleanId);
+        if (peer != null) {
+            host = peer.getIp();
+            grpcPort = peer.getPort();
+            role = peer.getRole().name();
+        }
+        java.nio.file.Path clusterFile = io.jettra.store.core.JettraConfigValidator.locateClusterConfigFile();
+        if (clusterFile != null && java.nio.file.Files.exists(clusterFile)) {
+            Properties props = io.jettra.store.core.JettraConfigValidator.loadProperties(clusterFile, "/cluster.config", "/jettra.config");
+            var info = io.jettra.store.core.JettraConfigValidator.findNodeInCluster(
+                    io.jettra.store.core.JettraConfigValidator.parseClusterNodes(props), cleanId);
+            if (info != null) {
+                if (host == null || host.isBlank()) host = info.ip();
+                if (grpcPort <= 0) grpcPort = info.grpcPort();
+                restPort = info.restPort();
+                if (info.role() != null && !info.role().isBlank()) role = info.role();
+            }
+        }
+        if (host != null && isNodeRunning(host, grpcPort, restPort)) {
+            ringEngine.startPeer(cleanId);
+            return new NodeLifecycleResult(true, true, "ALREADY_RUNNING",
+                    String.format("Nodo '%s' (%s:%d) ya se encuentra en ejecución (RUNNING).", cleanId, host, grpcPort));
+        }
+
+        // Intentar iniciar script local ~/jettra-<nodeId>/start-node.sh si existe
+        java.nio.file.Path nodeDir = java.nio.file.Path.of(System.getProperty("user.home"), "jettra-" + cleanId);
+        java.nio.file.Path startScript = nodeDir.resolve("start-node.sh");
+        boolean launched = false;
+        if (java.nio.file.Files.isRegularFile(startScript)) {
+            try {
+                java.nio.file.Path logDir = java.nio.file.Path.of(System.getProperty("user.home"), "jettra-logs");
+                java.nio.file.Files.createDirectories(logDir);
+                java.io.File logFile = logDir.resolve(cleanId + ".log").toFile();
+                new ProcessBuilder("bash", startScript.toAbsolutePath().toString(), cleanId, role)
+                        .directory(nodeDir.toFile())
+                        .redirectErrorStream(true)
+                        .redirectOutput(ProcessBuilder.Redirect.appendTo(logFile))
+                        .start();
+                launched = true;
+            } catch (Exception ignored) {}
+        }
+
+        if (launched && host != null && grpcPort > 0) {
+            boolean online = false;
+            for (int i = 0; i < 20; i++) {
+                try { Thread.sleep(250); } catch (InterruptedException e) { Thread.currentThread().interrupt(); break; }
+                if (isNodeRunning(host, grpcPort, restPort)) {
+                    online = true;
+                    break;
+                }
+            }
+            if (online) {
+                ringEngine.startPeer(cleanId);
+                return new NodeLifecycleResult(true, true, "LOCAL_SCRIPT",
+                        String.format("Nodo '%s' (%s:%d) iniciado correctamente (RUNNING) y reincorporado al clúster.", cleanId, host, grpcPort));
+            }
+            return new NodeLifecycleResult(true, false, "LOCAL_SCRIPT_PENDING",
+                    String.format("Arranque lanzado para '%s' (%s:%d); aún inicializando puertos.", cleanId, host, grpcPort));
+        }
+
+        boolean startedLocal = ringEngine.startPeer(cleanId);
+        if (startedLocal) {
+            return new NodeLifecycleResult(true, host != null && isNodeRunning(host, grpcPort, restPort), "RING_ENGINE",
+                    String.format("Nodo '%s' marcado como RUNNING en el anillo local.", cleanId));
+        }
+        return new NodeLifecycleResult(false, false, "NOT_FOUND",
+                String.format("No se encontró el nodo '%s' ni un script local en %s.", cleanId, startScript));
+    }
 }

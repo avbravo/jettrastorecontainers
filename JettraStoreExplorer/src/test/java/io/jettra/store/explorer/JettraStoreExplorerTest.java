@@ -1844,4 +1844,67 @@ public class JettraStoreExplorerTest {
         String kvJson = io.jettra.store.explorer.pages.explorer.EngineRecordRenderer.buildDetailsFromForm(kvForm, "{}");
         JettraAssert.assertTrue(kvJson.contains("region") && kvJson.contains("LATAM"), "KEY_VALUE debe persistir filas extra añadidas dinámicamente");
     }
+
+    @Test
+    @DisplayName("44. RF-02: Árbol con subárboles (Estructura CRUD, Índices NUMERIC/AUTO_INCREMENT, Registros) y validación estricta")
+    public void testTreeSubtreesSchemaCrudAndNumericAutoIncrementIndexes() {
+        JettraStorePlugin plugin = JettraStorePlugin.getInstance();
+        String dbName = "rf02_tree_db_" + System.currentTimeMillis();
+        plugin.createDatabase(dbName, "BucketBase", "DOCUMENT", "Base de prueba RF-02");
+
+        // 1. Crear bucket NONE y luego definir estructura DEFINED (CRUD Create/Update)
+        boolean createdB = plugin.addBucket(dbName, "ProductosRF02", "DOCUMENT", "Bucket de prueba", "NONE", "[]");
+        JettraAssert.assertTrue(createdB, "Debe crear bucket NONE");
+
+        String schemaJson = "[{\"atribute_name\":\"codigo\",\"type_atribute\":\"Long\",\"jettra_rules\":\"AUTO_INCREMENT\",\"description\":\"Código\"},"
+                + "{\"atribute_name\":\"nombre\",\"type_atribute\":\"String\",\"jettra_rules\":\"NOT_NULL\",\"description\":\"Nombre\"},"
+                + "{\"atribute_name\":\"precio\",\"type_atribute\":\"Double\",\"jettra_rules\":\"POSITIVE\",\"description\":\"Precio\"}]";
+        boolean savedSchema = plugin.saveBucketStructure(dbName, "ProductosRF02", schemaJson);
+        JettraAssert.assertTrue(savedSchema, "Debe guardar estructura DEFINED en el bucket");
+        JettraAssert.assertEquals("DEFINED", plugin.getBucket(dbName, "ProductosRF02").getStructureType(), "Tipo de estructura debe ser DEFINED");
+
+        // 2. Validación estricta de registros contra estructura DEFINED
+        var badVal = plugin.validateRecordForBucket(dbName, "ProductosRF02", "{\"nombre\":\"\",\"precio\":-5}");
+        JettraAssert.assertFalse(badVal.valid(), "Debe rechazar registro que viola NOT_NULL y POSITIVE");
+
+        var goodVal = plugin.validateRecordForBucket(dbName, "ProductosRF02", "{\"nombre\":\"Teclado\",\"precio\":45.5}");
+        JettraAssert.assertTrue(goodVal.valid(), "Debe aceptar registro válido omitiendo campo AUTO_INCREMENT");
+
+        // 3. Crear índices AUTO_INCREMENT y NUMERIC en el bucket
+        boolean idxAuto = plugin.addIndex(dbName, "ProductosRF02", "idx_rf02_codigo", "codigo", "AUTO_INCREMENT", true);
+        boolean idxNum = plugin.addIndex(dbName, "ProductosRF02", "idx_rf02_precio", "precio", "NUMERIC", false);
+        JettraAssert.assertTrue(idxAuto && idxNum, "Debe crear índices AUTO_INCREMENT y NUMERIC");
+
+        // 4. Verificar renderizado JettraFlux del árbol con subárboles (Estructura, Índices, Registros) y botones CRUD
+        io.jettra.server.flux.FluxRenderer renderer = new io.jettra.server.flux.FluxRenderer();
+        String htmlSchema = renderer.render(
+                new io.jettra.store.explorer.pages.explorer.RecordExplorerFluxView(
+                        dbName, "ProductosRF02", "schema", "", null, null, null, false, false, false, false, null, 1, 10).build(),
+                "RF02 Schema");
+        JettraAssert.assertTrue(htmlSchema.contains("section=schema") && htmlSchema.contains("section=indexes") && htmlSchema.contains("section=records"),
+                "El árbol debe renderizar los subárboles Estructura, Índices y Registros");
+        JettraAssert.assertTrue(htmlSchema.contains("Editar Estructura") && htmlSchema.contains("Eliminar Estructura") && htmlSchema.contains("Ver JSON"),
+                "La sección de estructura DEFINED debe mostrar botones CRUD completos");
+
+        String htmlIndexes = renderer.render(
+                new io.jettra.store.explorer.pages.explorer.RecordExplorerFluxView(
+                        dbName, "ProductosRF02", "indexes", "", null, null, null, false, false, false, false, null, 1, 10).build(),
+                "RF02 Indexes");
+        JettraAssert.assertTrue(htmlIndexes.contains("AUTO_INCREMENT") && htmlIndexes.contains("NUMERIC")
+                        && htmlIndexes.contains("idx_rf02_codigo") && htmlIndexes.contains("idx_rf02_precio"),
+                "El gestor de índices debe mostrar y soportar tipos AUTO_INCREMENT y NUMERIC");
+
+        // 5. Verificar carga dinámica del formulario de inserción para bucket DEFINED
+        String htmlCreate = renderer.render(
+                new io.jettra.store.explorer.pages.explorer.RecordExplorerFluxView(
+                        dbName, "ProductosRF02", "records", "", null, null, null, true, false, false, false, null, 1, 10).build(),
+                "RF02 Create Record");
+        JettraAssert.assertTrue(htmlCreate.contains("struct_codigo") && htmlCreate.contains("struct_nombre") && htmlCreate.contains("struct_precio"),
+                "El formulario de inserción debe generar inputs dinámicos para la estructura DEFINED");
+
+        // 6. Eliminar estructura (CRUD Delete -> vuelve a NONE)
+        boolean deletedSchema = plugin.deleteBucketStructure(dbName, "ProductosRF02");
+        JettraAssert.assertTrue(deletedSchema, "Debe eliminar la estructura DEFINED");
+        JettraAssert.assertEquals("NONE", plugin.getBucket(dbName, "ProductosRF02").getStructureType(), "Tras eliminar estructura debe volver a NONE");
+    }
 }

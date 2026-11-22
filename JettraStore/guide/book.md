@@ -3125,3 +3125,171 @@ Al incorporar un nuevo nodo o remover un nodo detenido mediante `TYPE_SYNC_CLUST
 - **Conciliación de rol (Anti Split-Brain):** Si un nodo recién incorporado inició aislado como `PRIMARY`, al recibir el `cluster.config` canónico donde figura como `SECONDARY` se degrada automáticamente a `SECONDARY` sin detenerse.
 - **Idempotencia estricta y Anti-Eco:** Si el archivo `cluster.config` no presenta diferencias respecto al ya persistido, no se re-difunden tramas ni se relanzan sincronizaciones; el `PRIMARY` nunca rebota actualizaciones originadas en otro nodo miembro.
 - **Coalescencia de sincronización:** Los nodos `SECONDARY` utilizan `triggerAsyncSynchronizeFromPrimary()` y `loadFromDisk` sincronizado para converger bases de datos y metadatos sin detener ningún nodo activo del clúster.
+
+
+---
+
+## Capítulo 23: Guía Práctica de Operaciones — Bases de Datos, Buckets, Registros, Índices Numéricos/Autoincrementables y Ciclo de Vida de Nodos (RF-01)
+
+Esta guía presenta flujos completos y ejecutables desde **JettraStoreShell**, **JettraStoreDriver (Java 25+)** y **JettraStoreExplorer**.
+
+---
+
+### 23.1 Creación y Administración de Bases de Datos
+
+#### Desde `JettraStoreShell`
+```sql
+-- Crear una base de datos y seleccionarla como activa
+CREATE DATABASE comercial_db
+USE comercial_db
+
+-- Listar todas las bases de datos almacenadas en el nodo PRIMARY
+SHOW DATABASES
+
+-- Eliminar una base de datos
+DROP DATABASE comercial_db
+```
+
+#### Desde `JettraStoreDriver` (Java 25+)
+```java
+JettraClientConfig cfg = JettraClientConfig.builder()
+        .addClusterNode("127.0.0.1", 50001)
+        .credentials("admin", "admin-jettra")
+        .role("admin")
+        .defaultDatabase("comercial_db")
+        .build();
+
+try (JettraClient client = JettraClient.connect(cfg)) {
+    client.createDatabase("comercial_db");
+    List<String> dbs = client.listDatabases();
+}
+```
+
+---
+
+### 23.2 Administración de Buckets con Estructura (`DEFINED`) y Sin Estructura (`NONE`)
+
+Cada engine (`DOCUMENT`, `JAVA_RECORD`, `KEY_VALUE`, `VECTOR`, `GRAPH`, `TIMESERIES`, `COLUMNAR`, `GEOSPATIAL`, `RELATIONAL`) soporta **buckets ilimitados**:
+
+#### A. Bucket sin estructura fija (`NONE`)
+```sql
+CREATE BUCKET Persona ENGINE DOCUMENT STRUCTURE NONE
+DESCRIBE BUCKET Persona
+```
+```java
+client.createBucket("comercial_db", "DOCUMENT", "Persona", "NONE", "[]");
+```
+
+#### B. Bucket con estructura definida (`DEFINED`)
+```sql
+CREATE BUCKET Pais ENGINE JAVA_RECORD STRUCTURE DEFINED [{"atribute_name":"codigo","type_atribute":"Long","jettra_rules":"AUTO_INCREMENT","description":"Código autoincremental"},{"atribute_name":"name","type_atribute":"String","jettra_rules":"NOT_NULL","description":"Nombre del país"},{"atribute_name":"siglas","type_atribute":"String","jettra_rules":"NOT_NULL,MIN_LENGTH:2,MAX_LENGTH:3","description":"Siglas ISO"}]
+DESCRIBE BUCKET Pais
+```
+```java
+String paisSchema = """
+    [
+      { "atribute_name": "codigo", "type_atribute": "Long", "jettra_rules": "AUTO_INCREMENT", "description": "Código autoincremental" },
+      { "atribute_name": "name", "type_atribute": "String", "jettra_rules": "NOT_NULL", "description": "Nombre del país" },
+      { "atribute_name": "siglas", "type_atribute": "String", "jettra_rules": "NOT_NULL,MIN_LENGTH:2,MAX_LENGTH:3", "description": "Siglas ISO" }
+    ]
+    """;
+client.createBucket("comercial_db", "JAVA_RECORD", "Pais", "DEFINED", paisSchema);
+```
+
+---
+
+### 23.3 Administración de Registros (Inserción, Consulta, Actualización, Eliminación y Autoincremento)
+
+#### Inserción en bucket `NONE` (esquema libre)
+```sql
+INSERT BUCKET Persona {"id": 1, "name": "aristides"}
+INSERT BUCKET Persona {"apellido": "Perez", "pais": "Panama"}
+```
+
+#### Inserción con validación `DEFINED` y campo `AUTO_INCREMENT`
+```sql
+-- Al omitir 'codigo', el motor autogenera secuencialmente 1, 2, 3...
+INSERT BUCKET Pais {"name": "Panama", "siglas": "PA"}
+INSERT BUCKET Pais {"name": "Costa Rica", "siglas": "CR"}
+
+-- Si falta un atributo obligatorio NOT_NULL, el motor rechaza la escritura con [VALIDATION ALERT]
+INSERT BUCKET Pais {"name": "Colombia"}
+```
+
+#### CRUD completo desde `JettraStoreDriver`
+```java
+// Insertar (autogenera 'codigo' si existe índice AUTO_INCREMENT)
+String id = client.upsertBucketRecord("comercial_db", "JAVA_RECORD", "Pais", "pa-1",
+        new LinkedHashMap<>(Map.of("name", "Panama", "siglas", "PA")));
+
+// Actualizar
+client.upsertBucketRecord("comercial_db", "JAVA_RECORD", "Pais", "pa-1",
+        new LinkedHashMap<>(Map.of("codigo", 1L, "name", "República de Panamá", "siglas", "PA")));
+
+// Eliminar (actualiza automáticamente los índices del bucket)
+client.deleteBucketRecord("comercial_db", "JAVA_RECORD", "Pais", "pa-1");
+```
+
+---
+
+### 23.4 Administración de Índices (Estándar, Numéricos y Autoincrementables)
+
+JettraStore soporta índices `BTREE`, `HASH`, `SPARSE`, **`NUMERIC`** (enteros/decimales con consultas exactas y por rango $O(\log N)$) y **`AUTO_INCREMENT`** (secuencia atómica persistida en `<db>_sequences.json` y `<db>_indexes.json`, inmune a reinicios y failover).
+
+#### Desde `JettraStoreShell`
+```sql
+-- Crear índice autoincrementable (único automáticamente)
+CREATE BUCKET INDEX idx_pais_codigo ON Pais (codigo) TYPE AUTO_INCREMENT
+
+-- Crear índice numérico para búsquedas exactas y por rango
+CREATE BUCKET INDEX idx_prod_precio ON productos (precio) TYPE NUMERIC
+
+-- Listar índices del bucket (incluye secuencia actual seq=N para AUTO_INCREMENT)
+SHOW BUCKET INDEXES Pais
+SHOW BUCKET INDEXES productos
+
+-- Consultar por rango numérico inclusivo [min, max]
+FIND NUMERIC productos precio 10.0 50.0
+
+-- Eliminar índice
+DROP BUCKET INDEX idx_prod_precio
+```
+
+#### Desde `JettraStoreDriver`
+```java
+client.createAutoIncrementIndex("comercial_db", "Pais", "idx_pais_codigo", "codigo");
+client.createNumericIndex("comercial_db", "productos", "idx_prod_precio", "precio", false);
+
+Set<String> idsEnRango = client.findIdsByNumericRange("comercial_db", "productos", "precio", 10.0, 50.0);
+long secuenciaActual = client.getAutoIncrementCurrentValue("comercial_db", "Pais", "codigo");
+client.dropBucketIndex("comercial_db", "idx_prod_precio");
+```
+
+---
+
+### 23.5 Gestión del Ciclo de Vida de Nodos y Topología en `JettraStoreShell`
+
+```sql
+-- Ver topología real en vivo (invariante de líder único: nunca duplica PRIMARY/LEADER)
+SHOW NODES
+
+-- Añadir un nuevo nodo al clúster en caliente (zero-downtime, solo rol admin)
+ADD NODE node-04 127.0.0.1 50004 SECONDARY 60004
+
+-- Detener un nodo limpiamente (envía trama Raft LIFECYCLE_SHUTDOWN + fallback REST)
+STOP NODE node-04
+
+-- Reiniciar un nodo detenido (lanza ~/jettra-node-04/start-node.sh y sincroniza estado)
+START NODE node-04
+
+-- Remover un nodo (regla estricta: primero STOP NODE; luego REMOVE NODE)
+STOP NODE node-04
+REMOVE NODE node-04
+```
+
+
+---
+
+## Capítulo 24: Proyecto de Referencia `JettraStoreExampleSE` y Sincronización Automática de Clientes
+
+El ecosistema incluye el módulo **`JettraStoreExampleSE`** (`JettraStoreExampleSE/guide/book.md`) como guía ejecutable en Java 25+ que integra `JettraStoreDriver`, `JettraRules`, modelos inmutables Java `record`, el Patrón Repository, la base `examplesedb` (buckets `DEFINED` y `NONE`), índices `NUMERIC` y `AUTO_INCREMENT`, y pruebas automatizadas de resiliencia ante parada, reinicio y remoción de nodos con `JettraTest`.

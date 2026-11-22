@@ -7,16 +7,9 @@
   "heapMaxMb" : 2048
 }, {
   "id" : "node-03",
-  "name" : "node-03-replica",
-  "role" : "SECONDARY",
-  "host" : "127.0.0.1",
-  "port" : 50003,
-  "heapMaxMb" : 2048
-}, {
-  "id" : "node-04",
-  "name" : "node-04",
+  "name" : "node-03",
   "role" : "FOLLOWER",
   "host" : "127.0.0.1",
-  "port" : 50004,
+  "port" : 50003,
   "heapMaxMb" : 2048
 } ]

@@ -667,12 +667,22 @@ public class App {
             if (db != null && bucket != null && indexName != null) {
                 plugin.deleteIndex(db, bucket, indexName);
             }
-            redirect(resp, "/explorer?db=" + db + "&bucket=" + bucket + "&msg=index_deleted");
+            redirect(resp, "/explorer?db=" + db + "&bucket=" + bucket + "&section=indexes&msg=index_deleted");
+            return;
+        } else if ("delete_schema".equalsIgnoreCase(action)) {
+            if (db != null && bucket != null) {
+                plugin.deleteBucketStructure(db, bucket);
+            }
+            redirect(resp, "/explorer?db=" + db + "&bucket=" + bucket + "&section=schema&msg=schema_deleted");
             return;
         }
 
+        String section = req.getQueryParam("section");
+        if (section == null || section.isBlank()) section = "records";
         boolean isNew = "new".equalsIgnoreCase(action);
         boolean isNewBucket = "new_bucket".equalsIgnoreCase(action);
+        boolean isEditSchema = "edit_schema".equalsIgnoreCase(action) || "new_schema".equalsIgnoreCase(action);
+        boolean isViewSchema = "view_schema".equalsIgnoreCase(action);
         String editId = req.getQueryParam("edit_id");
         String viewId = req.getQueryParam("view_id");
         String historyId = req.getQueryParam("history_id");
@@ -698,11 +708,14 @@ public class App {
         else if ("record_deleted".equals(msg)) messageText = "Registro eliminado del bucket.";
         else if ("version_restored".equals(msg)) messageText = "Versión previa restaurada exitosamente como nueva versión activa.";
         else if ("bucket_created".equals(msg)) messageText = "Bucket creado exitosamente con su estructura configurada.";
+        else if ("schema_saved".equals(msg)) messageText = "Estructura DEFINED guardada y activada para el bucket.";
+        else if ("schema_deleted".equals(msg)) messageText = "Estructura eliminada; el bucket opera ahora en modo NONE (flexible).";
         else if ("index_created".equals(msg)) messageText = "Índice secundario creado en el bucket.";
         else if ("index_deleted".equals(msg)) messageText = "Índice eliminado del bucket.";
         else if (msg != null && !msg.isBlank()) messageText = msg;
 
-        Widget content = new RecordExplorerFluxView(db, bucket, q, editId, viewId, historyId, isNew, isNewBucket, messageText, page, pageSize);
+        Widget content = new RecordExplorerFluxView(db, bucket, section, q, editId, viewId, historyId,
+                isNew, isNewBucket, isEditSchema, isViewSchema, messageText, page, pageSize);
         renderTemplate(resp, server, getLoggedUser(req), "Explorador de Registros CRUD", "explorer", content);
     }
 
@@ -727,20 +740,34 @@ public class App {
                         + java.net.URLEncoder.encode(err != null ? err : "Error creando bucket", java.nio.charset.StandardCharsets.UTF_8));
                 return;
             }
-            redirect(resp, "/explorer?db=" + db + "&bucket=" + newBucket.trim() + "&msg=bucket_created");
+            redirect(resp, "/explorer?db=" + db + "&bucket=" + newBucket.trim() + "&section=schema&msg=bucket_created");
+            return;
+        } else if ("save_schema".equalsIgnoreCase(action)) {
+            String attributesJson = form.getOrDefault("attributesJson", "[]");
+            boolean ok = plugin.saveBucketStructure(db, bucket, attributesJson);
+            if (!ok) {
+                String err = plugin.getLastBucketOperationError();
+                redirect(resp, "/explorer?db=" + db + "&bucket=" + bucket + "&section=schema&msg="
+                        + java.net.URLEncoder.encode(err != null ? err : "Error guardando estructura", java.nio.charset.StandardCharsets.UTF_8));
+                return;
+            }
+            redirect(resp, "/explorer?db=" + db + "&bucket=" + bucket + "&section=schema&msg=schema_saved");
             return;
         } else if ("create_bucket_index".equalsIgnoreCase(action)) {
             String idxName = form.get("indexName");
             String idxField = form.get("indexField");
+            if (idxField == null || idxField.isBlank()) {
+                idxField = form.get("indexFieldSelect");
+            }
             String idxType = form.getOrDefault("indexType", "BTREE");
             boolean unique = "true".equalsIgnoreCase(form.get("indexUnique")) || "on".equalsIgnoreCase(form.get("indexUnique"));
             boolean ok = plugin.addIndex(db, bucket, idxName, idxField, idxType, unique);
-            redirect(resp, "/explorer?db=" + db + "&bucket=" + bucket + "&msg=" + (ok ? "index_created" : "Error+creando+indice"));
+            redirect(resp, "/explorer?db=" + db + "&bucket=" + bucket + "&section=indexes&msg=" + (ok ? "index_created" : "Error+creando+indice"));
             return;
         } else if ("save_new".equalsIgnoreCase(action)) {
             String recordId = form.get("recordId");
             String summary = form.get("summary");
-            String details = io.jettra.store.explorer.pages.explorer.EngineRecordRenderer.buildDetailsFromForm(form, "");
+            String details = buildStructuredDetailsOrFallback(plugin, db, bucket, form, "");
             var validation = plugin.validateRecordForBucket(db, bucket, details);
             if (!validation.valid()) {
                 redirect(resp, "/explorer?db=" + db + "&bucket=" + bucket + "&msg="
@@ -755,8 +782,8 @@ public class App {
             String recordId = form.get("recordId");
             String summary = form.get("summary");
             io.jettra.store.explorer.model.EngineRecordInfo existing = plugin.getRecord(db, bucket, recordId);
-            String details = io.jettra.store.explorer.pages.explorer.EngineRecordRenderer.buildDetailsFromForm(
-                    form, existing != null ? existing.getDetails() : "");
+            String details = buildStructuredDetailsOrFallback(plugin, db, bucket, form,
+                    existing != null ? existing.getDetails() : "");
             var validation = plugin.validateRecordForBucket(db, bucket, details);
             if (!validation.valid()) {
                 redirect(resp, "/explorer?db=" + db + "&bucket=" + bucket + "&msg="
@@ -782,6 +809,39 @@ public class App {
             return;
         }
         redirect(resp, "/explorer?db=" + db + "&bucket=" + bucket);
+    }
+
+    private static String buildStructuredDetailsOrFallback(
+            JettraStorePlugin plugin, String db, String bucket, Map<String, String> form, String existingDetails) {
+        var bInfo = plugin.getBucket(db, bucket);
+        if (bInfo != null && "DEFINED".equalsIgnoreCase(bInfo.getStructureType()) && !bInfo.getAttributes().isEmpty()) {
+            boolean hasStructFields = form.keySet().stream().anyMatch(k -> k.startsWith("struct_"));
+            if (hasStructFields) {
+                StringBuilder json = new StringBuilder("{");
+                int count = 0;
+                for (var attr : bInfo.getAttributes()) {
+                    String name = attr.atribute_name();
+                    String rawVal = form.get("struct_" + name);
+                    if (rawVal == null || rawVal.isBlank()) {
+                        continue;
+                    }
+                    if (count++ > 0) json.append(", ");
+                    json.append("\"").append(name.replace("\"", "\\\"")).append("\": ");
+                    String t = attr.type_atribute() != null ? attr.type_atribute().toLowerCase() : "string";
+                    if (t.equals("int") || t.equals("integer") || t.equals("long")
+                            || t.equals("double") || t.equals("float") || t.equals("decimal") || t.equals("number")) {
+                        json.append(rawVal.trim());
+                    } else if (t.equals("boolean") || t.equals("bool")) {
+                        json.append("true".equalsIgnoreCase(rawVal.trim()) ? "true" : "false");
+                    } else {
+                        json.append("\"").append(rawVal.replace("\\", "\\\\").replace("\"", "\\\"")).append("\"");
+                    }
+                }
+                json.append("}");
+                return json.toString();
+            }
+        }
+        return io.jettra.store.explorer.pages.explorer.EngineRecordRenderer.buildDetailsFromForm(form, existingDetails);
     }
 
     // --- Consola SQL / JQL / Shell ---
