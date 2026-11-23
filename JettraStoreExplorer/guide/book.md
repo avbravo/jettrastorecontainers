@@ -83,18 +83,19 @@ Todas las vistas están construidas exclusivamente con componentes **JettraFlux*
 
 ## 7. Árbol Jerárquico, Subárboles por Bucket, CRUD de Estructura e Índices Numéricos / Autoincrementables (`/explorer` y `/databases`)
 
-### 7.1 Vista Simplificada de `/explorer` (RF-05)
+### 7.1 Vista Simplificada de `/explorer` (RF-05 y RF-06)
 Al acceder a `/explorer?db=<base_de_datos>`:
 - **Base de datos focalizada:** Se muestra **únicamente la base de datos activa/seleccionada** y su jerarquía (`Base de Datos` → `Engine` → `Bucket`), sin listar las demás bases de datos en el árbol ni en la barra superior. Para cambiar de base de datos o administrar motores/buckets, se incluye un acceso directo a **`/database`**.
-- **Sin botón `+ Nuevo Bucket`:** La creación, edición y eliminación de buckets y estructuras está centralizada en **`/database`**.
+- **Sin botón `+ Nuevo Bucket`:** La creación, edición y eliminación de buckets, estructuras e índices está centralizada en **`/database`**.
 - **Diálogo modal de consulta `📐 Estructura del Bucket`:** Al seleccionar un bucket en el árbol y hacer clic en **📐 Estructura** (`/explorer?db=<db>&bucket=<bucket>&section=schema`), se abre un **diálogo modal superpuesto** sobre `/explorer` (cerrable con **`✖ Cerrar`** o `Esc`, sin perder el contexto del árbol ni los registros) que presenta los atributos del bucket en formato **`DataTable`** (`Nombre`, `Tipo`, `Reglas`, `Descripción`), o un mensaje claro si el bucket opera en modo `NONE` (esquema libre). Este modal es exclusivamente de **consulta visual** y no incluye botones de *Ver JSON*, *Editar Estructura* ni *Eliminar Estructura*.
+- **Diálogo modal de consulta `⚡ Índices del Bucket` (RF-06):** Al seleccionar un bucket en el árbol y hacer clic en **⚡ Índices** (`/explorer?db=<db>&bucket=<bucket>&section=indexes`), se abre un **diálogo modal superpuesto** con el título **`Índices del Bucket '<nombre-bucket>' (<base-de-datos> / <engine>)`** (cerrable con **`✖ Cerrar`**, **`Cerrar`** o `Esc`) que lista los índices del bucket en formato **`DataTable`** (`Nombre del índice`, `Campo(s)`, `Tipo / Estrategia`, `Unicidad`, `Estado`) o un estado vacío claro si no hay índices configurados. Es de **solo lectura** (sin botones **Reconstruir** ni **Eliminar**); las operaciones de creación, reconstrucción y eliminación se realizan desde **`/database`**.
 
 ```text
 ▾ 📂 ventas_db (2)
    └─ ⚙️ DOCUMENT (2 bucket(s))
        ├─ ▾ 📦 Productos [DEFINED]
-       │    ├─ 📐 Estructura (4 campos)   → abre modal DataTable sobre /explorer
-       │    ├─ ⚡ Índices (2)             → /explorer?db=ventas_db&bucket=Productos&section=indexes
+       │    ├─ 📐 Estructura (4 campos)   → abre modal DataTable solo lectura sobre /explorer
+       │    ├─ ⚡ Índices (2)             → abre modal DataTable solo lectura sobre /explorer
        │    └─ 📄 Registros (12)          → /explorer?db=ventas_db&bucket=Productos&section=records
        └─ ▸ 📦 NotasLibres [NONE]
 ```

@@ -152,9 +152,8 @@ public class RecordExplorerFluxView extends FluxView {
             }
         }
 
-        // 5. Secciones del Bucket: Registros, Índices y Modal de Consulta de Estructura (cuando section=schema)
+        // 5. Registros del Bucket + Modales de solo lectura de Estructura (section=schema) e Índices (section=indexes)
         Widget recordsTable = buildRecordsTable(pageRecords, totalRecords, currentDb, currentBucket, searchQuery, currentPage, totalPages, pageSize, isStreamed);
-        Widget indexesPanel = buildBucketIndexesPanel(currentDb, bucketInfo);
 
         List<Widget> mainColChildren = new java.util.ArrayList<>();
         if (flashWidget != null) mainColChildren.add(flashWidget);
@@ -168,16 +167,13 @@ public class RecordExplorerFluxView extends FluxView {
             Modal structureModal = Modal.of(buildBucketStructureReadOnlyModal(currentDb, bucketInfo)).open(true);
             structureModal.id("bucketStructureModal");
             mainColChildren.add(structureModal);
+        } else if ("indexes".equals(activeSection) && bucketInfo != null) {
+            Modal indexesModal = Modal.of(buildBucketIndexesReadOnlyModal(currentDb, bucketInfo)).open(true);
+            indexesModal.id("bucketIndexesModal");
+            mainColChildren.add(indexesModal);
         }
-        if ("indexes".equals(activeSection)) {
-            mainColChildren.add(indexesPanel);
-            mainColChildren.add(searchAndActions);
-            mainColChildren.add(recordsTable);
-        } else {
-            mainColChildren.add(searchAndActions);
-            mainColChildren.add(recordsTable);
-            mainColChildren.add(indexesPanel);
-        }
+        mainColChildren.add(searchAndActions);
+        mainColChildren.add(recordsTable);
 
         Div mainCol = Div.of(mainColChildren.toArray(new Widget[0]));
         mainCol.modifier(new Modifier().cssClass("explorer-main-col").style("flex: 1; min-width: 0; overflow-x: auto;"));
@@ -404,6 +400,71 @@ public class RecordExplorerFluxView extends FluxView {
                 .cssClass("ui-card explorer-form-card")
                 .attribute("data-structure-readonly-modal", "true")
                 .style("border-left: 4px solid #00d4ff;"));
+        return card;
+    }
+
+    private Widget buildBucketIndexesReadOnlyModal(String currentDb, EngineBucketInfo bucketInfo) {
+        String bName = bucketInfo.getBucketName();
+        String engineType = bucketInfo.getEngineType() != null ? bucketInfo.getEngineType() : "DOCUMENT";
+        String closeUrl = "/explorer?db=" + currentDb + "&bucket=" + bName + "&section=records";
+
+        Header title = Header.of(3, "⚡ Índices del Bucket '" + bName + "' (" + currentDb + " / " + engineType + ")");
+        title.modifier(new Modifier().style("margin: 0; color: #c084fc; font-size: 1.08rem;"));
+
+        Widget closeTop = FluxUi.linkButton(closeUrl, "✖ Cerrar", "app-btn-secondary", "padding: 0.32rem 0.7rem; font-size: 0.8rem;");
+        Div headerRow = Div.of(title, closeTop);
+        headerRow.modifier(new Modifier().style("display: flex; justify-content: space-between; align-items: center; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 0.75rem;"));
+
+        Widget metaStrip = Div.of(
+                FluxUi.pillBadge("⚙️ " + engineType, engineAccentColor(engineType)),
+                FluxUi.pillBadge(bucketInfo.getIndexes().size() + " índice(s) configurado(s)", "#a855f7")
+        ).modifier(new Modifier().style("display: flex; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 0.9rem;"));
+
+        Widget bodyWidget;
+        if (!bucketInfo.getIndexes().isEmpty()) {
+            List<List<Widget>> idxRows = new ArrayList<>();
+            for (var idx : bucketInfo.getIndexes()) {
+                String idxTypeUpper = idx.getType() != null ? idx.getType().toUpperCase() : "BTREE";
+                boolean isAutoType = "AUTO_INCREMENT".equals(idxTypeUpper) || "SEQUENTIAL".equals(idxTypeUpper);
+                boolean isNumType = "NUMERIC".equals(idxTypeUpper) || "NUMBER".equals(idxTypeUpper);
+                String typeColor = isAutoType ? "#f59e0b" : (isNumType ? "#38bdf8" : "#00d4ff");
+
+                idxRows.add(List.of(
+                        FluxUi.coloredSpan(idx.getName(), "font-family: monospace; font-weight: 700; color: #00d4ff;"),
+                        FluxUi.coloredSpan(idx.getFields(), "font-family: monospace; color: #ffd700;"),
+                        FluxUi.pillBadge(idxTypeUpper, typeColor),
+                        FluxUi.pillBadge(idx.isUnique() ? "UNIQUE" : "NON-UNIQUE", idx.isUnique() ? "#ffd700" : "#10b981"),
+                        FluxUi.pillBadge(idx.getStatus(), "#10b981")
+                ));
+            }
+            Datatable table = Datatable.ofWidgets(
+                    List.of(Text.of("Nombre del índice"), Text.of("Campo(s)"), Text.of("Tipo / Estrategia"), Text.of("Unicidad"), Text.of("Estado")),
+                    idxRows
+            );
+            table.modifier(new Modifier().cssClass("app-table").attribute("data-bucket-indexes-table", "true"));
+            bodyWidget = table;
+        } else {
+            Paragraph emptyP = Paragraph.of("No hay índices registrados para este bucket. Para crear, reconstruir o eliminar índices, utilice la administración de base de datos en /database.");
+            emptyP.modifier(new Modifier().style("font-size: 0.86rem; color: var(--text-muted); margin: 0.25rem 0 0.75rem 0; line-height: 1.5;"));
+            bodyWidget = emptyP;
+        }
+
+        Div footerRow = Div.of(
+                FluxUi.linkButton("/database?db=" + currentDb + "&manage_indexes_db=" + currentDb + "&index_bucket=" + bName,
+                        "⚙️ Administrar en /database", "app-btn-secondary", "padding: 0.4rem 0.8rem; font-size: 0.8rem;"),
+                FluxUi.linkButton(closeUrl, "Cerrar", "app-btn-primary", "padding: 0.4rem 0.9rem; font-size: 0.82rem;")
+        );
+        footerRow.modifier(new Modifier().style("display: flex; justify-content: flex-end; gap: 0.6rem; margin-top: 1rem; flex-wrap: wrap;"));
+
+        RawScript escClose = RawScript.of(
+                "document.addEventListener('keydown', function(e){ if (e.key === 'Escape') { window.location.href = '" + closeUrl + "'; } });"
+        );
+
+        Div card = Div.of(headerRow, metaStrip, bodyWidget, footerRow, escClose);
+        card.modifier(new Modifier()
+                .cssClass("ui-card explorer-form-card")
+                .attribute("data-indexes-readonly-modal", "true")
+                .style("border-left: 4px solid #a855f7;"));
         return card;
     }
 

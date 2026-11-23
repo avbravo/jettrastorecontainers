@@ -2032,27 +2032,24 @@ public class JettraStoreExplorerTest {
             JettraAssert.assertNull(plugin.getRecord(dbName, "ProductosRF03", "P-4"),
                     "P-4 no debe persistirse al fallar validación de tipo numérico");
 
-            // 6. Verificar gestor de índices en /explorer y /databases con detección de NUMERIC y AUTO_INCREMENT
-            HttpResponse<String> explorerIdxPage = get("/explorer?db=" + dbName + "&bucket=ProductosRF03&section=indexes");
-            JettraAssert.assertEquals(200, explorerIdxPage.statusCode(), "/explorer?section=indexes debe responder 200");
-            JettraAssert.assertTrue(explorerIdxPage.body().contains("data-detected-numeric-fields=\"true\"")
-                    && explorerIdxPage.body().contains("codigo (Long • AUTO_INCREMENT)")
-                    && explorerIdxPage.body().contains("precio (BigDecimal • NUMERIC)"),
-                    "El gestor de índices en /explorer debe detectar y resaltar campos AUTO_INCREMENT y NUMERIC");
-
+            // 6. Verificar consulta modal de índices en /explorer y gestor de índices en /databases con detección de NUMERIC y AUTO_INCREMENT
             HttpResponse<String> createIdxRes = postForm("/explorer",
                     "action=create_bucket_index&db=" + dbName + "&bucket=ProductosRF03"
                     + "&indexName=idx_rf03_codigo&indexFieldSelect=codigo&indexType=AUTO_INCREMENT&indexUnique=true");
             JettraAssert.assertTrue(createIdxRes.headers().firstValue("Location").orElse("").contains("msg=index_created"),
-                    "Debe crear índice AUTO_INCREMENT desde /explorer");
+                    "Debe crear índice AUTO_INCREMENT");
 
-            HttpResponse<String> rebuildIdxRes = get("/explorer?db=" + dbName + "&bucket=ProductosRF03&action=rebuild_bucket_index&indexName=idx_rf03_codigo");
-            JettraAssert.assertTrue(rebuildIdxRes.headers().firstValue("Location").orElse("").contains("msg=index_rebuilt"),
-                    "Debe permitir reconstruir índices desde /explorer");
+            HttpResponse<String> explorerIdxPage = get("/explorer?db=" + dbName + "&bucket=ProductosRF03&section=indexes");
+            JettraAssert.assertEquals(200, explorerIdxPage.statusCode(), "/explorer?section=indexes debe responder 200");
+            JettraAssert.assertTrue(explorerIdxPage.body().contains("id=\"bucketIndexesModal\"")
+                    && explorerIdxPage.body().contains("idx_rf03_codigo"),
+                    "El diálogo de índices en /explorer debe mostrar los índices del bucket en modal");
 
             HttpResponse<String> dbIdxPage = get("/databases?db=" + dbName + "&manage_indexes_db=" + dbName + "&index_bucket=ProductosRF03");
             JettraAssert.assertEquals(200, dbIdxPage.statusCode(), "/databases gestor de índices debe responder 200");
             JettraAssert.assertTrue(dbIdxPage.body().contains("data-detected-numeric-fields=\"true\"")
+                    && dbIdxPage.body().contains("codigo (Long • AUTO_INCREMENT)")
+                    && dbIdxPage.body().contains("precio (BigDecimal • NUMERIC)")
                     && dbIdxPage.body().contains("name=\"fieldSelect\"")
                     && dbIdxPage.body().contains("idx_rf03_codigo"),
                     "El gestor de índices en /databases debe detectar campos numéricos/autoincrementables y listar índices");
@@ -2246,6 +2243,56 @@ public class JettraStoreExplorerTest {
         } finally {
             plugin.deleteDatabase(dbPrimary);
             plugin.deleteDatabase(dbOther);
+        }
+    }
+
+    @Test
+    @DisplayName("50. RF-06: Diálogo modal de solo lectura 'Índices del Bucket' en /explorer con DataTable y sin botones Reconstruir/Eliminar")
+    public void testRf06ExplorerReadOnlyBucketIndexesModal() throws Exception {
+        JettraStorePlugin plugin = JettraStorePlugin.getInstance();
+        String dbName = "rf06_indexes_modal_test_db";
+        try {
+            plugin.createDatabase(dbName, "OrdenesRF06", "DOCUMENT", "Base de pruebas RF-06");
+            plugin.addIndex(dbName, "OrdenesRF06", "idx_rf06_seq", "codigo", "AUTO_INCREMENT", true);
+            plugin.addIndex(dbName, "OrdenesRF06", "idx_rf06_total", "total", "NUMERIC", false);
+
+            // 1. Abrir Índices desde el árbol sobre OrdenesRF06 -> modal DataTable de solo lectura
+            HttpResponse<String> idxRes = get("/explorer?db=" + dbName + "&bucket=OrdenesRF06&section=indexes");
+            JettraAssert.assertEquals(200, idxRes.statusCode(), "GET /explorer?section=indexes debe responder HTTP 200");
+            String body = idxRes.body();
+            JettraAssert.assertTrue(body.contains("id=\"bucketIndexesModal\"")
+                    && body.contains("espresso-modal-overlay")
+                    && body.contains("data-indexes-readonly-modal=\"true\"")
+                    && body.contains("Índices del Bucket 'OrdenesRF06' (" + dbName + " / DOCUMENT)")
+                    && body.contains("data-bucket-indexes-table=\"true\"")
+                    && body.contains(">Nombre del índice<")
+                    && body.contains(">Campo(s)<")
+                    && body.contains(">Tipo / Estrategia<")
+                    && body.contains(">Unicidad<")
+                    && body.contains(">Estado<")
+                    && body.contains("idx_rf06_seq") && body.contains("AUTO_INCREMENT")
+                    && body.contains("idx_rf06_total") && body.contains("NUMERIC"),
+                    "Debe mostrar el diálogo modal DataTable de Índices del Bucket sobre /explorer");
+
+            // Extraer el fragmento del modal para validar estrictamente que no incluye Reconstruir ni Eliminar
+            int modalStart = body.indexOf("id=\"bucketIndexesModal\"");
+            String modalFragment = modalStart >= 0 ? body.substring(modalStart) : body;
+            JettraAssert.assertFalse(modalFragment.contains("Reconstruir")
+                    || modalFragment.contains("delete_bucket_index")
+                    || modalFragment.contains("rebuild_bucket_index")
+                    || modalFragment.contains("create_bucket_index"),
+                    "El modal de Índices del Bucket en /explorer no debe incluir botones Reconstruir, Eliminar ni creación inline");
+
+            // 2. Bucket sin índices configurados -> estado vacío claro dentro del modal
+            plugin.addBucket(dbName, "SinIndicesRF06", "DOCUMENT", "Bucket sin índices", "NONE", "[]");
+            plugin.findBucketExact(dbName, "SinIndicesRF06").getIndexes().clear();
+            HttpResponse<String> emptyIdxRes = get("/explorer?db=" + dbName + "&bucket=SinIndicesRF06&section=indexes");
+            JettraAssert.assertEquals(200, emptyIdxRes.statusCode(), "Modal vacío de índices debe responder 200");
+            JettraAssert.assertTrue(emptyIdxRes.body().contains("id=\"bucketIndexesModal\"")
+                    && emptyIdxRes.body().contains("No hay índices registrados para este bucket"),
+                    "Debe mostrar un estado vacío claro cuando el bucket no tiene índices");
+        } finally {
+            plugin.deleteDatabase(dbName);
         }
     }
 }
