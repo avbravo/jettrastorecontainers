@@ -459,4 +459,37 @@ public class JettraClientTest {
             assertTrue(health);
         }
     }
+
+    @Test
+    @DisplayName("Debe detener un nodo dinámico (node-04) real vía stopClusterNode (Raft/REST) y verificar cierre de puertos")
+    public void testStopDynamicNode04RealShutdown() throws Exception {
+        int restPort;
+        int grpcPort;
+        try (var s1 = new java.net.ServerSocket(0); var s2 = new java.net.ServerSocket(0)) {
+            restPort = s1.getLocalPort();
+            grpcPort = s2.getLocalPort();
+        }
+        java.nio.file.Path tmpDir = java.nio.file.Files.createTempDirectory("jettra-node04-test-");
+        java.util.Properties p = new java.util.Properties();
+        p.setProperty("node.id", "node-04");
+        p.setProperty("node.role", "SECONDARY");
+        p.setProperty("server.rest.port", String.valueOf(restPort));
+        p.setProperty("server.grpc.port", String.valueOf(grpcPort));
+        p.setProperty("cluster.multinode.active", "true");
+        p.setProperty("storage.data.dir", tmpDir.toAbsolutePath().toString());
+        p.setProperty("cluster.endpoints", "127.0.0.1:" + grpcPort);
+        io.jettra.store.core.JettraStoreConfig node04Cfg = new io.jettra.store.core.JettraStoreConfig(p);
+        io.jettra.store.JettraStoreServer node04Server = new io.jettra.store.JettraStoreServer(node04Cfg);
+        node04Server.start();
+        try (JettraClient client = JettraClient.connect("127.0.0.1", grpcPort, "admin", "admin-jettra")) {
+            client.setActiveRole("admin");
+            client.registerDynamicPeer("node-04", "127.0.0.1", grpcPort, "SECONDARY");
+
+            var stopRes = client.stopClusterNode("node-04");
+            assertTrue(stopRes.success(), "stopClusterNode debe reportar éxito: " + stopRes.message());
+            assertTrue(stopRes.verifiedState(), "stopClusterNode debe verificar que los puertos de node-04 cerraron: " + stopRes.message());
+        } finally {
+            try { node04Server.stop(); } catch (Exception ignored) {}
+        }
+    }
 }

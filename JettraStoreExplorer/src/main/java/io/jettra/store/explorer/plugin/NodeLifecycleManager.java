@@ -153,10 +153,19 @@ public final class NodeLifecycleManager {
         int port = node.getPort();
         List<String> mechanisms = new ArrayList<>();
 
-        boolean dockerEnv = dockerController.isDockerEnvironment();
-        String envLabel = dockerEnv ? "DOCKER" : "NATIVE";
-        Optional<String> containerOpt = dockerEnv ? dockerController.findContainer(node) : Optional.empty();
-        String containerName = containerOpt.orElse("");
+        boolean dockerEnv = false;
+        String envLabel = "NATIVE";
+        String containerName = "";
+        try {
+            dockerEnv = dockerController.isDockerEnvironment();
+            envLabel = dockerEnv ? "DOCKER" : "NATIVE";
+            Optional<String> containerOpt = dockerEnv ? dockerController.findContainer(node) : Optional.empty();
+            containerName = containerOpt.orElse("");
+        } catch (Throwable ignored) {
+            dockerEnv = false;
+            envLabel = "NATIVE";
+            containerName = "";
+        }
 
         // 1. Cerrar endpoint administrado si existe (e.g. instancia embebida en el mismo JVM o nodo gestionado)
         AutoCloseable endpoint = managedEndpoints.remove(key);
@@ -180,10 +189,12 @@ public final class NodeLifecycleManager {
         // 4. Estrategia dual Docker Compose vs Proceso nativo JVM
         boolean dockerStopped = false;
         if (!containerName.isEmpty()) {
-            if (dockerController.stopContainer(containerName, 8)) {
-                dockerStopped = true;
-                mechanisms.add("DOCKER_STOP[" + containerName + "]");
-            }
+            try {
+                if (dockerController.stopContainer(containerName, 8)) {
+                    dockerStopped = true;
+                    mechanisms.add("DOCKER_STOP[" + containerName + "]");
+                }
+            } catch (Throwable ignored) {}
         }
         if (!dockerStopped) {
             if (tryProcessHandleTerminate(nodeId, host, port)) {
@@ -226,22 +237,24 @@ public final class NodeLifecycleManager {
         clearStopped(nodeId);
 
         String mechanism = "HEALTHCHECK_PROBE";
-        if (dockerController.isDockerEnvironment()) {
-            Optional<String> containerOpt = dockerController.findContainer(node);
-            if (containerOpt.isPresent()) {
-                String containerName = containerOpt.get();
-                if (!isTcpPortOpen(node.getHost(), node.getPort(), 180) && dockerController.startContainer(containerName)) {
-                    mechanism = "DOCKER_START[" + containerName + "]";
-                    long deadline = System.currentTimeMillis() + 1500;
-                    while (System.currentTimeMillis() < deadline && !isTcpPortOpen(node.getHost(), node.getPort(), 150)) {
-                        try { Thread.sleep(100); } catch (InterruptedException ie) {
-                            Thread.currentThread().interrupt();
-                            break;
+        try {
+            if (dockerController.isDockerEnvironment()) {
+                Optional<String> containerOpt = dockerController.findContainer(node);
+                if (containerOpt.isPresent()) {
+                    String containerName = containerOpt.get();
+                    if (!isTcpPortOpen(node.getHost(), node.getPort(), 180) && dockerController.startContainer(containerName)) {
+                        mechanism = "DOCKER_START[" + containerName + "]";
+                        long deadline = System.currentTimeMillis() + 1500;
+                        while (System.currentTimeMillis() < deadline && !isTcpPortOpen(node.getHost(), node.getPort(), 150)) {
+                            try { Thread.sleep(100); } catch (InterruptedException ie) {
+                                Thread.currentThread().interrupt();
+                                break;
+                            }
                         }
                     }
                 }
             }
-        }
+        } catch (Throwable ignored) {}
 
         boolean reachable = plugin != null && plugin.checkNodeRealReachability(node, 800);
         if (!reachable && (node.getLastError() == null || node.getLastError().contains("LifecycleManager"))) {
@@ -288,8 +301,8 @@ public final class NodeLifecycleManager {
         if (node.getRestPort() > 0) candidatePorts.add(node.getRestPort());
         Integer hint = restPortHints.get(node.getId().trim().toLowerCase());
         if (hint != null && hint > 0 && !candidatePorts.contains(hint)) candidatePorts.add(hint);
-        if (nodePort >= 50001 && nodePort <= 50009) {
-            int mapped = 60000 + (nodePort - 50000); // 50001->60001, 50002->60002, 50003->60003
+        if (nodePort >= 50001 && nodePort <= 50099) {
+            int mapped = 60000 + (nodePort - 50000); // 50001->60001, 50004->60004, ...
             if (!candidatePorts.contains(mapped)) candidatePorts.add(mapped);
             if (!candidatePorts.contains(60001)) candidatePorts.add(60001);
         } else if (nodePort >= 9091 && nodePort <= 9099) {
@@ -478,9 +491,12 @@ public final class NodeLifecycleManager {
             if (containerNameOrId == null || containerNameOrId.isBlank()) return false;
             int timeout = Math.max(2, timeoutSeconds);
             String encoded = URLEncoder.encode(containerNameOrId.trim(), StandardCharsets.UTF_8);
-            UnixHttpResult sockRes = callDockerUnixSocket("POST", "/containers/" + encoded + "/stop?t=" + timeout);
-            if (sockRes != null && (sockRes.status == 204 || sockRes.status == 304 || (sockRes.status >= 200 && sockRes.status < 300))) {
-                return true;
+            Map.Entry<Integer, String> sockRes = callDockerUnixSocket("POST", "/containers/" + encoded + "/stop?t=" + timeout);
+            if (sockRes != null) {
+                int status = sockRes.getKey();
+                if (status == 204 || status == 304 || (status >= 200 && status < 300)) {
+                    return true;
+                }
             }
             return runDockerCli("stop", "-t", String.valueOf(timeout), containerNameOrId.trim());
         }
@@ -489,20 +505,23 @@ public final class NodeLifecycleManager {
         public boolean startContainer(String containerNameOrId) {
             if (containerNameOrId == null || containerNameOrId.isBlank()) return false;
             String encoded = URLEncoder.encode(containerNameOrId.trim(), StandardCharsets.UTF_8);
-            UnixHttpResult sockRes = callDockerUnixSocket("POST", "/containers/" + encoded + "/start");
-            if (sockRes != null && (sockRes.status == 204 || sockRes.status == 304 || (sockRes.status >= 200 && sockRes.status < 300))) {
-                return true;
+            Map.Entry<Integer, String> sockRes = callDockerUnixSocket("POST", "/containers/" + encoded + "/start");
+            if (sockRes != null) {
+                int status = sockRes.getKey();
+                if (status == 204 || status == 304 || (status >= 200 && status < 300)) {
+                    return true;
+                }
             }
             return runDockerCli("start", containerNameOrId.trim());
         }
 
         private Optional<String> findContainerViaSocket(ServerNodeInfo node) {
-            UnixHttpResult res = callDockerUnixSocket("GET", "/containers/json?all=true");
-            if (res == null || res.status != 200 || res.body == null || res.body.isBlank()) {
+            Map.Entry<Integer, String> res = callDockerUnixSocket("GET", "/containers/json?all=true");
+            if (res == null || res.getKey() != 200 || res.getValue() == null || res.getValue().isBlank()) {
                 return Optional.empty();
             }
             try {
-                JsonNode array = mapper.readTree(res.body);
+                JsonNode array = mapper.readTree(res.getValue());
                 if (!array.isArray()) return Optional.empty();
                 String selfHost = Optional.ofNullable(System.getenv("HOSTNAME")).orElse("").trim().toLowerCase(Locale.ROOT);
                 String nodeIdLower = node.getId().trim().toLowerCase(Locale.ROOT);
@@ -623,7 +642,7 @@ public final class NodeLifecycleManager {
             }
         }
 
-        private UnixHttpResult callDockerUnixSocket(String method, String path) {
+        private Map.Entry<Integer, String> callDockerUnixSocket(String method, String path) {
             if (!Files.exists(DOCKER_SOCK_FILE)) return null;
             try (SocketChannel channel = SocketChannel.open(StandardProtocolFamily.UNIX)) {
                 channel.connect(UnixDomainSocketAddress.of(DOCKER_SOCK_FILE));
@@ -654,8 +673,8 @@ public final class NodeLifecycleManager {
 
                 boolean chunked = headerBlock.toLowerCase(Locale.ROOT).contains("transfer-encoding: chunked");
                 String decodedBody = chunked ? decodeChunkedBody(rawBody) : rawBody;
-                return new UnixHttpResult(status, decodedBody);
-            } catch (Exception ignored) {
+                return Map.entry(status, decodedBody);
+            } catch (Throwable ignored) {
                 return null;
             }
         }
@@ -683,7 +702,5 @@ public final class NodeLifecycleManager {
             }
             return out.toString();
         }
-
-        private record UnixHttpResult(int status, String body) {}
     }
 }

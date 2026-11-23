@@ -584,6 +584,16 @@ public class ClusterFluxView extends FluxView {
             function applyClusterLiveData(data) {
                 if (!data || !Array.isArray(data.nodes)) return;
 
+                const currentSig = data.nodes.map(function(n) { return n.id; }).sort().join(',');
+                if (window._lastClusterNodeSig && window._lastClusterNodeSig !== currentSig) {
+                    window._lastClusterNodeSig = currentSig;
+                    lastClusterNodeCount = data.nodes.length;
+                    showLifecycleToast('🔄 Cambio en la topología del clúster detectado. Actualizando...', '#00d4ff');
+                    setTimeout(function() { window.location.reload(); }, 400);
+                    return;
+                }
+                window._lastClusterNodeSig = currentSig;
+
                 if (lastClusterNodeCount !== null && lastClusterNodeCount !== data.nodes.length) {
                     lastClusterNodeCount = data.nodes.length;
                     showLifecycleToast('🔄 Cambio en la topología del clúster detectado. Actualizando...', '#00d4ff');

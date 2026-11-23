@@ -1907,4 +1907,43 @@ public class JettraStoreExplorerTest {
         JettraAssert.assertTrue(deletedSchema, "Debe eliminar la estructura DEFINED");
         JettraAssert.assertEquals("NONE", plugin.getBucket(dbName, "ProductosRF02").getStructureType(), "Tras eliminar estructura debe volver a NONE");
     }
+
+    @Test
+    @DisplayName("45. Sincronización de topología externa (Shell remove/add) actualiza /cluster y /map")
+    public void testExternalTopologyRemovalUpdatesClusterAndMapViews() {
+        JettraStorePlugin plugin = JettraStorePlugin.getInstance();
+        java.util.List<io.jettra.store.explorer.model.ServerNodeInfo> backup = new java.util.ArrayList<>(plugin.getServerNodes());
+        try {
+            var n1 = new io.jettra.store.core.JettraConfigValidator.ClusterNodeInfo("node-01", "PRIMARY", "127.0.0.1", 50001, 60001, "./data/node-01");
+            var n2 = new io.jettra.store.core.JettraConfigValidator.ClusterNodeInfo("node-02", "SECONDARY", "127.0.0.1", 50002, 60002, "./data/node-02");
+            var n4 = new io.jettra.store.core.JettraConfigValidator.ClusterNodeInfo("node-04", "SECONDARY", "127.0.0.1", 50004, 60004, "./data/node-04");
+
+            // 1. Simular que Shell agregó node-04 en PRIMARY
+            plugin.applyAuthoritativeClusterNodes(java.util.List.of(n1, n2, n4), null);
+            JettraAssert.assertNotNull(plugin.getNodeById("node-04"), "node-04 debe aparecer tras sincronización desde PRIMARY");
+
+            // 2. Simular que Shell removió node-04 en PRIMARY
+            boolean changed = plugin.applyAuthoritativeClusterNodes(java.util.List.of(n1, n2), null);
+            JettraAssert.assertTrue(changed, "Debe detectar la eliminación externa de node-04");
+            JettraAssert.assertNull(plugin.getNodeById("node-04"), "node-04 debe haber sido removido de JettraStorePlugin");
+
+            // 3. Verificar que /cluster y /map ya no muestran node-04
+            io.jettra.server.flux.FluxRenderer renderer = new io.jettra.server.flux.FluxRenderer();
+            String clusterHtml = renderer.render(new io.jettra.store.explorer.pages.cluster.ClusterFluxView(null).build(), "Cluster");
+            String mapHtml = renderer.render(new io.jettra.store.explorer.pages.map.TransferMapFluxView().build(), "Map");
+            JettraAssert.assertFalse(clusterHtml.contains("node-04"), "/cluster no debe mostrar el nodo removido desde Shell");
+            JettraAssert.assertFalse(mapHtml.contains("node-04"), "/map no debe mostrar el nodo removido desde Shell");
+            JettraAssert.assertTrue(clusterHtml.contains("_lastClusterNodeSig"), "/cluster debe detectar cambios de topología por firma de IDs");
+        } finally {
+            // Restaurar nodos originales del entorno de pruebas
+            java.util.List<io.jettra.store.core.JettraConfigValidator.ClusterNodeInfo> restore = new java.util.ArrayList<>();
+            for (var n : backup) {
+                restore.add(new io.jettra.store.core.JettraConfigValidator.ClusterNodeInfo(
+                        n.getId(), n.getRole(), n.getHost(), n.getPort(), n.getRestPort(), "./data/" + n.getId()));
+            }
+            if (!restore.isEmpty()) {
+                plugin.applyAuthoritativeClusterNodes(restore, null);
+            }
+        }
+    }
 }

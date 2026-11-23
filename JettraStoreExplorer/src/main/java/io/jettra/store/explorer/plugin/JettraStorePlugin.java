@@ -1131,12 +1131,120 @@ public class JettraStorePlugin {
         }
     }
 
+    private volatile long lastPrimaryTopologySyncEpochMs = 0L;
+
+    /**
+     * Sincroniza la lista en memoria de {@code serverNodes} con el {@code cluster.config}
+     * autoritativo del nodo PRIMARY cuando éste responde de forma remota.
+     * De este modo, cualquier nodo agregado o removido desde JettraStoreShell o JettraStoreDriver
+     * se refleja automáticamente en {@code /cluster}, {@code /map} y {@code /api/cluster/status}.
+     */
+    public boolean syncTopologyFromPrimaryIfChanged(boolean force) {
+        long now = System.currentTimeMillis();
+        if (!force && (now - lastPrimaryTopologySyncEpochMs) < 1500L) {
+            return false;
+        }
+        lastPrimaryTopologySyncEpochMs = now;
+        try {
+            ClusterConfigSnapshot snap = fetchPrimaryClusterConfig();
+            if (snap == null || !snap.fromRemotePrimary() || !snap.valid() || snap.parsedNodes() == null || snap.parsedNodes().isEmpty()) {
+                return false;
+            }
+            return applyAuthoritativeClusterNodes(snap.parsedNodes(), snap.content());
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
+    /**
+     * Aplica una lista autoritativa de nodos (por ejemplo obtenida del PRIMARY) sobre {@code serverNodes},
+     * agregando nodos nuevos, actualizando endpoints y removiendo nodos eliminados externamente.
+     */
+    public synchronized boolean applyAuthoritativeClusterNodes(
+            List<io.jettra.store.core.JettraConfigValidator.ClusterNodeInfo> authoritative,
+            String rawClusterConfigContent) {
+        if (authoritative == null || authoritative.isEmpty()) {
+            return false;
+        }
+        Set<String> newIds = new HashSet<>();
+        for (var cn : authoritative) {
+            if (cn.id() != null && !cn.id().isBlank()) {
+                newIds.add(cn.id().trim().toLowerCase());
+            }
+        }
+        boolean changed = (serverNodes.size() != newIds.size());
+        if (!changed) {
+            for (ServerNodeInfo existing : serverNodes) {
+                if (!newIds.contains(existing.getId().trim().toLowerCase())) {
+                    changed = true;
+                    break;
+                }
+            }
+        }
+
+        List<ServerNodeInfo> updatedNodes = new ArrayList<>(authoritative.size());
+        for (var cn : authoritative) {
+            ServerNodeInfo existing = getNodeById(cn.id());
+            if (existing != null) {
+                if (!Objects.equals(existing.getHost(), cn.ip())
+                        || existing.getPort() != cn.grpcPort()
+                        || existing.getRestPort() != cn.restPort()
+                        || (cn.role() != null && !cn.role().equalsIgnoreCase(existing.getRole()))) {
+                    changed = true;
+                }
+                existing.setHost(cn.ip());
+                existing.setPort(cn.grpcPort());
+                existing.setRestPort(cn.restPort());
+                if (cn.role() != null && !cn.role().isBlank()) {
+                    existing.setRole(cn.role());
+                }
+                updatedNodes.add(existing);
+            } else {
+                changed = true;
+                ServerNodeInfo created = new ServerNodeInfo(
+                        cn.id(), cn.id(), cn.role(), cn.ip(), cn.grpcPort(),
+                        10.0f, 256, 2048, 512, 1000, 0, 10000, 0.5f, 4, true);
+                created.setRestPort(cn.restPort());
+                updatedNodes.add(created);
+            }
+        }
+
+        if (!changed) {
+            return false;
+        }
+
+        // Limpiar marca de detenido para nodos removidos del clúster
+        for (ServerNodeInfo old : serverNodes) {
+            if (!newIds.contains(old.getId().trim().toLowerCase())) {
+                lifecycleManager.clearStopped(old.getId());
+            }
+        }
+
+        serverNodes.clear();
+        serverNodes.addAll(updatedNodes);
+        saveClusterNodes();
+        persistClusterNodesToMicroprofileConfig();
+        if (rawClusterConfigContent != null && !rawClusterConfigContent.isBlank()) {
+            try {
+                Path clusterFile = io.jettra.store.core.JettraConfigValidator.locateClusterConfigFile();
+                if (clusterFile != null) {
+                    io.jettra.store.core.JettraConfigValidator.writeClusterConfigAtomically(
+                            clusterFile, rawClusterConfigContent.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                }
+            } catch (Exception ignored) {
+            }
+        }
+        notifyClusterChanged();
+        return true;
+    }
+
     public void refreshAllNodeStatuses(boolean force) {
         synchronized (refreshLock) {
             long now = System.currentTimeMillis();
             if (!force && (now - this.lastRefreshEpochMs) < 300L) {
                 return;
             }
+            syncTopologyFromPrimaryIfChanged(force);
             List<ServerNodeInfo> snapshot = new ArrayList<>(serverNodes);
             if (snapshot.isEmpty()) {
                 this.lastRefreshEpochMs = System.currentTimeMillis();

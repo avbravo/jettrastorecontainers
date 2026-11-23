@@ -33,7 +33,7 @@ public class TransferMapFluxView extends FluxView {
     @Override
     public Widget build() {
         JettraStorePlugin plugin = JettraStorePlugin.getInstance();
-        plugin.refreshAllNodeStatusesIfStale(1500L);
+        plugin.refreshAllNodeStatusesIfStale(300L);
 
         List<ServerNodeInfo> nodes = plugin.getServerNodes();
         ServerNodeInfo primary = plugin.getPrimaryNode();
@@ -451,6 +451,9 @@ public class TransferMapFluxView extends FluxView {
           function applyMapData(data) {
             if (!data) return;
             clusterState = data;
+            if (selectedNodeId && Array.isArray(data.nodes) && !data.nodes.some(n => n.id === selectedNodeId)) {
+              selectedNodeId = null;
+            }
             computeLayout();
             updateKpis(data);
             updateFeed(data.recentTransfers || []);

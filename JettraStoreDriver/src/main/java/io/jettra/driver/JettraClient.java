@@ -1854,25 +1854,26 @@ public final class JettraClient implements AutoCloseable {
 
     public record NodeLifecycleResult(boolean success, boolean verifiedState, String mechanism, String message) {}
 
+    private record ResolvedNodeTarget(String host, int grpcPort, int restPort, String role) {}
+
     /**
-     * Detiene un nodo remoto o local del clúster de forma limpia (requiere rol {@code admin}),
-     * enviando la trama Raft {@code TYPE_NODE_STOPPING} ({@code LIFECYCLE_SHUTDOWN:<nodeId>})
-     * y respaldo REST {@code POST /api/v1/cluster/shutdown}, verificando la parada del puerto.
+     * Resuelve el host/puertos de un nodo consultando el anillo local, {@code cluster.config} local
+     * y, si aún no aparece (por ejemplo un nodo recién agregado como {@code node-04}), consulta
+     * automáticamente el {@code cluster.config} vivo del nodo PRIMARY y sincroniza el anillo local.
      */
-    public synchronized NodeLifecycleResult stopClusterNode(String nodeId) {
-        assertAdminRole("stopClusterNode");
-        if (nodeId == null || nodeId.isBlank()) {
-            return new NodeLifecycleResult(false, false, "NONE", "El ID del nodo es obligatorio.");
-        }
-        String cleanId = nodeId.trim();
+    private ResolvedNodeTarget resolveNodeTarget(String cleanId) {
         String host = null;
         int grpcPort = 0;
         int restPort = 0;
+        String role = "SECONDARY";
+
         ClusterNode peer = ringEngine.getPeer(cleanId);
         if (peer != null) {
             host = peer.getIp();
             grpcPort = peer.getPort();
+            role = peer.getRole().name();
         }
+
         java.nio.file.Path clusterFile = io.jettra.store.core.JettraConfigValidator.locateClusterConfigFile();
         if (clusterFile != null && java.nio.file.Files.exists(clusterFile)) {
             Properties props = io.jettra.store.core.JettraConfigValidator.loadProperties(clusterFile, "/cluster.config", "/jettra.config");
@@ -1881,9 +1882,93 @@ public final class JettraClient implements AutoCloseable {
             if (info != null) {
                 if (host == null || host.isBlank()) host = info.ip();
                 if (grpcPort <= 0) grpcPort = info.grpcPort();
-                restPort = info.restPort();
+                if (info.restPort() > 0) restPort = info.restPort();
+                if (info.role() != null && !info.role().isBlank()) role = info.role();
             }
         }
+
+        // Si no fue encontrado localmente o falta restPort, consultar cluster.config actualizado en PRIMARY
+        if (host == null || host.isBlank() || grpcPort <= 0 || restPort <= 0) {
+            try {
+                String remoteCfg = readPrimaryClusterConfig();
+                if (remoteCfg != null && !remoteCfg.isBlank()) {
+                    Properties remoteProps = new Properties();
+                    try (var reader = new java.io.StringReader(remoteCfg)) {
+                        remoteProps.load(reader);
+                    }
+                    var remoteNodes = io.jettra.store.core.JettraConfigValidator.parseClusterNodes(remoteProps);
+                    var info = io.jettra.store.core.JettraConfigValidator.findNodeInCluster(remoteNodes, cleanId);
+                    if (info != null) {
+                        if (host == null || host.isBlank()) host = info.ip();
+                        if (grpcPort <= 0) grpcPort = info.grpcPort();
+                        if (restPort <= 0 && info.restPort() > 0) restPort = info.restPort();
+                        if (info.role() != null && !info.role().isBlank()) role = info.role();
+
+                        // Actualizar anillo local y cluster.config local si es íntegro
+                        ClusterNode.Role r = "PRIMARY".equalsIgnoreCase(role)
+                                ? ClusterNode.Role.PRIMARY
+                                : ClusterNode.Role.SECONDARY;
+                        if (host != null && !host.isBlank() && grpcPort > 0) {
+                            ringEngine.registerPeer(new ClusterNode(cleanId, host, grpcPort, r));
+                        }
+                        byte[] cfgBytes = remoteCfg.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                        if (io.jettra.store.core.JettraConfigValidator.validateClusterConfigIntegrity(cfgBytes).isValid()) {
+                            java.nio.file.Path targetFile = clusterFile != null
+                                    ? clusterFile
+                                    : java.nio.file.Path.of(io.jettra.store.core.JettraConfigValidator.DEFAULT_CLUSTER_CONFIG_PATH);
+                            try {
+                                io.jettra.store.core.JettraConfigValidator.writeClusterConfigAtomically(targetFile, cfgBytes);
+                            } catch (Exception ignored) {}
+                        }
+                    }
+                }
+            } catch (Exception ignored) {}
+        }
+
+        if (restPort <= 0 && grpcPort >= 50001 && grpcPort <= 50099) {
+            restPort = 60000 + (grpcPort - 50000);
+        } else if (restPort <= 0 && grpcPort >= 9091 && grpcPort <= 9099) {
+            restPort = grpcPort - 1010;
+        }
+        return new ResolvedNodeTarget(host, grpcPort, restPort, role);
+    }
+
+    private String acquireNodeJwtToken(java.net.http.HttpClient hc, String host, int restPort) {
+        try {
+            java.net.http.HttpRequest authReq = java.net.http.HttpRequest.newBuilder()
+                    .uri(java.net.URI.create(String.format("http://%s:%d/api/v1/auth/login", host, restPort)))
+                    .timeout(java.time.Duration.ofMillis(700))
+                    .header("Content-Type", "application/json")
+                    .POST(java.net.http.HttpRequest.BodyPublishers.ofString("{}"))
+                    .build();
+            var resp = hc.send(authReq, java.net.http.HttpResponse.BodyHandlers.ofString());
+            if (resp.statusCode() == 200 && resp.body() != null) {
+                var m = java.util.regex.Pattern.compile("\"token\"\\s*:\\s*\"([^\"]+)\"").matcher(resp.body());
+                if (m.find()) {
+                    return m.group(1);
+                }
+            }
+        } catch (Exception ignored) {}
+        return null;
+    }
+
+    /**
+     * Detiene un nodo remoto o local del clúster de forma limpia (requiere rol {@code admin}),
+     * sincronizando primero la topología desde PRIMARY si el nodo no está en caché local,
+     * enviando la trama Raft {@code TYPE_NODE_STOPPING} ({@code LIFECYCLE_SHUTDOWN:<nodeId>})
+     * y respaldo REST autenticado {@code POST /api/v1/cluster/shutdown}, verificando la parada del puerto.
+     */
+    public synchronized NodeLifecycleResult stopClusterNode(String nodeId) {
+        assertAdminRole("stopClusterNode");
+        if (nodeId == null || nodeId.isBlank()) {
+            return new NodeLifecycleResult(false, false, "NONE", "El ID del nodo es obligatorio.");
+        }
+        String cleanId = nodeId.trim();
+        ResolvedNodeTarget target = resolveNodeTarget(cleanId);
+        String host = target.host();
+        int grpcPort = target.grpcPort();
+        int restPort = target.restPort();
+
         if (host == null || host.isBlank() || grpcPort <= 0) {
             boolean stoppedLocal = ringEngine.stopPeer(cleanId);
             if (stoppedLocal) {
@@ -1903,7 +1988,7 @@ public final class JettraClient implements AutoCloseable {
                  var bis = new java.io.BufferedInputStream(s.getInputStream(), 8192)) {
                 var stopFrame = new io.jettra.store.cluster.JettraRaftFrame(
                         io.jettra.store.cluster.JettraRaftFrame.TYPE_NODE_STOPPING,
-                        1L, 0L, "jettra-driver-admin", "", "", "",
+                        1L, 0L, "jettra-driver-admin", "", "", cleanId,
                         ("LIFECYCLE_SHUTDOWN:" + cleanId).getBytes(java.nio.charset.StandardCharsets.UTF_8),
                         System.currentTimeMillis());
                 io.jettra.store.cluster.JettraClusterProtocol.writeFrame(bos, stopFrame);
@@ -1913,25 +1998,31 @@ public final class JettraClient implements AutoCloseable {
             }
         } catch (Exception ignored) {}
 
-        // 2. Fallback REST /api/v1/cluster/shutdown si aún responde
-        if (!signalSent && restPort > 0) {
+        // 2. Respaldo REST autenticado /api/v1/cluster/shutdown si Raft falló o el puerto REST sigue abierto
+        if ((!signalSent || isNodeRunning(host, grpcPort, restPort)) && restPort > 0) {
             try {
                 java.net.http.HttpClient hc = java.net.http.HttpClient.newBuilder()
-                        .connectTimeout(java.time.Duration.ofMillis(500)).build();
-                java.net.http.HttpRequest req = java.net.http.HttpRequest.newBuilder()
+                        .connectTimeout(java.time.Duration.ofMillis(700)).build();
+                String jwt = acquireNodeJwtToken(hc, host, restPort);
+                java.net.http.HttpRequest.Builder rb = java.net.http.HttpRequest.newBuilder()
                         .uri(java.net.URI.create(String.format("http://%s:%d/api/v1/cluster/shutdown", host, restPort)))
-                        .timeout(java.time.Duration.ofMillis(800))
-                        .POST(java.net.http.HttpRequest.BodyPublishers.noBody())
-                        .build();
-                hc.send(req, java.net.http.HttpResponse.BodyHandlers.discarding());
-                signalSent = true;
-                mechanism = "REST_SHUTDOWN";
+                        .timeout(java.time.Duration.ofMillis(1200))
+                        .header("Content-Type", "application/json")
+                        .POST(java.net.http.HttpRequest.BodyPublishers.ofString("{\"nodeId\":\"" + cleanId + "\"}"));
+                if (jwt != null && !jwt.isBlank()) {
+                    rb.header("Authorization", "Bearer " + jwt);
+                }
+                var resp = hc.send(rb.build(), java.net.http.HttpResponse.BodyHandlers.ofString());
+                if (resp.statusCode() >= 200 && resp.statusCode() < 300) {
+                    signalSent = true;
+                    mechanism = "NONE".equals(mechanism) ? "REST_SHUTDOWN" : mechanism + "+REST_SHUTDOWN";
+                }
             } catch (Exception ignored) {}
         }
 
         // 3. Esperar cierre limpio del puerto TCP
         boolean offline = !isNodeRunning(host, grpcPort, restPort);
-        for (int i = 0; i < 10 && !offline; i++) {
+        for (int i = 0; i < 12 && !offline; i++) {
             try { Thread.sleep(150); } catch (InterruptedException e) { Thread.currentThread().interrupt(); break; }
             offline = !isNodeRunning(host, grpcPort, restPort);
         }
@@ -1955,35 +2046,48 @@ public final class JettraClient implements AutoCloseable {
             return new NodeLifecycleResult(false, false, "NONE", "El ID del nodo es obligatorio.");
         }
         String cleanId = nodeId.trim();
-        String host = null;
-        int grpcPort = 0;
-        int restPort = 0;
-        String role = "SECONDARY";
-        ClusterNode peer = ringEngine.getPeer(cleanId);
-        if (peer != null) {
-            host = peer.getIp();
-            grpcPort = peer.getPort();
-            role = peer.getRole().name();
-        }
-        java.nio.file.Path clusterFile = io.jettra.store.core.JettraConfigValidator.locateClusterConfigFile();
-        if (clusterFile != null && java.nio.file.Files.exists(clusterFile)) {
-            Properties props = io.jettra.store.core.JettraConfigValidator.loadProperties(clusterFile, "/cluster.config", "/jettra.config");
-            var info = io.jettra.store.core.JettraConfigValidator.findNodeInCluster(
-                    io.jettra.store.core.JettraConfigValidator.parseClusterNodes(props), cleanId);
-            if (info != null) {
-                if (host == null || host.isBlank()) host = info.ip();
-                if (grpcPort <= 0) grpcPort = info.grpcPort();
-                restPort = info.restPort();
-                if (info.role() != null && !info.role().isBlank()) role = info.role();
-            }
-        }
+        ResolvedNodeTarget target = resolveNodeTarget(cleanId);
+        String host = target.host();
+        int grpcPort = target.grpcPort();
+        int restPort = target.restPort();
+        String role = target.role();
         if (host != null && isNodeRunning(host, grpcPort, restPort)) {
             ringEngine.startPeer(cleanId);
             return new NodeLifecycleResult(true, true, "ALREADY_RUNNING",
                     String.format("Nodo '%s' (%s:%d) ya se encuentra en ejecución (RUNNING).", cleanId, host, grpcPort));
         }
 
-        // Intentar iniciar script local ~/jettra-<nodeId>/start-node.sh si existe
+        // 1. Intentar reiniciar contenedor Docker si existe (jettra-<nodeId> o <nodeId>)
+        boolean dockerStarted = false;
+        for (String candidateContainer : List.of("jettra-" + cleanId, cleanId)) {
+            try {
+                Process p = new ProcessBuilder("docker", "start", candidateContainer)
+                        .redirectErrorStream(true)
+                        .start();
+                boolean finished = p.waitFor(4, java.util.concurrent.TimeUnit.SECONDS);
+                if (finished && p.exitValue() == 0) {
+                    dockerStarted = true;
+                    break;
+                }
+            } catch (Exception ignored) {}
+        }
+        if (dockerStarted && host != null && grpcPort > 0) {
+            boolean online = false;
+            for (int i = 0; i < 16; i++) {
+                try { Thread.sleep(250); } catch (InterruptedException e) { Thread.currentThread().interrupt(); break; }
+                if (isNodeRunning(host, grpcPort, restPort)) {
+                    online = true;
+                    break;
+                }
+            }
+            if (online) {
+                ringEngine.startPeer(cleanId);
+                return new NodeLifecycleResult(true, true, "DOCKER_START",
+                        String.format("Contenedor del nodo '%s' (%s:%d) iniciado correctamente (RUNNING).", cleanId, host, grpcPort));
+            }
+        }
+
+        // 2. Intentar iniciar script local ~/jettra-<nodeId>/start-node.sh si existe
         java.nio.file.Path nodeDir = java.nio.file.Path.of(System.getProperty("user.home"), "jettra-" + cleanId);
         java.nio.file.Path startScript = nodeDir.resolve("start-node.sh");
         boolean launched = false;
@@ -2015,13 +2119,27 @@ public final class JettraClient implements AutoCloseable {
                 return new NodeLifecycleResult(true, true, "LOCAL_SCRIPT",
                         String.format("Nodo '%s' (%s:%d) iniciado correctamente (RUNNING) y reincorporado al clúster.", cleanId, host, grpcPort));
             }
-            return new NodeLifecycleResult(true, false, "LOCAL_SCRIPT_PENDING",
-                    String.format("Arranque lanzado para '%s' (%s:%d); aún inicializando puertos.", cleanId, host, grpcPort));
+            ringEngine.stopPeer(cleanId);
+            return new NodeLifecycleResult(false, false, "LOCAL_SCRIPT_TIMEOUT",
+                    String.format("Arranque lanzado para '%s' (%s:%d), pero el puerto sigue inaccesible (INACTIVE).", cleanId, host, grpcPort));
+        }
+
+        // 3. No reportar RUNNING si el nodo tiene host/puerto real pero el servicio TCP sigue inaccesible
+        if (host != null && !host.isBlank() && grpcPort > 0) {
+            if (isNodeRunning(host, grpcPort, restPort)) {
+                ringEngine.startPeer(cleanId);
+                return new NodeLifecycleResult(true, true, "REACHABLE",
+                        String.format("Nodo '%s' (%s:%d) verificado como RUNNING.", cleanId, host, grpcPort));
+            }
+            ringEngine.stopPeer(cleanId);
+            return new NodeLifecycleResult(false, false, "UNREACHABLE",
+                    String.format("No se pudo iniciar el servicio real de '%s' en %s:%d (puerto inaccesible / INACTIVE). Inicie el proceso/contenedor del nodo o cree %s.",
+                            cleanId, host, grpcPort, startScript));
         }
 
         boolean startedLocal = ringEngine.startPeer(cleanId);
         if (startedLocal) {
-            return new NodeLifecycleResult(true, host != null && isNodeRunning(host, grpcPort, restPort), "RING_ENGINE",
+            return new NodeLifecycleResult(true, false, "RING_ENGINE",
                     String.format("Nodo '%s' marcado como RUNNING en el anillo local.", cleanId));
         }
         return new NodeLifecycleResult(false, false, "NOT_FOUND",

@@ -113,30 +113,37 @@ public final class JettraStoreShellApp implements AutoCloseable {
         }
     }
 
-    private final java.util.concurrent.atomic.AtomicBoolean clusterConfigSyncInProgress = new java.util.concurrent.atomic.AtomicBoolean(false);
+    private final java.util.concurrent.atomic.AtomicBoolean clusterConfigSyncInProgress = new java.util.concurrent.atomic.AtomicBoolean(
+            false);
     private volatile boolean clusterEventListenerRegistered = false;
 
     private void registerClusterConfigSyncListener() {
-        if (clusterEventListenerRegistered) return;
+        if (clusterEventListenerRegistered)
+            return;
         clusterEventListenerRegistered = true;
         try {
             io.jettra.store.cluster.JettraClusterEventBus.getInstance().subscribe(event -> {
-                if (event == null || event.type() == null) return;
+                if (event == null || event.type() == null)
+                    return;
                 String t = event.type();
                 if (io.jettra.store.cluster.ClusterLiveEvent.TYPE_NODE_ONLINE.equals(t)
                         || io.jettra.store.cluster.ClusterLiveEvent.TYPE_NODE_OFFLINE.equals(t)
                         || io.jettra.store.cluster.ClusterLiveEvent.TYPE_LEADER_PROMOTED.equals(t)
                         || (io.jettra.store.cluster.ClusterLiveEvent.TYPE_DATA_TRANSFER.equals(t)
-                            && "cluster.config".equalsIgnoreCase(event.details()))) {
-                    Thread.ofVirtual().name("jettra-shell-cluster-cfg-sync").start(this::syncLocalClusterConfigFromPrimary);
+                                && "cluster.config".equalsIgnoreCase(event.details()))) {
+                    Thread.ofVirtual().name("jettra-shell-cluster-cfg-sync")
+                            .start(this::syncLocalClusterConfigFromPrimary);
                 }
             });
-        } catch (Throwable ignored) {}
+        } catch (Throwable ignored) {
+        }
     }
 
     /**
-     * Obtiene el archivo cluster.config vigente directamente del nodo PRIMARY al que está conectada
-     * la consola y lo persiste atómicamente en disco local para mantener sincronizado el clúster.
+     * Obtiene el archivo cluster.config vigente directamente del nodo PRIMARY al
+     * que está conectada
+     * la consola y lo persiste atómicamente en disco local para mantener
+     * sincronizado el clúster.
      */
     public boolean syncLocalClusterConfigFromPrimary() {
         if (!clusterConfigSyncInProgress.compareAndSet(false, true)) {
@@ -155,17 +162,23 @@ public final class JettraStoreShellApp implements AutoCloseable {
             }
             for (String ep : candidates) {
                 String[] parts = ep.split(":");
-                if (parts.length < 2) continue;
+                if (parts.length < 2)
+                    continue;
                 String h = parts[0].trim();
                 int p;
-                try { p = Integer.parseInt(parts[1].trim()); } catch (Exception e) { continue; }
+                try {
+                    p = Integer.parseInt(parts[1].trim());
+                } catch (Exception e) {
+                    continue;
+                }
                 try (Socket s = new Socket()) {
                     s.setTcpNoDelay(true);
                     s.connect(new InetSocketAddress(h, p), 400);
                     s.setSoTimeout(600);
                     try (BufferedOutputStream bos = new BufferedOutputStream(s.getOutputStream(), 8192);
-                         BufferedInputStream bis = new BufferedInputStream(s.getInputStream(), 8192)) {
-                        JettraClusterProtocol.writeFrame(bos, JettraRaftFrame.getClusterConfigReq(1L, "jettra-shell-sync"));
+                            BufferedInputStream bis = new BufferedInputStream(s.getInputStream(), 8192)) {
+                        JettraClusterProtocol.writeFrame(bos,
+                                JettraRaftFrame.getClusterConfigReq(1L, "jettra-shell-sync"));
                         JettraRaftFrame resp = JettraClusterProtocol.readFrame(bis);
                         if (resp != null && resp.frameType() == JettraRaftFrame.TYPE_GET_CLUSTER_CONFIG_RESP
                                 && resp.payload() != null && resp.payload().length > 0) {
@@ -180,14 +193,18 @@ public final class JettraStoreShellApp implements AutoCloseable {
                                 try (var bais = new java.io.ByteArrayInputStream(cfgBytes)) {
                                     props.load(bais);
                                 }
-                                List<JettraConfigValidator.ClusterNodeInfo> parsed = JettraConfigValidator.parseClusterNodes(props);
+                                List<JettraConfigValidator.ClusterNodeInfo> parsed = JettraConfigValidator
+                                        .parseClusterNodes(props);
                                 if (!parsed.isEmpty() && client != null && client.getRingEngine() != null) {
                                     Set<String> liveIds = new HashSet<>();
                                     for (var cn : parsed) {
                                         liveIds.add(cn.id().toLowerCase(Locale.ROOT));
-                                        ClusterNode.Role r = "PRIMARY".equalsIgnoreCase(cn.role()) ? ClusterNode.Role.PRIMARY : ClusterNode.Role.SECONDARY;
+                                        ClusterNode.Role r = "PRIMARY".equalsIgnoreCase(cn.role())
+                                                ? ClusterNode.Role.PRIMARY
+                                                : ClusterNode.Role.SECONDARY;
                                         if (client.getRingEngine().getPeer(cn.id()) == null) {
-                                            client.getRingEngine().registerPeer(new ClusterNode(cn.id(), cn.ip(), cn.grpcPort(), r));
+                                            client.getRingEngine()
+                                                    .registerPeer(new ClusterNode(cn.id(), cn.ip(), cn.grpcPort(), r));
                                         }
                                     }
                                     for (ClusterNode existing : new ArrayList<>(client.getRingEngine().getPeers())) {
@@ -200,7 +217,8 @@ public final class JettraStoreShellApp implements AutoCloseable {
                             }
                         }
                     }
-                } catch (Exception ignored) {}
+                } catch (Exception ignored) {
+                }
             }
             return false;
         } finally {
@@ -2726,9 +2744,10 @@ public final class JettraStoreShellApp implements AutoCloseable {
         if (id.isBlank())
             return "[ERROR] Uso: START NODE <nodeId>";
         try {
+            syncLocalClusterConfigFromPrimary();
             client.setActiveRole(currentRole);
             var res = client.startClusterNode(id);
-            if (res.success()) {
+            if (res.success() && res.verifiedState()) {
                 io.jettra.store.cluster.ClusterNode peer = client.getRingEngine().getPeer(id);
                 if (peer != null) {
                     triggerPrimaryDatabaseSyncToNode(peer.getId(), peer.getRole().name(), peer.getIp(), peer.getPort(),
@@ -2738,7 +2757,7 @@ public final class JettraStoreShellApp implements AutoCloseable {
                         "[SUCCESS] %s (mecanismo: %s). Ejecute 'show nodes' para verificar el estado en tiempo real.",
                         res.message(), res.mechanism());
             }
-            return "[ERROR] " + res.message();
+            return String.format("[ERROR] %s (mecanismo: %s)", res.message(), res.mechanism());
         } catch (Exception e) {
             return "[ERROR] Error al iniciar nodo '" + id + "': " + e.getMessage();
         }
@@ -2959,6 +2978,7 @@ public final class JettraStoreShellApp implements AutoCloseable {
         if (id.isBlank())
             return "[ERROR] Uso: STOP NODE <nodeId>";
         try {
+            syncLocalClusterConfigFromPrimary();
             client.setActiveRole(currentRole);
             var res = client.stopClusterNode(id);
             if (res.success()) {
