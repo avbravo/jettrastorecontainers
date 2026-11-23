@@ -281,3 +281,14 @@ La vista `/explorer` utiliza un **layout maestro-detalle de dos columnas** (`dat
 3. **Comportamiento responsivo:**
    - En **escritorio (`> 920px`)**, ambas columnas se muestran lado a lado alineadas superiormente.
    - En **móvil / tablet (`<= 920px`)**, el Grid cambia a una sola columna (`grid-template-columns: 1fr`), apilando el **Tree Explorador Jerárquico** encima del panel de **Bucket Seleccionado** y el **`DataTable`** para evitar cortes horizontales.
+
+
+---
+
+## 13. Catálogo de Tipos Sin Duplicados y Entrada Libre de Tipos en Buckets (`/databases`, RF-11)
+
+En los diálogos **`➕ Añadir Nuevo Motor / Bucket en [db]`** y **`✏️ Editar Bucket [bucket] • Engine: [engine]`** de `/databases`, la columna **`tipo`** de la tabla de estructura (`| nombre | tipo | rules | descripcion |`) ofrece:
+
+1. **Catálogo depurado sin duplicados:** El selector de tipos sugeridos (`-- Tipo sugerido --`) incluye una sola entrada por tipo estándar y colección (`String`, `Integer`, `Long`, `Double`, `BigDecimal`, `Boolean`, `Instant`, `LocalDate`, `LocalDateTime`, `UUID`, `List`, `ArrayList`, `Set`, `Map`), eliminando entradas repetidas para `List` y `ArrayList`.
+2. **Entrada libre de tipos personalizados y colecciones parametrizadas:** Junto al selector sugerido se incluye un campo de texto editable (`attr_type_<i>`) que permite escribir o modificar libremente cualquier tipo Java estándar, clase/`record` propio del usuario (`Cliente`, `Direccion`, `MiRecord`) o colección parametrizada (`List<String>`, `List<MiRecord>`, `ArrayList<Producto>`, `Set<Integer>`, `Map<String, List<Detalle>>`). Al abrir **`✏️ Editar Bucket`**, el valor parametrizado actual se precarga íntegramente sin perder su declaración genérica.
+3. **Validación sintáctica previa al guardado:** Al guardar un Bucket en modo `DEFINED`, se valida que ningún campo tenga el `tipo` vacío y que cumpla una sintaxis válida de identificador Java o tipo genérico parametrizado (rechazando entradas vacías, genéricos sin tipo como `List<>` o delimitadores desbalanceados).

@@ -2507,4 +2507,110 @@ public class JettraStoreExplorerTest {
             plugin.deleteDatabase(dbName);
         }
     }
+
+    @Test
+    @DisplayName("55. RF-11: Catálogo de tipos sin duplicados (List/ArrayList únicos) y entrada libre/validación de tipos personalizados en Añadir y Editar Bucket (/databases)")
+    public void testRf11DeduplicatedTypesAndFreeCustomTypeInputInBucketDialogs() throws Exception {
+        JettraStorePlugin plugin = JettraStorePlugin.getInstance();
+        String dbName = "rf11_types_test_db";
+        try {
+            plugin.createDatabase(dbName, "BaseRF11", "DOCUMENT", "Base pruebas RF-11");
+
+            // 1. Verificar catálogo de tipos sin duplicados en 'Añadir Nuevo Motor / Bucket'
+            HttpResponse<String> addRes = get("/databases?db=" + dbName + "&manage_engines=true&add_bucket=true");
+            JettraAssert.assertEquals(200, addRes.statusCode(), "Modal Añadir Bucket debe responder HTTP 200");
+            String addBody = addRes.body();
+            JettraAssert.assertTrue(addBody.contains("data-add-bucket-modal=\"true\"")
+                    && addBody.contains("data-attr-type-select=\"true\"")
+                    && addBody.contains("data-attr-type-input=\"true\""),
+                    "El modal Añadir Bucket debe ofrecer selector de tipos sugeridos y campo editable de tipo libre");
+
+            // Extraer el primer <select name="attr_type_select_0" ...>...</select> y verificar que List y ArrayList aparecen una sola vez
+            java.util.regex.Matcher addSel = java.util.regex.Pattern.compile(
+                    "<select[^>]*name=\"attr_type_select_0\"[^>]*>(.*?)</select>",
+                    java.util.regex.Pattern.DOTALL).matcher(addBody);
+            JettraAssert.assertTrue(addSel.find(), "Debe renderizar el select attr_type_select_0 en Añadir Bucket");
+            String addOptionsHtml = addSel.group(1);
+            int listCountAdd = addOptionsHtml.split(">List<", -1).length - 1;
+            int arrayListCountAdd = addOptionsHtml.split(">ArrayList<", -1).length - 1;
+            JettraAssert.assertEquals(1, listCountAdd, "List debe aparecer exactamente una vez en Añadir Bucket");
+            JettraAssert.assertEquals(1, arrayListCountAdd, "ArrayList debe aparecer exactamente una vez en Añadir Bucket");
+            JettraAssert.assertFalse(addOptionsHtml.contains("List<String>") || addOptionsHtml.contains("ArrayList<String>"),
+                    "No deben existir entradas repetidas con etiquetas genéricas sin escapar en el selector de Añadir Bucket");
+
+            // 2. Crear Bucket DEFINED con tipos personalizados y colecciones parametrizadas escritas manualmente
+            String createBody = "action=add_bucket&db=" + dbName
+                    + "&bucketName=PedidosRF11&engineType=JAVA_RECORD&structureType=DEFINED&description=Pedidos+RF11"
+                    + "&attr_name_0=cliente&attr_type_0=MiRecord&attr_rules_0=NOT_NULL&attr_desc_0=Record+personalizado"
+                    + "&attr_name_1=detalles&attr_type_1=List%3CMiRecord%3E&attr_rules_1=NOT_NULL&attr_desc_1=Lista+parametrizada"
+                    + "&attr_name_2=productos&attr_type_2=ArrayList%3CProducto%3E&attr_rules_2=&attr_desc_2=ArrayList+parametrizada"
+                    + "&attr_name_3=codigos&attr_type_3=Set%3CInteger%3E&attr_rules_3=&attr_desc_3=Conjunto+enteros";
+            HttpResponse<String> createRes = postForm("/databases", createBody);
+            JettraAssert.assertEquals(302, createRes.statusCode(), "Crear bucket con tipos personalizados debe redirigir 302");
+            JettraAssert.assertTrue(createRes.headers().firstValue("Location").orElse("").contains("msg=bucket_added"),
+                    "Debe crear exitosamente el bucket con MiRecord, List<MiRecord>, ArrayList<Producto> y Set<Integer>");
+
+            EngineBucketInfo created = plugin.findBucketExact(dbName, "PedidosRF11");
+            JettraAssert.assertNotNull(created, "PedidosRF11 debe existir en el catálogo");
+            JettraAssert.assertEquals("MiRecord", created.getAttributes().get(0).type_atribute(), "Debe persistir MiRecord");
+            JettraAssert.assertEquals("List<MiRecord>", created.getAttributes().get(1).type_atribute(), "Debe persistir List<MiRecord>");
+            JettraAssert.assertEquals("ArrayList<Producto>", created.getAttributes().get(2).type_atribute(), "Debe persistir ArrayList<Producto>");
+            JettraAssert.assertEquals("Set<Integer>", created.getAttributes().get(3).type_atribute(), "Debe persistir Set<Integer>");
+
+            // 3. Abrir modal 'Editar Bucket' -> sin duplicados y precargando los tipos parametrizados exactos
+            HttpResponse<String> editRes = get("/databases?db=" + dbName + "&manage_engines=true&edit_bucket=PedidosRF11");
+            JettraAssert.assertEquals(200, editRes.statusCode(), "Modal Editar Bucket debe responder HTTP 200");
+            String editBody = editRes.body();
+            JettraAssert.assertTrue(editBody.contains("data-edit-bucket-form=\"PedidosRF11\"")
+                    && editBody.contains("MiRecord")
+                    && (editBody.contains("List<MiRecord>") || editBody.contains("List&lt;MiRecord&gt;"))
+                    && (editBody.contains("ArrayList<Producto>") || editBody.contains("ArrayList&lt;Producto&gt;"))
+                    && (editBody.contains("Set<Integer>") || editBody.contains("Set&lt;Integer&gt;")),
+                    "El modal Editar Bucket debe precargar los tipos personalizados y colecciones parametrizadas sin perderlos");
+
+            java.util.regex.Matcher editSel = java.util.regex.Pattern.compile(
+                    "<select[^>]*name=\"attr_type_select_0\"[^>]*>(.*?)</select>",
+                    java.util.regex.Pattern.DOTALL).matcher(editBody);
+            JettraAssert.assertTrue(editSel.find(), "Debe renderizar attr_type_select_0 en Editar Bucket");
+            String editOptionsHtml = editSel.group(1);
+            JettraAssert.assertEquals(1, editOptionsHtml.split(">List<", -1).length - 1,
+                    "List debe aparecer exactamente una vez en Editar Bucket");
+            JettraAssert.assertEquals(1, editOptionsHtml.split(">ArrayList<", -1).length - 1,
+                    "ArrayList debe aparecer exactamente una vez en Editar Bucket");
+
+            // 4. Editar bucket modificando tipos libremente -> persiste correctamente
+            String updateBody = "action=edit_bucket&db=" + dbName
+                    + "&originalBucketName=PedidosRF11&bucketName=PedidosRF11&structureType=DEFINED&description=Editado"
+                    + "&attr_name_0=direccion&attr_type_0=Direccion&attr_rules_0=NOT_NULL&attr_desc_0=Clase+custom"
+                    + "&attr_name_1=historial&attr_type_1=List%3CDireccion%3E&attr_rules_1=&attr_desc_1=Lista+direcciones";
+            HttpResponse<String> updateRes = postForm("/databases", updateBody);
+            JettraAssert.assertEquals(302, updateRes.statusCode(), "Editar bucket con nuevos tipos personalizados debe redirigir 302");
+            JettraAssert.assertTrue(updateRes.headers().firstValue("Location").orElse("").contains("msg=bucket_updated"),
+                    "Debe actualizar el bucket con Direccion y List<Direccion>");
+            EngineBucketInfo updated = plugin.findBucketExact(dbName, "PedidosRF11");
+            JettraAssert.assertEquals("Direccion", updated.getAttributes().get(0).type_atribute(), "Debe persistir Direccion");
+            JettraAssert.assertEquals("List<Direccion>", updated.getAttributes().get(1).type_atribute(), "Debe persistir List<Direccion>");
+
+            // 5. Validación de sintaxis de tipo: rechazar tipo vacío o genérico inválido (List<>, 123Invalido)
+            JettraAssert.assertTrue(JettraStorePlugin.isValidAttributeTypeSyntax("MiRecord"), "MiRecord es válido");
+            JettraAssert.assertTrue(JettraStorePlugin.isValidAttributeTypeSyntax("List<MiRecord>"), "List<MiRecord> es válido");
+            JettraAssert.assertTrue(JettraStorePlugin.isValidAttributeTypeSyntax("Map<String, List<Producto>>"), "Map anidado es válido");
+            JettraAssert.assertFalse(JettraStorePlugin.isValidAttributeTypeSyntax(""), "Tipo vacío es inválido");
+            JettraAssert.assertFalse(JettraStorePlugin.isValidAttributeTypeSyntax("List<>"), "List<> vacío es inválido");
+            JettraAssert.assertFalse(JettraStorePlugin.isValidAttributeTypeSyntax("List<MiRecord"), "Genérico sin cierre es inválido");
+            JettraAssert.assertFalse(JettraStorePlugin.isValidAttributeTypeSyntax("123Tipo"), "Identificador numérico inicial es inválido");
+
+            String invalidCreate = "action=add_bucket&db=" + dbName
+                    + "&bucketName=InvalidoRF11&engineType=DOCUMENT&structureType=DEFINED"
+                    + "&attr_name_0=items&attr_type_0=List%3C%3E&attr_rules_0=NOT_NULL&attr_desc_0=Invalido";
+            HttpResponse<String> invalidRes = postForm("/databases", invalidCreate);
+            JettraAssert.assertEquals(302, invalidRes.statusCode(), "Tipo inválido debe redirigir con mensaje de error");
+            JettraAssert.assertFalse(invalidRes.headers().firstValue("Location").orElse("").contains("msg=bucket_added"),
+                    "No debe crear el bucket cuando un campo tiene sintaxis de tipo inválida");
+            JettraAssert.assertNull(plugin.findBucketExact(dbName, "InvalidoRF11"),
+                    "El bucket con tipo inválido no debe guardarse en el catálogo");
+        } finally {
+            plugin.deleteDatabase(dbName);
+        }
+    }
 }

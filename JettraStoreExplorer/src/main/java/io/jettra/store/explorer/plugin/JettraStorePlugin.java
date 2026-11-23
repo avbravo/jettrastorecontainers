@@ -2608,6 +2608,13 @@ public class JettraStorePlugin {
                 this.lastBucketOperationError = "Un bucket con estructura DEFINED debe incluir al menos un atributo JSON válido.";
                 return false;
             }
+            for (var attr : parsedAttrs) {
+                if (!isValidAttributeTypeSyntax(attr.type_atribute())) {
+                    this.lastBucketOperationError = "Tipo de dato inválido para el campo '" + attr.atribute_name()
+                            + "': '" + attr.type_atribute() + "'. Use un identificador válido o tipo genérico (ej: String, MiRecord, List<MiRecord>).";
+                    return false;
+                }
+            }
         }
         String desc = (description != null && !description.isBlank())
                 ? description.trim()
@@ -2660,6 +2667,13 @@ public class JettraStorePlugin {
                 this.lastBucketOperationError = "Un bucket con estructura DEFINED debe incluir al menos un atributo válido en la tabla.";
                 return false;
             }
+            for (var attr : parsedAttrs) {
+                if (!isValidAttributeTypeSyntax(attr.type_atribute())) {
+                    this.lastBucketOperationError = "Tipo de dato inválido para el campo '" + attr.atribute_name()
+                            + "': '" + attr.type_atribute() + "'. Use un identificador válido o tipo genérico (ej: String, MiRecord, List<MiRecord>).";
+                    return false;
+                }
+            }
         }
         bucket.setBucketName(targetName);
         if (description != null) {
@@ -2675,6 +2689,112 @@ public class JettraStorePlugin {
                 "Bucket '" + targetName + "' [" + bucket.getEngineType() + " | " + st.name() + "] actualizado en " + dbName,
                 "OK", parsedAttrs.size() + " atributo(s)");
         return true;
+    }
+
+    /**
+     * Valida sintácticamente un tipo de dato Java simple, cualificado, arreglo o genérico parametrizado
+     * (por ejemplo: String, MiRecord, io.jettra.Cliente, List<MiRecord>, ArrayList<Producto>, Map<String, List<Integer>>).
+     */
+    public static boolean isValidAttributeTypeSyntax(String rawType) {
+        if (rawType == null) return false;
+        String s = rawType.trim();
+        if (s.isEmpty()) return false;
+        return parseTypeExpr(s, 0) == s.length();
+    }
+
+    private static int parseTypeExpr(String s, int pos) {
+        pos = skipSpaces(s, pos);
+        int start = pos;
+        if (pos >= s.length() || !Character.isJavaIdentifierStart(s.charAt(pos))) {
+            return -1;
+        }
+        pos++;
+        while (pos < s.length() && Character.isJavaIdentifierPart(s.charAt(pos))) {
+            pos++;
+        }
+        // Permitir nombres cualificados con paquete (ej. com.acme.Cliente)
+        while (pos < s.length() && s.charAt(pos) == '.') {
+            pos++;
+            if (pos >= s.length() || !Character.isJavaIdentifierStart(s.charAt(pos))) {
+                return -1;
+            }
+            pos++;
+            while (pos < s.length() && Character.isJavaIdentifierPart(s.charAt(pos))) {
+                pos++;
+            }
+        }
+        if (pos == start) return -1;
+        pos = skipSpaces(s, pos);
+        // Argumentos genéricos opcionales <T, U>
+        if (pos < s.length() && s.charAt(pos) == '<') {
+            pos++;
+            pos = skipSpaces(s, pos);
+            if (pos >= s.length() || s.charAt(pos) == '>') {
+                return -1; // No se permite List<> vacío
+            }
+            while (true) {
+                pos = parseTypeExpr(s, pos);
+                if (pos < 0) return -1;
+                pos = skipSpaces(s, pos);
+                if (pos < s.length() && s.charAt(pos) == ',') {
+                    pos++;
+                    continue;
+                }
+                if (pos < s.length() && s.charAt(pos) == '>') {
+                    pos++;
+                    break;
+                }
+                return -1;
+            }
+            pos = skipSpaces(s, pos);
+        }
+        // Sufijos de arreglo opcionales []
+        while (pos + 1 < s.length() && s.charAt(pos) == '[' && s.charAt(pos + 1) == ']') {
+            pos += 2;
+            pos = skipSpaces(s, pos);
+        }
+        return pos;
+    }
+
+    private static int skipSpaces(String s, int pos) {
+        while (pos < s.length() && Character.isWhitespace(s.charAt(pos))) {
+            pos++;
+        }
+        return pos;
+    }
+
+    /**
+     * Valida que todas las filas activas de la tabla de estructura tengan un tipo no vacío y sintácticamente válido.
+     * Retorna {@code null} si es válido, o el mensaje de error descriptivo en caso contrario.
+     */
+    public static String validateTableFormAttributeTypes(Map<String, String> form) {
+        if (form == null || form.isEmpty()) return null;
+        List<Integer> indices = new ArrayList<>();
+        for (String key : form.keySet()) {
+            if (key.startsWith("attr_name_")) {
+                try {
+                    indices.add(Integer.parseInt(key.substring("attr_name_".length())));
+                } catch (NumberFormatException ignored) {}
+            }
+        }
+        indices.sort(Integer::compareTo);
+        for (int i : indices) {
+            String name = form.get("attr_name_" + i);
+            if (name == null || name.isBlank()) continue;
+            String customType = form.get("attr_type_custom_" + i);
+            String type = (customType != null && !customType.isBlank())
+                    ? customType.trim()
+                    : (form.get("attr_type_" + i) != null ? form.get("attr_type_" + i).trim() : "");
+            if (type.isEmpty()) {
+                return "El tipo de dato es obligatorio para el campo '" + name.trim()
+                        + "'. Ingrese un tipo estándar, clase/record personalizado o colección parametrizada (ej: String, MiRecord, List<MiRecord>).";
+            }
+            if (!isValidAttributeTypeSyntax(type)) {
+                return "Tipo de dato inválido para el campo '" + name.trim() + "': '" + type
+                        + "'. Use un identificador válido o tipo genérico (ej: String, Cliente, List<MiRecord>, Set<Integer>).";
+            }
+        }
+        return null;
     }
 
     public static String buildAttributesJsonFromTableForm(Map<String, String> form) {

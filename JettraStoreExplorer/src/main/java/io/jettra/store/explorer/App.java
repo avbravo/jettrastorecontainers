@@ -39,9 +39,12 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Aplicación Principal JettraStore Explorer.
- * Despliega el gestor web para administración y telemetría de bases de datos multimodelo,
- * con interfaz profesional construida íntegramente en JettraFlux y ejecutada sobre JettraServer
- * con hilos virtuales de Project Loom (Java 25) y almacenamiento Slotted-Page Off-Heap Panama.
+ * Despliega el gestor web para administración y telemetría de bases de datos
+ * multimodelo,
+ * con interfaz profesional construida íntegramente en JettraFlux y ejecutada
+ * sobre JettraServer
+ * con hilos virtuales de Project Loom (Java 25) y almacenamiento Slotted-Page
+ * Off-Heap Panama.
  */
 public class App {
 
@@ -63,14 +66,16 @@ public class App {
             try {
                 config.setPort(Integer.parseInt(sysPort.trim()));
                 portOverridden = true;
-            } catch (Exception ignored) {}
+            } catch (Exception ignored) {
+            }
         }
         String sysHost = System.getProperty("server.host", System.getProperty("host", System.getenv("SERVER_HOST")));
         if (sysHost != null && !sysHost.isBlank()) {
             config.setHost(sysHost.trim());
             hostOverridden = true;
         }
-        String sysCp = System.getProperty("server.contextpath", System.getProperty("server.context-path", System.getenv("SERVER_CONTEXT_PATH")));
+        String sysCp = System.getProperty("server.contextpath",
+                System.getProperty("server.context-path", System.getenv("SERVER_CONTEXT_PATH")));
         if (sysCp != null && !sysCp.isBlank()) {
             config.setContextPath(sysCp.trim());
             contextPathOverridden = true;
@@ -80,20 +85,23 @@ public class App {
             for (int i = 0; i < args.length; i++) {
                 String arg = args[i];
                 if (arg.startsWith("--server.port=")) {
-                    try { 
-                        config.setPort(Integer.parseInt(arg.substring("--server.port=".length()).trim())); 
+                    try {
+                        config.setPort(Integer.parseInt(arg.substring("--server.port=".length()).trim()));
                         portOverridden = true;
-                    } catch (Exception ignored) {}
+                    } catch (Exception ignored) {
+                    }
                 } else if (arg.startsWith("--port=") || arg.startsWith("-port=")) {
-                    try { 
-                        config.setPort(Integer.parseInt(arg.substring(arg.indexOf('=') + 1).trim())); 
+                    try {
+                        config.setPort(Integer.parseInt(arg.substring(arg.indexOf('=') + 1).trim()));
                         portOverridden = true;
-                    } catch (Exception ignored) {}
+                    } catch (Exception ignored) {
+                    }
                 } else if ((arg.equals("-p") || arg.equals("--port")) && i + 1 < args.length) {
-                    try { 
-                        config.setPort(Integer.parseInt(args[++i].trim())); 
+                    try {
+                        config.setPort(Integer.parseInt(args[++i].trim()));
                         portOverridden = true;
-                    } catch (Exception ignored) {}
+                    } catch (Exception ignored) {
+                    }
                 } else if (arg.startsWith("--server.host=")) {
                     config.setHost(arg.substring("--server.host=".length()).trim());
                     hostOverridden = true;
@@ -109,7 +117,8 @@ public class App {
             }
         }
 
-        // Leer host, puerto y contextpath definidos en microprofile-config.properties si no fueron sobreescritos por CLI/System props
+        // Leer host, puerto y contextpath definidos en microprofile-config.properties
+        // si no fueron sobreescritos por CLI/System props
         JettraStorePlugin plugin = JettraStorePlugin.getInstance();
         if (!hostOverridden || config.getHost() == null || "0.0.0.0".equals(config.getHost())) {
             config.setHost(plugin.getServerHost());
@@ -122,8 +131,10 @@ public class App {
         }
 
         String storageProp = System.getProperty("storage.mode");
-        if (storageProp == null || storageProp.isBlank()) storageProp = System.getProperty("jettra.storage.mode");
-        if (storageProp == null || storageProp.isBlank()) storageProp = System.getenv("STORAGE_MODE");
+        if (storageProp == null || storageProp.isBlank())
+            storageProp = System.getProperty("jettra.storage.mode");
+        if (storageProp == null || storageProp.isBlank())
+            storageProp = System.getenv("STORAGE_MODE");
         if (storageProp != null && !storageProp.isBlank()) {
             config.setStorageMode(StorageMode.fromString(storageProp.trim()));
         }
@@ -131,7 +142,8 @@ public class App {
         JettraServer server = startApplication(config);
 
         try {
-            System.out.println("[JettraStore Explorer] Escuchando en http://" + config.getHost() + ":" + config.getPort() + "/login (Presione Ctrl+C para detener)");
+            System.out.println("[JettraStore Explorer] Escuchando en http://" + config.getHost() + ":"
+                    + config.getPort() + "/login (Presione Ctrl+C para detener)");
             server.await();
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
@@ -148,15 +160,18 @@ public class App {
     }
 
     public static JettraServer startApplication(ServerConfig config) {
-        // Todo arranque de JettraStoreExplorer inicia sin sesiones previas y exige autenticación en /login
+        // Todo arranque de JettraStoreExplorer inicia sin sesiones previas y exige
+        // autenticación en /login
         closeAllSessions();
 
         JettraStorePlugin plugin = JettraStorePlugin.getInstance();
         if (config.getHost() == null || "0.0.0.0".equals(config.getHost())) {
             config.setHost(plugin.getServerHost());
         }
-        // Si no se sobreescribió por argumento del sistema o el puerto proviene de defaults upstream (8080 o 8082),
-        // aplicar prioritariamente el server.port configurado en microprofile-config.properties (8085)
+        // Si no se sobreescribió por argumento del sistema o el puerto proviene de
+        // defaults upstream (8080 o 8082),
+        // aplicar prioritariamente el server.port configurado en
+        // microprofile-config.properties (8085)
         String sysPort = System.getProperty("server.port", System.getProperty("port", System.getenv("PORT")));
         if (sysPort == null || sysPort.isBlank()) {
             if (config.getPort() == 8080 || config.getPort() == 8082) {
@@ -182,11 +197,14 @@ public class App {
             }));
         }
 
-        // Registrar el endpoint propio de JettraStoreExplorer (Web UI) sin sobrescribir el destino del nodo PRIMARY JettraStore
+        // Registrar el endpoint propio de JettraStoreExplorer (Web UI) sin sobrescribir
+        // el destino del nodo PRIMARY JettraStore
         plugin.setExplorerServerEndpoint(config.getHost(), config.getPort());
         plugin.startClusterHeartbeatMonitor();
         plugin.refreshAllNodeStatuses(true);
-        System.out.println("[JettraStore Explorer] Inicializado JettraStorePlugin. WebUI: " + config.getHost() + ":" + config.getPort() + " | Nodos: " + plugin.getServerNodes().size() + " | Modo: " + plugin.getMultinodeDisplay());
+        System.out.println("[JettraStore Explorer] Inicializado JettraStorePlugin. WebUI: " + config.getHost() + ":"
+                + config.getPort() + " | Nodos: " + plugin.getServerNodes().size() + " | Modo: "
+                + plugin.getMultinodeDisplay());
 
         // Adjuntar módulo JettraFlux
         FluxModule flux = FluxModule.attach(server);
@@ -196,7 +214,8 @@ public class App {
         server.get("/login", (req, resp) -> handleLoginGet(req, resp));
         server.post("/login", (req, resp) -> handleLoginPost(req, resp));
 
-        // 2. Administración y Monitor de Nodos del Clúster (/cluster, /clusters y /dashboard)
+        // 2. Administración y Monitor de Nodos del Clúster (/cluster, /clusters y
+        // /dashboard)
         server.get("/cluster", (req, resp) -> handleClusterGet(req, resp, server));
         server.post("/cluster", (req, resp) -> handleClusterPost(req, resp));
         server.get("/clusters", (req, resp) -> handleClusterGet(req, resp, server));
@@ -214,7 +233,8 @@ public class App {
         server.get("/status", (req, resp) -> handleStatusGet(req, resp, server));
         server.get("/telemetry", (req, resp) -> handleStatusGet(req, resp, server));
 
-        // 4. Administración de Bases de Datos y Motores (/databases, /database y /engines)
+        // 4. Administración de Bases de Datos y Motores (/databases, /database y
+        // /engines)
         server.get("/databases", (req, resp) -> handleDatabasesGet(req, resp, server));
         server.post("/databases", (req, resp) -> handleDatabasesPost(req, resp));
         server.get("/database", (req, resp) -> handleDatabasesGet(req, resp, server));
@@ -307,8 +327,10 @@ public class App {
         Map<String, String> form = parseFormBody(req.getBodyAsString());
         String user = form.get("username");
         String pass = form.get("password");
-        if (user == null || user.isBlank()) user = req.getQueryParam("username");
-        if (pass == null || pass.isBlank()) pass = req.getQueryParam("password");
+        if (user == null || user.isBlank())
+            user = req.getQueryParam("username");
+        if (pass == null || pass.isBlank())
+            pass = req.getQueryParam("password");
 
         if (user == null || user.isBlank() || pass == null || pass.isBlank()) {
             redirect(resp, "/login?error=empty_fields");
@@ -320,17 +342,20 @@ public class App {
         if (auth.isPresent()) {
             setSession(resp, auth.get().getUsername());
             resp.header("Cache-Control", "no-store, no-cache, must-revalidate");
-            plugin.logPoliceIncident("Security Patrol", "Inicio de sesión concedido para '" + user + "'", "OK", "Sesión WEB activa");
+            plugin.logPoliceIncident("Security Patrol", "Inicio de sesión concedido para '" + user + "'", "OK",
+                    "Sesión WEB activa");
             redirect(resp, "/cluster");
         } else {
-            plugin.logPoliceIncident("Security Patrol", "Fallo de credenciales para usuario '" + user + "'", "WARN", "Acceso denegado");
+            plugin.logPoliceIncident("Security Patrol", "Fallo de credenciales para usuario '" + user + "'", "WARN",
+                    "Acceso denegado");
             redirect(resp, "/login?error=invalid_credentials");
         }
     }
 
     // --- Clúster y Nodos ---
     private static void handleClusterGet(HttpRequest req, HttpResponse resp, JettraServer server) {
-        if (!requireAuth(req, resp)) return;
+        if (!requireAuth(req, resp))
+            return;
         JettraStorePlugin plugin = JettraStorePlugin.getInstance();
         String action = req.getQueryParam("action");
 
@@ -340,24 +365,28 @@ public class App {
             return;
         } else if ("toggle_node".equalsIgnoreCase(action)) {
             String nodeId = req.getQueryParam("nodeId");
-            if (nodeId != null) plugin.toggleNode(nodeId);
+            if (nodeId != null)
+                plugin.toggleNode(nodeId);
             redirect(resp, "/cluster");
             return;
         } else if ("shutdown_node".equalsIgnoreCase(action)) {
             String nodeId = req.getQueryParam("nodeId");
-            if (nodeId != null) plugin.shutdownNode(nodeId);
+            if (nodeId != null)
+                plugin.shutdownNode(nodeId);
             redirect(resp, "/cluster?msg=node_stopped");
             return;
         } else if ("start_node".equalsIgnoreCase(action)) {
             String nodeId = req.getQueryParam("nodeId");
-            if (nodeId != null) plugin.startNode(nodeId);
+            if (nodeId != null)
+                plugin.startNode(nodeId);
             redirect(resp, "/cluster?msg=node_started");
             return;
         } else if ("remove_node".equalsIgnoreCase(action)) {
             JettraUser currentUser = plugin.findUser(getLoggedUser(req)).orElse(null);
             if (currentUser == null || currentUser.getGlobalRole() != JettraUser.GlobalRole.ADMIN) {
                 redirect(resp, "/cluster?msg=" + java.net.URLEncoder.encode(
-                        "Acceso denegado: solo usuarios con rol ADMIN pueden remover nodos del clúster.", java.nio.charset.StandardCharsets.UTF_8));
+                        "Acceso denegado: solo usuarios con rol ADMIN pueden remover nodos del clúster.",
+                        java.nio.charset.StandardCharsets.UTF_8));
                 return;
             }
             String nodeId = req.getQueryParam("nodeId");
@@ -378,19 +407,26 @@ public class App {
 
         String msg = req.getQueryParam("msg");
         String clusterMsg = null;
-        if ("node_added".equals(msg)) clusterMsg = "Nodo registrado exitosamente en el quórum Raft.";
-        else if ("node_removed".equals(msg)) clusterMsg = "Nodo expulsado del clúster.";
-        else if ("node_stopped".equals(msg)) clusterMsg = "Nodo detenido limpiamente y marcado como OFFLINE.";
-        else if ("node_started".equals(msg)) clusterMsg = "Verificación de encendido y reconexión del nodo ejecutada.";
-        else if ("nodes_checked".equals(msg)) clusterMsg = "Conectividad TCP y latencia de nodos del clúster verificadas en tiempo real.";
-        else clusterMsg = msg;
+        if ("node_added".equals(msg))
+            clusterMsg = "Nodo registrado exitosamente en el quórum Raft.";
+        else if ("node_removed".equals(msg))
+            clusterMsg = "Nodo expulsado del clúster.";
+        else if ("node_stopped".equals(msg))
+            clusterMsg = "Nodo detenido limpiamente y marcado como OFFLINE.";
+        else if ("node_started".equals(msg))
+            clusterMsg = "Verificación de encendido y reconexión del nodo ejecutada.";
+        else if ("nodes_checked".equals(msg))
+            clusterMsg = "Conectividad TCP y latencia de nodos del clúster verificadas en tiempo real.";
+        else
+            clusterMsg = msg;
 
         Widget content = new ClusterFluxView(clusterMsg);
         renderTemplate(resp, server, getLoggedUser(req), "Monitor y Administración de Nodos", "cluster", content);
     }
 
     private static void handleClusterPost(HttpRequest req, HttpResponse resp) {
-        if (!requireAuth(req, resp)) return;
+        if (!requireAuth(req, resp))
+            return;
         Map<String, String> form = parseFormBody(req.getBodyAsString());
         String action = form.get("action");
 
@@ -401,8 +437,14 @@ public class App {
             String nodeHost = form.get("nodeHost");
             int port = 50001;
             long ram = 2048;
-            try { port = Integer.parseInt(form.get("nodePort")); } catch (Exception ignored) {}
-            try { ram = Long.parseLong(form.get("nodeRam")); } catch (Exception ignored) {}
+            try {
+                port = Integer.parseInt(form.get("nodePort"));
+            } catch (Exception ignored) {
+            }
+            try {
+                ram = Long.parseLong(form.get("nodeRam"));
+            } catch (Exception ignored) {
+            }
 
             JettraStorePlugin plugin = JettraStorePlugin.getInstance();
             boolean added = plugin.addNode(nodeId, nodeName, nodeRole, nodeHost, port, ram);
@@ -420,9 +462,11 @@ public class App {
         redirect(resp, "/cluster");
     }
 
-    // --- Visor/Editor de cluster.config del Nodo PRIMARY y Sincronización (Solo ADMIN) ---
+    // --- Visor/Editor de cluster.config del Nodo PRIMARY y Sincronización (Solo
+    // ADMIN) ---
     private static void handleClusterConfigGet(HttpRequest req, HttpResponse resp, JettraServer server) {
-        if (!requireAuth(req, resp)) return;
+        if (!requireAuth(req, resp))
+            return;
         boolean isAdmin = isLoggedUserAdmin(req);
         String msg = req.getQueryParam("msg");
         String action = req.getQueryParam("action");
@@ -431,16 +475,21 @@ public class App {
             flash = "Archivo cluster.config recargado desde el nodo PRIMARY.";
         }
         Widget content = new ClusterConfigFluxView(isAdmin, flash, List.of(), null);
-        renderTemplate(resp, server, getLoggedUser(req), "Configuración del Clúster (cluster.config)", "cluster-config", content);
+        renderTemplate(resp, server, getLoggedUser(req), "Configuración del Clúster (cluster.config)", "cluster-config",
+                content);
     }
 
     private static void handleClusterConfigPost(HttpRequest req, HttpResponse resp, JettraServer server) {
-        if (!requireAuth(req, resp)) return;
+        if (!requireAuth(req, resp))
+            return;
         boolean isAdmin = isLoggedUserAdmin(req);
         if (!isAdmin) {
-            Widget denied = new ClusterConfigFluxView(false, "Error: Acceso denegado. Solo administradores pueden editar o sincronizar cluster.config.", List.of(), null);
+            Widget denied = new ClusterConfigFluxView(false,
+                    "Error: Acceso denegado. Solo administradores pueden editar o sincronizar cluster.config.",
+                    List.of(), null);
             resp.status(HttpStatus.FORBIDDEN);
-            renderTemplate(resp, server, getLoggedUser(req), "Configuración del Clúster (cluster.config)", "cluster-config", denied);
+            renderTemplate(resp, server, getLoggedUser(req), "Configuración del Clúster (cluster.config)",
+                    "cluster-config", denied);
             return;
         }
         Map<String, String> form = parseFormBody(req.getBodyAsString());
@@ -458,31 +507,40 @@ public class App {
         String draft = report.success() ? null : content;
         String flash = report.success() ? report.message() : "Error: " + report.message();
         Widget view = new ClusterConfigFluxView(true, flash, report.nodeResults(), draft);
-        renderTemplate(resp, server, getLoggedUser(req), "Configuración del Clúster (cluster.config)", "cluster-config", view);
+        renderTemplate(resp, server, getLoggedUser(req), "Configuración del Clúster (cluster.config)", "cluster-config",
+                view);
     }
 
     // --- Mapa de Transferencia en Tiempo Real (/map) ---
     private static void handleMapGet(HttpRequest req, HttpResponse resp, JettraServer server) {
-        if (!requireAuth(req, resp)) return;
+        if (!requireAuth(req, resp))
+            return;
         Widget content = new TransferMapFluxView();
         renderTemplate(resp, server, getLoggedUser(req), "Mapa de Transferencia en Tiempo Real", "map", content);
     }
 
     // --- Administración de Bases de Datos de Ejemplo (/examples) ---
     private static void handleExamplesGet(HttpRequest req, HttpResponse resp, JettraServer server) {
-        if (!requireAuth(req, resp)) return;
+        if (!requireAuth(req, resp))
+            return;
         String msg = req.getQueryParam("msg");
         String displayMsg = null;
-        if ("installed".equals(msg)) displayMsg = "Base de datos de ejemplo instalada correctamente.";
-        else if ("deleted".equals(msg)) displayMsg = "Base de datos de ejemplo eliminada correctamente.";
-        else if ("installed_all".equals(msg)) displayMsg = "Todas las bases de datos de ejemplo fueron instaladas.";
-        else if ("deleted_all".equals(msg)) displayMsg = "Todas las bases de datos de ejemplo fueron eliminadas.";
+        if ("installed".equals(msg))
+            displayMsg = "Base de datos de ejemplo instalada correctamente.";
+        else if ("deleted".equals(msg))
+            displayMsg = "Base de datos de ejemplo eliminada correctamente.";
+        else if ("installed_all".equals(msg))
+            displayMsg = "Todas las bases de datos de ejemplo fueron instaladas.";
+        else if ("deleted_all".equals(msg))
+            displayMsg = "Todas las bases de datos de ejemplo fueron eliminadas.";
         Widget content = new ExamplesFluxView(displayMsg);
-        renderTemplate(resp, server, getLoggedUser(req), "Administración de Bases de Datos de Ejemplo", "examples", content);
+        renderTemplate(resp, server, getLoggedUser(req), "Administración de Bases de Datos de Ejemplo", "examples",
+                content);
     }
 
     private static void handleExamplesPost(HttpRequest req, HttpResponse resp) {
-        if (!requireAuth(req, resp)) return;
+        if (!requireAuth(req, resp))
+            return;
         Map<String, String> form = parseFormBody(req.getBodyAsString());
         String action = form.get("action");
         String exampleId = form.get("exampleId");
@@ -509,26 +567,30 @@ public class App {
 
     // --- Estatus y Telemetría ---
     private static void handleStatusGet(HttpRequest req, HttpResponse resp, JettraServer server) {
-        if (!requireAuth(req, resp)) return;
+        if (!requireAuth(req, resp))
+            return;
         Widget content = new StatusFluxView(server);
         renderTemplate(resp, server, getLoggedUser(req), "Estatus del Servidor & Telemetría", "status", content);
     }
 
     // --- Bases de Datos y Motores ---
     private static void handleDatabasesGet(HttpRequest req, HttpResponse resp, JettraServer server) {
-        if (!requireAuth(req, resp)) return;
+        if (!requireAuth(req, resp))
+            return;
         JettraStorePlugin plugin = JettraStorePlugin.getInstance();
         String action = req.getQueryParam("action");
 
         if ("delete_db".equalsIgnoreCase(action)) {
             String db = req.getQueryParam("db");
-            if (db != null) plugin.deleteDatabase(db);
+            if (db != null)
+                plugin.deleteDatabase(db);
             redirect(resp, "/databases?msg=db_deleted");
             return;
         } else if ("delete_bucket".equalsIgnoreCase(action)) {
             String db = req.getQueryParam("db");
             String bucket = req.getQueryParam("bucket");
-            if (db != null && bucket != null) plugin.deleteBucket(db, bucket);
+            if (db != null && bucket != null)
+                plugin.deleteBucket(db, bucket);
             redirect(resp, "/databases?db=" + db + "&manage_engines=true&msg=bucket_deleted");
             return;
         }
@@ -546,19 +608,32 @@ public class App {
         boolean isAdmin = isLoggedUserAdmin(req);
         String msg = req.getQueryParam("msg");
         String messageText = null;
-        if ("db_created".equals(msg)) messageText = "Base de datos creada exitosamente.";
-        else if ("db_deleted".equals(msg)) messageText = "Base de datos eliminada.";
-        else if ("bucket_added".equals(msg)) messageText = "Nuevo bucket añadido al engine exitosamente.";
-        else if ("bucket_updated".equals(msg)) messageText = "Bucket y su estructura actualizados correctamente.";
-        else if ("bucket_deleted".equals(msg)) messageText = "Bucket eliminado.";
-        else if ("db_user_added".equals(msg)) messageText = "Usuario añadido/actualizado en la base de datos.";
-        else if ("db_user_removed".equals(msg)) messageText = "Usuario removido de la base de datos.";
-        else if ("index_added".equals(msg)) messageText = "Índice creado y habilitado exitosamente en el bucket.";
-        else if ("index_updated".equals(msg)) messageText = "Índice actualizado correctamente en el bucket.";
-        else if ("index_deleted".equals(msg)) messageText = "Índice eliminado del bucket.";
-        else if ("index_rebuilt".equals(msg)) messageText = "Índice reconstruido en caliente (Zero-Lock).";
-        else if ("forbidden".equals(msg)) messageText = "Acceso denegado: se requiere rol ADMIN para administrar usuarios de la base de datos.";
-        else if (msg != null && !msg.isBlank()) messageText = msg;
+        if ("db_created".equals(msg))
+            messageText = "Base de datos creada exitosamente.";
+        else if ("db_deleted".equals(msg))
+            messageText = "Base de datos eliminada.";
+        else if ("bucket_added".equals(msg))
+            messageText = "Nuevo bucket añadido al engine exitosamente.";
+        else if ("bucket_updated".equals(msg))
+            messageText = "Bucket y su estructura actualizados correctamente.";
+        else if ("bucket_deleted".equals(msg))
+            messageText = "Bucket eliminado.";
+        else if ("db_user_added".equals(msg))
+            messageText = "Usuario añadido/actualizado en la base de datos.";
+        else if ("db_user_removed".equals(msg))
+            messageText = "Usuario removido de la base de datos.";
+        else if ("index_added".equals(msg))
+            messageText = "Índice creado y habilitado exitosamente en el bucket.";
+        else if ("index_updated".equals(msg))
+            messageText = "Índice actualizado correctamente en el bucket.";
+        else if ("index_deleted".equals(msg))
+            messageText = "Índice eliminado del bucket.";
+        else if ("index_rebuilt".equals(msg))
+            messageText = "Índice reconstruido en caliente (Zero-Lock).";
+        else if ("forbidden".equals(msg))
+            messageText = "Acceso denegado: se requiere rol ADMIN para administrar usuarios de la base de datos.";
+        else if (msg != null && !msg.isBlank())
+            messageText = msg;
 
         if (manageUsersDb != null && !manageUsersDb.isBlank() && !isAdmin) {
             manageUsersDb = null;
@@ -573,7 +648,8 @@ public class App {
     }
 
     private static void handleDatabasesPost(HttpRequest req, HttpResponse resp) {
-        if (!requireAuth(req, resp)) return;
+        if (!requireAuth(req, resp))
+            return;
         Map<String, String> form = parseFormBody(req.getBodyAsString());
         String action = form.get("action");
         JettraStorePlugin plugin = JettraStorePlugin.getInstance();
@@ -597,13 +673,22 @@ public class App {
             String engineType = form.get("engineType");
             String description = form.get("description");
             String structureType = form.getOrDefault("structureType", "NONE");
+            if ("DEFINED".equalsIgnoreCase(structureType)) {
+                String typeErr = JettraStorePlugin.validateTableFormAttributeTypes(form);
+                if (typeErr != null) {
+                    redirect(resp, "/databases?db=" + db + "&manage_engines=true&add_bucket=true&msg="
+                            + java.net.URLEncoder.encode(typeErr, StandardCharsets.UTF_8));
+                    return;
+                }
+            }
             String attributesJson = JettraStorePlugin.buildAttributesJsonFromTableForm(form);
 
             boolean ok = plugin.addBucket(db, bucketName, engineType, description, structureType, attributesJson);
             if (!ok) {
                 String err = plugin.getLastBucketOperationError();
-                redirect(resp, "/databases?db=" + db + "&manage_engines=true&msg="
-                        + java.net.URLEncoder.encode(err != null ? err : "Error añadiendo bucket", StandardCharsets.UTF_8));
+                redirect(resp, "/databases?db=" + db + "&manage_engines=true&add_bucket=true&msg="
+                        + java.net.URLEncoder.encode(err != null ? err : "Error añadiendo bucket",
+                                StandardCharsets.UTF_8));
                 return;
             }
             redirect(resp, "/databases?db=" + db + "&manage_engines=true&msg=bucket_added");
@@ -614,13 +699,24 @@ public class App {
             String newBucket = form.get("bucketName");
             String description = form.get("description");
             String structureType = form.getOrDefault("structureType", "NONE");
+            if ("DEFINED".equalsIgnoreCase(structureType)) {
+                String typeErr = JettraStorePlugin.validateTableFormAttributeTypes(form);
+                if (typeErr != null) {
+                    redirect(resp, "/databases?db=" + db + "&manage_engines=true&edit_bucket=" + (originalBucket != null ? originalBucket : "") + "&msg="
+                            + java.net.URLEncoder.encode(typeErr, StandardCharsets.UTF_8));
+                    return;
+                }
+            }
             String attributesJson = JettraStorePlugin.buildAttributesJsonFromTableForm(form);
 
             boolean ok = plugin.updateBucket(db, originalBucket, newBucket, description, structureType, attributesJson);
             if (!ok) {
                 String err = plugin.getLastBucketOperationError();
-                redirect(resp, "/databases?db=" + db + "&manage_engines=true&edit_bucket=" + (originalBucket != null ? originalBucket : "") + "&msg="
-                        + java.net.URLEncoder.encode(err != null ? err : "Error editando bucket", StandardCharsets.UTF_8));
+                redirect(resp,
+                        "/databases?db=" + db + "&manage_engines=true&edit_bucket="
+                                + (originalBucket != null ? originalBucket : "") + "&msg="
+                                + java.net.URLEncoder.encode(err != null ? err : "Error editando bucket",
+                                        StandardCharsets.UTF_8));
                 return;
             }
             redirect(resp, "/databases?db=" + db + "&manage_engines=true&msg=bucket_updated");
@@ -635,7 +731,10 @@ public class App {
             String roleStr = form.get("role");
             JettraDatabaseRole role = JettraDatabaseRole.READ_WRITE;
             if (roleStr != null && !roleStr.isBlank()) {
-                try { role = JettraDatabaseRole.valueOf(roleStr.trim().toUpperCase(java.util.Locale.ROOT)); } catch (Exception ignored) {}
+                try {
+                    role = JettraDatabaseRole.valueOf(roleStr.trim().toUpperCase(java.util.Locale.ROOT));
+                } catch (Exception ignored) {
+                }
             }
             plugin.assignUserToDatabase(db, username, role);
             redirect(resp, "/databases?db=" + db + "&manage_users_db=" + db + "&msg=db_user_added");
@@ -663,11 +762,15 @@ public class App {
             boolean ok = plugin.addIndex(db, bucket, indexName, fields, indexType, unique);
             if (!ok) {
                 String err = plugin.getLastIndexOperationError();
-                redirect(resp, "/databases?db=" + db + "&manage_indexes_db=" + db + "&index_bucket=" + (bucket != null ? bucket : "") + "&msg="
-                        + java.net.URLEncoder.encode(err != null ? err : "Error creando índice", StandardCharsets.UTF_8));
+                redirect(resp,
+                        "/databases?db=" + db + "&manage_indexes_db=" + db + "&index_bucket="
+                                + (bucket != null ? bucket : "") + "&msg="
+                                + java.net.URLEncoder.encode(err != null ? err : "Error creando índice",
+                                        StandardCharsets.UTF_8));
                 return;
             }
-            redirect(resp, "/databases?db=" + db + "&manage_indexes_db=" + db + "&index_bucket=" + bucket + "&msg=index_added");
+            redirect(resp, "/databases?db=" + db + "&manage_indexes_db=" + db + "&index_bucket=" + bucket
+                    + "&msg=index_added");
             return;
         } else if ("edit_index".equalsIgnoreCase(action)) {
             String db = form.get("db");
@@ -680,26 +783,32 @@ public class App {
             boolean ok = plugin.updateIndex(db, bucket, originalIndexName, newIndexName, fields, indexType, unique);
             if (!ok) {
                 String err = plugin.getLastIndexOperationError();
-                redirect(resp, "/databases?db=" + db + "&manage_indexes_db=" + db + "&index_bucket=" + (bucket != null ? bucket : "")
-                        + "&edit_index=" + (originalIndexName != null ? originalIndexName : "") + "&msg="
-                        + java.net.URLEncoder.encode(err != null ? err : "Error editando índice", StandardCharsets.UTF_8));
+                redirect(resp,
+                        "/databases?db=" + db + "&manage_indexes_db=" + db + "&index_bucket="
+                                + (bucket != null ? bucket : "")
+                                + "&edit_index=" + (originalIndexName != null ? originalIndexName : "") + "&msg="
+                                + java.net.URLEncoder.encode(err != null ? err : "Error editando índice",
+                                        StandardCharsets.UTF_8));
                 return;
             }
-            redirect(resp, "/databases?db=" + db + "&manage_indexes_db=" + db + "&index_bucket=" + bucket + "&msg=index_updated");
+            redirect(resp, "/databases?db=" + db + "&manage_indexes_db=" + db + "&index_bucket=" + bucket
+                    + "&msg=index_updated");
             return;
         } else if ("delete_index".equalsIgnoreCase(action)) {
             String db = form.get("db");
             String bucket = form.get("bucket");
             String indexName = form.get("indexName");
             plugin.deleteIndex(db, bucket, indexName);
-            redirect(resp, "/databases?db=" + db + "&manage_indexes_db=" + db + "&index_bucket=" + bucket + "&msg=index_deleted");
+            redirect(resp, "/databases?db=" + db + "&manage_indexes_db=" + db + "&index_bucket=" + bucket
+                    + "&msg=index_deleted");
             return;
         } else if ("rebuild_index".equalsIgnoreCase(action)) {
             String db = form.get("db");
             String bucket = form.get("bucket");
             String indexName = form.get("indexName");
             plugin.rebuildIndex(db, bucket, indexName);
-            redirect(resp, "/databases?db=" + db + "&manage_indexes_db=" + db + "&index_bucket=" + bucket + "&msg=index_rebuilt");
+            redirect(resp, "/databases?db=" + db + "&manage_indexes_db=" + db + "&index_bucket=" + bucket
+                    + "&msg=index_rebuilt");
             return;
         }
         redirect(resp, "/databases");
@@ -707,7 +816,8 @@ public class App {
 
     // --- Explorador de Registros CRUD ---
     private static void handleExplorerGet(HttpRequest req, HttpResponse resp, JettraServer server) {
-        if (!requireAuth(req, resp)) return;
+        if (!requireAuth(req, resp))
+            return;
         JettraStorePlugin plugin = JettraStorePlugin.getInstance();
         String action = req.getQueryParam("action");
         String db = req.getQueryParam("db");
@@ -727,9 +837,11 @@ public class App {
                 try {
                     long targetVer = Long.parseLong(versionStr.trim());
                     plugin.restoreRecordVersion(db, bucket, recordId, targetVer);
-                    redirect(resp, "/explorer?db=" + db + "&bucket=" + bucket + "&history_id=" + recordId + "&msg=version_restored");
+                    redirect(resp, "/explorer?db=" + db + "&bucket=" + bucket + "&history_id=" + recordId
+                            + "&msg=version_restored");
                     return;
-                } catch (Exception ignored) {}
+                } catch (Exception ignored) {
+                }
             }
             redirect(resp, "/explorer?db=" + db + "&bucket=" + bucket);
             return;
@@ -756,7 +868,8 @@ public class App {
         }
 
         String section = req.getQueryParam("section");
-        if (section == null || section.isBlank()) section = "records";
+        if (section == null || section.isBlank())
+            section = "records";
         boolean isNew = "new".equalsIgnoreCase(action);
         boolean isNewBucket = "new_bucket".equalsIgnoreCase(action);
         boolean isEditSchema = "edit_schema".equalsIgnoreCase(action) || "new_schema".equalsIgnoreCase(action);
@@ -773,25 +886,42 @@ public class App {
         int page = 1;
         int pageSize = RecordExplorerFluxView.DEFAULT_PAGE_SIZE;
         if (pageStr != null && !pageStr.isBlank()) {
-            try { page = Math.max(1, Integer.parseInt(pageStr.trim())); } catch (Exception ignored) {}
+            try {
+                page = Math.max(1, Integer.parseInt(pageStr.trim()));
+            } catch (Exception ignored) {
+            }
         }
         if (sizeStr != null && !sizeStr.isBlank()) {
-            try { pageSize = Math.max(1, Math.min(100, Integer.parseInt(sizeStr.trim()))); } catch (Exception ignored) {}
+            try {
+                pageSize = Math.max(1, Math.min(100, Integer.parseInt(sizeStr.trim())));
+            } catch (Exception ignored) {
+            }
         }
 
         String msg = req.getQueryParam("msg");
         String messageText = null;
-        if ("record_created".equals(msg)) messageText = "Registro creado exitosamente en el almacén.";
-        else if ("record_updated".equals(msg)) messageText = "Registro actualizado correctamente.";
-        else if ("record_deleted".equals(msg)) messageText = "Registro eliminado del bucket.";
-        else if ("version_restored".equals(msg)) messageText = "Versión previa restaurada exitosamente como nueva versión activa.";
-        else if ("bucket_created".equals(msg)) messageText = "Bucket creado exitosamente con su estructura configurada.";
-        else if ("schema_saved".equals(msg)) messageText = "Estructura DEFINED guardada y activada para el bucket.";
-        else if ("schema_deleted".equals(msg)) messageText = "Estructura eliminada; el bucket opera ahora en modo NONE (flexible).";
-        else if ("index_created".equals(msg)) messageText = "Índice secundario creado en el bucket.";
-        else if ("index_rebuilt".equals(msg)) messageText = "Índice reconstruido y optimizado exitosamente.";
-        else if ("index_deleted".equals(msg)) messageText = "Índice eliminado del bucket.";
-        else if (msg != null && !msg.isBlank()) messageText = msg;
+        if ("record_created".equals(msg))
+            messageText = "Registro creado exitosamente en el almacén.";
+        else if ("record_updated".equals(msg))
+            messageText = "Registro actualizado correctamente.";
+        else if ("record_deleted".equals(msg))
+            messageText = "Registro eliminado del bucket.";
+        else if ("version_restored".equals(msg))
+            messageText = "Versión previa restaurada exitosamente como nueva versión activa.";
+        else if ("bucket_created".equals(msg))
+            messageText = "Bucket creado exitosamente con su estructura configurada.";
+        else if ("schema_saved".equals(msg))
+            messageText = "Estructura DEFINED guardada y activada para el bucket.";
+        else if ("schema_deleted".equals(msg))
+            messageText = "Estructura eliminada; el bucket opera ahora en modo NONE (flexible).";
+        else if ("index_created".equals(msg))
+            messageText = "Índice secundario creado en el bucket.";
+        else if ("index_rebuilt".equals(msg))
+            messageText = "Índice reconstruido y optimizado exitosamente.";
+        else if ("index_deleted".equals(msg))
+            messageText = "Índice eliminado del bucket.";
+        else if (msg != null && !msg.isBlank())
+            messageText = msg;
 
         Widget content = new RecordExplorerFluxView(db, bucket, section, q, editId, viewId, historyId,
                 isNew, isNewBucket, isEditSchema, isViewSchema, messageText, page, pageSize);
@@ -801,9 +931,9 @@ public class App {
     private static void handleGenerateJettraIdApi(HttpRequest req, HttpResponse resp) {
         if (getLoggedUser(req) == null) {
             resp.status(HttpStatus.UNAUTHORIZED)
-                .contentType("application/json; charset=UTF-8")
-                .header("Cache-Control", "no-store")
-                .body("{\"error\":\"unauthorized\"}");
+                    .contentType("application/json; charset=UTF-8")
+                    .header("Cache-Control", "no-store")
+                    .body("{\"error\":\"unauthorized\"}");
             return;
         }
         String db = req.getQueryParam("db");
@@ -811,13 +941,14 @@ public class App {
         String generated = io.jettra.store.core.JettraId.generate(
                 db != null ? db : "", bucket != null ? bucket : "").toHexString();
         resp.contentType("application/json; charset=UTF-8")
-            .header("Cache-Control", "no-store")
-            .body("{\"jettraId\":\"" + generated + "\",\"database\":\"" + escapeJson(db != null ? db : "")
-                + "\",\"bucket\":\"" + escapeJson(bucket != null ? bucket : "") + "\"}");
+                .header("Cache-Control", "no-store")
+                .body("{\"jettraId\":\"" + generated + "\",\"database\":\"" + escapeJson(db != null ? db : "")
+                        + "\",\"bucket\":\"" + escapeJson(bucket != null ? bucket : "") + "\"}");
     }
 
     private static void handleExplorerPost(HttpRequest req, HttpResponse resp, JettraServer server) {
-        if (!requireAuth(req, resp)) return;
+        if (!requireAuth(req, resp))
+            return;
         Map<String, String> form = parseFormBody(req.getBodyAsString());
         String action = form.get("action");
         String db = form.get("db");
@@ -834,7 +965,8 @@ public class App {
             if (!ok) {
                 String err = plugin.getLastBucketOperationError();
                 redirect(resp, "/explorer?db=" + db + "&bucket=" + (bucket != null ? bucket : "") + "&msg="
-                        + java.net.URLEncoder.encode(err != null ? err : "Error creando bucket", java.nio.charset.StandardCharsets.UTF_8));
+                        + java.net.URLEncoder.encode(err != null ? err : "Error creando bucket",
+                                java.nio.charset.StandardCharsets.UTF_8));
                 return;
             }
             redirect(resp, "/explorer?db=" + db + "&bucket=" + newBucket.trim() + "&section=schema&msg=bucket_created");
@@ -845,7 +977,8 @@ public class App {
             if (!ok) {
                 String err = plugin.getLastBucketOperationError();
                 redirect(resp, "/explorer?db=" + db + "&bucket=" + bucket + "&section=schema&msg="
-                        + java.net.URLEncoder.encode(err != null ? err : "Error guardando estructura", java.nio.charset.StandardCharsets.UTF_8));
+                        + java.net.URLEncoder.encode(err != null ? err : "Error guardando estructura",
+                                java.nio.charset.StandardCharsets.UTF_8));
                 return;
             }
             redirect(resp, "/explorer?db=" + db + "&bucket=" + bucket + "&section=schema&msg=schema_saved");
@@ -857,9 +990,11 @@ public class App {
                 idxField = form.get("indexFieldSelect");
             }
             String idxType = form.getOrDefault("indexType", "BTREE");
-            boolean unique = "true".equalsIgnoreCase(form.get("indexUnique")) || "on".equalsIgnoreCase(form.get("indexUnique"));
+            boolean unique = "true".equalsIgnoreCase(form.get("indexUnique"))
+                    || "on".equalsIgnoreCase(form.get("indexUnique"));
             boolean ok = plugin.addIndex(db, bucket, idxName, idxField, idxType, unique);
-            redirect(resp, "/explorer?db=" + db + "&bucket=" + bucket + "&section=indexes&msg=" + (ok ? "index_created" : "Error+creando+indice"));
+            redirect(resp, "/explorer?db=" + db + "&bucket=" + bucket + "&section=indexes&msg="
+                    + (ok ? "index_created" : "Error+creando+indice"));
             return;
         } else if ("save_new".equalsIgnoreCase(action)) {
             String rawRecordId = form.get("recordId");
@@ -869,7 +1004,8 @@ public class App {
             String summary = form.getOrDefault("summary", "");
             String details = buildStructuredDetailsOrFallback(plugin, db, bucket, form, "");
 
-            // Validar unicidad de clave primaria sin cerrar el diálogo ni perder datos capturados
+            // Validar unicidad de clave primaria sin cerrar el diálogo ni perder datos
+            // capturados
             if (plugin.getRecord(db, bucket, recordId) != null) {
                 String dupErr = "Error de integridad: ya existe un registro con el identificador '"
                         + recordId + "' en el bucket '" + bucket + "'. Modifique el ID o regenere un nuevo JettraId.";
@@ -883,7 +1019,8 @@ public class App {
             var validation = plugin.validateRecordForBucket(db, bucket, details);
             if (!validation.valid()) {
                 redirect(resp, "/explorer?db=" + db + "&bucket=" + bucket + "&msg="
-                        + java.net.URLEncoder.encode("Validación fallida: " + validation.getSummary(), java.nio.charset.StandardCharsets.UTF_8));
+                        + java.net.URLEncoder.encode("Validación fallida: " + validation.getSummary(),
+                                java.nio.charset.StandardCharsets.UTF_8));
                 return;
             }
 
@@ -899,7 +1036,8 @@ public class App {
             var validation = plugin.validateRecordForBucket(db, bucket, details, recordId);
             if (!validation.valid()) {
                 redirect(resp, "/explorer?db=" + db + "&bucket=" + bucket + "&msg="
-                        + java.net.URLEncoder.encode("Validación fallida: " + validation.getSummary(), java.nio.charset.StandardCharsets.UTF_8));
+                        + java.net.URLEncoder.encode("Validación fallida: " + validation.getSummary(),
+                                java.nio.charset.StandardCharsets.UTF_8));
                 return;
             }
 
@@ -913,9 +1051,11 @@ public class App {
                 try {
                     long targetVer = Long.parseLong(versionStr.trim());
                     plugin.restoreRecordVersion(db, bucket, recordId, targetVer);
-                    redirect(resp, "/explorer?db=" + db + "&bucket=" + bucket + "&history_id=" + recordId + "&msg=version_restored");
+                    redirect(resp, "/explorer?db=" + db + "&bucket=" + bucket + "&history_id=" + recordId
+                            + "&msg=version_restored");
                     return;
-                } catch (Exception ignored) {}
+                } catch (Exception ignored) {
+                }
             }
             redirect(resp, "/explorer?db=" + db + "&bucket=" + bucket);
             return;
@@ -937,7 +1077,8 @@ public class App {
                     if (rawVal == null || rawVal.isBlank()) {
                         continue;
                     }
-                    if (count++ > 0) json.append(", ");
+                    if (count++ > 0)
+                        json.append(", ");
                     json.append("\"").append(name.replace("\"", "\\\"")).append("\": ");
                     String t = attr.type_atribute() != null ? attr.type_atribute().toLowerCase() : "string";
                     if (JettraStorePlugin.isNumericTypeName(t) && rawVal.trim().matches("-?\\d+(\\.\\d+)?")) {
@@ -957,7 +1098,8 @@ public class App {
 
     // --- Consola SQL / JQL / Shell ---
     private static void handleQueryGet(HttpRequest req, HttpResponse resp, JettraServer server) {
-        if (!requireAuth(req, resp)) return;
+        if (!requireAuth(req, resp))
+            return;
         String db = req.getQueryParam("db");
         String bucket = req.getQueryParam("bucket");
         String query = req.getQueryParam("query");
@@ -967,7 +1109,8 @@ public class App {
     }
 
     private static void handleQueryPost(HttpRequest req, HttpResponse resp, JettraServer server) {
-        if (!requireAuth(req, resp)) return;
+        if (!requireAuth(req, resp))
+            return;
         Map<String, String> form = parseFormBody(req.getBodyAsString());
         String db = form.get("db");
         String bucket = form.get("bucket");
@@ -979,37 +1122,46 @@ public class App {
 
     // --- Conexiones ---
     private static void handleConnectionsGet(HttpRequest req, HttpResponse resp, JettraServer server) {
-        if (!requireAuth(req, resp)) return;
+        if (!requireAuth(req, resp))
+            return;
         String msg = req.getQueryParam("msg");
         String messageText = null;
-        if ("connected".equals(msg)) messageText = "Conectado al perfil en caliente.";
-        else if ("default_set".equals(msg)) messageText = "Perfil establecido como predeterminado.";
-        else if ("deleted".equals(msg)) messageText = "Perfil de conexión eliminado.";
-        else if ("saved".equals(msg)) messageText = "Perfil guardado exitosamente.";
+        if ("connected".equals(msg))
+            messageText = "Conectado al perfil en caliente.";
+        else if ("default_set".equals(msg))
+            messageText = "Perfil establecido como predeterminado.";
+        else if ("deleted".equals(msg))
+            messageText = "Perfil de conexión eliminado.";
+        else if ("saved".equals(msg))
+            messageText = "Perfil guardado exitosamente.";
 
         Widget content = new ConnectionManagerFluxView(messageText);
         renderTemplate(resp, server, getLoggedUser(req), "Gestión de Conexiones a Clúster", "connections", content);
     }
 
     private static void handleConnectionsPost(HttpRequest req, HttpResponse resp) {
-        if (!requireAuth(req, resp)) return;
+        if (!requireAuth(req, resp))
+            return;
         Map<String, String> form = parseFormBody(req.getBodyAsString());
         String action = form.get("action");
         JettraStorePlugin plugin = JettraStorePlugin.getInstance();
 
         if ("connect".equalsIgnoreCase(action)) {
             String id = form.get("id");
-            if (id != null) plugin.connectProfile(id);
+            if (id != null)
+                plugin.connectProfile(id);
             redirect(resp, "/connections?msg=connected");
             return;
         } else if ("set_default".equalsIgnoreCase(action)) {
             String id = form.get("id");
-            if (id != null) plugin.setDefaultProfile(id);
+            if (id != null)
+                plugin.setDefaultProfile(id);
             redirect(resp, "/connections?msg=default_set");
             return;
         } else if ("delete".equalsIgnoreCase(action)) {
             String id = form.get("id");
-            if (id != null) plugin.deleteProfile(id);
+            if (id != null)
+                plugin.deleteProfile(id);
             redirect(resp, "/connections?msg=deleted");
             return;
         } else if ("save".equalsIgnoreCase(action)) {
@@ -1027,7 +1179,8 @@ public class App {
 
     // --- Usuarios y Seguridad ---
     private static void handleUsersGet(HttpRequest req, HttpResponse resp, JettraServer server) {
-        if (!requireAuth(req, resp)) return;
+        if (!requireAuth(req, resp))
+            return;
         JettraStorePlugin plugin = JettraStorePlugin.getInstance();
         String loggedUsername = getLoggedUser(req);
         boolean isAdmin = isLoggedUserAdmin(req);
@@ -1035,9 +1188,12 @@ public class App {
         String msg = req.getQueryParam("msg");
 
         String messageText = null;
-        if ("user_saved".equals(msg)) messageText = "Usuario y permisos actualizados exitosamente.";
-        else if ("user_deleted".equals(msg)) messageText = "Usuario revocado del sistema.";
-        else if ("forbidden".equals(msg)) messageText = "Acceso denegado: no tienes permisos para modificar otros usuarios.";
+        if ("user_saved".equals(msg))
+            messageText = "Usuario y permisos actualizados exitosamente.";
+        else if ("user_deleted".equals(msg))
+            messageText = "Usuario revocado del sistema.";
+        else if ("forbidden".equals(msg))
+            messageText = "Acceso denegado: no tienes permisos para modificar otros usuarios.";
 
         JettraUser editTarget = null;
         if (editParam != null && !editParam.isBlank()) {
@@ -1054,7 +1210,8 @@ public class App {
     }
 
     private static void handleUsersPost(HttpRequest req, HttpResponse resp) {
-        if (!requireAuth(req, resp)) return;
+        if (!requireAuth(req, resp))
+            return;
         Map<String, String> form = parseFormBody(req.getBodyAsString());
         String action = form.get("action");
         JettraStorePlugin plugin = JettraStorePlugin.getInstance();
@@ -1104,7 +1261,8 @@ public class App {
                 }
             }
 
-            JettraUser user = new JettraUser(cleanUsername, password != null ? password : "", desc != null ? desc : "", gRole);
+            JettraUser user = new JettraUser(cleanUsername, password != null ? password : "", desc != null ? desc : "",
+                    gRole);
             if (!isAdmin && existingOpt.isPresent()) {
                 user.setDatabaseRoles(new java.util.HashMap<>(existingOpt.get().getDatabaseRoles()));
             } else {
@@ -1112,8 +1270,10 @@ public class App {
                     String roleVal = form.get("db_role_" + db);
                     if (roleVal != null && !roleVal.isBlank()) {
                         try {
-                            user.setRoleForDatabase(db, JettraDatabaseRole.valueOf(roleVal.trim().toUpperCase(java.util.Locale.ROOT)));
-                        } catch (Exception ignored) {}
+                            user.setRoleForDatabase(db,
+                                    JettraDatabaseRole.valueOf(roleVal.trim().toUpperCase(java.util.Locale.ROOT)));
+                        } catch (Exception ignored) {
+                        }
                     } else if (existingOpt.isPresent()) {
                         JettraDatabaseRole prev = existingOpt.get().getDatabaseRoles().get(db);
                         if (prev != null) {
@@ -1131,7 +1291,8 @@ public class App {
                 return;
             }
             String username = form.get("username");
-            if (username != null) plugin.deleteUser(username);
+            if (username != null)
+                plugin.deleteUser(username);
             redirect(resp, "/users?msg=user_deleted");
             return;
         }
@@ -1140,24 +1301,31 @@ public class App {
 
     // --- Centinelas Police ---
     private static void handlePoliceGet(HttpRequest req, HttpResponse resp, JettraServer server) {
-        if (!requireAuth(req, resp)) return;
+        if (!requireAuth(req, resp))
+            return;
         String msg = req.getQueryParam("msg");
         String messageText = null;
-        if ("scan_complete".equals(msg)) messageText = "Patrullaje general completado. 0 anomalías encontradas.";
+        if ("scan_complete".equals(msg))
+            messageText = "Patrullaje general completado. 0 anomalías encontradas.";
 
         Widget content = new PoliceMonitorFluxView(messageText);
         renderTemplate(resp, server, getLoggedUser(req), "Centinelas Police & Auditoría", "police", content);
     }
 
     private static void handlePolicePost(HttpRequest req, HttpResponse resp) {
-        if (!requireAuth(req, resp)) return;
+        if (!requireAuth(req, resp))
+            return;
         Map<String, String> form = parseFormBody(req.getBodyAsString());
         String action = form.get("action");
         JettraStorePlugin plugin = JettraStorePlugin.getInstance();
 
         if ("patrol_scan".equalsIgnoreCase(action)) {
-            plugin.logPoliceIncident("Heap Sentinel", "Escaneo profundo de Memoria Directa Panama completado. 0 fragmentaciones.", "OK", "Búferes auditados");
-            plugin.logPoliceIncident("Raft Quorum K9", "Auditoría de consistencia de réplicas en nodos del quórum: 100% sincronizado.", "OK", "WAL validado");
+            plugin.logPoliceIncident("Heap Sentinel",
+                    "Escaneo profundo de Memoria Directa Panama completado. 0 fragmentaciones.", "OK",
+                    "Búferes auditados");
+            plugin.logPoliceIncident("Raft Quorum K9",
+                    "Auditoría de consistencia de réplicas en nodos del quórum: 100% sincronizado.", "OK",
+                    "WAL validado");
             redirect(resp, "/police?msg=scan_complete");
             return;
         }
@@ -1166,19 +1334,24 @@ public class App {
 
     // --- Backups ---
     private static void handleBackupsGet(HttpRequest req, HttpResponse resp, JettraServer server) {
-        if (!requireAuth(req, resp)) return;
+        if (!requireAuth(req, resp))
+            return;
         String msg = req.getQueryParam("msg");
         String messageText = null;
-        if ("created".equals(msg)) messageText = "Copia de respaldo generada exitosamente.";
-        else if ("restored".equals(msg)) messageText = "Snapshot restaurado en caliente con Zero-Copy.";
-        else if ("deleted".equals(msg)) messageText = "Snapshot eliminado.";
+        if ("created".equals(msg))
+            messageText = "Copia de respaldo generada exitosamente.";
+        else if ("restored".equals(msg))
+            messageText = "Snapshot restaurado en caliente con Zero-Copy.";
+        else if ("deleted".equals(msg))
+            messageText = "Snapshot eliminado.";
 
         Widget content = new BackupFluxView(messageText);
         renderTemplate(resp, server, getLoggedUser(req), "Copias de Seguridad y Snapshots", "backups", content);
     }
 
     private static void handleBackupsPost(HttpRequest req, HttpResponse resp) {
-        if (!requireAuth(req, resp)) return;
+        if (!requireAuth(req, resp))
+            return;
         Map<String, String> form = parseFormBody(req.getBodyAsString());
         String action = form.get("action");
         JettraStorePlugin plugin = JettraStorePlugin.getInstance();
@@ -1209,32 +1382,32 @@ public class App {
     private static void handleClusterStatusJson(HttpRequest req, HttpResponse resp) {
         if (getLoggedUser(req) == null) {
             resp.status(HttpStatus.UNAUTHORIZED)
-                .contentType("application/json; charset=UTF-8")
-                .header("Cache-Control", "no-store, no-cache, must-revalidate")
-                .body("{\"error\":\"unauthorized\"}");
+                    .contentType("application/json; charset=UTF-8")
+                    .header("Cache-Control", "no-store, no-cache, must-revalidate")
+                    .body("{\"error\":\"unauthorized\"}");
             return;
         }
         JettraStorePlugin plugin = JettraStorePlugin.getInstance();
         plugin.refreshAllNodeStatuses(true);
         resp.contentType("application/json; charset=UTF-8")
-            .header("Cache-Control", "no-store, no-cache, must-revalidate")
-            .body(buildClusterStatusJson(plugin));
+                .header("Cache-Control", "no-store, no-cache, must-revalidate")
+                .body(buildClusterStatusJson(plugin));
     }
 
     private static void handleClusterEventsSse(HttpRequest req, HttpResponse resp) {
         if (getLoggedUser(req) == null) {
             resp.status(HttpStatus.UNAUTHORIZED)
-                .contentType("application/json; charset=UTF-8")
-                .body("{\"error\":\"unauthorized\"}");
+                    .contentType("application/json; charset=UTF-8")
+                    .body("{\"error\":\"unauthorized\"}");
             return;
         }
         JettraStorePlugin plugin = JettraStorePlugin.getInstance();
         plugin.refreshAllNodeStatusesIfStale(300L);
         String payload = "retry: 1000\nevent: cluster_status\ndata: " + buildClusterStatusJson(plugin) + "\n\n";
         resp.contentType("text/event-stream; charset=UTF-8")
-            .header("Cache-Control", "no-store, no-cache, must-revalidate")
-            .header("Connection", "keep-alive")
-            .body(payload);
+                .header("Cache-Control", "no-store, no-cache, must-revalidate")
+                .header("Connection", "keep-alive")
+                .body(payload);
     }
 
     private static String buildClusterStatusJson(JettraStorePlugin plugin) {
@@ -1252,11 +1425,13 @@ public class App {
         long inactiveOthers = nodes.stream().filter(n -> n != primary && !n.isActive()).count();
         long offlineOthers = inactiveOthers;
         long totalQps = nodes.stream().filter(ServerNodeInfo::isActive).mapToLong(ServerNodeInfo::getQps).sum();
-        long totalPanama = nodes.stream().filter(ServerNodeInfo::isActive).mapToLong(ServerNodeInfo::getPanamaDirectMb).sum();
+        long totalPanama = nodes.stream().filter(ServerNodeInfo::isActive).mapToLong(ServerNodeInfo::getPanamaDirectMb)
+                .sum();
 
         StringBuilder json = new StringBuilder();
         json.append("{");
-        json.append("\"executionEnvironment\":\"").append(escapeJson(plugin.getLifecycleManager().detectExecutionEnvironment())).append("\",");
+        json.append("\"executionEnvironment\":\"")
+                .append(escapeJson(plugin.getLifecycleManager().detectExecutionEnvironment())).append("\",");
         json.append("\"primaryNodeId\":\"").append(escapeJson(primaryNodeId)).append("\",");
         json.append("\"primaryNodeName\":\"").append(escapeJson(primaryNodeName)).append("\",");
         json.append("\"primaryRole\":\"").append(escapeJson(primaryRole)).append("\",");
@@ -1273,7 +1448,8 @@ public class App {
         json.append("\"nodes\":[");
         for (int i = 0; i < nodes.size(); i++) {
             ServerNodeInfo n = nodes.get(i);
-            if (i > 0) json.append(",");
+            if (i > 0)
+                json.append(",");
             json.append("{");
             json.append("\"id\":\"").append(escapeJson(n.getId())).append("\",");
             json.append("\"name\":\"").append(escapeJson(n.getName())).append("\",");
@@ -1294,16 +1470,18 @@ public class App {
             json.append("\"diskUsedMb\":").append(n.getDiskUsedMb()).append(",");
             json.append("\"virtualThreads\":").append(n.getVirtualThreads()).append(",");
             json.append("\"qps\":").append(n.getQps()).append(",");
-            json.append("\"lastError\":").append(n.getLastError() != null ? "\"" + escapeJson(n.getLastError()) + "\"" : "null");
+            json.append("\"lastError\":")
+                    .append(n.getLastError() != null ? "\"" + escapeJson(n.getLastError()) + "\"" : "null");
             json.append("}");
         }
         json.append("],\"recentTransfers\":[");
         try {
-            List<io.jettra.store.cluster.ClusterLiveEvent> events =
-                io.jettra.store.cluster.JettraClusterEventBus.getInstance().getRecentEvents(20);
+            List<io.jettra.store.cluster.ClusterLiveEvent> events = io.jettra.store.cluster.JettraClusterEventBus
+                    .getInstance().getRecentEvents(20);
             for (int i = 0; i < events.size(); i++) {
                 io.jettra.store.cluster.ClusterLiveEvent ev = events.get(i);
-                if (i > 0) json.append(",");
+                if (i > 0)
+                    json.append(",");
                 json.append("{");
                 json.append("\"timestamp\":").append(ev.timestamp()).append(",");
                 json.append("\"time\":\"").append(escapeJson(ev.formattedTimestamp())).append("\",");
@@ -1314,7 +1492,8 @@ public class App {
                 json.append("\"details\":\"").append(escapeJson(ev.details())).append("\"");
                 json.append("}");
             }
-        } catch (Throwable ignored) {}
+        } catch (Throwable ignored) {
+        }
         json.append("]}");
         return json.toString();
     }
@@ -1322,8 +1501,8 @@ public class App {
     private static void handleNodeShutdownApi(HttpRequest req, HttpResponse resp) {
         if (getLoggedUser(req) == null) {
             resp.status(HttpStatus.UNAUTHORIZED)
-                .contentType("application/json; charset=UTF-8")
-                .body("{\"error\":\"unauthorized\"}");
+                    .contentType("application/json; charset=UTF-8")
+                    .body("{\"error\":\"unauthorized\"}");
             return;
         }
         String nodeId = extractNodeIdParam(req);
@@ -1331,42 +1510,43 @@ public class App {
         ServerNodeInfo node = nodeId != null ? plugin.getNodeById(nodeId) : null;
         if (node == null) {
             resp.status(HttpStatus.NOT_FOUND)
-                .contentType("application/json; charset=UTF-8")
-                .body("{\"success\":false,\"error\":\"Nodo no encontrado\"}");
+                    .contentType("application/json; charset=UTF-8")
+                    .body("{\"success\":false,\"error\":\"Nodo no encontrado\"}");
             return;
         }
         NodeLifecycleManager.ShutdownOutcome outcome = plugin.shutdownNode(node.getId());
         ServerNodeInfo newPrimary = plugin.getPrimaryNode();
         String json = "{"
-            + "\"success\":" + outcome.success() + ","
-            + "\"offlineVerified\":" + outcome.offlineVerified() + ","
-            + "\"stopped\":" + (!node.isOnline()) + ","
-            + "\"nodeId\":\"" + escapeJson(node.getId()) + "\","
-            + "\"role\":\"" + escapeJson(node.getRole()) + "\","
-            + "\"raftState\":\"" + escapeJson(node.getRaftState()) + "\","
-            + "\"active\":" + node.isActive() + ","
-            + "\"online\":" + node.isOnline() + ","
-            + "\"status\":\"" + node.getStatus() + "\","
-            + "\"state\":\"" + (node.isOnline() ? "ONLINE" : "OFFLINE") + "\","
-            + "\"executionEnvironment\":\"" + escapeJson(outcome.executionEnvironment()) + "\","
-            + "\"dockerContainer\":\"" + escapeJson(outcome.dockerContainer()) + "\","
-            + "\"primaryNodeId\":\"" + escapeJson(newPrimary != null ? newPrimary.getId() : "") + "\","
-            + "\"primaryActive\":" + (newPrimary != null && newPrimary.isActive()) + ","
-            + "\"mechanism\":\"" + escapeJson(outcome.mechanism()) + "\","
-            + "\"elapsedMs\":" + outcome.elapsedMs() + ","
-            + "\"lastError\":" + (node.getLastError() != null ? "\"" + escapeJson(node.getLastError()) + "\"" : "null") + ","
-            + "\"message\":\"" + escapeJson(outcome.message()) + "\""
-            + "}";
+                + "\"success\":" + outcome.success() + ","
+                + "\"offlineVerified\":" + outcome.offlineVerified() + ","
+                + "\"stopped\":" + (!node.isOnline()) + ","
+                + "\"nodeId\":\"" + escapeJson(node.getId()) + "\","
+                + "\"role\":\"" + escapeJson(node.getRole()) + "\","
+                + "\"raftState\":\"" + escapeJson(node.getRaftState()) + "\","
+                + "\"active\":" + node.isActive() + ","
+                + "\"online\":" + node.isOnline() + ","
+                + "\"status\":\"" + node.getStatus() + "\","
+                + "\"state\":\"" + (node.isOnline() ? "ONLINE" : "OFFLINE") + "\","
+                + "\"executionEnvironment\":\"" + escapeJson(outcome.executionEnvironment()) + "\","
+                + "\"dockerContainer\":\"" + escapeJson(outcome.dockerContainer()) + "\","
+                + "\"primaryNodeId\":\"" + escapeJson(newPrimary != null ? newPrimary.getId() : "") + "\","
+                + "\"primaryActive\":" + (newPrimary != null && newPrimary.isActive()) + ","
+                + "\"mechanism\":\"" + escapeJson(outcome.mechanism()) + "\","
+                + "\"elapsedMs\":" + outcome.elapsedMs() + ","
+                + "\"lastError\":"
+                + (node.getLastError() != null ? "\"" + escapeJson(node.getLastError()) + "\"" : "null") + ","
+                + "\"message\":\"" + escapeJson(outcome.message()) + "\""
+                + "}";
         resp.contentType("application/json; charset=UTF-8")
-            .header("Cache-Control", "no-store, no-cache, must-revalidate")
-            .body(json);
+                .header("Cache-Control", "no-store, no-cache, must-revalidate")
+                .body(json);
     }
 
     private static void handleNodeStartApi(HttpRequest req, HttpResponse resp) {
         if (getLoggedUser(req) == null) {
             resp.status(HttpStatus.UNAUTHORIZED)
-                .contentType("application/json; charset=UTF-8")
-                .body("{\"error\":\"unauthorized\"}");
+                    .contentType("application/json; charset=UTF-8")
+                    .body("{\"error\":\"unauthorized\"}");
             return;
         }
         String nodeId = extractNodeIdParam(req);
@@ -1374,37 +1554,42 @@ public class App {
         ServerNodeInfo node = nodeId != null ? plugin.getNodeById(nodeId) : null;
         if (node == null) {
             resp.status(HttpStatus.NOT_FOUND)
-                .contentType("application/json; charset=UTF-8")
-                .body("{\"success\":false,\"error\":\"Nodo no encontrado\"}");
+                    .contentType("application/json; charset=UTF-8")
+                    .body("{\"success\":false,\"error\":\"Nodo no encontrado\"}");
             return;
         }
         NodeLifecycleManager.StartOutcome outcome = plugin.startNode(node.getId());
         String json = "{"
-            + "\"success\":" + outcome.success() + ","
-            + "\"onlineVerified\":" + outcome.onlineVerified() + ","
-            + "\"nodeId\":\"" + escapeJson(node.getId()) + "\","
-            + "\"active\":" + node.isActive() + ","
-            + "\"online\":" + node.isOnline() + ","
-            + "\"status\":\"" + node.getStatus() + "\","
-            + "\"state\":\"" + (node.isOnline() ? "ONLINE" : "OFFLINE") + "\","
-            + "\"mechanism\":\"" + escapeJson(outcome.mechanism()) + "\","
-            + "\"lastError\":" + (node.getLastError() != null ? "\"" + escapeJson(node.getLastError()) + "\"" : "null") + ","
-            + "\"message\":\"" + escapeJson(outcome.message()) + "\""
-            + "}";
+                + "\"success\":" + outcome.success() + ","
+                + "\"onlineVerified\":" + outcome.onlineVerified() + ","
+                + "\"nodeId\":\"" + escapeJson(node.getId()) + "\","
+                + "\"active\":" + node.isActive() + ","
+                + "\"online\":" + node.isOnline() + ","
+                + "\"status\":\"" + node.getStatus() + "\","
+                + "\"state\":\"" + (node.isOnline() ? "ONLINE" : "OFFLINE") + "\","
+                + "\"mechanism\":\"" + escapeJson(outcome.mechanism()) + "\","
+                + "\"lastError\":"
+                + (node.getLastError() != null ? "\"" + escapeJson(node.getLastError()) + "\"" : "null") + ","
+                + "\"message\":\"" + escapeJson(outcome.message()) + "\""
+                + "}";
         resp.contentType("application/json; charset=UTF-8")
-            .header("Cache-Control", "no-store, no-cache, must-revalidate")
-            .body(json);
+                .header("Cache-Control", "no-store, no-cache, must-revalidate")
+                .body(json);
     }
 
     private static String extractNodeIdParam(HttpRequest req) {
         String id = req.getQueryParam("nodeId");
-        if (id != null && !id.isBlank()) return id.trim();
+        if (id != null && !id.isBlank())
+            return id.trim();
         String body = req.getBodyAsString();
-        if (body == null || body.isBlank()) return null;
+        if (body == null || body.isBlank())
+            return null;
         String trimmed = body.trim();
         if (trimmed.startsWith("{")) {
-            java.util.regex.Matcher m = java.util.regex.Pattern.compile("\"nodeId\"\\s*:\\s*\"([^\"]+)\"").matcher(trimmed);
-            if (m.find()) return m.group(1).trim();
+            java.util.regex.Matcher m = java.util.regex.Pattern.compile("\"nodeId\"\\s*:\\s*\"([^\"]+)\"")
+                    .matcher(trimmed);
+            if (m.find())
+                return m.group(1).trim();
         }
         Map<String, String> form = parseFormBody(trimmed);
         String fId = form.get("nodeId");
@@ -1412,7 +1597,8 @@ public class App {
     }
 
     private static String escapeJson(String s) {
-        if (s == null) return "";
+        if (s == null)
+            return "";
         return s.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n").replace("\r", "\\r");
     }
 
@@ -1423,7 +1609,8 @@ public class App {
         if (server != null) {
             try {
                 server.stop();
-            } catch (Exception ignored) {}
+            } catch (Exception ignored) {
+            }
             if (server == serverInstance) {
                 serverInstance = null;
             }
@@ -1435,7 +1622,8 @@ public class App {
         ACTIVE_SESSIONS.clear();
         serverBootId = UUID.randomUUID().toString();
         if (count > 0) {
-            System.out.println("[JettraStore Explorer] Sesiones activas cerradas (" + count + "). Se requerirá nueva autenticación al iniciar.");
+            System.out.println("[JettraStore Explorer] Sesiones activas cerradas (" + count
+                    + "). Se requerirá nueva autenticación al iniciar.");
         }
     }
 
@@ -1445,14 +1633,14 @@ public class App {
 
     // --- Utilidades de Plantilla y HTTP ---
 
-    private static void renderTemplate(HttpResponse resp, JettraServer server, String username, String title, String activeSection, Widget content) {
+    private static void renderTemplate(HttpResponse resp, JettraServer server, String username, String title,
+            String activeSection, Widget content) {
         StoreExplorerFluxTemplateView template = new StoreExplorerFluxTemplateView(
                 title,
                 activeSection,
                 server,
                 username,
-                content
-        );
+                content);
         String html = RENDERER.render(template, title + " - JettraStore Explorer");
         resp.header("Cache-Control", "no-store, no-cache, must-revalidate");
         resp.header("Pragma", "no-cache");
@@ -1538,7 +1726,8 @@ public class App {
     }
 
     public static Map<String, String> parseFormBody(String body) {
-        if (body == null || body.isBlank()) return Collections.emptyMap();
+        if (body == null || body.isBlank())
+            return Collections.emptyMap();
         Map<String, String> map = new HashMap<>();
         String[] pairs = body.split("&");
         for (String pair : pairs) {

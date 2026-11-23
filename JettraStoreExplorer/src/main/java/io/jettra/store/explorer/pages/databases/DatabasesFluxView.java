@@ -36,11 +36,12 @@ public class DatabasesFluxView extends FluxView {
             "JAVA_RECORD", "VECTOR", "COLUMNAR", "OBJECT", "RELATIONAL"
     );
 
-    private static final List<String> STRUCTURE_TYPES = List.of(
+    private static final String TYPE_PRESET_PLACEHOLDER = "-- Tipo sugerido --";
+
+    public static final List<String> STRUCTURE_TYPES = List.of(
             "String", "Integer", "Long", "Double", "BigDecimal", "Boolean",
             "Instant", "LocalDate", "LocalDateTime", "UUID",
-            "List<String>", "List<Integer>", "List<Double>", "Set<String>", "ArrayList<String>", "ArrayList<Integer>",
-            "List<MiObjeto>", "Set<MiObjeto>", "MiObjeto"
+            "List", "ArrayList", "Set", "Map"
     );
 
     private static final List<String> JETTRA_RULES_PRESETS = List.of(
@@ -426,20 +427,36 @@ public class DatabasesFluxView extends FluxView {
             rowsData.add(new io.jettra.store.core.JettraBucketSchema.AttributeRule("", "String", "", ""));
         }
 
+        List<String> typeSelectOptions = new ArrayList<>();
+        typeSelectOptions.add(TYPE_PRESET_PLACEHOLDER);
+        typeSelectOptions.addAll(STRUCTURE_TYPES);
+
         List<List<Widget>> tableRows = new ArrayList<>();
         for (int i = 0; i < rowsData.size(); i++) {
             var attr = rowsData.get(i);
-            String declaredType = (attr.type_atribute() != null && !attr.type_atribute().isBlank()) ? attr.type_atribute() : "String";
-            boolean inPreset = STRUCTURE_TYPES.stream().anyMatch(t -> t.equalsIgnoreCase(declaredType));
-            String selectedPreset = inPreset
-                    ? STRUCTURE_TYPES.stream().filter(t -> t.equalsIgnoreCase(declaredType)).findFirst().orElse("String")
-                    : "String";
-            String customVal = inPreset ? "" : declaredType;
+            String declaredType = (attr.type_atribute() != null && !attr.type_atribute().isBlank()) ? attr.type_atribute().trim() : "String";
+            String selectedPreset = STRUCTURE_TYPES.stream()
+                    .filter(t -> t.equalsIgnoreCase(declaredType))
+                    .findFirst()
+                    .orElse(TYPE_PRESET_PLACEHOLDER);
+
+            var typeSelect = FluxUi.dropdown("attr_type_select_" + i, typeSelectOptions, selectedPreset);
+            typeSelect.modifier(new Modifier()
+                    .cssClass("app-input")
+                    .attribute("name", "attr_type_select_" + i)
+                    .attribute("data-attr-type-select", "true")
+                    .attribute("onchange", "jettraApplyTypePreset(this)"));
+
+            var typeInput = FluxUi.textInput("attr_type_" + i, declaredType, "Ej: String, Cliente, List<MiRecord>", false);
+            typeInput.modifier(new Modifier()
+                    .cssClass("app-input")
+                    .attribute("type", "text")
+                    .attribute("data-attr-type-input", "true"));
 
             Widget typeCell = Div.of(
-                    FluxUi.dropdown("attr_type_" + i, STRUCTURE_TYPES, selectedPreset),
-                    FluxUi.textInput("attr_type_custom_" + i, customVal, "o clase/record/List<MiTipo>", false)
-            ).modifier(new Modifier().style("display: flex; flex-direction: column; gap: 0.25rem; min-width: 165px;"));
+                    typeSelect,
+                    typeInput
+            ).modifier(new Modifier().style("display: flex; flex-direction: column; gap: 0.25rem; min-width: 185px;"));
 
             String curRules = attr.jettra_rules() != null ? attr.jettra_rules() : "";
             String selectedRulePreset = JETTRA_RULES_PRESETS.stream()
@@ -483,6 +500,15 @@ public class DatabasesFluxView extends FluxView {
                 .style("margin-top: 0.55rem; padding: 0.32rem 0.75rem; font-size: 0.78rem;"));
 
         RawScript script = RawScript.of("""
+                function jettraApplyTypePreset(sel) {
+                  if (!sel || !sel.parentElement) return;
+                  var input = sel.parentElement.querySelector('input[data-attr-type-input="true"]');
+                  if (!input) return;
+                  var v = (sel.value || '').trim();
+                  if (!v || v === '-- Tipo sugerido --') return;
+                  input.value = v;
+                  input.focus();
+                }
                 function jettraApplyRulePreset(sel) {
                   if (!sel || !sel.parentElement) return;
                   var input = sel.parentElement.querySelector('input[name^="attr_rules_"]');
@@ -513,15 +539,15 @@ public class DatabasesFluxView extends FluxView {
                   if (!tbody) return;
                   var idx = tbody.querySelectorAll('tr').length;
                   var tr = document.createElement('tr');
-                  var typeOpts = ['String','Integer','Long','Double','BigDecimal','Boolean','Instant','LocalDate','LocalDateTime','UUID','List<String>','List<Integer>','List<Double>','Set<String>','ArrayList<String>','ArrayList<Integer>','List<MiObjeto>','Set<MiObjeto>','MiObjeto']
-                    .map(function(o){ var e = o.replace(/</g,'&lt;').replace(/>/g,'&gt;'); return '<option value="' + e + '">' + e + '</option>'; }).join('');
+                  var typeOpts = ['-- Tipo sugerido --','String','Integer','Long','Double','BigDecimal','Boolean','Instant','LocalDate','LocalDateTime','UUID','List','ArrayList','Set','Map']
+                    .map(function(o){ return '<option value="' + o + '">' + o + '</option>'; }).join('');
                   var ruleOpts = ['NONE','NOT_NULL','REQUIRED','NOT_BLANK','UNIQUE','AUTO_INCREMENT','POSITIVE','NON_NEGATIVE','EMAIL','MIN:0','MAX:100','MIN_LENGTH:3','MAX_LENGTH:255','NOT_NULL,UNIQUE','NOT_NULL,NOT_BLANK','NOT_NULL,POSITIVE','REGEX:^[A-Z0-9-]+$']
                     .map(function(r){ return '<option value="' + r + '">' + r + '</option>'; }).join('');
                   tr.innerHTML =
                     '<td><input type="text" class="app-input" name="attr_name_' + idx + '" placeholder="nombreCampo"></td>' +
-                    '<td><div style="display:flex;flex-direction:column;gap:0.25rem;min-width:165px;">' +
-                      '<select class="app-input" name="attr_type_' + idx + '">' + typeOpts + '</select>' +
-                      '<input type="text" class="app-input" name="attr_type_custom_' + idx + '" placeholder="o clase/record/List<MiTipo>">' +
+                    '<td><div style="display:flex;flex-direction:column;gap:0.25rem;min-width:185px;">' +
+                      '<select class="app-input" name="attr_type_select_' + idx + '" data-attr-type-select="true" onchange="jettraApplyTypePreset(this)">' + typeOpts + '</select>' +
+                      '<input type="text" class="app-input" name="attr_type_' + idx + '" data-attr-type-input="true" value="String" placeholder="Ej: String, Cliente, List&lt;MiRecord&gt;">' +
                     '</div></td>' +
                     '<td><div style="display:flex;flex-direction:column;gap:0.25rem;min-width:180px;">' +
                       '<select class="app-input" name="attr_rules_select_' + idx + '" onchange="jettraApplyRulePreset(this)">' + ruleOpts + '</select>' +
