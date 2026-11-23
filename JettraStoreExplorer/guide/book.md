@@ -253,3 +253,14 @@ El diálogo **`➕ Crear Nuevo Registro en [ <db> / <bucket> ] • Motor: ... �
 4. **Integridad y validación sin pérdida de datos:**
    - Si el usuario vacía el campo de ID antes de guardar, el servidor asigna automáticamente un `JettraId`.
    - Si el identificador ingresado ya existe en el bucket, se muestra una notificación de error clara dentro del mismo diálogo **sin cerrarlo ni perder los datos capturados**.
+
+
+---
+
+## 11. Cabecera Informativa del Bucket y Controles Expandir/Colapsar en `/explorer` (RF-09)
+
+1. **Cabecera informativa del Bucket seleccionado antes del `DataTable`:**
+   - Justo encima de la barra de búsqueda y de la tabla de registros (`ID | MOTOR | RESUMEN | VERSION | FECHA MUTACION | ACCIONES`), `/explorer` muestra una tarjeta de contexto (`data-selected-bucket-header="true"`) con el **nombre del Bucket activo**, su **Engine**, la **base de datos**, el **modo de estructura** (`DEFINED (N campos)` o `NONE (Esquema libre)`), la **cantidad de registros** y la **cantidad de índices**.
+   - Si no hay ningún bucket seleccionado en la base de datos activa, muestra un estado vacío legible indicando cómo seleccionar un bucket desde el **Tree Explorador Jerárquico**.
+2. **Controles `⊞ Expandir todo` y `⊟ Colapsar todo` en el Tree Explorador Jerárquico:**
+   - Permiten desplegar de inmediato todos los Engines y subárboles de Buckets (`📐 Estructura`, `⚡ Índices`, `📄 Registros`) o plegarlos todos en un clic, **conservando intacta la selección actual y el registro activo** en `/explorer`.

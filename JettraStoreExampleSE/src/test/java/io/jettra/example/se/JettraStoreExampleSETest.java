@@ -50,6 +50,7 @@ public class JettraStoreExampleSETest {
         Path clusterFile = tmpDir.resolve("cluster.config");
         String prevCluster = System.getProperty("cluster.config.path");
         String prevStorage = System.getProperty("jettra.storage.path");
+        String prevStorageAlias = System.getProperty("storage.path");
 
         Files.writeString(clusterFile, """
                 cluster.multinode.active=on
@@ -69,21 +70,26 @@ public class JettraStoreExampleSETest {
                 cluster.node.3.grpc.port=53103
                 cluster.node.3.rest.port=63103
                 """);
+        String isolatedClientStorage = tmpDir.resolve("client-storage").toAbsolutePath().toString();
         System.setProperty("cluster.config.path", clusterFile.toAbsolutePath().toString());
-        System.setProperty("jettra.storage.path", tmpDir.resolve("client-storage").toAbsolutePath().toString());
+        System.clearProperty("jettra.storage.path");
+        System.clearProperty("storage.path");
 
         JettraStoreServer n1 = null, n2 = null, n3 = null;
+        String testDb = "examplesedb_test_db";
         try {
             // Arrancar SECONDARY primero y PRIMARY al final para que la instancia activa en la misma JVM sea node-01 (PRIMARY)
             n2 = startTestNode(tmpDir, clusterFile, "node-02", "SECONDARY", 53102, 63102);
             n3 = startTestNode(tmpDir, clusterFile, "node-03", "SECONDARY", 53103, 63103);
             n1 = startTestNode(tmpDir, clusterFile, "node-01", "PRIMARY", 53101, 63101);
+            System.setProperty("jettra.storage.path", isolatedClientStorage);
+            System.setProperty("storage.path", isolatedClientStorage);
 
             JettraClientConfig cfg = JettraClientConfig.builder()
                     .addClusterNode("127.0.0.1", 53101)
                     .credentials("admin", "admin-jettra")
                     .role("admin")
-                    .defaultDatabase("examplesedb")
+                    .defaultDatabase(testDb)
                     .build();
 
             try (JettraClient client = JettraClient.connect(cfg)) {
@@ -92,11 +98,11 @@ public class JettraStoreExampleSETest {
                 JettraAssert.assertTrue(primaryCfg.contains("node-01") && primaryCfg.contains("53101"),
                         "Debe obtener cluster.config vigente desde el PRIMARY");
 
-                // 2. Crear base examplesedb, buckets DEFINED/NONE e índices
-                client.createDatabase("examplesedb");
-                PaisRepository paisRepo = new PaisRepository(client, "examplesedb");
-                ProductoRepository prodRepo = new ProductoRepository(client, "examplesedb");
-                NotaLibreRepository notaRepo = new NotaLibreRepository(client, "examplesedb");
+                // 2. Crear base aislada de prueba, buckets DEFINED/NONE e índices
+                client.createDatabase(testDb);
+                PaisRepository paisRepo = new PaisRepository(client, testDb);
+                ProductoRepository prodRepo = new ProductoRepository(client, testDb);
+                NotaLibreRepository notaRepo = new NotaLibreRepository(client, testDb);
 
                 paisRepo.initBucketAndIndexes();
                 prodRepo.initBucketAndIndexes();
@@ -157,6 +163,13 @@ public class JettraStoreExampleSETest {
             else System.setProperty("cluster.config.path", prevCluster);
             if (prevStorage == null) System.clearProperty("jettra.storage.path");
             else System.setProperty("jettra.storage.path", prevStorage);
+            if (prevStorageAlias == null) System.clearProperty("storage.path");
+            else System.setProperty("storage.path", prevStorageAlias);
+            try (var walk = Files.walk(tmpDir)) {
+                walk.sorted(java.util.Comparator.reverseOrder()).forEach(p -> {
+                    try { Files.deleteIfExists(p); } catch (Exception ignored) {}
+                });
+            } catch (Exception ignored) {}
         }
     }
 }

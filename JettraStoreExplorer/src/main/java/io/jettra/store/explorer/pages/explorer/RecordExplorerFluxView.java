@@ -173,7 +173,8 @@ public class RecordExplorerFluxView extends FluxView {
             }
         }
 
-        // 5. Registros del Bucket + Modales de solo lectura de Estructura (section=schema) e Índices (section=indexes)
+        // 5. Registros del Bucket + Cabecera informativa del Bucket + Modales de solo lectura de Estructura (section=schema) e Índices (section=indexes)
+        Widget selectedBucketHeader = buildSelectedBucketContextHeader(currentDb, bucketInfo, totalRecords);
         Widget recordsTable = buildRecordsTable(pageRecords, totalRecords, currentDb, currentBucket, searchQuery, currentPage, totalPages, pageSize, isStreamed);
 
         List<Widget> mainColChildren = new java.util.ArrayList<>();
@@ -192,6 +193,7 @@ public class RecordExplorerFluxView extends FluxView {
             indexesModal.id("bucketIndexesModal");
             mainColChildren.add(indexesModal);
         }
+        mainColChildren.add(selectedBucketHeader);
         mainColChildren.add(searchAndActions);
         mainColChildren.add(recordsTable);
 
@@ -234,8 +236,31 @@ public class RecordExplorerFluxView extends FluxView {
         treeNodes.add(treeTitle);
 
         Paragraph treeSubtitle = Paragraph.of("Base de Datos → Engine → Bucket");
-        treeSubtitle.modifier(new Modifier().style("margin: 0 0 0.75rem 0; color: var(--text-muted); font-size: 0.72rem; font-weight: 600;"));
+        treeSubtitle.modifier(new Modifier().style("margin: 0 0 0.55rem 0; color: var(--text-muted); font-size: 0.72rem; font-weight: 600;"));
         treeNodes.add(treeSubtitle);
+
+        // Controles Expandir todo / Colapsar todo (conservan selección y registro activo)
+        Button expandAllBtn = Button.of("⊞ Expandir todo");
+        expandAllBtn.id("treeExpandAllBtn");
+        expandAllBtn.modifier(new Modifier()
+                .cssClass("app-btn-secondary")
+                .attribute("type", "button")
+                .attribute("onclick", "jettraTreeExpandAll()")
+                .style("flex: 1; padding: 0.3rem 0.45rem; font-size: 0.72rem; text-align: center;"));
+
+        Button collapseAllBtn = Button.of("⊟ Colapsar todo");
+        collapseAllBtn.id("treeCollapseAllBtn");
+        collapseAllBtn.modifier(new Modifier()
+                .cssClass("app-btn-secondary")
+                .attribute("type", "button")
+                .attribute("onclick", "jettraTreeCollapseAll()")
+                .style("flex: 1; padding: 0.3rem 0.45rem; font-size: 0.72rem; text-align: center;"));
+
+        Div treeControls = Div.of(expandAllBtn, collapseAllBtn);
+        treeControls.modifier(new Modifier()
+                .attribute("data-tree-controls", "true")
+                .style("display: flex; gap: 0.4rem; margin-bottom: 0.75rem;"));
+        treeNodes.add(treeControls);
 
         // Mostrar únicamente la base de datos activa/seleccionada (sin listar las demás bases de datos)
         if (currentDb != null && !currentDb.isBlank()) {
@@ -257,7 +282,7 @@ public class RecordExplorerFluxView extends FluxView {
             }
             for (var entry : byEngine.entrySet()) {
                 String engineColor = engineAccentColor(entry.getKey());
-                List<Widget> engineChildren = new ArrayList<>();
+                List<Widget> bucketWidgets = new ArrayList<>();
 
                 Div engHeader = Div.of(
                         FluxUi.coloredSpan("⚙️ " + entry.getKey(), "color: " + engineColor + ";"),
@@ -266,8 +291,8 @@ public class RecordExplorerFluxView extends FluxView {
                 engHeader.modifier(new Modifier()
                         .cssClass("explorer-tree-engine-label")
                         .attribute("data-tree-level", "engine")
+                        .attribute("aria-expanded", "true")
                         .style("background: rgba(148, 163, 184, 0.08);"));
-                engineChildren.add(engHeader);
 
                 for (EngineBucketInfo b : entry.getValue()) {
                     boolean activeB = b.getBucketName().equalsIgnoreCase(currentBucket);
@@ -287,60 +312,98 @@ public class RecordExplorerFluxView extends FluxView {
                             .attribute("data-tree-level", "bucket")
                             .attribute("aria-expanded", activeB ? "true" : "false")
                             .style(activeB ? "" : "color: var(--text-main);"));
-                    engineChildren.add(bLink);
+                    bucketWidgets.add(bLink);
 
-                    // Subárbol explícito por Bucket: Estructura (consulta modal), Índices y Registros
-                    if (activeB) {
-                        List<Widget> subItems = new ArrayList<>();
+                    // Subárbol explícito por Bucket (renderizado para todos los buckets para soportar Expandir todo / Colapsar todo)
+                    List<Widget> subItems = new ArrayList<>();
 
-                        Link schemaNode = Link.of("/explorer?db=" + currentDb + "&bucket=" + b.getBucketName() + "&section=schema",
-                                FluxUi.coloredSpan("📐 Estructura", null),
-                                FluxUi.coloredSpan(isDefined ? b.getAttributes().size() + " campos" : "NONE",
-                                        "font-size: 0.66rem; opacity: 0.85;")
-                        );
-                        schemaNode.modifier(new Modifier()
-                                .cssClass("explorer-tree-subitem")
-                                .attribute("data-tree-sub", "schema")
-                                .style("schema".equals(activeSection)
-                                        ? "background: rgba(0, 212, 255, 0.18); color: #00d4ff; font-weight: 700;"
-                                        : "color: var(--text-muted);"));
-                        subItems.add(schemaNode);
+                    Link schemaNode = Link.of("/explorer?db=" + currentDb + "&bucket=" + b.getBucketName() + "&section=schema",
+                            FluxUi.coloredSpan("📐 Estructura", null),
+                            FluxUi.coloredSpan(isDefined ? b.getAttributes().size() + " campos" : "NONE",
+                                    "font-size: 0.66rem; opacity: 0.85;")
+                    );
+                    schemaNode.modifier(new Modifier()
+                            .cssClass("explorer-tree-subitem")
+                            .attribute("data-tree-sub", "schema")
+                            .style((activeB && "schema".equals(activeSection))
+                                    ? "background: rgba(0, 212, 255, 0.18); color: #00d4ff; font-weight: 700;"
+                                    : "color: var(--text-muted);"));
+                    subItems.add(schemaNode);
 
-                        Link indexesNode = Link.of("/explorer?db=" + currentDb + "&bucket=" + b.getBucketName() + "&section=indexes",
-                                FluxUi.coloredSpan("⚡ Índices", null),
-                                FluxUi.coloredSpan(String.valueOf(b.getIndexes().size()), "font-size: 0.66rem; opacity: 0.85;")
-                        );
-                        indexesNode.modifier(new Modifier()
-                                .cssClass("explorer-tree-subitem")
-                                .attribute("data-tree-sub", "indexes")
-                                .style("indexes".equals(activeSection)
-                                        ? "background: rgba(168, 85, 247, 0.20); color: #c084fc; font-weight: 700;"
-                                        : "color: var(--text-muted);"));
-                        subItems.add(indexesNode);
+                    Link indexesNode = Link.of("/explorer?db=" + currentDb + "&bucket=" + b.getBucketName() + "&section=indexes",
+                            FluxUi.coloredSpan("⚡ Índices", null),
+                            FluxUi.coloredSpan(String.valueOf(b.getIndexes().size()), "font-size: 0.66rem; opacity: 0.85;")
+                    );
+                    indexesNode.modifier(new Modifier()
+                            .cssClass("explorer-tree-subitem")
+                            .attribute("data-tree-sub", "indexes")
+                            .style((activeB && "indexes".equals(activeSection))
+                                    ? "background: rgba(168, 85, 247, 0.20); color: #c084fc; font-weight: 700;"
+                                    : "color: var(--text-muted);"));
+                    subItems.add(indexesNode);
 
-                        Link recordsNode = Link.of("/explorer?db=" + currentDb + "&bucket=" + b.getBucketName() + "&section=records",
-                                FluxUi.coloredSpan("📄 Registros", null),
-                                FluxUi.coloredSpan(String.format("%,d", b.getTotalObjects()), "font-size: 0.66rem; opacity: 0.85;")
-                        );
-                        recordsNode.modifier(new Modifier()
-                                .cssClass("explorer-tree-subitem")
-                                .attribute("data-tree-sub", "records")
-                                .style("records".equals(activeSection)
-                                        ? "background: rgba(16, 185, 129, 0.18); color: #34d399; font-weight: 700;"
-                                        : "color: var(--text-muted);"));
-                        subItems.add(recordsNode);
+                    Link recordsNode = Link.of("/explorer?db=" + currentDb + "&bucket=" + b.getBucketName() + "&section=records",
+                            FluxUi.coloredSpan("📄 Registros", null),
+                            FluxUi.coloredSpan(String.format("%,d", b.getTotalObjects()), "font-size: 0.66rem; opacity: 0.85;")
+                    );
+                    recordsNode.modifier(new Modifier()
+                            .cssClass("explorer-tree-subitem")
+                            .attribute("data-tree-sub", "records")
+                            .style((activeB && "records".equals(activeSection))
+                                    ? "background: rgba(16, 185, 129, 0.18); color: #34d399; font-weight: 700;"
+                                    : "color: var(--text-muted);"));
+                    subItems.add(recordsNode);
 
-                        Div subTree = Div.of(subItems.toArray(new Widget[0]));
-                        subTree.modifier(new Modifier().cssClass("explorer-tree-subtree").attribute("data-bucket-subtree", b.getBucketName()));
-                        engineChildren.add(subTree);
-                    }
+                    Div subTree = Div.of(subItems.toArray(new Widget[0]));
+                    subTree.modifier(new Modifier()
+                            .cssClass("explorer-tree-subtree")
+                            .attribute("data-bucket-subtree", b.getBucketName())
+                            .attribute("data-expanded", activeB ? "true" : "false")
+                            .style(activeB ? "display: flex;" : "display: none;"));
+                    bucketWidgets.add(subTree);
                 }
 
-                Div engineGroup = Div.of(engineChildren.toArray(new Widget[0]));
+                Div engineBody = Div.of(bucketWidgets.toArray(new Widget[0]));
+                engineBody.modifier(new Modifier()
+                        .attribute("data-engine-body", entry.getKey())
+                        .attribute("data-expanded", "true")
+                        .style("display: block;"));
+
+                Div engineGroup = Div.of(engHeader, engineBody);
                 engineGroup.modifier(new Modifier().cssClass("explorer-tree-engine-group"));
                 treeNodes.add(engineGroup);
             }
         }
+
+        RawScript treeToggleScript = RawScript.of("""
+                function jettraTreeExpandAll() {
+                  document.querySelectorAll('[data-engine-body]').forEach(function(el) {
+                    el.style.display = 'block';
+                    el.setAttribute('data-expanded', 'true');
+                  });
+                  document.querySelectorAll('[data-bucket-subtree]').forEach(function(el) {
+                    el.style.display = 'flex';
+                    el.setAttribute('data-expanded', 'true');
+                  });
+                  document.querySelectorAll('[data-tree-level="engine"], [data-tree-level="bucket"]').forEach(function(el) {
+                    el.setAttribute('aria-expanded', 'true');
+                  });
+                }
+                function jettraTreeCollapseAll() {
+                  document.querySelectorAll('[data-bucket-subtree]').forEach(function(el) {
+                    el.style.display = 'none';
+                    el.setAttribute('data-expanded', 'false');
+                  });
+                  document.querySelectorAll('[data-engine-body]').forEach(function(el) {
+                    el.style.display = 'none';
+                    el.setAttribute('data-expanded', 'false');
+                  });
+                  document.querySelectorAll('[data-tree-level="engine"], [data-tree-level="bucket"]').forEach(function(el) {
+                    el.setAttribute('aria-expanded', 'false');
+                  });
+                }
+                """);
+        treeNodes.add(treeToggleScript);
 
         Div sidebar = Div.of(treeNodes.toArray(new Widget[0]));
         sidebar.modifier(new Modifier()
@@ -348,6 +411,55 @@ public class RecordExplorerFluxView extends FluxView {
                 .attribute("data-explorer-tree", "true")
                 .style("padding: 1rem; border-left: 3px solid #00d4ff;"));
         return sidebar;
+    }
+
+    private Widget buildSelectedBucketContextHeader(String currentDb, EngineBucketInfo bucketInfo, long totalRecords) {
+        if (bucketInfo == null) {
+            Paragraph emptyMsg = Paragraph.of("ℹ️ Sin Bucket seleccionado. Elija un Bucket desde el Tree Explorador Jerárquico (Base de Datos → Engine → Bucket) para inspeccionar sus registros, estructura e índices.");
+            emptyMsg.modifier(new Modifier().style("margin: 0; font-size: 0.84rem; color: var(--text-muted); font-weight: 600;"));
+            Div emptyCard = Div.of(emptyMsg);
+            emptyCard.modifier(new Modifier()
+                    .attribute("data-selected-bucket-header", "true")
+                    .attribute("data-no-bucket-selected", "true")
+                    .style("background: var(--bg-subtle); border: 1px dashed var(--border-subtle); border-radius: 10px; padding: 0.85rem 1rem; margin-bottom: 1rem;"));
+            return emptyCard;
+        }
+
+        String bName = bucketInfo.getBucketName();
+        String engineType = bucketInfo.getEngineType() != null ? bucketInfo.getEngineType() : "DOCUMENT";
+        boolean isDefined = "DEFINED".equalsIgnoreCase(bucketInfo.getStructureType()) && !bucketInfo.getAttributes().isEmpty();
+        String structureLabel = isDefined
+                ? "📐 Estructura: DEFINED (" + bucketInfo.getAttributes().size() + " campos)"
+                : "📐 Estructura: NONE (Esquema libre)";
+
+        Widget titleRow = Div.of(
+                FluxUi.coloredSpan("📦 Bucket Seleccionado: " + bName, "font-size: 0.98rem; font-weight: 800; color: var(--text-main);"),
+                FluxUi.pillBadge("⚙️ " + engineType, engineAccentColor(engineType)),
+                FluxUi.pillBadge("🗄️ " + currentDb, "#00d4ff")
+        ).modifier(new Modifier().style("display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;"));
+
+        Widget metricsRow = Div.of(
+                FluxUi.pillBadge(structureLabel, isDefined ? "#10b981" : "#94a3b8"),
+                FluxUi.pillBadge("📄 " + String.format("%,d", totalRecords) + " registro(s)", "#38bdf8"),
+                FluxUi.pillBadge("⚡ " + bucketInfo.getIndexes().size() + " índice(s)", "#c084fc")
+        ).modifier(new Modifier().style("display: flex; align-items: center; gap: 0.45rem; flex-wrap: wrap; margin-top: 0.45rem;"));
+
+        List<Widget> cardChildren = new ArrayList<>();
+        cardChildren.add(titleRow);
+        cardChildren.add(metricsRow);
+        if (bucketInfo.getDescription() != null && !bucketInfo.getDescription().isBlank()) {
+            Paragraph descP = Paragraph.of(bucketInfo.getDescription());
+            descP.modifier(new Modifier().style("margin: 0.4rem 0 0 0; font-size: 0.78rem; color: var(--text-muted);"));
+            cardChildren.add(descP);
+        }
+
+        Div card = Div.of(cardChildren.toArray(new Widget[0]));
+        card.modifier(new Modifier()
+                .attribute("data-selected-bucket-header", "true")
+                .attribute("data-selected-bucket-name", bName)
+                .style("background: var(--bg-subtle); border: 1px solid var(--border-subtle); border-left: 4px solid "
+                        + engineAccentColor(engineType) + "; border-radius: 10px; padding: 0.75rem 1rem; margin-bottom: 1rem;"));
+        return card;
     }
 
     private Widget buildActiveDbHeaderBar(String currentDb) {

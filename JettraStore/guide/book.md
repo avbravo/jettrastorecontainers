@@ -3330,3 +3330,75 @@ String assignedId = db.insertBucketRecord("DOCUMENT", "Facturas", null, Map.of("
 String customId = db.insertBucketRecord("DOCUMENT", "Facturas", "FAC-2026-001", Map.of("cliente", "Beta"));
 // Un segundo insertBucketRecord con "FAC-2026-001" lanza IllegalStateException ([PRIMARY KEY VIOLATION])
 ```
+
+
+---
+
+## Administración de Buckets e Índices desde `JettraStoreShell` (RF-09)
+
+Desde la consola interactiva **JettraStoreShell** es posible administrar el ciclo de vida completo de **Buckets** (tanto con estructura `DEFINED` como sin estructura `NONE`) y de **Índices** asociados a cada Bucket (incluyendo índices numéricos `NUMERIC` y autoincrementables `AUTO_INCREMENT`).
+
+### 1. Comandos de Buckets en `JettraStoreShell`
+
+| Operación | Sintaxis | Descripción |
+| :--- | :--- | :--- |
+| **Crear Bucket** | `CREATE BUCKET <nombre> [ENGINE <engine>] [STRUCTURE NONE\|DEFINED <json_atributos>]` | Crea un bucket dentro del Engine (`DOCUMENT`, `JAVA_RECORD`, `KEY_VALUE`, `VECTOR`, `GRAPH`, `TIMESERIES`, `COLUMNAR`, `GEOSPATIAL`) con esquema libre (`NONE`) o estricto (`DEFINED`). |
+| **Listar Buckets** | `SHOW BUCKETS` | Lista todos los buckets creados en la base de datos activa. |
+| **Inspeccionar Estructura** | `DESCRIBE BUCKET <nombre>` / `SHOW BUCKET SCHEMA <nombre>` | Muestra el Engine, modo (`NONE`/`DEFINED`), atributos/reglas e índices del bucket. |
+| **Insertar Registro** | `INSERT BUCKET <nombre> [ID <customId>] <json>` | Inserta y valida el registro contra la estructura del bucket (autogenerando `JettraId` si se omite `ID`). |
+| **Eliminar Bucket** | `DROP BUCKET <nombre> [ENGINE <engine>]` | Elimina el bucket y sus metadatos de la base de datos activa. |
+
+### 2. Comandos de Índices sobre Buckets en `JettraStoreShell`
+
+| Operación | Sintaxis | Descripción |
+| :--- | :--- | :--- |
+| **Crear Índice** | `CREATE BUCKET INDEX <nombre> ON <bucket> (<campo>) [TYPE BTREE\|HASH\|NUMERIC\|AUTO_INCREMENT\|SPARSE] [UNIQUE]` | Crea un índice sobre un bucket concreto. `AUTO_INCREMENT` fuerza unicidad y mantiene secuencia automática. |
+| **Listar Índices** | `SHOW BUCKET INDEXES <bucket>` | Lista los índices asociados al bucket indicando campo, tipo, unicidad y entradas. |
+| **Eliminar Índice** | `DROP BUCKET INDEX <nombre>` | Elimina el índice especificado de la base de datos activa. |
+
+### 3. Ejemplos Prácticos Paso a Paso
+
+#### Escenario A: Bucket con estructura `DEFINED`, índices `AUTO_INCREMENT` y `NUMERIC`
+```sql
+CREATE DATABASE comercio_db
+USE comercio_db
+
+-- 1. Crear Bucket con estructura DEFINED en el Engine DOCUMENT
+CREATE BUCKET Productos ENGINE DOCUMENT STRUCTURE DEFINED [{"atribute_name":"codigo","type_atribute":"Long","jettra_rules":"AUTO_INCREMENT","description":"Código secuencial"},{"atribute_name":"nombre","type_atribute":"String","jettra_rules":"NOT_NULL","description":"Nombre"},{"atribute_name":"precio","type_atribute":"Double","jettra_rules":"POSITIVE","description":"Precio unitario"}]
+-- Salida esperada:
+-- [SUCCESS] Bucket 'Productos' creado en DB 'comercio_db' | Engine: DOCUMENT | Estructura: DEFINED (3 atributo(s)).
+
+-- 2. Crear índice autoincrementable y numérico sobre el Bucket Productos
+CREATE BUCKET INDEX idx_prod_codigo ON Productos (codigo) TYPE AUTO_INCREMENT UNIQUE
+CREATE BUCKET INDEX idx_prod_precio ON Productos (precio) TYPE NUMERIC
+
+-- 3. Inspeccionar esquema e índices del Bucket
+DESCRIBE BUCKET Productos
+SHOW BUCKET INDEXES Productos
+
+-- 4. Insertar registro válido (omite codigo para autogeneración secuencial y genera JettraId)
+INSERT BUCKET Productos {"nombre":"Teclado Mecánico","precio":89.50}
+-- Salida esperada:
+-- [SUCCESS] Registro con JettraId '<32-hex>' insertado y validado en bucket 'Productos' (DOCUMENT).
+
+-- 5. Intentar insertar registro inválido (precio negativo viola POSITIVE)
+INSERT BUCKET Productos {"nombre":"Mouse","precio":-10.0}
+-- Salida esperada:
+-- [VALIDATION ALERT] Registro rechazado por estructura del bucket 'Productos': ...
+```
+
+#### Escenario B: Bucket sin estructura (`NONE`) y limpieza
+```sql
+-- 1. Crear Bucket flexible sin esquema fijo
+CREATE BUCKET NotasLibres ENGINE DOCUMENT STRUCTURE NONE
+-- Salida esperada:
+-- [SUCCESS] Bucket 'NotasLibres' creado en DB 'comercio_db' | Engine: DOCUMENT | Estructura: NONE (0 atributo(s)).
+
+-- 2. Insertar cualquier JSON libre (con o sin ID manual)
+INSERT BUCKET NotasLibres {"titulo":"Recordatorio","prioridad":1,"tags":["urgente","ops"]}
+INSERT BUCKET NotasLibres ID NOTA-01 {"contenido":"Nota con ID manual"}
+
+-- 3. Eliminar índice o bucket cuando ya no se requieran
+DROP BUCKET INDEX idx_prod_precio
+DROP BUCKET NotasLibres ENGINE DOCUMENT
+```

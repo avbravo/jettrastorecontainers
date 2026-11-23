@@ -2394,4 +2394,58 @@ public class JettraStoreExplorerTest {
             plugin.deleteDatabase(dbName);
         }
     }
+
+    @Test
+    @DisplayName("53. RF-09: Cabecera informativa del Bucket antes del DataTable y controles Expandir todo / Colapsar todo en el Tree")
+    public void testRf09SelectedBucketContextHeaderAndTreeExpandCollapseControls() throws Exception {
+        JettraStorePlugin plugin = JettraStorePlugin.getInstance();
+        String dbName = "rf09_context_tree_test_db";
+        try {
+            plugin.createDatabase(dbName, "OrdenesRF09", "DOCUMENT", "Órdenes activas");
+            plugin.addBucket(dbName, "MetricasRF09", "TIMESERIES", "Telemetría en vivo", "NONE", "[]");
+            plugin.saveBucketStructure(dbName, "OrdenesRF09",
+                    "[{\"atribute_name\":\"codigo\",\"type_atribute\":\"Long\",\"jettra_rules\":\"AUTO_INCREMENT\",\"description\":\"Código\"}]");
+            plugin.addIndex(dbName, "OrdenesRF09", "idx_rf09_cod", "codigo", "AUTO_INCREMENT", true);
+            plugin.addRecord(dbName, "OrdenesRF09", "ORD-RF09-1", "Orden prueba", "{\"codigo\":1}");
+
+            // 1. Verificar cabecera informativa del Bucket ANTES del DataTable en /explorer
+            HttpResponse<String> res1 = get("/explorer?db=" + dbName + "&bucket=OrdenesRF09");
+            JettraAssert.assertEquals(200, res1.statusCode(), "GET /explorer debe responder HTTP 200");
+            String body1 = res1.body();
+            int headerPos = body1.indexOf("data-selected-bucket-header=\"true\"");
+            int tablePos = body1.indexOf("Fecha Mutación");
+            if (tablePos < 0) tablePos = body1.indexOf("app-table");
+            JettraAssert.assertTrue(headerPos > 0 && tablePos > headerPos,
+                    "La cabecera informativa del Bucket seleccionado debe renderizarse antes del DataTable");
+            JettraAssert.assertTrue(body1.contains("Bucket Seleccionado: OrdenesRF09")
+                    && body1.contains("DOCUMENT")
+                    && body1.contains(dbName)
+                    && body1.contains("DEFINED (1 campos)")
+                    && body1.contains("índice(s)"),
+                    "La cabecera debe mostrar nombre del bucket, engine, base de datos, modo de estructura y conteo de índices");
+
+            // 2. Cambiar de bucket en el Tree -> la cabecera se actualiza al nuevo bucket (NONE)
+            HttpResponse<String> res2 = get("/explorer?db=" + dbName + "&bucket=MetricasRF09");
+            JettraAssert.assertEquals(200, res2.statusCode(), "Cambio a MetricasRF09 debe responder HTTP 200");
+            JettraAssert.assertTrue(res2.body().contains("Bucket Seleccionado: MetricasRF09")
+                    && res2.body().contains("TIMESERIES")
+                    && res2.body().contains("NONE (Esquema libre)"),
+                    "La cabecera debe actualizarse al seleccionar otro bucket del Tree");
+
+            // 3. Controles Expandir todo y Colapsar todo en el Tree Jerárquico + subárboles renderizados para todos los buckets
+            JettraAssert.assertTrue(body1.contains("id=\"treeExpandAllBtn\"")
+                    && body1.contains("Expandir todo")
+                    && body1.contains("jettraTreeExpandAll()")
+                    && body1.contains("id=\"treeCollapseAllBtn\"")
+                    && body1.contains("Colapsar todo")
+                    && body1.contains("jettraTreeCollapseAll()")
+                    && body1.contains("data-engine-body=\"DOCUMENT\"")
+                    && body1.contains("data-engine-body=\"TIMESERIES\"")
+                    && body1.contains("data-bucket-subtree=\"OrdenesRF09\"")
+                    && body1.contains("data-bucket-subtree=\"MetricasRF09\""),
+                    "El Tree debe incluir botones Expandir todo / Colapsar todo y todos los subárboles de buckets/engines");
+        } finally {
+            plugin.deleteDatabase(dbName);
+        }
+    }
 }
