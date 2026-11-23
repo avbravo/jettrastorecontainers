@@ -58,7 +58,7 @@ public final class JettraStoreSamples {
         return ALL_SAMPLE_DATABASES.contains(name);
     }
 
-    public static int getSampleCollectionCount(String dbName) {
+    public static int getSampleBucketCount(String dbName) {
         if (dbName == null) return 0;
         return switch (dbName) {
             case SAMPLE_ENTERPRISE -> 4;

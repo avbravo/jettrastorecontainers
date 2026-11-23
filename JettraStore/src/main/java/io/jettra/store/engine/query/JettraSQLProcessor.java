@@ -207,7 +207,7 @@ public final class JettraSQLProcessor {
 
         DocumentEngine docEngine = database.getDocumentEngine(collection);
         if (docEngine == null || docEngine.isEmpty()) {
-            return new QueryResult(List.of("result"), Collections.emptyList(), 0, "0 registros en colección '" + collection + "'");
+            return new QueryResult(List.of("result"), Collections.emptyList(), 0, "0 registros en bucket '" + collection + "'");
         }
 
         // 4. Parsear especificaciones de agregación
@@ -283,7 +283,7 @@ public final class JettraSQLProcessor {
         String collection = sanitize(tokens[0]);
         DocumentEngine docEngine = database.getDocumentEngine(collection);
         if (docEngine == null || docEngine.isEmpty()) {
-            return new QueryResult(List.of("result"), Collections.emptyList(), 0, "0 registros en colección '" + collection + "'");
+            return new QueryResult(List.of("result"), Collections.emptyList(), 0, "0 registros en bucket '" + collection + "'");
         }
 
         List<String> groupByCols = new ArrayList<>();
@@ -839,7 +839,7 @@ public final class JettraSQLProcessor {
             summaryMsg = String.format("%d fila(s) retornada(s) (Límite: %d, Offset: %d) de un total estimado de %d en '%s'",
                     rows.size(), limit, offset, totalCount, collection);
         } else {
-            summaryMsg = String.format("%d fila(s) retornada(s) [Límite de seguridad: %d] (Total en colección: %d en '%s')",
+            summaryMsg = String.format("%d fila(s) retornada(s) [Límite de seguridad: %d] (Total en bucket: %d en '%s')",
                     rows.size(), limit, totalCount, collection);
         }
 

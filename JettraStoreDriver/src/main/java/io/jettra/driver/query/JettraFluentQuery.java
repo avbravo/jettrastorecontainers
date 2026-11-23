@@ -22,7 +22,7 @@ import java.util.stream.Stream;
  */
 public final class JettraFluentQuery<T> {
     private final JettraClient client;
-    private final String collection;
+    private final String bucket;
     private final Class<T> recordClass;
     private String databaseName;
     private String indexName;
@@ -31,10 +31,10 @@ public final class JettraFluentQuery<T> {
     private int skip = 0;
     private FetchMode fetchMode = FetchMode.EAGER;
 
-    public JettraFluentQuery(JettraClient client, String databaseName, String collection, Class<T> recordClass) {
+    public JettraFluentQuery(JettraClient client, String databaseName, String bucket, Class<T> recordClass) {
         this.client = Objects.requireNonNull(client, "El cliente JettraClient no puede ser nulo");
         this.databaseName = databaseName;
-        this.collection = Objects.requireNonNull(collection, "El nombre de la colección no puede ser nulo");
+        this.bucket = Objects.requireNonNull(bucket, "El nombre del bucket no puede ser nulo");
         this.recordClass = Objects.requireNonNull(recordClass, "La clase del registro no puede ser nula");
     }
 
@@ -99,7 +99,7 @@ public final class JettraFluentQuery<T> {
 
         // 1. Intentar resolver desde RecordsEngine si la clase es un Record
         if (Record.class.isAssignableFrom(recordClass)) {
-            RecordsEngine<?> recEngine = db.getRecordsEngine(collection);
+            RecordsEngine<?> recEngine = db.getRecordsEngine(bucket);
             if (recEngine != null && !recEngine.getAll().isEmpty()) {
                 for (Object rec : recEngine.listAll()) {
                     if (recordClass.isInstance(rec)) {
@@ -111,7 +111,7 @@ public final class JettraFluentQuery<T> {
 
         // 2. Si no se obtuvieron resultados de RecordsEngine, consultar DocumentEngine y mapear
         if (rawItems.isEmpty()) {
-            DocumentEngine docEngine = db.getDocumentEngine(collection);
+            DocumentEngine docEngine = db.getDocumentEngine(bucket);
             if (docEngine != null && !docEngine.isEmpty()) {
                 for (Map<String, Object> doc : docEngine.streamAll().collectAll()) {
                     if (doc != null) {
@@ -143,7 +143,7 @@ public final class JettraFluentQuery<T> {
         List<T> finalItems = stream.toList();
         long dur = System.currentTimeMillis() - start;
         String summary = String.format("Retornados %d registro(s) de '%s' en %d ms (Índice: %s, FetchMode: %s)",
-            finalItems.size(), collection, dur, (indexName != null ? indexName : "NONE"), fetchMode);
+            finalItems.size(), bucket, dur, (indexName != null ? indexName : "NONE"), fetchMode);
 
         return new JettraResults<>(finalItems, summary, dur);
     }

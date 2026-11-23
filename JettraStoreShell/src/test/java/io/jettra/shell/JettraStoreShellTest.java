@@ -457,7 +457,7 @@ public class JettraStoreShellTest {
             String created = shell.executeCommand("CREATE DATABASE drop_test_db");
             assertTrue(created.contains("[SUCCESS]"));
             shell.executeCommand("USE drop_test_db");
-            shell.executeCommand("CREATE COLLECTION users");
+            shell.executeCommand("CREATE BUCKET users");
             shell.executeCommand("INSERT INTO users (id, name) VALUES ('u1', 'Alice')");
 
             String dbsBefore = shell.executeCommand("SHOW DATABASES");
@@ -857,13 +857,14 @@ public class JettraStoreShellTest {
         assertTrue(multiMatches.size() > 1);
         assertTrue(multiMatches.contains("SHOW DATABASES"));
         assertTrue(multiMatches.contains("SHOW BUCKETS"));
-        assertTrue(multiMatches.contains("SHOW COLLECTIONS"));
+        assertFalse(multiMatches.contains("SHOW COLLECTIONS"));
 
         // 4. Múltiples coincidencias para subcomandos: 'SHOW '
         var showSubMatches = shell.autocomplete("SHOW ");
         assertNotNull(showSubMatches);
         assertTrue(showSubMatches.contains("SHOW DATABASES"));
-        assertTrue(showSubMatches.contains("SHOW COLLECTIONS"));
+        assertTrue(showSubMatches.contains("SHOW BUCKETS"));
+        assertFalse(showSubMatches.contains("SHOW COLLECTIONS"));
 
         // 5. Metadatos de autocompletado: grupo y descripción
         String dbGroup = shell.resolveCandidateGroup("SHOW DATABASES");
@@ -1173,6 +1174,54 @@ public class JettraStoreShellTest {
             String outBucketCustom = shell.executeCommand("INSERT BUCKET Facturas ID FAC-99 {\"folio\":\"F99\",\"total\":99}");
             assertTrue(outBucketCustom.contains("[SUCCESS]") && outBucketCustom.contains("FAC-99"),
                     "INSERT BUCKET con ID personalizado debe respetarlo: " + outBucketCustom);
+        } finally {
+            try { shell.executeCommand("DROP DATABASE " + dbName); } catch (Exception ignored) {}
+        }
+    }
+
+    @Test
+    @DisplayName("RF-12: Unificación a BUCKET en motor DOCUMENT y rechazo de comandos COLLECTION en JettraStoreShell")
+    public void testRf12BucketUnificationAndCollectionRemovalInShell() {
+        JettraStoreShellApp shell = new JettraStoreShellApp(false);
+        String dbName = "rf12_shell_bucket_test_db";
+        try {
+            shell.executeCommand("login admin admin-jettra");
+            shell.executeCommand("CREATE DATABASE " + dbName);
+            shell.executeCommand("USE " + dbName);
+
+            // 1. Comandos COLLECTION deben ser rechazados explícitamente
+            String errCreate = shell.executeCommand("CREATE COLLECTION clientes");
+            assertTrue(errCreate.contains("[ERROR]") && errCreate.contains("BUCKET"),
+                    "CREATE COLLECTION debe rechazarse indicando el uso de BUCKET: " + errCreate);
+
+            String errShow = shell.executeCommand("SHOW COLLECTIONS");
+            assertTrue(errShow.contains("[ERROR]") && errShow.contains("BUCKET"),
+                    "SHOW COLLECTIONS debe rechazarse indicando SHOW BUCKETS: " + errShow);
+
+            String errDrop = shell.executeCommand("DROP COLLECTION clientes");
+            assertTrue(errDrop.contains("[ERROR]") && errDrop.contains("BUCKET"),
+                    "DROP COLLECTION debe rechazarse indicando DROP BUCKET: " + errDrop);
+
+            // 2. Autocompletado no debe sugerir COLLECTION
+            assertFalse(shell.autocomplete("CREATE ").contains("CREATE COLLECTION "));
+            assertFalse(shell.autocomplete("DROP ").contains("DROP COLLECTION "));
+            assertTrue(shell.autocomplete("CREATE ").contains("CREATE BUCKET "));
+            assertTrue(shell.autocomplete("DROP ").contains("DROP BUCKET "));
+
+            // 3. Flujo completo con BUCKET en motor DOCUMENT
+            String created = shell.executeCommand("CREATE BUCKET clientes TYPE DOCUMENT");
+            assertTrue(created.contains("[SUCCESS]") && created.contains("Bucket 'clientes'"),
+                    "CREATE BUCKET debe crear el bucket en DOCUMENT: " + created);
+
+            String listed = shell.executeCommand("SHOW BUCKETS");
+            assertTrue(listed.contains("DOCUMENT") && listed.contains("Bucket") && listed.contains("clientes"),
+                    "SHOW BUCKETS debe mostrar DOCUMENT con unidad Bucket: " + listed);
+            assertFalse(listed.contains("Collection"),
+                    "SHOW BUCKETS no debe etiquetar el motor DOCUMENT como Collection: " + listed);
+
+            String dropped = shell.executeCommand("DROP BUCKET clientes");
+            assertTrue(dropped.contains("[SUCCESS]") && dropped.contains("clientes"),
+                    "DROP BUCKET debe eliminar el bucket: " + dropped);
         } finally {
             try { shell.executeCommand("DROP DATABASE " + dbName); } catch (Exception ignored) {}
         }

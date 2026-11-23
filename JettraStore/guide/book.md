@@ -1023,8 +1023,8 @@ Para evitar la saturación de memoria (*Heap Space*) cuando clientes o interface
 #### 10.5.1 Estructura de Metadatos: `JettraPoliceNotification`
 Cuando el algoritmo predictivo de `JettraPolice` determina que una lectura masiva amenaza la estabilidad del Heap, genera un registro inmutable `JettraPoliceNotification` con los detalles diagnósticos de la intervención:
 * `operation`: Identificador de la consulta en ejecución (ej. `SQL_SELECT`, `DOCUMENT_STREAM_ALL`).
-* `targetCollection`: Nombre de la colección o bucket evaluado.
-* `estimatedTotalRecords`: Cantidad total de registros presentes en la colección.
+* `targetBucket`: Nombre del bucket evaluado.
+* `estimatedTotalRecords`: Cantidad total de registros presentes en el bucket.
 * `safeBatchSize`: Tamaño de lote seguro calculado adaptativamente (ej. 100 registros por lote).
 * `heapUsagePercent`: Porcentaje de saturación del Heap JVM al momento de la intervención.
 * `availableMemoryMb`: Memoria disponible restante en Megabytes.
@@ -1033,14 +1033,14 @@ Cuando el algoritmo predictivo de `JettraPolice` determina que una lectura masiv
 * `forcedLazyPagination`: Bandera booleana que confirma que la paginación defensiva fue forzada de forma autónoma.
 
 #### 10.5.2 Flujo Continuo: `StreamResponse<T>`
-En el núcleo del motor (`DocumentEngine.streamAll()`, `JettraDatabase.streamCollection()`), los datos se leen y transmiten mediante `StreamResponse<T>`:
+En el núcleo del motor (`DocumentEngine.streamAll()`, `JettraDatabase.streamBucket()`), los datos se leen y transmiten mediante `StreamResponse<T>`:
 1. **Partición en Bloques Seguros:** La consulta se fragmenta en lotes de tamaño seguro (por defecto 100 registros).
 2. **Liberación Iterativa para Garbage Collector (GC):** Cada chunk procesado es vaciado y dereferenciado de inmediato al iterar (`forEachChunk()`), permitiendo al recolector de basura (ZGC Generational en Java 25) recuperar memoria entre lote y lote sin retener la totalidad de los datos en el Heap.
 3. **Entrega Transparente:** Provee adaptadores para iteración por lotes (`forEachChunk()`), iteración elemento a elemento (`forEachRecord()`), acumulación segura (`collectAll()`) y Streams de Java 25 (`stream()`).
 
 ```java
 // Ejemplo de consumo en servidor o extensiones internas
-try (StreamResponse<Map<String, Object>> stream = database.streamCollection("clientes", 10000)) {
+try (StreamResponse<Map<String, Object>> stream = database.streamBucket("clientes", 10000)) {
     if (stream.isSentinelActivated()) {
         System.out.println("Sentinel activo: Lote seguro de " + stream.getSafeBatchSize() + " registros.");
     }
@@ -1103,8 +1103,8 @@ public class AntiOomStreamingSentinelExample {
         JettraPoliceEventListener listener = notification -> {
             sentinelNotified.set(true);
             lastNotifRef.set(notification);
-            System.out.printf("🛡️ [SENTINEL ACTIVADO] Operación: %s | Colección: %s%n",
-                notification.operation(), notification.targetCollection());
+            System.out.printf("🛡️ [SENTINEL ACTIVADO] Operación: %s | Bucket: %s%n",
+                notification.operation(), notification.targetBucket());
             System.out.printf("   Lote seguro forzado: %d | Heap: %.1f%% | RAM libre: %d MB%n",
                 notification.safeBatchSize(), notification.heapUsagePercent(), notification.availableMemoryMb());
         };

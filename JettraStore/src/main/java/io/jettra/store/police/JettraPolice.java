@@ -85,13 +85,13 @@ public final class JettraPolice implements Runnable {
      * Toma decisiones autónomas y forzosas para garantizar la estabilidad total del sistema.
      *
      * @param operation Nombre de la operación (e.g., "SQL_SELECT", "JQL_FROM", "SCAN_ALL")
-     * @param collection Nombre de la colección o bucket
-     * @param estimatedRecords Cantidad total estimada de registros en la colección
+     * @param bucket Nombre del bucket objetivo
+     * @param estimatedRecords Cantidad total estimada de registros en el bucket
      * @param requestedLimit Límite solicitado por el cliente (<= 0 o Integer.MAX_VALUE = sin límite)
      * @param avgRecordSizeBytes Tamaño promedio estimado de cada registro en bytes
      * @return Decisión vinculante de JettraPolice con las directivas de seguridad
      */
-    public PoliceDecision evaluateHeapSafety(String operation, String collection, long estimatedRecords, int requestedLimit, long avgRecordSizeBytes) {
+    public PoliceDecision evaluateHeapSafety(String operation, String bucket, long estimatedRecords, int requestedLimit, long avgRecordSizeBytes) {
         long maxMemory = Runtime.getRuntime().maxMemory();
         long totalMemory = Runtime.getRuntime().totalMemory();
         long freeMemory = Runtime.getRuntime().freeMemory();
@@ -121,7 +121,7 @@ public final class JettraPolice implements Runnable {
             String rationale = String.format(
                 "JettraPolice activado: Operación '%s' sobre '%s' (%d registros solicitados) amenazaba con agotar el Heap " +
                 "(Est: %d MB requeridos, Disp: %d MB, Saturación Heap: %.1f%%). Se forzó paginación lazy a %d filas para garantizar estabilidad.",
-                operation, collection, targetCount,
+                operation, bucket, targetCount,
                 estimatedBytes / (1024 * 1024), availableMemory / (1024 * 1024),
                 saturationPercent, enforcedLimit
             );
@@ -142,7 +142,7 @@ public final class JettraPolice implements Runnable {
 
             JettraPoliceNotification notification = JettraPoliceNotification.of(
                 operation,
-                collection,
+                bucket,
                 estimatedRecords,
                 enforcedLimit,
                 saturationPercent,

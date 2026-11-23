@@ -641,7 +641,7 @@ DROP USER dev_user;
 ## 12. Exploración de Buckets/Units, Inspección de Registros y Conteo Multimodelo
 
 En la arquitectura multimodelo de `JettraStore`, cada motor organiza sus datos en unidades lógicas especializadas (**Buckets** o **Units**):
-- **DOCUMENT**: Colecciones de documentos JSON estructurados/semi-estructurados (`Collection`).
+- **DOCUMENT**: Buckets de documentos JSON estructurados (`DEFINED`) o sin estructura fija (`NONE`) (`Bucket`). Los comandos heredados de `COLLECTION` (`CREATE COLLECTION`, `SHOW COLLECTIONS`, `DROP COLLECTION`) fueron retirados y unificados en `BUCKET` (RF-12).
 - **VECTOR**: Índices vectoriales de embeddings densos con métricas de coseno (`Vector Index [dim]`).
 - **GRAPH**: Redes de grafos de propiedades, vértices y aristas dirigidas (`Property Graph`).
 - **TIMESERIES**: Métricas y series temporales ordenadas cronológicamente (`Metric Series`).
@@ -671,9 +671,9 @@ jettra-shell [admin@127.0.0.1:50001/sample_enterprise_db]> SHOW BUCKETS
 +-------------+----------------------+--------------------+-----------+----------------------+
 | Motor       | Tipo de Unidad       | Nombre de Unidad   | Registros | Estado               |
 +-------------+----------------------+--------------------+-----------+----------------------+
-| DOCUMENT    | Collection           | departments        | 1         | ACTIVE (In-Memory)   |
-| DOCUMENT    | Collection           | employees          | 1         | ACTIVE (In-Memory)   |
-| DOCUMENT    | Collection           | products           | 1         | ACTIVE (In-Memory)   |
+| DOCUMENT    | Bucket               | departments        | 1         | ACTIVE (In-Memory)   |
+| DOCUMENT    | Bucket               | employees          | 1         | ACTIVE (In-Memory)   |
+| DOCUMENT    | Bucket               | products           | 1         | ACTIVE (In-Memory)   |
 | VECTOR      | Vector Index [3d]    | product_embeddings | 1         | INDEXED (HNSW)       |
 | VECTOR      | Vector Index [3d]    | employee_biometrics| 1         | INDEXED (HNSW)       |
 | GRAPH       | Property Graph       | catalog_graph      | 2         | TOPOLOGY (In-Memory) |
@@ -692,9 +692,9 @@ jettra-shell [admin@127.0.0.1:50001/sample_enterprise_db]> SHOW BUCKETS DOCUMENT
 +-------------+----------------------+--------------------+-----------+----------------------+
 | Motor       | Tipo de Unidad       | Nombre de Unidad   | Registros | Estado               |
 +-------------+----------------------+--------------------+-----------+----------------------+
-| DOCUMENT    | Collection           | departments        | 1         | ACTIVE (In-Memory)   |
-| DOCUMENT    | Collection           | employees          | 1         | ACTIVE (In-Memory)   |
-| DOCUMENT    | Collection           | products           | 1         | ACTIVE (In-Memory)   |
+| DOCUMENT    | Bucket               | departments        | 1         | ACTIVE (In-Memory)   |
+| DOCUMENT    | Bucket               | employees          | 1         | ACTIVE (In-Memory)   |
+| DOCUMENT    | Bucket               | products           | 1         | ACTIVE (In-Memory)   |
 +-------------+----------------------+--------------------+-----------+----------------------+
 Total: 3 bucket(s)/unit(s) registrados en la base de datos 'sample_enterprise_db'.
 ```
@@ -813,7 +813,7 @@ CREATE DATABASE clinica_db;
 -- 2. Conmutar a la base de datos de trabajo
 USE clinica_db;
 
--- 3. Crear unidades/motores especializados (sintaxis CREATE ENGINE o CREATE COLLECTION)
+-- 3. Crear buckets/motores especializados (sintaxis CREATE BUCKET o CREATE ENGINE)
 CREATE ENGINE pacientes TYPE DOCUMENT;
 CREATE ENGINE inventario_rapido TYPE KEYVALUE;
 CREATE ENGINE diagnostico_vectores TYPE VECTOR;
@@ -1135,8 +1135,8 @@ admin@jettra-cluster:primary> SHOW BUCKETS
 +-------------+----------------------+--------------------+-----------+----------------------+
 | Motor       | Tipo de Unidad       | Nombre de Unidad   | Registros | Estado               |
 +-------------+----------------------+--------------------+-----------+----------------------+
-| DOCUMENT    | Collection           | pacientes          | 0         | ACTIVE (In-Memory)   |
-| DOCUMENT    | Collection           | medicos            | 0         | ACTIVE (In-Memory)   |
+| DOCUMENT    | Bucket               | pacientes          | 0         | ACTIVE (In-Memory)   |
+| DOCUMENT    | Bucket               | medicos            | 0         | ACTIVE (In-Memory)   |
 | VECTOR      | Vector Index [3d]    | sintomas_ia        | 0         | INDEXED (HNSW)       |
 | GRAPH       | Property Graph       | red_hospital       | 0         | TOPOLOGY (In-Memory) |
 | TIMESERIES  | Metric Series        | signos_vitales     | 0         | APPEND-ONLY (Delta)  |
@@ -1635,8 +1635,8 @@ A continuación aprovisionamos los buckets especializados para cada uno de los m
 
 ```text
 -- 1. Unidades del Motor Documental
-admin@jettra-cluster:primary> CREATE COLLECTION empresas
-admin@jettra-cluster:primary> CREATE COLLECTION clientes
+admin@jettra-cluster:primary> CREATE BUCKET empresas TYPE DOCUMENT
+admin@jettra-cluster:primary> CREATE BUCKET clientes TYPE DOCUMENT
 admin@jettra-cluster:primary> CREATE COLLECTION productos
 admin@jettra-cluster:primary> CREATE COLLECTION tecnicos
 admin@jettra-cluster:primary> CREATE COLLECTION ordenes_compra

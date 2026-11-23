@@ -2613,4 +2613,49 @@ public class JettraStoreExplorerTest {
             plugin.deleteDatabase(dbName);
         }
     }
+
+    @Test
+    @DisplayName("56. RF-12: Unificación a Bucket en el motor DOCUMENT en /database y /explorer sin referencias a COLLECTION")
+    public void testRf12DocumentEngineUsesBucketExclusivelyAcrossDatabaseAndExplorer() throws Exception {
+        JettraStorePlugin plugin = JettraStorePlugin.getInstance();
+        String dbName = "rf12_doc_bucket_test_db";
+        try {
+            plugin.createDatabase(dbName, "FacturasRF12", "DOCUMENT", "Bucket documental unificado");
+            plugin.saveBucketStructure(dbName, "FacturasRF12",
+                    "[{\"atribute_name\":\"folio\",\"type_atribute\":\"String\",\"jettra_rules\":\"NOT_NULL\",\"description\":\"Folio\"}]");
+            plugin.addIndex(dbName, "FacturasRF12", "idx_rf12_folio", "folio", "BTREE", true);
+            plugin.addRecord(dbName, "FacturasRF12", "FAC-RF12-1", "Factura RF12", "{\"folio\":\"F-001\"}");
+
+            // 1. /database -> Motores y Buckets muestra DOCUMENT con Buckets y sin comandos/flujos COLLECTION
+            HttpResponse<String> dbRes = get("/database?db=" + dbName + "&manage_engines=true");
+            JettraAssert.assertEquals(200, dbRes.statusCode(), "GET /database?manage_engines=true debe responder 200");
+            String dbBody = dbRes.body();
+            JettraAssert.assertTrue(dbBody.contains("data-engine-group=\"DOCUMENT\"")
+                    && dbBody.contains("FacturasRF12")
+                    && dbBody.contains("Añadir Bucket en DOCUMENT"),
+                    "/database debe administrar el engine DOCUMENT exclusivamente mediante Buckets");
+            JettraAssert.assertFalse(dbBody.contains("CREATE COLLECTION") || dbBody.contains("DROP COLLECTION") || dbBody.contains("Colección de logs"),
+                    "/database no debe contener referencias residuales a COLLECTION");
+
+            // 2. /explorer -> Tree Jerárquico, Bucket Seleccionado, Estructura e Índices sobre Bucket DOCUMENT
+            HttpResponse<String> expRes = get("/explorer?db=" + dbName + "&bucket=FacturasRF12");
+            JettraAssert.assertEquals(200, expRes.statusCode(), "GET /explorer debe responder 200");
+            JettraAssert.assertTrue(expRes.body().contains("Bucket Seleccionado: FacturasRF12")
+                    && expRes.body().contains("DOCUMENT")
+                    && expRes.body().contains("FAC-RF12-1"),
+                    "/explorer debe operar sobre FacturasRF12 como Bucket del engine DOCUMENT");
+
+            HttpResponse<String> schemaRes = get("/explorer?db=" + dbName + "&bucket=FacturasRF12&section=schema");
+            JettraAssert.assertEquals(200, schemaRes.statusCode(), "Modal Estructura debe responder 200");
+            JettraAssert.assertTrue(schemaRes.body().contains("Estructura del Bucket 'FacturasRF12'"),
+                    "El modal de estructura debe titularse como Bucket");
+
+            HttpResponse<String> idxRes = get("/explorer?db=" + dbName + "&bucket=FacturasRF12&section=indexes");
+            JettraAssert.assertEquals(200, idxRes.statusCode(), "Modal Índices debe responder 200");
+            JettraAssert.assertTrue(idxRes.body().contains("Índices del Bucket 'FacturasRF12' (" + dbName + " / DOCUMENT)"),
+                    "El modal de índices debe titularse como Bucket en DOCUMENT");
+        } finally {
+            plugin.deleteDatabase(dbName);
+        }
+    }
 }

@@ -11,7 +11,7 @@ import java.time.Instant;
  */
 public record JettraPoliceNotification(
     String operation,
-    String targetCollection,
+    String targetBucket,
     long estimatedTotalRecords,
     int safeBatchSize,
     double heapUsagePercent,
@@ -23,7 +23,7 @@ public record JettraPoliceNotification(
 
     public static JettraPoliceNotification of(
             String operation,
-            String targetCollection,
+            String targetBucket,
             long estimatedTotalRecords,
             int safeBatchSize,
             double heapUsagePercent,
@@ -31,7 +31,7 @@ public record JettraPoliceNotification(
             String warningMessage) {
         return new JettraPoliceNotification(
             operation,
-            targetCollection,
+            targetBucket,
             estimatedTotalRecords,
             safeBatchSize,
             heapUsagePercent,

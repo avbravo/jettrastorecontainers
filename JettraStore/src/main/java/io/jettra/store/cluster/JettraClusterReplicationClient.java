@@ -281,11 +281,11 @@ public final class JettraClusterReplicationClient implements AutoCloseable {
                         String desc = switch (frame.frameType()) {
                             case JettraRaftFrame.TYPE_CREATE_DATABASE -> String.format("Base '%s' replicada hacia '%s'", frame.databaseName(), vote.peer().getId());
                             case JettraRaftFrame.TYPE_DISTRIBUTE_DATABASE -> String.format("Transferencia de base '%s' completada hacia '%s'", frame.databaseName(), vote.peer().getId());
-                            case JettraRaftFrame.TYPE_CREATE_ENGINE -> String.format("Motor '%s' [%s] en base '%s' replicado hacia '%s'", frame.collectionName(), frame.key(), frame.databaseName(), vote.peer().getId());
-                            case JettraRaftFrame.TYPE_CREATE_INDEX -> String.format("Índice '%s' en colección '%s' de base '%s' replicado hacia '%s'", frame.key(), frame.collectionName(), frame.databaseName(), vote.peer().getId());
+                            case JettraRaftFrame.TYPE_CREATE_ENGINE -> String.format("Motor '%s' [%s] en base '%s' replicado hacia '%s'", frame.bucketName(), frame.key(), frame.databaseName(), vote.peer().getId());
+                            case JettraRaftFrame.TYPE_CREATE_INDEX -> String.format("Índice '%s' en bucket '%s' de base '%s' replicado hacia '%s'", frame.key(), frame.bucketName(), frame.databaseName(), vote.peer().getId());
                             case JettraRaftFrame.TYPE_DROP_INDEX -> String.format("Índice '%s' de base '%s' eliminado hacia '%s'", frame.key(), frame.databaseName(), vote.peer().getId());
-                            case JettraRaftFrame.TYPE_PUT_DOCUMENT -> String.format("Documento '%s' en colección '%s' replicado hacia '%s'", frame.key(), frame.collectionName(), vote.peer().getId());
-                            case JettraRaftFrame.TYPE_PUT_RECORD -> String.format("Registro KV '%s' en '%s' replicado hacia '%s'", frame.key(), frame.collectionName(), vote.peer().getId());
+                            case JettraRaftFrame.TYPE_PUT_DOCUMENT -> String.format("Documento '%s' en bucket '%s' replicado hacia '%s'", frame.key(), frame.bucketName(), vote.peer().getId());
+                            case JettraRaftFrame.TYPE_PUT_RECORD -> String.format("Registro KV '%s' en '%s' replicado hacia '%s'", frame.key(), frame.bucketName(), vote.peer().getId());
                             default -> String.format("Trama Raft 0x%02X transferida hacia '%s'", frame.frameType(), vote.peer().getId());
                         };
                         ClusterLiveEvent transferEvt = new ClusterLiveEvent(

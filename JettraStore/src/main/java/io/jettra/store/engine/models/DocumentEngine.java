@@ -18,19 +18,19 @@ import java.util.stream.StreamSupport;
  * para evitar sobrecargar el heap con toArray() y listas intermedias.
  */
 public final class DocumentEngine implements Iterable<Map<String, Object>> {
-    private final String collectionName;
+    private final String bucketName;
     private final io.jettra.store.core.JettraDatabase database;
     private final UnifiedMap<String, Map<String, Object>> documents = UnifiedMap.newMap(64);
     private final ReentrantReadWriteLock rwLock = new ReentrantReadWriteLock();
     private final ReentrantReadWriteLock.ReadLock rLock = rwLock.readLock();
     private final ReentrantReadWriteLock.WriteLock wLock = rwLock.writeLock();
 
-    public DocumentEngine(String collectionName) {
-        this(collectionName, null);
+    public DocumentEngine(String bucketName) {
+        this(bucketName, null);
     }
 
-    public DocumentEngine(String collectionName, io.jettra.store.core.JettraDatabase database) {
-        this.collectionName = collectionName;
+    public DocumentEngine(String bucketName, io.jettra.store.core.JettraDatabase database) {
+        this.bucketName = bucketName;
         this.database = database;
     }
 
@@ -57,7 +57,7 @@ public final class DocumentEngine implements Iterable<Map<String, Object>> {
             wLock.unlock();
         }
         if (database != null && copy != null) {
-            database.onDocumentInsert(collectionName, effectiveId, copy);
+            database.onDocumentInsert(bucketName, effectiveId, copy);
         }
     }
 
@@ -85,7 +85,7 @@ public final class DocumentEngine implements Iterable<Map<String, Object>> {
                     || (database != null && database.getStorageMode().isDiskMemory() && loadFromDiskMemory(effectiveId) != null)
                     || (database != null && database.getStorageMode().isOffHeap() && loadFromOffHeap(effectiveId) != null)) {
                 throw new IllegalStateException("[PRIMARY KEY VIOLATION] Ya existe un registro con el identificador '"
-                        + effectiveId + "' en el bucket '" + collectionName + "'.");
+                        + effectiveId + "' en el bucket '" + bucketName + "'.");
             }
             copy = UnifiedMap.newMap(Math.max(4, (document != null ? document.size() : 0) + 1));
             if (document != null) {
@@ -102,7 +102,7 @@ public final class DocumentEngine implements Iterable<Map<String, Object>> {
             wLock.unlock();
         }
         if (database != null) {
-            database.onDocumentInsert(collectionName, effectiveId, copy);
+            database.onDocumentInsert(bucketName, effectiveId, copy);
         }
         return effectiveId;
     }
@@ -118,7 +118,7 @@ public final class DocumentEngine implements Iterable<Map<String, Object>> {
             }
         }
         String dbName = database != null ? database.getDatabaseName() : "default";
-        return io.jettra.store.core.JettraId.generate(dbName, collectionName).toHexString();
+        return io.jettra.store.core.JettraId.generate(dbName, bucketName).toHexString();
     }
 
     /**
@@ -178,19 +178,19 @@ public final class DocumentEngine implements Iterable<Map<String, Object>> {
     private void persistToDiskMemory(String id, Map<String, Object> doc) {
         try {
             String jsonStr = new io.jettra.json.JettraJson().toJson(doc);
-            database.putRecordDiskMemory((byte) 1, collectionName + ":" + id, jsonStr.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            database.putRecordDiskMemory((byte) 1, bucketName + ":" + id, jsonStr.getBytes(java.nio.charset.StandardCharsets.UTF_8));
         } catch (Exception ignored) {}
     }
 
     private void removeFromDiskMemory(String id) {
         try {
-            database.deleteRecordDiskMemory((byte) 1, collectionName + ":" + id);
+            database.deleteRecordDiskMemory((byte) 1, bucketName + ":" + id);
         } catch (Exception ignored) {}
     }
 
     private Map<String, Object> loadFromDiskMemory(String id) {
         try {
-            byte[] bytes = database.getRecordDiskMemory((byte) 1, collectionName + ":" + id);
+            byte[] bytes = database.getRecordDiskMemory((byte) 1, bucketName + ":" + id);
             if (bytes != null) {
                 String jsonStr = new String(bytes, java.nio.charset.StandardCharsets.UTF_8);
                 return new io.jettra.json.JettraJson().fromJson(jsonStr, Map.class);
@@ -202,19 +202,19 @@ public final class DocumentEngine implements Iterable<Map<String, Object>> {
     private void persistToOffHeap(String id, Map<String, Object> doc) {
         try {
             String jsonStr = new io.jettra.json.JettraJson().toJson(doc);
-            database.putRecordOffHeap(collectionName + ":" + id, jsonStr.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            database.putRecordOffHeap(bucketName + ":" + id, jsonStr.getBytes(java.nio.charset.StandardCharsets.UTF_8));
         } catch (Exception ignored) {}
     }
 
     private void removeFromOffHeap(String id) {
         try {
-            database.deleteRecordOffHeap(collectionName + ":" + id);
+            database.deleteRecordOffHeap(bucketName + ":" + id);
         } catch (Exception ignored) {}
     }
 
     private Map<String, Object> loadFromOffHeap(String id) {
         try {
-            byte[] bytes = database.getRecordOffHeap(collectionName + ":" + id);
+            byte[] bytes = database.getRecordOffHeap(bucketName + ":" + id);
             if (bytes != null) {
                 String jsonStr = new String(bytes, java.nio.charset.StandardCharsets.UTF_8);
                 return new io.jettra.json.JettraJson().fromJson(jsonStr, Map.class);
@@ -243,7 +243,7 @@ public final class DocumentEngine implements Iterable<Map<String, Object>> {
     public StreamResponse<Map<String, Object>> streamAll(int requestedLimit) {
         long totalRecords = count();
         var policeDecision = JettraPolice.getInstance().evaluateHeapSafety(
-            "DOCUMENT_STREAM_ALL", collectionName, totalRecords, requestedLimit, 512L);
+            "DOCUMENT_STREAM_ALL", bucketName, totalRecords, requestedLimit, 512L);
 
         int batchSize = policeDecision.interventionRequired() 
             ? Math.max(10, policeDecision.recommendedPageSize()) 
@@ -371,7 +371,7 @@ public final class DocumentEngine implements Iterable<Map<String, Object>> {
             wLock.unlock();
         }
         if (database != null && updatedCopy != null) {
-            database.onDocumentInsert(collectionName, id, updatedCopy);
+            database.onDocumentInsert(bucketName, id, updatedCopy);
         }
     }
 
@@ -392,7 +392,7 @@ public final class DocumentEngine implements Iterable<Map<String, Object>> {
             wLock.unlock();
         }
         if (removed && database != null) {
-            database.onDocumentDelete(collectionName, id);
+            database.onDocumentDelete(bucketName, id);
         }
         return removed;
     }
@@ -431,8 +431,8 @@ public final class DocumentEngine implements Iterable<Map<String, Object>> {
         }
     }
 
-    public String getCollectionName() {
-        return collectionName;
+    public String getBucketName() {
+        return bucketName;
     }
 
     public void insertBatch(Map<String, Map<String, Object>> batch) {

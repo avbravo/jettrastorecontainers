@@ -12,7 +12,7 @@ public record JettraRaftFrame(
     long logIndex,
     String senderNodeId,
     String databaseName,
-    String collectionName,
+    String bucketName,
     String key,
     byte[] payload,
     long timestamp
@@ -75,26 +75,26 @@ public record JettraRaftFrame(
         return new JettraRaftFrame(TYPE_DROP_DATABASE, term, logIndex, senderNodeId, databaseName, "", "", new byte[0], System.currentTimeMillis());
     }
 
-    public static JettraRaftFrame putRecord(long term, long logIndex, String senderNodeId, String databaseName, String collectionName, String key, byte[] payload) {
-        return new JettraRaftFrame(TYPE_PUT_RECORD, term, logIndex, senderNodeId, databaseName, collectionName, key, payload != null ? payload : new byte[0], System.currentTimeMillis());
+    public static JettraRaftFrame putRecord(long term, long logIndex, String senderNodeId, String databaseName, String bucketName, String key, byte[] payload) {
+        return new JettraRaftFrame(TYPE_PUT_RECORD, term, logIndex, senderNodeId, databaseName, bucketName, key, payload != null ? payload : new byte[0], System.currentTimeMillis());
     }
 
-    public static JettraRaftFrame deleteRecord(long term, long logIndex, String senderNodeId, String databaseName, String collectionName, String key) {
-        return new JettraRaftFrame(TYPE_DELETE_RECORD, term, logIndex, senderNodeId, databaseName, collectionName, key, new byte[0], System.currentTimeMillis());
+    public static JettraRaftFrame deleteRecord(long term, long logIndex, String senderNodeId, String databaseName, String bucketName, String key) {
+        return new JettraRaftFrame(TYPE_DELETE_RECORD, term, logIndex, senderNodeId, databaseName, bucketName, key, new byte[0], System.currentTimeMillis());
     }
 
-    public static JettraRaftFrame putDocument(long term, long logIndex, String senderNodeId, String databaseName, String collectionName, String id, byte[] jsonPayload) {
-        return new JettraRaftFrame(TYPE_PUT_DOCUMENT, term, logIndex, senderNodeId, databaseName, collectionName, id, jsonPayload != null ? jsonPayload : new byte[0], System.currentTimeMillis());
+    public static JettraRaftFrame putDocument(long term, long logIndex, String senderNodeId, String databaseName, String bucketName, String id, byte[] jsonPayload) {
+        return new JettraRaftFrame(TYPE_PUT_DOCUMENT, term, logIndex, senderNodeId, databaseName, bucketName, id, jsonPayload != null ? jsonPayload : new byte[0], System.currentTimeMillis());
     }
 
-    public static JettraRaftFrame deleteDocument(long term, long logIndex, String senderNodeId, String databaseName, String collectionName, String id) {
-        return new JettraRaftFrame(TYPE_DELETE_DOCUMENT, term, logIndex, senderNodeId, databaseName, collectionName, id, new byte[0], System.currentTimeMillis());
+    public static JettraRaftFrame deleteDocument(long term, long logIndex, String senderNodeId, String databaseName, String bucketName, String id) {
+        return new JettraRaftFrame(TYPE_DELETE_DOCUMENT, term, logIndex, senderNodeId, databaseName, bucketName, id, new byte[0], System.currentTimeMillis());
     }
 
-    public static JettraRaftFrame createIndex(long term, long logIndex, String senderNodeId, String databaseName, String collectionName, String indexName, String field, String type, boolean unique) {
+    public static JettraRaftFrame createIndex(long term, long logIndex, String senderNodeId, String databaseName, String bucketName, String indexName, String field, String type, boolean unique) {
         String meta = field + ":" + type + ":" + unique;
         byte[] payload = meta.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-        return new JettraRaftFrame(TYPE_CREATE_INDEX, term, logIndex, senderNodeId, databaseName, collectionName, indexName, payload, System.currentTimeMillis());
+        return new JettraRaftFrame(TYPE_CREATE_INDEX, term, logIndex, senderNodeId, databaseName, bucketName, indexName, payload, System.currentTimeMillis());
     }
 
     public static JettraRaftFrame dropIndex(long term, long logIndex, String senderNodeId, String databaseName, String indexName) {

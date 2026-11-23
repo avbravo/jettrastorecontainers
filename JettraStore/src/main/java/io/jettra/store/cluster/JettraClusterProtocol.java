@@ -16,7 +16,7 @@ import java.io.OutputStream;
  * [8B Timestamp]
  * [UTF senderNodeId]
  * [UTF databaseName]
- * [UTF collectionName]
+ * [UTF bucketName]
  * [UTF key]
  * [4B PayloadLength]
  * [NB Payload Bytes]
@@ -34,7 +34,7 @@ public final class JettraClusterProtocol {
         dos.writeLong(frame.timestamp());
         dos.writeUTF(frame.senderNodeId() != null ? frame.senderNodeId() : "");
         dos.writeUTF(frame.databaseName() != null ? frame.databaseName() : "");
-        dos.writeUTF(frame.collectionName() != null ? frame.collectionName() : "");
+        dos.writeUTF(frame.bucketName() != null ? frame.bucketName() : "");
         dos.writeUTF(frame.key() != null ? frame.key() : "");
 
         byte[] payload = frame.payload();
@@ -59,13 +59,13 @@ public final class JettraClusterProtocol {
         long timestamp = dis.readLong();
         String senderNodeId = dis.readUTF();
         String databaseName = dis.readUTF();
-        String collectionName = dis.readUTF();
+        String bucketName = dis.readUTF();
         String key = dis.readUTF();
         int payloadLen = dis.readInt();
         byte[] payload = new byte[payloadLen];
         if (payloadLen > 0) {
             dis.readFully(payload);
         }
-        return new JettraRaftFrame(frameType, term, logIndex, senderNodeId, databaseName, collectionName, key, payload, timestamp);
+        return new JettraRaftFrame(frameType, term, logIndex, senderNodeId, databaseName, bucketName, key, payload, timestamp);
     }
 }

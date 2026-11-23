@@ -292,3 +292,13 @@ En los diálogos **`➕ Añadir Nuevo Motor / Bucket en [db]`** y **`✏️ Edit
 1. **Catálogo depurado sin duplicados:** El selector de tipos sugeridos (`-- Tipo sugerido --`) incluye una sola entrada por tipo estándar y colección (`String`, `Integer`, `Long`, `Double`, `BigDecimal`, `Boolean`, `Instant`, `LocalDate`, `LocalDateTime`, `UUID`, `List`, `ArrayList`, `Set`, `Map`), eliminando entradas repetidas para `List` y `ArrayList`.
 2. **Entrada libre de tipos personalizados y colecciones parametrizadas:** Junto al selector sugerido se incluye un campo de texto editable (`attr_type_<i>`) que permite escribir o modificar libremente cualquier tipo Java estándar, clase/`record` propio del usuario (`Cliente`, `Direccion`, `MiRecord`) o colección parametrizada (`List<String>`, `List<MiRecord>`, `ArrayList<Producto>`, `Set<Integer>`, `Map<String, List<Detalle>>`). Al abrir **`✏️ Editar Bucket`**, el valor parametrizado actual se precarga íntegramente sin perder su declaración genérica.
 3. **Validación sintáctica previa al guardado:** Al guardar un Bucket en modo `DEFINED`, se valida que ningún campo tenga el `tipo` vacío y que cumpla una sintaxis válida de identificador Java o tipo genérico parametrizado (rechazando entradas vacías, genéricos sin tipo como `List<>` o delimitadores desbalanceados).
+
+
+---
+
+## 14. Unificación a Bucket en el Motor `DOCUMENT` (RF-12)
+
+En todo el ecosistema **JettraStore** (`JettraStore`, `JettraStoreDriver`, `JettraStoreShell` y `JettraStoreExplorer`), el motor **`DOCUMENT`** opera exclusivamente bajo el modelo unificado de **Bucket** (eliminando las abstracciones y comandos de `COLLECTION`):
+
+- En **`/database`**, el grupo **`⚙️ DOCUMENT`** dentro de **Motores de Almacenamiento y Buckets** permite crear (`➕ Añadir Bucket en DOCUMENT`), editar (`✏️ Editar`), eliminar (`🗑️ Remover`) e indexar (`⚡ Administrar Índices`) únicamente **Buckets** (`NONE` o `DEFINED`).
+- En **`/explorer`**, el **Tree Explorador Jerárquico** (`Database -> Engine -> Bucket`), la cabecera **`📦 Bucket Seleccionado`**, el modal de **`📐 Estructura del Bucket`** y el modal de **`⚡ Índices del Bucket`** operan uniformemente sobre **Buckets** para `DOCUMENT` y el resto de motores.

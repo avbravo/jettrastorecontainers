@@ -25,7 +25,7 @@ import java.util.concurrent.atomic.AtomicLong;
 public final class JettraIndexManager {
     public record IndexInfo(
         String name, 
-        String collection, 
+        String bucket, 
         String field, 
         String type, 
         boolean unique, 
@@ -103,7 +103,7 @@ public final class JettraIndexManager {
             for (IndexInfo info : indexMetadata.values()) {
                 if (i++ > 0) idxSb.append(",\n");
                 idxSb.append("  {\"name\":\"").append(escapeJson(info.name()))
-                     .append("\",\"collection\":\"").append(escapeJson(info.collection()))
+                     .append("\",\"bucket\":\"").append(escapeJson(info.bucket()))
                      .append("\",\"field\":\"").append(escapeJson(info.field()))
                      .append("\",\"type\":\"").append(escapeJson(info.type()))
                      .append("\",\"unique\":").append(info.unique())
@@ -157,7 +157,8 @@ public final class JettraIndexManager {
                             Object item = arr.get(i);
                             if (item instanceof JsonObject o) {
                                 String name = o.get("name") != null ? String.valueOf(o.get("name")) : null;
-                                String col = o.get("collection") != null ? String.valueOf(o.get("collection")) : null;
+                                String col = o.get("bucket") != null ? String.valueOf(o.get("bucket"))
+                                        : (o.get("collection") != null ? String.valueOf(o.get("collection")) : null);
                                 String field = o.get("field") != null ? String.valueOf(o.get("field")) : null;
                                 String type = o.get("type") != null ? String.valueOf(o.get("type")) : "BTREE";
                                 boolean unique = Boolean.TRUE.equals(o.get("unique"));
@@ -219,7 +220,7 @@ public final class JettraIndexManager {
     public List<IndexInfo> getAutoIncrementIndexes(String collection) {
         List<IndexInfo> out = new ArrayList<>();
         for (IndexInfo info : indexMetadata.values()) {
-            if (info.collection().equalsIgnoreCase(collection) && isAutoIncrementType(info.type())) {
+            if (info.bucket().equalsIgnoreCase(collection) && isAutoIncrementType(info.type())) {
                 out.add(info);
             }
         }
@@ -233,7 +234,7 @@ public final class JettraIndexManager {
     public synchronized void prepareAndValidateForInsert(String collection, String recordId, Map<String, Object> record) {
         if (collection == null || record == null) return;
         for (IndexInfo info : indexMetadata.values()) {
-            if (!info.collection().equalsIgnoreCase(collection)) continue;
+            if (!info.bucket().equalsIgnoreCase(collection)) continue;
             String field = info.field();
             Object rawVal = record.get(field);
 
@@ -321,8 +322,8 @@ public final class JettraIndexManager {
             io.jettra.store.cluster.JettraClusterEventBus.getInstance().publish(
                 io.jettra.store.cluster.ClusterLiveEvent.TYPE_INDEX_CREATED,
                 config.getNodeId(), "cluster",
-                String.format("Índice '%s' en colección '%s' de base '%s' creado y replicado al clúster", indexName, collection, databaseName),
-                "db=" + databaseName + ",col=" + collection + ",idx=" + indexName
+                String.format("Índice '%s' en bucket '%s' de base '%s' creado y replicado al clúster", indexName, collection, databaseName),
+                "db=" + databaseName + ",bucket=" + collection + ",idx=" + indexName
             );
         }
 
@@ -480,16 +481,16 @@ public final class JettraIndexManager {
             numericIndexData.put(indexName, numTree);
         }
         if (autoInc && maxSeq[0] > 0) {
-            advanceSequenceIfHigher(info.collection(), info.field(), maxSeq[0]);
+            advanceSequenceIfHigher(info.bucket(), info.field(), maxSeq[0]);
         }
-        IndexInfo updated = new IndexInfo(info.name(), info.collection(), info.field(), info.type(), info.unique(), count[0], info.createdAt());
+        IndexInfo updated = new IndexInfo(info.name(), info.bucket(), info.field(), info.type(), info.unique(), count[0], info.createdAt());
         indexMetadata.put(indexName, updated);
         return updated;
     }
 
     public void onDocumentInsert(String collection, String id, Map<String, Object> doc) {
         for (IndexInfo info : indexMetadata.values()) {
-            if (info.collection().equalsIgnoreCase(collection)) {
+            if (info.bucket().equalsIgnoreCase(collection)) {
                 Object val = doc.get(info.field());
                 if (val != null) {
                     if (isNumericType(info.type())) {
@@ -529,7 +530,7 @@ public final class JettraIndexManager {
 
     public void onDocumentDelete(String collection, String id, Map<String, Object> oldDoc) {
         for (IndexInfo info : indexMetadata.values()) {
-            if (info.collection().equalsIgnoreCase(collection)) {
+            if (info.bucket().equalsIgnoreCase(collection)) {
                 if (isNumericType(info.type())) {
                     TreeMap<Double, UnifiedSet<String>> numTree = numericIndexData.get(info.name());
                     if (numTree != null) {
@@ -601,7 +602,7 @@ public final class JettraIndexManager {
 
     public Set<String> findDocIds(String collection, String field, Object value) {
         for (IndexInfo info : indexMetadata.values()) {
-            if (info.collection().equalsIgnoreCase(collection) && info.field().equalsIgnoreCase(field)) {
+            if (info.bucket().equalsIgnoreCase(collection) && info.field().equalsIgnoreCase(field)) {
                 if (isNumericType(info.type())) {
                     Double num = toNumericDouble(value);
                     TreeMap<Double, UnifiedSet<String>> numTree = numericIndexData.get(info.name());
@@ -640,7 +641,7 @@ public final class JettraIndexManager {
      */
     public Set<String> findDocIdsByNumericRange(String collection, String field, Double minInclusive, Double maxInclusive) {
         for (IndexInfo info : indexMetadata.values()) {
-            if (info.collection().equalsIgnoreCase(collection)
+            if (info.bucket().equalsIgnoreCase(collection)
                     && info.field().equalsIgnoreCase(field)
                     && isNumericType(info.type())) {
                 TreeMap<Double, UnifiedSet<String>> numTree = numericIndexData.get(info.name());
@@ -664,7 +665,7 @@ public final class JettraIndexManager {
     public List<IndexInfo> listIndexes(String collection) {
         List<IndexInfo> list = new ArrayList<>();
         for (IndexInfo info : indexMetadata.values()) {
-            if (collection == null || collection.isBlank() || info.collection().equalsIgnoreCase(collection)) {
+            if (collection == null || collection.isBlank() || info.bucket().equalsIgnoreCase(collection)) {
                 list.add(info);
             }
         }

@@ -931,7 +931,7 @@ Para mantener el código de negocio del cliente completamente limpio y desacopla
 // Registrar listener desacoplado para recibir notificaciones del Sentinel
 client.addPoliceEventListener(notification -> {
     System.out.printf("🛡️ [Sentinel Activo] Operación: %s sobre %s%n", 
-        notification.operation(), notification.targetCollection());
+        notification.operation(), notification.targetBucket());
     System.out.printf("   Lote seguro forzado: %d registros | Heap: %.1f%% (%d MB libres)%n",
         notification.safeBatchSize(), notification.heapUsagePercent(), notification.availableMemoryMb());
     System.out.printf("   Diagnóstico: %s%n", notification.warningMessage());
@@ -1213,8 +1213,8 @@ Para evitar fallos en aplicaciones de misión crítica cuando un nodo primario c
 `JettraStoreDriver` incluye soporte nativo y sincronizado para la administración de índices secundarios en memoria (`HASH`, `BTREE`, `SPARSE`), permitiendo acelerar consultas de búsqueda O(1), optimizar el streaming lazy y replicar la creación/eliminación de índices a nivel de clúster Raft:
 
 ### 12.1 Operaciones Soportadas:
-* **Creación de Índice:** `client.createIndex(collection, indexName, field, type, unique)`
-* **Listado de Índices:** `client.listIndexes()` o `client.listIndexes(databaseName, collection)`
+* **Creación de Índice:** `client.createIndex(bucket, indexName, field, type, unique)`
+* **Listado de Índices:** `client.listIndexes()` o `client.listIndexes(databaseName, bucket)`
 * **Eliminación de Índice:** `client.dropIndex(indexName)` o `client.dropIndex(databaseName, indexName)`
 
 ### 12.2 Ejemplo en Java 25:
@@ -1237,8 +1237,8 @@ public class IndexManagementDemo {
                 "HASH",
                 false // no único
             );
-            System.out.printf("Índice creado: %s | Colección: %s | Campo: %s%n",
-                index.name(), index.collection(), index.field());
+            System.out.printf("Índice creado: %s | Bucket: %s | Campo: %s%n",
+                index.name(), index.bucket(), index.field());
 
             // 2. Listar todos los índices secundarios activos
             List<IndexInfo> activeIndexes = client.listIndexes();
@@ -1263,10 +1263,10 @@ public class IndexManagementDemo {
 | :--- | :--- | :--- |
 | **Conexión & Sesión** | `connect(host, port, user, pass)` | Inicializa conexión autenticada con token JWT. |
 | **SQL Fluido** | `sql(query)` | Retorna `JettraSqlCommand` para `.execute()` o `.executeAsync()`. |
-| **LQL Fluido** | `from(collection, Record.class)` | Retorna `JettraFluentQuery<T>` con filtros y tipado. |
-| **Documentos** | `getDocumentEngine(collection)` | Acceso directo a `DocumentEngine`. |
-| **Clave-Valor** | `getKeyValueEngine(collection)` | Acceso directo a `KeyValueEngine`. |
-| **Vectores** | `getVectorEngine(collection, dims)` | Acceso directo a `VectorEngine` con similitud coseno. |
+| **LQL Fluido** | `from(bucket, Record.class)` | Retorna `JettraFluentQuery<T>` con filtros y tipado sobre el Bucket. |
+| **Documentos** | `getDocumentEngine(bucket)` | Acceso directo a `DocumentEngine` (Bucket del engine `DOCUMENT`). |
+| **Clave-Valor** | `getKeyValueEngine(bucket)` | Acceso directo a `KeyValueEngine`. |
+| **Vectores** | `getVectorEngine(bucket, dims)` | Acceso directo a `VectorEngine` con similitud coseno. |
 | **Grafos** | `getGraphEngine(graphName)` | Acceso directo a `GraphEngine` para nodos y aristas. |
 | **Series Temporales**| `getTimeSeriesEngine(seriesName)` | Acceso directo a `TimeSeriesEngine`. |
 | **Geoespacial** | `getGeospatialEngine(geoName)` | Acceso directo a `GeospatialEngine` y radio en km. |

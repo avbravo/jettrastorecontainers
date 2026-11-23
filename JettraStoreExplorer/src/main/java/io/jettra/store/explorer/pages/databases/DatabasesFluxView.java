@@ -587,7 +587,7 @@ public class DatabasesFluxView extends FluxView {
                         FluxUi.fieldColumn("Nombre del Bucket", FluxUi.textInput("bucketName", "", "AuditLog", true), "flex: 1.4; min-width: 160px;"),
                         FluxUi.fieldColumn("Tipo de Motor (Engine)", FluxUi.dropdown("engineType", ALL_ENGINES, selectedEngine), "flex: 1.2; min-width: 150px;"),
                         FluxUi.fieldColumn("Modo de Estructura", FluxUi.dropdown("structureType", List.of("NONE", "DEFINED"), "NONE"), "flex: 1; min-width: 140px;"),
-                        FluxUi.fieldColumn("Descripción del Almacén", FluxUi.textInput("description", "", "Colección de logs de auditoría transaccional", false), "flex: 2; min-width: 200px;")
+                        FluxUi.fieldColumn("Descripción del Almacén", FluxUi.textInput("description", "", "Bucket de logs de auditoría transaccional", false), "flex: 2; min-width: 200px;")
                 ).modifier(new Modifier().style("display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: flex-end;")),
                 FluxUi.coloredSpan("ℹ️ " + engineStructureHint(selectedEngine),
                         "font-size: 0.76rem; color: var(--text-muted); display: block; margin-top: 0.5rem;"),

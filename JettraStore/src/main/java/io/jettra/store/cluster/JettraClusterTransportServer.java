@@ -220,7 +220,7 @@ public final class JettraClusterTransportServer implements AutoCloseable {
 
             case JettraRaftFrame.TYPE_CREATE_ENGINE -> {
                 String dbName = frame.databaseName();
-                String engineName = frame.collectionName();
+                String engineName = frame.bucketName();
                 String engineType = frame.key();
                 System.out.printf("[JettraClusterTransport] ↳ [ENGINE] Recibida orden Raft de crear motor: '%s' [%s] en base '%s' desde nodo '%s'%n",
                     engineName, engineType, dbName, frame.senderNodeId());
@@ -262,7 +262,7 @@ public final class JettraClusterTransportServer implements AutoCloseable {
 
             case JettraRaftFrame.TYPE_PUT_RECORD -> {
                 String dbName = frame.databaseName();
-                String colName = frame.collectionName();
+                String colName = frame.bucketName();
                 String key = frame.key();
                 try {
                     if (server != null) {
@@ -297,7 +297,7 @@ public final class JettraClusterTransportServer implements AutoCloseable {
 
             case JettraRaftFrame.TYPE_DELETE_RECORD -> {
                 String dbName = frame.databaseName();
-                String colName = frame.collectionName();
+                String colName = frame.bucketName();
                 String key = frame.key();
                 try {
                     if (server != null) {
@@ -317,7 +317,7 @@ public final class JettraClusterTransportServer implements AutoCloseable {
 
             case JettraRaftFrame.TYPE_PUT_DOCUMENT -> {
                 String dbName = frame.databaseName();
-                String colName = frame.collectionName();
+                String colName = frame.bucketName();
                 String id = frame.key();
                 try {
                     if (server != null) {
@@ -358,7 +358,7 @@ public final class JettraClusterTransportServer implements AutoCloseable {
 
             case JettraRaftFrame.TYPE_DELETE_DOCUMENT -> {
                 String dbName = frame.databaseName();
-                String colName = frame.collectionName();
+                String colName = frame.bucketName();
                 String id = frame.key();
                 try {
                     if (server != null) {
@@ -383,7 +383,7 @@ public final class JettraClusterTransportServer implements AutoCloseable {
 
             case JettraRaftFrame.TYPE_CREATE_INDEX -> {
                 String dbName = frame.databaseName();
-                String colName = frame.collectionName();
+                String colName = frame.bucketName();
                 String indexName = frame.key();
                 String meta = frame.getPayloadAsString(); // field:type:unique
                 try {

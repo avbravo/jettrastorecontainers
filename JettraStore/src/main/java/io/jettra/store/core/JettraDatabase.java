@@ -87,7 +87,7 @@ public final class JettraDatabase implements AutoCloseable {
 
         // 2. No cargar bases de datos de ejemplo automáticamente al ejecutar JettraStore
         // (solo se instalan si se habilita explícitamente -Djettra.samples.autoload=true)
-        if (!loaded && getAllCollectionNames().isEmpty()
+        if (!loaded && getAllBucketNames().isEmpty()
                 && Boolean.getBoolean("jettra.samples.autoload")
                 && JettraStoreSamples.isSampleDatabase(databaseName)) {
             if (!isReadOnlyNode()) {
@@ -189,12 +189,12 @@ public final class JettraDatabase implements AutoCloseable {
         return eng;
     }
 
-    public StreamResponse<Map<String, Object>> streamCollection(String collectionName) {
-        return getDocumentEngine(collectionName).streamAll();
+    public StreamResponse<Map<String, Object>> streamBucket(String bucketName) {
+        return getDocumentEngine(bucketName).streamAll();
     }
 
-    public StreamResponse<Map<String, Object>> streamCollection(String collectionName, int limit) {
-        return getDocumentEngine(collectionName).streamAll(limit);
+    public StreamResponse<Map<String, Object>> streamBucket(String bucketName, int limit) {
+        return getDocumentEngine(bucketName).streamAll(limit);
     }
 
     public VectorEngine getVectorEngine(String name, int dimensions) {
@@ -234,39 +234,39 @@ public final class JettraDatabase implements AutoCloseable {
         return eng;
     }
 
-    public void onDocumentInsert(String collectionName, String id, Map<String, Object> doc) {
+    public void onDocumentInsert(String bucketName, String id, Map<String, Object> doc) {
         if (indexManager != null) {
-            indexManager.onDocumentInsert(collectionName, id, doc);
+            indexManager.onDocumentInsert(bucketName, id, doc);
         }
         if (config != null && config.isClusterMultinodeActive() && config.getNodeRole() == ClusterNode.Role.PRIMARY) {
             io.jettra.store.JettraStoreServer server = io.jettra.store.JettraStoreServer.getActiveInstance();
             if (server != null) {
                 byte[] jsonBytes = new io.jettra.json.JettraJson().toJson(doc).getBytes(java.nio.charset.StandardCharsets.UTF_8);
-                server.replicatePutDocument(databaseName, collectionName, id, jsonBytes);
+                server.replicatePutDocument(databaseName, bucketName, id, jsonBytes);
             }
             io.jettra.store.cluster.JettraClusterEventBus.getInstance().publish(
                 io.jettra.store.cluster.ClusterLiveEvent.TYPE_DOCUMENT_REPLICATED,
                 config.getNodeId(), "cluster",
-                String.format("Documento '%s' en colección '%s' de base '%s' replicado a nodos secundarios", id, collectionName, databaseName),
-                "db=" + databaseName + ",col=" + collectionName + ",id=" + id
+                String.format("Documento '%s' en bucket '%s' de base '%s' replicado a nodos secundarios", id, bucketName, databaseName),
+                "db=" + databaseName + ",bucket=" + bucketName + ",id=" + id
             );
         }
     }
 
-    public void onDocumentDelete(String collectionName, String id) {
+    public void onDocumentDelete(String bucketName, String id) {
         if (indexManager != null) {
-            indexManager.onDocumentDelete(collectionName, id, null);
+            indexManager.onDocumentDelete(bucketName, id, null);
         }
         if (config != null && config.isClusterMultinodeActive() && config.getNodeRole() == ClusterNode.Role.PRIMARY) {
             io.jettra.store.JettraStoreServer server = io.jettra.store.JettraStoreServer.getActiveInstance();
             if (server != null) {
-                server.replicateDeleteDocument(databaseName, collectionName, id);
+                server.replicateDeleteDocument(databaseName, bucketName, id);
             }
             io.jettra.store.cluster.JettraClusterEventBus.getInstance().publish(
                 io.jettra.store.cluster.ClusterLiveEvent.TYPE_DOCUMENT_DELETED,
                 config.getNodeId(), "cluster",
-                String.format("Documento '%s' en colección '%s' de base '%s' eliminado y propagado al clúster", id, collectionName, databaseName),
-                "db=" + databaseName + ",col=" + collectionName + ",id=" + id
+                String.format("Documento '%s' en bucket '%s' de base '%s' eliminado y propagado al clúster", id, bucketName, databaseName),
+                "db=" + databaseName + ",bucket=" + bucketName + ",id=" + id
             );
         }
     }
@@ -396,10 +396,10 @@ public final class JettraDatabase implements AutoCloseable {
         return null;
     }
 
-    public static int getLightweightCollectionCount(String databaseName, JettraStoreConfig config) {
+    public static int getLightweightBucketCount(String databaseName, JettraStoreConfig config) {
         if (databaseName == null) return 0;
         if (JettraStoreSamples.isSampleDatabase(databaseName)) {
-            return JettraStoreSamples.getSampleCollectionCount(databaseName);
+            return JettraStoreSamples.getSampleBucketCount(databaseName);
         }
         Path metaFile = resolveMetaFile(databaseName, config);
         if (metaFile == null || !Files.exists(metaFile)) {
@@ -413,22 +413,22 @@ public final class JettraDatabase implements AutoCloseable {
             PanamaOffHeapScanner s = new PanamaOffHeapScanner(segment, size);
             s.skipWhitespace();
             if (s.peek() == '{') s.read();
-            Set<String> collections = new HashSet<>();
+            Set<String> buckets = new HashSet<>();
             while (s.hasMore() && s.peek() != '}') {
                 s.skipWhitespaceAndSeparators();
                 String key = s.readQuotedString();
                 if (key == null) break;
                 s.skipWhitespaceAndSeparators();
-                if ("collections".equals(key)) {
+                if ("buckets".equals(key) || "collections".equals(key)) {
                     s.skipWhitespace();
                     if (s.peek() == '[') {
                         s.read();
                         while (s.hasMore() && s.peek() != ']') {
                             s.skipWhitespaceAndSeparators();
-                            String colName = s.readQuotedString();
-                            if (colName != null) collections.add(colName);
+                            String bucketName = s.readQuotedString();
+                            if (bucketName != null) buckets.add(bucketName);
                         }
-                        return collections.size();
+                        return buckets.size();
                     }
                 } else if ("documentEngines".equals(key) || "keyValueEngines".equals(key) ||
                            "timeSeriesEngines".equals(key) || "geospatialEngines".equals(key) ||
@@ -441,7 +441,7 @@ public final class JettraDatabase implements AutoCloseable {
                             s.skipWhitespaceAndSeparators();
                             String itemKey = s.readQuotedString();
                             if (itemKey == null) break;
-                            collections.add(itemKey);
+                            buckets.add(itemKey);
                             s.skipValue();
                         }
                         s.skipWhitespace();
@@ -453,7 +453,7 @@ public final class JettraDatabase implements AutoCloseable {
                     s.skipValue();
                 }
             }
-            return collections.size();
+            return buckets.size();
         } catch (Exception e) {
             return 0;
         }
@@ -476,11 +476,11 @@ public final class JettraDatabase implements AutoCloseable {
             writer.write("  \"databaseName\": \"" + databaseName + "\",\n");
             writer.write("  \"savedAt\": " + System.currentTimeMillis() + ",\n");
 
-            // Metadatos de colecciones ligeras al inicio
-            List<String> allCols = new ArrayList<>(getAllCollectionNames());
-            writer.write("  \"collections\": [");
-            for (int i = 0; i < allCols.size(); i++) {
-                writer.write("\"" + JettraJson.escapeString(allCols.get(i)) + "\"" + (i < allCols.size() - 1 ? ", " : ""));
+            // Metadatos ligeros de buckets al inicio
+            List<String> allBuckets = new ArrayList<>(getAllBucketNames());
+            writer.write("  \"buckets\": [");
+            for (int i = 0; i < allBuckets.size(); i++) {
+                writer.write("\"" + JettraJson.escapeString(allBuckets.get(i)) + "\"" + (i < allBuckets.size() - 1 ? ", " : ""));
             }
             writer.write("],\n");
 
@@ -675,7 +675,7 @@ public final class JettraDatabase implements AutoCloseable {
                 if (!firstIdx) writer.write(",\n");
                 firstIdx = false;
                 writer.write("    {\"name\": \"" + JettraJson.escapeString(idx.name()) + "\", " +
-                        "\"collection\": \"" + JettraJson.escapeString(idx.collection()) + "\", " +
+                        "\"bucket\": \"" + JettraJson.escapeString(idx.bucket()) + "\", " +
                         "\"field\": \"" + JettraJson.escapeString(idx.field()) + "\", " +
                         "\"type\": \"" + JettraJson.escapeString(idx.type()) + "\", " +
                         "\"unique\": " + idx.unique() + "}");
@@ -1311,14 +1311,14 @@ public final class JettraDatabase implements AutoCloseable {
                                 String idxStr = scanner.readBalancedObject();
                                 if (idxStr != null) {
                                     JsonObject io = json.fromJson(idxStr, JsonObject.class);
-                                    if (io != null && io.has("name") && io.has("collection") && io.has("field")) {
+                                    if (io != null && io.has("name") && (io.has("bucket") || io.has("collection")) && io.has("field")) {
                                         String name = io.getAsString("name");
-                                        String collection = io.getAsString("collection");
+                                        String bucket = io.has("bucket") ? io.getAsString("bucket") : io.getAsString("collection");
                                         String field = io.getAsString("field");
                                         String type = io.has("type") ? io.getAsString("type") : "HASH";
                                         boolean unique = io.has("unique") && io.getAsBoolean("unique");
-                                        var docEng = getDocumentEngine(collection);
-                                        indexManager.applyReplicatedIndex(collection, name, field, type, unique, docEng);
+                                        var docEng = getDocumentEngine(bucket);
+                                        indexManager.applyReplicatedIndex(bucket, name, field, type, unique, docEng);
                                     }
                                 }
                             }
@@ -2011,7 +2011,7 @@ public final class JettraDatabase implements AutoCloseable {
     public java.util.Set<String> getGeospatialEngineNames() { return java.util.Collections.unmodifiableSet(geospatialEngines.keySet()); }
     public java.util.Set<String> getColumnarEngineNames() { return java.util.Collections.unmodifiableSet(columnarEngines.keySet()); }
 
-    public java.util.Set<String> getAllCollectionNames() {
+    public java.util.Set<String> getAllBucketNames() {
         java.util.Set<String> all = new java.util.TreeSet<>();
         all.addAll(documentEngines.keySet());
         all.addAll(vectorEngines.keySet());
@@ -2053,7 +2053,7 @@ public final class JettraDatabase implements AutoCloseable {
         return count;
     }
 
-    public boolean dropCollection(String name) {
+    public boolean dropBucket(String name) {
         boolean removed = false;
         if (documentEngines.remove(name) != null) removed = true;
         if (vectorEngines.remove(name) != null) removed = true;
@@ -2315,7 +2315,7 @@ public final class JettraDatabase implements AutoCloseable {
         if (bucketName == null || bucketName.isBlank()) return false;
         String key = JettraBucketSchema.buildKey(engineType, bucketName);
         boolean removedMeta = bucketSchemas.remove(key) != null;
-        boolean removedCol = dropCollection(bucketName.trim());
+        boolean removedCol = dropBucket(bucketName.trim());
         if (removedMeta) {
             saveBucketsToDisk();
         }

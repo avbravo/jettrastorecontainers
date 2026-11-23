@@ -56,7 +56,7 @@ public final class JettraStoreShellApp implements AutoCloseable {
                 System.out.println("║ 🛡️  [JETTRAPOLICE SENTINEL - PROTECCIÓN PREVENTIVA DE MEMORIA HEAP]         ║");
                 System.out.println("╠══════════════════════════════════════════════════════════════════════════════╣");
                 System.out.printf("║  Operación: %-15s | Colección: %-32s║%n", notification.operation(),
-                        notification.targetCollection());
+                        notification.targetBucket());
                 System.out.printf("║  Total Estimado: %-10d | Lote Seguro (Batch): %-23d║%n",
                         notification.estimatedTotalRecords(), notification.safeBatchSize());
                 System.out.printf("║  Saturación Heap: %5.1f%%        | RAM Disponible: %-19s║%n",
@@ -655,9 +655,9 @@ public final class JettraStoreShellApp implements AutoCloseable {
                 // Bases de Datos
                 "SHOW DATABASES", "SHOW SAMPLES", "SHOW SAMPLE DATABASES", "CREATE DATABASE ", "DROP DATABASE ", "USE ",
                 "DB STATS", "DB INFO",
-                // Colecciones, Buckets & Índices
-                "SHOW BUCKETS", "SHOW COLLECTIONS", "SHOW TABLES", "SHOW UNITS", "SHOW RECORDS ", "COUNT ",
-                "CREATE COLLECTION ", "DROP COLLECTION ", "CREATE BUCKET ", "DROP BUCKET ",
+                // Buckets & Índices
+                "SHOW BUCKETS", "SHOW TABLES", "SHOW UNITS", "SHOW RECORDS ", "COUNT ",
+                "CREATE BUCKET ", "DROP BUCKET ",
                 "CREATE INDEX ", "CREATE INDEX ON ", "DROP INDEX ", "SHOW INDEXES", "SHOW INDEXES ON ", "LIST INDEXES",
                 "REINDEX ",
                 // Usuarios & Seguridad
@@ -771,13 +771,12 @@ public final class JettraStoreShellApp implements AutoCloseable {
                 }
             }
         }
-        // 4. Sugerencias contextuales para Colecciones / Buckets en consultas
+        // 4. Sugerencias contextuales para Buckets en consultas
         else if (pUpper.startsWith("SHOW RECORDS ") || pTrimUpper.equals("SHOW RECORDS")
                 || pUpper.startsWith("COUNT ") || pTrimUpper.equals("COUNT")
                 || pUpper.startsWith("SELECT * FROM ") || pTrimUpper.equals("SELECT * FROM")
                 || pUpper.startsWith("INSERT INTO ") || pTrimUpper.equals("INSERT INTO")
                 || pUpper.startsWith("DELETE FROM ") || pTrimUpper.equals("DELETE FROM")
-                || pUpper.startsWith("DROP COLLECTION ") || pTrimUpper.equals("DROP COLLECTION")
                 || pUpper.startsWith("DROP BUCKET ") || pTrimUpper.equals("DROP BUCKET")
                 || pUpper.startsWith("CREATE INDEX ON ") || pTrimUpper.equals("CREATE INDEX ON")
                 || pUpper.startsWith("SHOW INDEXES ON ") || pTrimUpper.equals("SHOW INDEXES ON")) {
@@ -792,7 +791,7 @@ public final class JettraStoreShellApp implements AutoCloseable {
                 try {
                     JettraDatabase db = client.getDatabase(currentDatabase);
                     if (db != null) {
-                        for (String b : db.getAllCollectionNames()) {
+                        for (String b : db.getAllBucketNames()) {
                             if (bucketPrefix.isEmpty() || b.toLowerCase().startsWith(bucketPrefix)) {
                                 candidates.add(verb + b);
                             }
@@ -871,7 +870,7 @@ public final class JettraStoreShellApp implements AutoCloseable {
             String verb = lastSpace != -1 ? prefix.substring(0, lastSpace + 1) : prefix + " ";
             String sub = lastSpace != -1 ? prefix.substring(lastSpace + 1).trim().toUpperCase() : "";
             List<String> showOptions = List.of(
-                    "DATABASES", "BUCKETS", "COLLECTIONS", "TABLES", "INDEXES",
+                    "DATABASES", "BUCKETS", "TABLES", "INDEXES",
                     "USERS", "NODES", "SAMPLES", "STORAGE_MODE", "MULTINODE", "RECORDS ");
             for (String opt : showOptions) {
                 if (sub.isEmpty() || opt.startsWith(sub)) {
@@ -884,7 +883,7 @@ public final class JettraStoreShellApp implements AutoCloseable {
             int lastSpace = prefix.lastIndexOf(' ');
             String verb = lastSpace != -1 ? prefix.substring(0, lastSpace + 1) : prefix + " ";
             String sub = lastSpace != -1 ? prefix.substring(lastSpace + 1).trim().toUpperCase() : "";
-            List<String> createOptions = List.of("DATABASE ", "COLLECTION ", "BUCKET ", "INDEX ", "USER ");
+            List<String> createOptions = List.of("DATABASE ", "BUCKET ", "INDEX ", "USER ");
             for (String opt : createOptions) {
                 if (sub.isEmpty() || opt.startsWith(sub)) {
                     candidates.add(verb + opt);
@@ -896,7 +895,7 @@ public final class JettraStoreShellApp implements AutoCloseable {
             int lastSpace = prefix.lastIndexOf(' ');
             String verb = lastSpace != -1 ? prefix.substring(0, lastSpace + 1) : prefix + " ";
             String sub = lastSpace != -1 ? prefix.substring(lastSpace + 1).trim().toUpperCase() : "";
-            List<String> dropOptions = List.of("DATABASE ", "COLLECTION ", "BUCKET ", "INDEX ", "USER ");
+            List<String> dropOptions = List.of("DATABASE ", "BUCKET ", "INDEX ", "USER ");
             for (String opt : dropOptions) {
                 if (sub.isEmpty() || opt.startsWith(sub)) {
                     candidates.add(verb + opt);
@@ -1043,7 +1042,7 @@ public final class JettraStoreShellApp implements AutoCloseable {
             return "Elimina permanentemente una base de datos";
         if (u.equals("SHOW BUCKETS") || u.equals("SHOW UNITS"))
             return "Lista colecciones/buckets de la base de datos activa";
-        if (u.equals("SHOW COLLECTIONS") || u.equals("SHOW TABLES"))
+        if (u.equals("SHOW TABLES"))
             return "Lista colecciones o tablas de la base de datos activa";
         if (u.startsWith("SHOW RECORDS "))
             return "Muestra registros de una colección o bucket";
@@ -1426,14 +1425,18 @@ public final class JettraStoreShellApp implements AutoCloseable {
         } else if (upper.equals("COUNT") || upper.startsWith("COUNT ") || upper.equals("COUNT *")
                 || upper.equals("COUNT ALL")) {
             return handleCount(trimmed);
-        } else if (upper.equals("SHOW COLLECTIONS") || upper.equals("SHOW TABLES")) {
-            return handleShowCollections();
-        } else if (upper.startsWith("CREATE COLLECTION ") || upper.startsWith("CREATE ENGINE ")
+        } else if (upper.equals("SHOW COLLECTIONS") || upper.startsWith("SHOW COLLECTIONS ")
+                || upper.startsWith("CREATE COLLECTION ") || upper.equals("CREATE COLLECTION")
+                || upper.startsWith("DROP COLLECTION ") || upper.equals("DROP COLLECTION")) {
+            return "[ERROR] El comando COLLECTION fue eliminado y unificado en BUCKET (RF-12). Use 'SHOW BUCKETS', 'CREATE BUCKET <nombre> [TYPE <engine>]' o 'DROP BUCKET <nombre>'.";
+        } else if (upper.equals("SHOW TABLES")) {
+            return handleShowBuckets("SHOW BUCKETS");
+        } else if (upper.startsWith("CREATE ENGINE ")
                 || upper.startsWith("CREATE BUCKET ") || upper.startsWith("CREATE UNIT ")) {
-            return handleCreateCollection(trimmed);
-        } else if (upper.startsWith("DROP COLLECTION ") || upper.startsWith("DROP ENGINE ")
+            return handleCreateBucket(trimmed);
+        } else if (upper.startsWith("DROP ENGINE ")
                 || upper.startsWith("DROP BUCKET ") || upper.startsWith("DROP UNIT ")) {
-            return handleDropCollection(trimmed);
+            return handleDropBucket(trimmed);
         }
 
         // 9. Administración de Índices
@@ -2486,7 +2489,7 @@ public final class JettraStoreShellApp implements AutoCloseable {
                     : "";
             return String.format(
                     "[SUCCESS] Índice '%s' creado en bucket '%s' (campo=%s, tipo=%s, unique=%s, entradas=%d%s).",
-                    info.name(), info.collection(), info.field(), info.type(), info.unique(), info.entriesCount(),
+                    info.name(), info.bucket(), info.field(), info.type(), info.unique(), info.entriesCount(),
                     seqInfo);
         } catch (Exception e) {
             return "[ERROR] No se pudo crear el índice '" + idxName + "': " + e.getMessage();
@@ -2977,9 +2980,9 @@ public final class JettraStoreShellApp implements AutoCloseable {
             int colCount;
             boolean loaded = client.isDatabaseLoaded(db);
             if (loaded) {
-                colCount = client.getDatabase(db).getAllCollectionNames().size();
+                colCount = client.getDatabase(db).getAllBucketNames().size();
             } else {
-                colCount = client.getLightweightCollectionCount(db);
+                colCount = client.getLightweightBucketCount(db);
             }
             String tipo = db.startsWith("sample_") || db.startsWith("example_") ? "SAMPLE"
                     : (db.equals("system_metadata_db") ? "SYSTEM" : "USER");
@@ -3100,7 +3103,7 @@ public final class JettraStoreShellApp implements AutoCloseable {
                 - Java Records:        %s
                 - Índices Secundarios: %d
                 - MemTable Utilizada:  %.2f KB
-                """, currentDatabase, db.getAllCollectionNames().size(),
+                """, currentDatabase, db.getAllBucketNames().size(),
                 db.getDocumentEngineNames(),
                 db.getKeyValueEngineNames(),
                 db.getVectorEngineNames(),
@@ -3147,7 +3150,7 @@ public final class JettraStoreShellApp implements AutoCloseable {
             var info = db.getIndexManager().createIndex(col, indexName, field, type, unique, db.getDocumentEngine(col));
             client.replicateCreateIndex(currentDatabase, col, indexName, field, type, unique);
             return String.format("[SUCCESS] Índice '%s' creado sobre '%s'(%s) tipo %s (Entradas indexadas: %d).",
-                    info.name(), info.collection(), info.field(), info.type(), info.entriesCount());
+                    info.name(), info.bucket(), info.field(), info.type(), info.entriesCount());
         } catch (UnsupportedOperationException e) {
             return "[ERROR] " + e.getMessage();
         } catch (Exception e) {
@@ -3180,7 +3183,7 @@ public final class JettraStoreShellApp implements AutoCloseable {
         if (info == null)
             return "[ERROR] Índice '" + indexName + "' no encontrado.";
 
-        var updated = db.getIndexManager().rebuildIndex(indexName, db.getDocumentEngine(info.collection()));
+        var updated = db.getIndexManager().rebuildIndex(indexName, db.getDocumentEngine(info.bucket()));
         return String.format("[SUCCESS] Índice '%s' reconstruido exitosamente. Total entradas indexadas: %d.",
                 updated.name(), updated.entriesCount());
     }
@@ -3208,7 +3211,7 @@ public final class JettraStoreShellApp implements AutoCloseable {
                 "+----------------------+----------------------+----------------------+--------+--------+----------+\n");
         for (var idx : list) {
             sb.append(String.format("| %-20s | %-20s | %-20s | %-6s | %-6s | %-8d |\n",
-                    idx.name(), idx.collection(), idx.field(), idx.type(), idx.unique() ? "SI" : "NO",
+                    idx.name(), idx.bucket(), idx.field(), idx.type(), idx.unique() ? "SI" : "NO",
                     idx.entriesCount()));
         }
         sb.append(
@@ -3739,7 +3742,7 @@ public final class JettraStoreShellApp implements AutoCloseable {
                 db.getIndexManager().onDocumentInsert(col, assignedId, data);
                 db.saveToDisk();
                 client.replicatePutDocument(resolveActiveDb(), col, assignedId, data);
-                return String.format("[SUCCESS] Registro con _id '%s' (JettraId) insertado en la colección '%s'.", assignedId, col);
+                return String.format("[SUCCESS] Registro con _id '%s' (JettraId) insertado en el bucket '%s'.", assignedId, col);
             }
             int valIdx = after.toUpperCase().indexOf(" VALUES");
             if (valIdx != -1) {
@@ -3769,7 +3772,7 @@ public final class JettraStoreShellApp implements AutoCloseable {
                 db.getIndexManager().onDocumentInsert(col, id, data);
                 db.saveToDisk();
                 client.replicatePutDocument(resolveActiveDb(), col, id, data);
-                return String.format("[SUCCESS] Registro con _id '%s' (JettraId) insertado en la colección '%s'.", id, col);
+                return String.format("[SUCCESS] Registro con _id '%s' (JettraId) insertado en el bucket '%s'.", id, col);
             }
         } catch (UnsupportedOperationException | IllegalStateException e) {
             return "[ERROR] " + e.getMessage();
@@ -3789,7 +3792,7 @@ public final class JettraStoreShellApp implements AutoCloseable {
         JettraDatabase db = client.getDatabase(currentDatabase);
         Map<String, Object> doc = db.getDocumentEngine(colName).findById(id);
         if (doc == null) {
-            return String.format("[NOT FOUND] No se encontró el registro con _id '%s' en la colección '%s'.", id,
+            return String.format("[NOT FOUND] No se encontró el registro con _id '%s' en el bucket '%s'.", id,
                     colName);
         }
 
@@ -3827,11 +3830,11 @@ public final class JettraStoreShellApp implements AutoCloseable {
         JettraDatabase db = client.getDatabase(currentDatabase);
         var docEngine = db.getDocumentEngine(colName);
         if (docEngine == null || docEngine.isEmpty()) {
-            return String.format("[INFO] La colección '%s' está vacía.", colName);
+            return String.format("[INFO] El bucket '%s' está vacío.", colName);
         }
 
         StringBuilder sb = new StringBuilder();
-        sb.append(String.format("--- COLECCIÓN '%s' (Mostrando %d de %d registros) ---\n",
+        sb.append(String.format("--- BUCKET '%s' (Mostrando %d de %d registros) ---\n",
                 colName, Math.min((int) docEngine.count(), limit), docEngine.count()));
         int count = 0;
         for (Map<String, Object> doc : docEngine) {
@@ -4414,59 +4417,12 @@ public final class JettraStoreShellApp implements AutoCloseable {
         }
     }
 
-    // --- Control de Colecciones ---
-    private String handleShowCollections() {
-        JettraDatabase db = client.getDatabase(currentDatabase);
-        StringBuilder sb = new StringBuilder();
-        sb.append("+---------------------------+---------------------+---------+\n");
-        sb.append("| Colección                 | Motor Multimodelo   | Registros|\n");
-        sb.append("+---------------------------+---------------------+---------+\n");
-
-        int count = 0;
-        for (String c : db.getDocumentEngineNames()) {
-            sb.append(String.format("| %-25s | %-19s | %-7d |\n", c, "DOCUMENT", db.getDocumentEngine(c).count()));
-            count++;
-        }
-        for (String c : db.getVectorEngineNames()) {
-            sb.append(
-                    String.format("| %-25s | %-19s | %-7d |\n", c, "VECTOR (Cosine)", db.getVectorEngine(c, 3).size()));
-            count++;
-        }
-        for (String c : db.getGraphEngineNames()) {
-            sb.append(String.format("| %-25s | %-19s | %-7d |\n", c, "GRAPH (Adjacency)",
-                    db.getGraphEngine(c).getVertices().size()));
-            count++;
-        }
-        for (String c : db.getTimeSeriesEngineNames()) {
-            sb.append(String.format("| %-25s | %-19s | %-7d |\n", c, "TIMESERIES", db.getTimeSeriesEngine(c).size()));
-            count++;
-        }
-        for (String c : db.getKeyValueEngineNames()) {
-            sb.append(String.format("| %-25s | %-19s | %-7d |\n", c, "KEY-VALUE", db.getKeyValueEngine(c).size()));
-            count++;
-        }
-        for (String c : db.getColumnarEngineNames()) {
-            sb.append(String.format("| %-25s | %-19s | %-7d |\n", c, "COLUMNAR", db.getColumnarEngine(c).size()));
-            count++;
-        }
-        for (String c : db.getGeospatialEngineNames()) {
-            sb.append(String.format("| %-25s | %-19s | %-7d |\n", c, "GEOSPATIAL", db.getGeospatialEngine(c).size()));
-            count++;
-        }
-
-        if (count == 0) {
-            sb.append("| (Sin colecciones activas) | -                   | 0       |\n");
-        }
-        sb.append("+---------------------------+---------------------+---------+\n");
-        sb.append(String.format("Total: %d coleccion(es) en base de datos '%s'\n", count, currentDatabase));
-        return sb.toString();
-    }
-
-    private String handleCreateCollection(String command) {
+    // --- Control de Buckets ---
+    private String handleCreateBucket(String command) {
         String[] parts = command.split("\\s+");
         if (parts.length < 3)
-            return "[ERROR] Uso: CREATE <ENGINE|COLLECTION|BUCKET|UNIT> <nombre> [TYPE <tipo>]";
-        String colName = cleanQuotes(parts[2]);
+            return "[ERROR] Uso: CREATE <BUCKET|ENGINE|UNIT> <nombre> [TYPE <tipo>]";
+        String bucketName = cleanQuotes(parts[2]);
         String type = "DOCUMENT";
         for (int i = 3; i < parts.length - 1; i++) {
             if ("TYPE".equalsIgnoreCase(parts[i])) {
@@ -4476,16 +4432,16 @@ public final class JettraStoreShellApp implements AutoCloseable {
 
         JettraDatabase db = client.getDatabase(currentDatabase);
         switch (type) {
-            case "VECTOR" -> db.getVectorEngine(colName, 3);
-            case "GRAPH" -> db.getGraphEngine(colName);
-            case "TIMESERIES" -> db.getTimeSeriesEngine(colName);
-            case "KEYVALUE", "KV" -> db.getKeyValueEngine(colName);
-            case "COLUMNAR" -> db.getColumnarEngine(colName);
-            case "GEOSPATIAL", "GEO" -> db.getGeospatialEngine(colName);
-            default -> db.getDocumentEngine(colName);
+            case "VECTOR" -> db.getVectorEngine(bucketName, 3);
+            case "GRAPH" -> db.getGraphEngine(bucketName);
+            case "TIMESERIES" -> db.getTimeSeriesEngine(bucketName);
+            case "KEYVALUE", "KV" -> db.getKeyValueEngine(bucketName);
+            case "COLUMNAR" -> db.getColumnarEngine(bucketName);
+            case "GEOSPATIAL", "GEO" -> db.getGeospatialEngine(bucketName);
+            default -> db.getDocumentEngine(bucketName);
         }
-        return String.format("[SUCCESS] Unidad/Motor '%s' creado con motor multimodelo '%s' en base de datos '%s'.",
-                colName, type, currentDatabase);
+        return String.format("[SUCCESS] Bucket '%s' creado en el motor '%s' en base de datos '%s'.",
+                bucketName, type, currentDatabase);
     }
 
     // --- Control de Buckets / Units, Conteo y Visualización de Registros ---
@@ -4503,9 +4459,9 @@ public final class JettraStoreShellApp implements AutoCloseable {
 
         // 1. Documents
         if (filterEngine == null || filterEngine.contains("DOC")) {
-            for (String col : db.getDocumentEngineNames()) {
-                long c = db.getDocumentEngine(col).count();
-                rows.add(new UnitRow("DOCUMENT", "Collection", col, c, "ACTIVE (In-Memory)"));
+            for (String bucket : db.getDocumentEngineNames()) {
+                long c = db.getDocumentEngine(bucket).count();
+                rows.add(new UnitRow("DOCUMENT", "Bucket", bucket, c, "ACTIVE (In-Memory)"));
             }
         }
         // 2. Vectors
@@ -4591,7 +4547,7 @@ public final class JettraStoreShellApp implements AutoCloseable {
         String clean = command.replaceAll("(?i)^SHOW\\s+RECORDS(\\s+FROM)?\\s*", "").trim();
         JettraDatabase db = client.getDatabase(currentDatabase);
         if (clean.isBlank()) {
-            var all = db.getAllCollectionNames();
+            var all = db.getAllBucketNames();
             if (all.isEmpty()) {
                 return String.format("[INFO] No hay buckets/units creados en la base de datos '%s'.", currentDatabase);
             }
@@ -4889,12 +4845,12 @@ public final class JettraStoreShellApp implements AutoCloseable {
                 currentDatabase);
     }
 
-    private String handleDropCollection(String command) {
-        String clean = command.replaceAll("(?i)^(DROP COLLECTION|DROP ENGINE|DROP BUCKET|DROP UNIT)\\s+", "").trim();
-        String col = cleanQuotes(clean.split("\\s+")[0]);
-        boolean ok = client.getDatabase(currentDatabase).dropCollection(col);
-        return ok ? String.format("[SUCCESS] Unidad/Colección/Motor '%s' eliminado.", col)
-                : String.format("[WARN] La unidad/colección/motor '%s' no existía.", col);
+    private String handleDropBucket(String command) {
+        String clean = command.replaceAll("(?i)^(DROP ENGINE|DROP BUCKET|DROP UNIT)\\s+", "").trim();
+        String bucket = cleanQuotes(clean.split("\\s+")[0]);
+        boolean ok = client.getDatabase(currentDatabase).dropBucket(bucket);
+        return ok ? String.format("[SUCCESS] Bucket '%s' eliminado.", bucket)
+                : String.format("[WARN] El bucket '%s' no existía.", bucket);
     }
 
     // --- Auxiliares de Parseo ---

@@ -332,12 +332,12 @@ public final class JettraClient implements AutoCloseable {
         return name != null && databases.containsKey(name);
     }
 
-    public int getLightweightCollectionCount(String dbName) {
+    public int getLightweightBucketCount(String dbName) {
         if (dbName == null) return 0;
         if (databases.containsKey(dbName)) {
-            return databases.get(dbName).getAllCollectionNames().size();
+            return databases.get(dbName).getAllBucketNames().size();
         }
-        return io.jettra.store.core.JettraDatabase.getLightweightCollectionCount(dbName, JettraStoreConfig.load());
+        return io.jettra.store.core.JettraDatabase.getLightweightBucketCount(dbName, JettraStoreConfig.load());
     }
 
     public boolean databaseExists(String name) {
@@ -795,13 +795,13 @@ public final class JettraClient implements AutoCloseable {
      * Retorna un flujo continuo de chunks de documentos procesados de forma segura
      * particionados en lotes liberables para Garbage Collection, con metadatos de Sentinel.
      */
-    public StreamResponse<Map<String, Object>> streamFindAll(String databaseName, String collectionName) {
-        return streamFindAll(databaseName, collectionName, 0);
+    public StreamResponse<Map<String, Object>> streamFindAll(String databaseName, String bucketName) {
+        return streamFindAll(databaseName, bucketName, 0);
     }
 
-    public StreamResponse<Map<String, Object>> streamFindAll(String databaseName, String collectionName, int limit) {
+    public StreamResponse<Map<String, Object>> streamFindAll(String databaseName, String bucketName, int limit) {
         JettraDatabase db = getDatabase(databaseName);
-        StreamResponse<Map<String, Object>> stream = db.streamCollection(collectionName, limit);
+        StreamResponse<Map<String, Object>> stream = db.streamBucket(bucketName, limit);
         if (stream.isSentinelActivated()) {
             dispatchPoliceEvent(stream.getNotification());
         }
@@ -1148,8 +1148,8 @@ public final class JettraClient implements AutoCloseable {
         return "[COMMAND] Comando ejecutado: " + trimmed;
     }
 
-    public Set<String> getCollectionNames(String databaseName) {
-        return getDatabase(databaseName).getAllCollectionNames();
+    public Set<String> getBucketNames(String databaseName) {
+        return getDatabase(databaseName).getAllBucketNames();
     }
 
     public Set<String> getDocumentEngineNames(String databaseName) {
@@ -1255,7 +1255,7 @@ public final class JettraClient implements AutoCloseable {
     }
 
     public boolean dropBucket(String databaseName, String bucketName) {
-        return getDatabase(databaseName).dropCollection(bucketName);
+        return getDatabase(databaseName).dropBucket(bucketName);
     }
 
     public boolean deleteDocument(String databaseName, String bucketName, String id) {
