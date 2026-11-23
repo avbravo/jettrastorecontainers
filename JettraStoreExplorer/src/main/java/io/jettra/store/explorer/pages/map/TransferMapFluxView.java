@@ -462,7 +462,7 @@ public class TransferMapFluxView extends FluxView {
 
           async function fetchState() {
             try {
-              const res = await fetch('/api/cluster/status', { cache: 'no-store' });
+              const res = await fetch('/api/cluster/status', { cache: 'no-store', credentials: 'same-origin' });
               if (!res.ok) return;
               const data = await res.json();
               applyMapData(data);

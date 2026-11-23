@@ -1208,9 +1208,11 @@ public class StoreExplorerFluxTemplateView extends FluxView {
 
               async function pollClusterHealth() {
                 try {
-                  const res = await fetch('/api/cluster/status', { cache: 'no-store' });
+                  const res = await fetch('/api/cluster/status', { cache: 'no-store', credentials: 'same-origin' });
                   if (res.status === 401) {
-                    window.location.href = '/login?error=session_expired';
+                    if (!window.location.pathname.startsWith('/login')) {
+                      window.location.href = '/login?error=session_expired';
+                    }
                     return;
                   }
                   if (!res.ok) return;

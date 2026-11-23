@@ -8,7 +8,6 @@ import io.jettra.driver.config.JettraClientConfig;
 import io.jettra.store.backup.BackupManager;
 import io.jettra.store.cluster.ClusterNode;
 import io.jettra.store.cluster.DynamicRingEngine;
-import io.jettra.store.cluster.JettraClusterProtocol;
 import io.jettra.store.cluster.JettraRaftFrame;
 import io.jettra.store.core.JettraDatabase;
 import io.jettra.store.core.JettraStoreConfig;
@@ -171,50 +170,43 @@ public final class JettraStoreShellApp implements AutoCloseable {
                 } catch (Exception e) {
                     continue;
                 }
-                try (Socket s = new Socket()) {
-                    s.setTcpNoDelay(true);
-                    s.connect(new InetSocketAddress(h, p), 400);
-                    s.setSoTimeout(600);
-                    try (BufferedOutputStream bos = new BufferedOutputStream(s.getOutputStream(), 8192);
-                            BufferedInputStream bis = new BufferedInputStream(s.getInputStream(), 8192)) {
-                        JettraClusterProtocol.writeFrame(bos,
-                                JettraRaftFrame.getClusterConfigReq(1L, "jettra-shell-sync"));
-                        JettraRaftFrame resp = JettraClusterProtocol.readFrame(bis);
-                        if (resp != null && resp.frameType() == JettraRaftFrame.TYPE_GET_CLUSTER_CONFIG_RESP
-                                && resp.payload() != null && resp.payload().length > 0) {
-                            byte[] cfgBytes = resp.payload();
-                            if (JettraConfigValidator.validateClusterConfigIntegrity(cfgBytes).isValid()) {
-                                Path localFile = JettraConfigValidator.locateClusterConfigFile();
-                                if (localFile == null) {
-                                    localFile = Path.of(JettraConfigValidator.DEFAULT_CLUSTER_CONFIG_PATH);
-                                }
-                                JettraConfigValidator.writeClusterConfigAtomically(localFile, cfgBytes);
-                                Properties props = new Properties();
-                                try (var bais = new java.io.ByteArrayInputStream(cfgBytes)) {
-                                    props.load(bais);
-                                }
-                                List<JettraConfigValidator.ClusterNodeInfo> parsed = JettraConfigValidator
-                                        .parseClusterNodes(props);
-                                if (!parsed.isEmpty() && client != null && client.getRingEngine() != null) {
-                                    Set<String> liveIds = new HashSet<>();
-                                    for (var cn : parsed) {
-                                        liveIds.add(cn.id().toLowerCase(Locale.ROOT));
-                                        ClusterNode.Role r = "PRIMARY".equalsIgnoreCase(cn.role())
-                                                ? ClusterNode.Role.PRIMARY
-                                                : ClusterNode.Role.SECONDARY;
-                                        if (client.getRingEngine().getPeer(cn.id()) == null) {
-                                            client.getRingEngine()
-                                                    .registerPeer(new ClusterNode(cn.id(), cn.ip(), cn.grpcPort(), r));
-                                        }
-                                    }
-                                    for (ClusterNode existing : new ArrayList<>(client.getRingEngine().getPeers())) {
-                                        if (!liveIds.contains(existing.getId().toLowerCase(Locale.ROOT))) {
-                                            client.getRingEngine().removePeer(existing.getId());
-                                        }
-                                    }
-                                }
-                                return true;
+                if (client == null)
+                    continue;
+                try {
+                    var remoteCfg = client.readPrimaryClusterConfigFrom(h, p, 400, 600);
+                    if (remoteCfg != null && remoteCfg.rawBytes() != null && remoteCfg.rawBytes().length > 0) {
+                        byte[] cfgBytes = remoteCfg.rawBytes();
+                        if (JettraConfigValidator.validateClusterConfigIntegrity(cfgBytes).isValid()) {
+                            Path localFile = JettraConfigValidator.locateClusterConfigFile();
+                            if (localFile == null) {
+                                localFile = Path.of(JettraConfigValidator.DEFAULT_CLUSTER_CONFIG_PATH);
                             }
+                            JettraConfigValidator.writeClusterConfigAtomically(localFile, cfgBytes);
+                            Properties props = new Properties();
+                            try (var bais = new java.io.ByteArrayInputStream(cfgBytes)) {
+                                props.load(bais);
+                            }
+                            List<JettraConfigValidator.ClusterNodeInfo> parsed = JettraConfigValidator
+                                    .parseClusterNodes(props);
+                            if (!parsed.isEmpty() && client.getRingEngine() != null) {
+                                Set<String> liveIds = new HashSet<>();
+                                for (var cn : parsed) {
+                                    liveIds.add(cn.id().toLowerCase(Locale.ROOT));
+                                    ClusterNode.Role r = "PRIMARY".equalsIgnoreCase(cn.role())
+                                            ? ClusterNode.Role.PRIMARY
+                                            : ClusterNode.Role.SECONDARY;
+                                    if (client.getRingEngine().getPeer(cn.id()) == null) {
+                                        client.getRingEngine()
+                                                .registerPeer(new ClusterNode(cn.id(), cn.ip(), cn.grpcPort(), r));
+                                    }
+                                }
+                                for (ClusterNode existing : new ArrayList<>(client.getRingEngine().getPeers())) {
+                                    if (!liveIds.contains(existing.getId().toLowerCase(Locale.ROOT))) {
+                                        client.getRingEngine().removePeer(existing.getId());
+                                    }
+                                }
+                            }
+                            return true;
                         }
                     }
                 } catch (Exception ignored) {
@@ -1837,26 +1829,19 @@ public final class JettraStoreShellApp implements AutoCloseable {
             } catch (Exception e) {
                 continue;
             }
-            try (Socket s = new Socket()) {
-                s.setTcpNoDelay(true);
-                s.connect(new InetSocketAddress(h, p), 300);
-                s.setSoTimeout(500);
-                try (BufferedOutputStream bos = new BufferedOutputStream(s.getOutputStream(), 8192);
-                        BufferedInputStream bis = new BufferedInputStream(s.getInputStream(), 8192)) {
-                    JettraClusterProtocol.writeFrame(bos,
-                            JettraRaftFrame.getClusterConfigReq(1L, "jettra-shell-topology"));
-                    JettraRaftFrame resp = JettraClusterProtocol.readFrame(bis);
-                    if (resp != null && resp.frameType() == JettraRaftFrame.TYPE_GET_CLUSTER_CONFIG_RESP
-                            && resp.payload() != null && resp.payload().length > 0) {
-                        Properties props = new Properties();
-                        try (var bais = new java.io.ByteArrayInputStream(resp.payload())) {
-                            props.load(bais);
-                        }
-                        List<JettraConfigValidator.ClusterNodeInfo> parsed = JettraConfigValidator
-                                .parseClusterNodes(props);
-                        if (!parsed.isEmpty()) {
-                            return parsed;
-                        }
+            if (client == null)
+                continue;
+            try {
+                var remoteCfg = client.readPrimaryClusterConfigFrom(h, p, 300, 500);
+                if (remoteCfg != null && remoteCfg.rawBytes() != null && remoteCfg.rawBytes().length > 0) {
+                    Properties props = new Properties();
+                    try (var bais = new java.io.ByteArrayInputStream(remoteCfg.rawBytes())) {
+                        props.load(bais);
+                    }
+                    List<JettraConfigValidator.ClusterNodeInfo> parsed = JettraConfigValidator
+                            .parseClusterNodes(props);
+                    if (!parsed.isEmpty()) {
+                        return parsed;
                     }
                 }
             } catch (Exception ignored) {
@@ -2665,35 +2650,20 @@ public final class JettraStoreShellApp implements AutoCloseable {
         report.append(
                 "[CLUSTER REPLICATION] Sincronizando cluster.config en todos los nodos (PRIMARY -> SECONDARY):\n");
 
-        JettraRaftFrame syncFrame = JettraRaftFrame.syncClusterConfig(1L, "jettra-shell", cfgBytes);
-
         for (ShellClusterNode target : targets) {
             boolean isPrim = isPrimaryRole(target.role());
             String roleTag = isPrim ? "PRIMARY  " : "SECONDARY";
             if (target.host() == null || target.host().isBlank() || target.grpcPort() <= 0)
                 continue;
 
-            try (Socket s = new Socket()) {
-                s.setTcpNoDelay(true);
-                s.connect(new InetSocketAddress(target.host(), target.grpcPort()), 1000);
-                s.setSoTimeout(1500);
-                try (BufferedOutputStream bos = new BufferedOutputStream(s.getOutputStream(), 8192);
-                        BufferedInputStream bis = new BufferedInputStream(s.getInputStream(), 8192)) {
-                    JettraClusterProtocol.writeFrame(bos, syncFrame);
-                    bos.flush();
-                    try {
-                        JettraRaftFrame ack = JettraClusterProtocol.readFrame(bis);
-                        report.append(String.format("  ✓ [%s] %s (%s:%d): cluster.config replicado exitosamente.%n",
-                                roleTag, target.id(), target.host(), target.grpcPort()));
-                    } catch (Exception ex) {
-                        report.append(String.format("  ✓ [%s] %s (%s:%d): Trama cluster.config enviada al nodo.%n",
-                                roleTag, target.id(), target.host(), target.grpcPort()));
-                    }
-                }
-            } catch (Exception e) {
+            boolean ok = client != null && client.distributeClusterConfigToNode(target.host(), target.grpcPort(), cfgBytes);
+            if (ok) {
+                report.append(String.format("  ✓ [%s] %s (%s:%d): cluster.config replicado exitosamente (vía JettraStoreDriver).%n",
+                        roleTag, target.id(), target.host(), target.grpcPort()));
+            } else {
                 report.append(String.format(
-                        "  ⚠ [%s] %s (%s:%d): No alcanzable (%s). Se sincronizará automáticamente al iniciar.%n",
-                        roleTag, target.id(), target.host(), target.grpcPort(), e.getMessage()));
+                        "  ⚠ [%s] %s (%s:%d): No alcanzable. Se sincronizará automáticamente al iniciar.%n",
+                        roleTag, target.id(), target.host(), target.grpcPort()));
             }
         }
 
@@ -2718,19 +2688,9 @@ public final class JettraStoreShellApp implements AutoCloseable {
                         break;
                     }
                 }
-                if (primary == null || primary.ip() == null || primary.grpcPort() <= 0)
+                if (primary == null || primary.ip() == null || primary.grpcPort() <= 0 || client == null)
                     return;
-                JettraRaftFrame joinReq = JettraRaftFrame.joinClusterReq(1L, nodeId, role, host, grpcPort, restPort);
-                try (java.net.Socket s = new java.net.Socket()) {
-                    s.setTcpNoDelay(true);
-                    s.connect(new java.net.InetSocketAddress(primary.ip(), primary.grpcPort()), 1500);
-                    s.setSoTimeout(3000);
-                    try (var bos = new BufferedOutputStream(s.getOutputStream(), 8192);
-                            var bis = new BufferedInputStream(s.getInputStream(), 8192)) {
-                        JettraClusterProtocol.writeFrame(bos, joinReq);
-                        JettraClusterProtocol.readFrame(bis);
-                    }
-                }
+                client.triggerNodeJoinSync(primary.ip(), primary.grpcPort(), nodeId, role, host, grpcPort, restPort);
             } catch (Exception ignored) {
             }
         });
@@ -4948,127 +4908,117 @@ public final class JettraStoreShellApp implements AutoCloseable {
     public String getHelpText() {
         return """
                 ==============================================================================================
-                                         JETTRASTORE SHELL - GUÍA COMPLETA DE COMANDOS
+                           JETTRASTORE SHELL - GUÍA COMPLETA DE COMANDOS (vía JettraStoreDriver)
                 ==============================================================================================
                 1. CONEXIÓN Y SESIÓN:
-                  connect <url> <port>                  Establece la dirección del nodo servidor JettraStore.
-                  connect <nombre-perfil>               Conecta utilizando un perfil previamente guardado.
-                  login <username> <password>            Autentica y obtiene un token de sesión criptográfico JettraJWT.
-                  logout                                Cierra la sesión activa y revoca el token JWT.
-                  save connection <nombre> Guarda el perfil de conexión actual con un alias.
-                  remove connection <nombre>            Elimina un perfil de conexión guardado.
-                  list connections / list conections    Lista todos los perfiles de conexión guardados.
+                  connect <url> <port>                      Establece la dirección del nodo servidor JettraStore.
+                  connect <nombre-perfil>                   Conecta utilizando un perfil previamente guardado.
+                  login <username> <password>               Autentica y obtiene un token criptográfico JettraJWT.
+                  logout                                    Cierra la sesión activa y revoca el token JWT.
+                  save connection <nombre>                  Guarda el perfil de conexión actual con un alias.
+                  remove connection <nombre>                Elimina un perfil de conexión guardado.
+                  list connections                          Lista todos los perfiles de conexión guardados.
 
-                2. TELEMETRÍA Y CLÚSTER:
-                  status                                Monitorea RAM Panama FFM, CPU Loom y Disco LSM.
-                  show nodes / list nodes               Muestra la topología del clúster Raft y nodos del anillo.
+                2. TELEMETRÍA Y ADMINISTRACIÓN DEL CLÚSTER:
+                  status                                    Monitorea RAM Panama FFM, CPU Loom y Disco LSM.
+                  show nodes / list nodes                   Muestra la topología real del clúster Raft y nodos.
+                  show cluster config / cluster config      Muestra el archivo cluster.config vigente del PRIMARY.
+                  sync cluster config                       Sincroniza cluster.config desde/hacia el clúster.
                   cluster-distributed <all>             distribuye entre todos los nodos todas las bases de datos
                   cluster-distributed <nombre-base-datos>: distribuye la base de datos indicada
                   cluster-distributed info :            Muestra una tabla con los nodos y las bases de datos en cada nodo.
-                  cluster live [límite]                 Muestra trazas y eventos en tiempo real de lo que ocurre en el clúster.
-                  multinode / show multinode            Muestra el estado de cluster.multinode.active (ON/OFF).
-                  multinode on / multinode off          Activa o desactiva dinámicamente la distribución de datos.
-                  cluster add-node <id> <host> <port> [ROLE] [REST_PORT]  Agrega un nuevo nodo; replica cluster.config (PRIMARY -> SECONDARIES) y sincroniza datos desde PRIMARY.
-                  add node <id> <host> <port> [ROLE] [REST_PORT]    Agrega un nuevo nodo al clúster y replica cluster.config.
-                  cluster remove-node <id>              Remueve un nodo y replica cluster.config (PRIMARY -> SECONDARIES).
-                  remove node <id>                      Remueve un nodo réplica del anillo y replica cluster.config.
-                  start node <id>                       Inicia/reactiva un nodo y sincroniza automáticamente bases de datos y objetos desde PRIMARY.
-                  stop node <id>                        Detiene un nodo réplica (pausa el tráfico de descarga).
+                  cluster live [límite]                     Muestra eventos y trazas del clúster en tiempo real.
+                  multinode / show multinode                Muestra el estado de cluster.multinode.active (ON/OFF).
+                  multinode on / multinode off              Activa o desactiva la distribución multinodo.
+                  add node <id> <host> <port> [ROLE] [REST] Agrega un nodo, replica cluster.config y sincroniza datos.
+                  cluster add-node <id> <host> <port> [R]   Alias de add node (PRIMARY -> SECONDARIES).
+                  remove node <id>                          Remueve un nodo detenido y replica cluster.config.
+                  cluster remove-node <id>                  Alias de remove node (solo rol admin).
+                  start node <id>                           Inicia/verifica un nodo y sincroniza desde PRIMARY.
+                  stop node <id>                            Detiene limpiamente un nodo (Raft/REST vía Driver).
 
-                3. BASES DE DATOS, BUCKETS/UNITS Y PERSISTENCIA EN DISCO:
-                  show databases / show dbs             Lista todas las bases de datos detectadas en disco y memoria.
-                  show buckets / show unit              Muestra todos los buckets/units de cada motor con sus conteos.
-                  show records <bucket> [LIMIT n]       Muestra los registros que contiene el bucket indicado en cualquier motor.
-                  count <bucket> / count all            Cuenta los registros de un bucket o el total de la base de datos activa.
-                  show samples / show sample dbs        Muestra las 5 bases de datos de prueba preconfiguradas.
-                  create database <nombre>              Crea una nueva base de datos lógica.
-                  drop database <nombre>                Elimina la base de datos especificada.
-                  use <nombre>                          Conmuta la base de datos activa.
-                  db stats                              Muestra estadísticas de la base de datos activa.
-                  INSTALL SAMPLES                       Instala y persiste las 5 bases de datos de ejemplo estándar.
-                  LOAD SAMPLE example_factura_db        Carga la base de datos de facturación (3M objetos).
-                  LOAD SAMPLE samples_hostipal_db       Carga la base de datos hospitalaria (2M objetos).
-                  LOAD SAMPLE samples_ambiental_db      Carga la base de datos ambiental mundial (3M objetos).
-                  backup database [nombre] [destino]    Genera un snapshot físico .snap de la base de datos.
-                  restore database <archivo> <nombre>   Restaura un snapshot .snap en una base de datos.
+                3. BASES DE DATOS, BUCKETS, ESQUEMAS Y PERSISTENCIA:
+                  show databases / show dbs                 Lista todas las bases de datos en disco y memoria.
+                  create database <nombre>                  Crea una nueva base de datos lógica.
+                  drop database <nombre>                    Elimina la base de datos especificada.
+                  use <nombre>                              Conmuta la base de datos activa.
+                  db stats                                  Muestra estadísticas de la base de datos activa.
+                  show buckets / show unit                  Muestra los buckets/units de cada motor con conteos.
+                  create bucket <db> <engine> <bucket> [NONE|DEFINED] [json]  Crea bucket libre o con esquema estricto.
+                  describe bucket <db> <engine> <bucket>    Inspecciona el esquema (NONE/DEFINED) y reglas del bucket.
+                  drop bucket <db> <engine> <bucket>        Elimina el bucket especificado.
+                  show records <bucket> [LIMIT n]           Muestra los registros del bucket en cualquier motor.
+                  count <bucket> / count all                Cuenta registros de un bucket o de toda la BD activa.
+                  show samples / INSTALL SAMPLES            Lista o instala las bases de datos de ejemplo estándar.
+                  LOAD SAMPLE <nombre_sample_db>            Carga un dataset de ejemplo (p.ej. example_factura_db).
+                  backup database [nombre] [destino]        Genera un snapshot físico .snap de la base de datos.
+                  restore database <archivo> <nombre>       Restaura un snapshot .snap en una base de datos.
 
-                4. CONSULTAS POLÍGLOTAS (JETTRAQL Y JETTRASQL):
-                  JettraQL: Declarativo multimodelo (FROM, MATCH, VECTOR SIMILARITY, FETCH)
-                  JQL FROM <col> [WHERE campo = valor]  Consulta declarativa sobre documentos.
-                  JQL MATCH (a)-[r]->(b) IN <grafo>     Pattern matching sobre redes de grafos.
-                  JQL VECTOR SIMILARITY <col> TO [...]  Búsqueda de vecinos más cercanos por similaridad coseno.
-                  JQL FETCH <col> <id> [RESOLVE REFS]   Recupera un registro resolviendo referencias JettraRef.
-                  SQL SELECT * FROM <col> [WHERE k = v] Consulta relacional con tabla formateada de columnas y filas.
-                  SQL INSERT INTO <col> VALUES (id, json) Inserta registro en la colección activa.
+                4. CONSULTAS POLÍGLOTAS (JETTRAQL, JETTRASQL) Y ALMACENAMIENTO:
+                  JQL FROM <col> [WHERE campo = valor]      Consulta declarativa multimodelo sobre documentos.
+                  JQL MATCH (a)-[r]->(b) IN <grafo>         Pattern matching sobre redes de grafos.
+                  JQL VECTOR SIMILARITY <col> TO [...]      Búsqueda k-NN por similaridad coseno.
+                  JQL FETCH <col> <id> [RESOLVE REFS]       Recupera un registro resolviendo referencias JettraRef.
+                  SQL SELECT * FROM <col> [WHERE k = v]     Consulta relacional con tabla formateada.
+                  SQL INSERT INTO <col> VALUES (id, json)   Inserta registro en la colección activa.
                   SQL UPDATE <col> SET k = v WHERE _id = id Actualiza campos de un registro.
-                  SQL DELETE FROM <col> WHERE _id = id  Elimina un registro mediante sintaxis SQL.
-
-                  STORAGE_MODE                          Muestra el modo de almacenamiento activo (JVM-RAM, DISK-MEMORY u OFF-HEAP).
-                  STORAGE_MODE <JVM_RAM|DISK_MEMORY|OFF_HEAP>  Conmuta el modo entre RAM JVM, DISK-MEMORY o páginas nativas OFF-HEAP.
+                  SQL DELETE FROM <col> WHERE _id = id      Elimina un registro mediante sintaxis SQL.
+                  STORAGE_MODE                              Muestra el modo activo (JVM_RAM, DISK_MEMORY, OFF_HEAP).
+                  STORAGE_MODE <JVM_RAM|DISK_MEMORY|OFF_HEAP>  Conmuta el modo de almacenamiento en caliente.
 
                 5. CÁLCULO, AGREGACIONES, ESTADÍSTICA, FINANZAS Y ÁLGEBRA VECTORIAL:
-                  AGGREGATE <col> [GROUP BY c] [SUM f] [AVG f] [MIN f] [MAX f] [MEDIAN f] [COUNT]
-                  MATH <expresion>                     Evaluador matemático (sqrt, cbrt, pow, gcd, lcm, fact, hypot, etc.)
-                  FINANCE PMT <tasa> <nper> <prestamo>  Cálculo de cuota periódica fija (sistema francés).
-                  FINANCE FV <tasa> <nper> <cuota>      Cálculo de valor futuro de una inversión.
-                  FINANCE CAGR <inicial> <final> <anios> Tasa de crecimiento anual compuesto (CAGR %).
-                  FINANCE NPV <tasa> <cf0> <cf1>...    Valor presente neto / VAN.
-                  FINANCE IRR <cf0> <cf1> <cf2>...     Tasa interna de retorno / TIR %.
-                  FINANCE AMORTIZATION <p> <tasa> <n>  Genera tabla completa de amortización francesa.
-                  STATS MEAN <n1, n2, n3...>            Media aritmética muestral.
-                  STATS MEDIAN <n1, n2, n3...>          Mediana muestral.
-                  STATS SUMMARY <n1, n2, n3...>         Resumen descriptivo completo (mean, median, stddev, min, max, p95).
-                  STATS CORRELATION [x1, x2...] [y1, y2...] Coeficiente de correlación de Pearson r.
-                  STATS REGRESSION [x1, x2...] [y1, y2...]  Regresión lineal simple (y = mx + b).
-                  VECTOR DOT [v1] [v2]                 Producto punto entre vectores.
-                  VECTOR COSINE [v1] [v2]              Similitud coseno entre embeddings.
-                  VECTOR EUCLIDEAN [v1] [v2]           Distancia euclidiana.
-                  VECTOR CROSS [v1] [v2]               Producto cruz 3D.
-                  VECTOR ANGLE [v1] [v2]               Ángulo entre vectores (radianes y grados).
-                  VECTOR NORMALIZE [v]                 Normaliza a vector unitario (norma L2 = 1.0).
-                  SELECT cat, SUM(v), AVG(v), MEDIAN(v) FROM <col> GROUP BY cat  SQL estándar con agregaciones.
+                  AGGREGATE <col> [GROUP BY c] [SUM|AVG|MIN|MAX|MEDIAN|COUNT]  Agregaciones nativas.
+                  MATH <expresion>                          Evaluador matemático (sqrt, pow, gcd, lcm, fact, etc.).
+                  FINANCE <PMT|FV|CAGR|NPV|IRR|AMORTIZATION> ...  Cálculos financieros integrados.
+                  STATS <MEAN|MEDIAN|SUMMARY|CORRELATION|REGRESSION> ...  Estadística descriptiva y regresión.
+                  VECTOR <DOT|COSINE|EUCLIDEAN|CROSS|ANGLE|NORMALIZE> ... Álgebra vectorial para embeddings.
+                  SELECT cat, SUM(v), AVG(v) FROM <col> GROUP BY cat      SQL estándar con agregaciones.
 
                 6. REGISTROS REFERENCIADOS (JETTRAREF) Y LAZY LOADING:
-                  lazy reference on / off (lazy reference on / lazy reference off)               Alterna la resolución diferida (Lazy) o inmediata (Eager).
-                  insert ref <col> <id> KEY <k> TARGET <engine>::<col>#<id>  Vincula un puntero cruzado multimodelo.
-                  resolve ref <engine>::<col>#<id>      Resuelve manualmente el destino de una referencia.
-                  show refs <col> <id>                  Muestra todas las referencias de un registro y sus resoluciones.
-                  get <col> <id>                        Obtiene un documento y resuelve sus punteros _ref_*.
+                  lazy reference on / off                   Alterna la resolución diferida (Lazy) o inmediata (Eager).
+                  insert ref <col> <id> KEY <k> TARGET <engine>::<col>#<id>  Vincula puntero cruzado multimodelo.
+                  resolve ref <engine>::<col>#<id>          Resuelve manualmente el destino de una referencia.
+                  show refs <col> <id>                      Muestra todas las referencias de un registro.
+                  get <col> <id>                            Obtiene un documento resolviendo sus punteros _ref_*.
 
-                7. ADMINISTRACIÓN DE ÍNDICES:
-                  create index <nombre> ON <col> (campo) [TYPE BTREE|HASH|SPARSE] [UNIQUE]  Crea índice secundario.
-                  drop index <nombre>                   Elimina el índice especificado.
-                  alter index <nombre> rebuild          Reconstruye el índice re-escaneando los documentos.
-                  show indexes [ON <col>]               Muestra la tabla de índices creados en la base de datos.
+                7. ADMINISTRACIÓN DE ÍNDICES (BTREE, HASH, NUMERIC, AUTO_INCREMENT):
+                  create index <nombre> ON <col> (<campo>) [TYPE BTREE|HASH|SPARSE|NUMERIC|AUTO_INCREMENT] [UNIQUE]
+                  create bucket index <nombre> ON <bucket> (<campo>) [TYPE BTREE|HASH|NUMERIC|AUTO_INCREMENT] [UNIQUE]
+                  show indexes [ON <col>]                   Muestra los índices de la base de datos o colección.
+                  show bucket indexes [ON <bucket>]         Muestra los índices asociados a un bucket.
+                  drop index <nombre> / drop bucket index <nombre>  Elimina el índice especificado.
+                  alter index <nombre> rebuild              Reconstruye el índice re-escaneando los documentos.
+                  show sequence <bucket> <campo>            Muestra el valor actual de la secuencia AUTO_INCREMENT.
+                  next sequence <bucket> <campo>            Genera y persiste el siguiente valor AUTO_INCREMENT.
 
-                7. ADMINISTRACIÓN DE USUARIOS Y ROLES (RBAC):
-                  show users / list users               Muestra todos los usuarios, rol global y roles por base de datos.
-                  create user <user> PASSWORD <pass> [ROLE <role>] Crea un nuevo usuario en el sistema.
-                  drop user <user>                      Elimina un usuario (superuser 'admin' inmutable).
-                  alter user <user> PASSWORD <newPass>  Actualiza la contraseña del usuario.
-                  alter user <user> ROLE <newRole>      Actualiza el rol global del usuario.
-                  grant <DB_OWNER|READ_WRITE|READ_ONLY> ON <db> TO <user>  Asigna privilegios sobre una base de datos.
-                  revoke <db> FROM <user>               Revoca el acceso sobre la base de datos indicada.
-                  show grants for <user>                Muestra los privilegios asignados al usuario especificado.
+                8. ADMINISTRACIÓN DE USUARIOS Y ROLES (RBAC):
+                  show users / list users                   Muestra usuarios, rol global y roles por base de datos.
+                  create user <user> PASSWORD <pass> [ROLE <role>]  Crea un nuevo usuario en el sistema.
+                  drop user <user>                          Elimina un usuario (superuser 'admin' inmutable).
+                  alter user <user> PASSWORD <newPass>      Actualiza la contraseña del usuario.
+                  alter user <user> ROLE <newRole>          Actualiza el rol global del usuario.
+                  grant <DB_OWNER|READ_WRITE|READ_ONLY> ON <db> TO <user>  Asigna privilegios sobre una BD.
+                  revoke <db> FROM <user>                   Revoca el acceso sobre la base de datos indicada.
+                  show grants for <user>                    Muestra los privilegios asignados al usuario.
 
-                8. MOTORES ESPECIALIZADOS (VECTORES, GRAFOS, TIME SERIES, KV):
-                  vector index <col> <id> [f1,f2,..]    Indexa vector float[] en el motor vectorial.
-                  vector search <col> [f1,f2] K <num>   Búsqueda k-NN por similaridad coseno.
-                  graph add vertex <grafo> <id>         Agrega un vértice a la red de grafos.
-                  graph add edge <g> <a> <b> [LABEL l]  Agrega arista dirigida ponderada.
-                  ts record <serie> <val> [TIME t]      Registra punto métrico en serie temporal.
-                  ts range <serie> <inicio> <fin>       Consulta métricas en rango de tiempo.
-                  kv put <tabla> <clave> <valor>        Almacena clave-valor en memoria de acceso ultra rápido.
-                  kv get <tabla> <clave>                Recupera el valor asociado a la clave.
+                9. MOTORES ESPECIALIZADOS (VECTORES, GRAFOS, TIME SERIES, KEY-VALUE):
+                  vector index <col> <id> [f1,f2,..]        Indexa vector float[] en el motor vectorial.
+                  vector search <col> [f1,f2] K <num>       Búsqueda k-NN por similaridad coseno.
+                  graph add vertex <grafo> <id>             Agrega un vértice a la red de grafos.
+                  graph add edge <g> <a> <b> [LABEL l]      Agrega arista dirigida ponderada.
+                  ts record <serie> <val> [TIME t]          Registra punto métrico en serie temporal.
+                  ts range <serie> <inicio> <fin>           Consulta métricas en rango de tiempo.
+                  kv put <tabla> <clave> <valor>            Almacena clave-valor en memoria de acceso rápido.
+                  kv get <tabla> <clave>                    Recupera el valor asociado a la clave.
 
-                9. HISTORIAL Y AUTOCOMPLETADO:
-                  history [n]                           Muestra los últimos n comandos ejecutados (o todos).
-                  history search <término>              Busca comandos en el historial que contengan el texto.
-                  history clear                         Borra el historial en memoria y en disco (~/.jettra/history.log).
-                  !<n>                                  Ejecuta el comando en la posición n del historial.
-                  !!                                    Ejecuta el último comando ejecutado.
-                  !<prefijo>                            Ejecuta el comando más reciente que comience con el prefijo.
-                  complete <prefijo> / tab <prefijo>    Muestra sugerencias de autocompletado para el prefijo indicado.
+                10. HISTORIAL, AUTOCOMPLETADO Y AYUDA TEMÁTICA:
+                  help / ?                                  Muestra esta guía completa de comandos.
+                  help cluster / help storage               Muestra ayuda detallada de clúster o almacenamiento.
+                  menu / menu connections                   Abre el menú interactivo guiado.
+                  history [n] / history search <término>    Consulta o filtra el historial de comandos.
+                  history clear                             Borra el historial en memoria y en disco.
+                  !<n> / !! / !<prefijo>                    Re-ejecuta un comando del historial.
+                  complete <prefijo> / tab <prefijo>        Muestra sugerencias de autocompletado.
                 ==============================================================================================
                 """;
     }

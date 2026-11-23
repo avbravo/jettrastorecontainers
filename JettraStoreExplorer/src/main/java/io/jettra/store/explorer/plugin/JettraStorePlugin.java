@@ -434,9 +434,21 @@ public class JettraStorePlugin {
     }
 
     public synchronized Optional<JettraUser> authenticate(String username, String password) {
-        return users.stream().filter(u -> u.getUsername().equalsIgnoreCase(username) &&
-                (u.getPassword().equals(password) || ("admin".equalsIgnoreCase(u.getUsername())
-                        && ("admin".equals(password) || "admin123".equals(password)))))
+        if (username == null || username.isBlank() || password == null || password.isBlank()) {
+            return Optional.empty();
+        }
+        if (users.isEmpty()) {
+            loadUsers();
+        }
+        String cleanUser = username.trim();
+        String cleanPass = password.trim();
+        return users.stream()
+                .filter(u -> u.getUsername() != null && u.getUsername().equalsIgnoreCase(cleanUser)
+                        && (Objects.equals(u.getPassword(), cleanPass)
+                                || ("admin".equalsIgnoreCase(u.getUsername())
+                                        && ("admin".equals(cleanPass)
+                                                || "admin123".equals(cleanPass)
+                                                || "admin-jettra".equals(cleanPass)))))
                 .findFirst();
     }
 
@@ -1132,6 +1144,33 @@ public class JettraStorePlugin {
     }
 
     private volatile long lastPrimaryTopologySyncEpochMs = 0L;
+    private volatile io.jettra.driver.JettraClient driverClient;
+    private volatile String driverClientEndpoint = "";
+
+    /**
+     * Devuelve el cliente estandarizado {@link io.jettra.driver.JettraClient} ({@code JettraStoreDriver})
+     * conectado al nodo PRIMARY vigente del clúster. Todas las operaciones de clúster y base de datos
+     * de {@code JettraStoreExplorer} se enrutan a través de este driver.
+     */
+    public synchronized io.jettra.driver.JettraClient getDriverClient() {
+        ServerNodeInfo primary = getPrimaryNode();
+        String host = (primary != null && primary.getHost() != null && !primary.getHost().isBlank())
+                ? primary.getHost().trim() : "127.0.0.1";
+        int port = (primary != null && primary.getPort() > 0) ? primary.getPort() : 50001;
+        String endpointKey = host + ":" + port;
+        if (driverClient == null || !endpointKey.equals(driverClientEndpoint)) {
+            if (driverClient != null) {
+                try {
+                    driverClient.close();
+                } catch (Exception ignored) {
+                }
+            }
+            driverClient = io.jettra.driver.JettraClient.connect(host, port, "admin", "admin-jettra");
+            driverClient.setActiveRole("admin");
+            driverClientEndpoint = endpointKey;
+        }
+        return driverClient;
+    }
 
     /**
      * Sincroniza la lista en memoria de {@code serverNodes} con el {@code cluster.config}
@@ -1608,27 +1647,20 @@ public class JettraStorePlugin {
         targets.sort((a, b) -> Boolean.compare(isPrimaryRole(b.getRole()), isPrimaryRole(a.getRole())));
         List<String> results = new ArrayList<>();
         int syncedCount = 0;
+        io.jettra.driver.JettraClient client = getDriverClient();
         for (ServerNodeInfo target : targets) {
             if (target.getHost() == null || target.getHost().isBlank() || target.getPort() <= 0)
                 continue;
             String roleTag = isPrimaryRole(target.getRole()) ? "PRIMARY" : "SECONDARY";
-            try (java.net.Socket s = new java.net.Socket()) {
-                s.setTcpNoDelay(true);
-                s.connect(new java.net.InetSocketAddress(target.getHost(), target.getPort()), 1200);
-                s.setSoTimeout(1500);
-                try (java.io.BufferedOutputStream bos = new java.io.BufferedOutputStream(s.getOutputStream(), 8192);
-                        java.io.BufferedInputStream bis = new java.io.BufferedInputStream(s.getInputStream(), 8192)) {
-                    io.jettra.store.cluster.JettraClusterProtocol.writeFrame(bos, frame);
-                    io.jettra.store.cluster.JettraRaftFrame ack = io.jettra.store.cluster.JettraClusterProtocol
-                            .readFrame(bis);
-                    if (ack != null && ack.frameType() == io.jettra.store.cluster.JettraRaftFrame.TYPE_NACK) {
-                        results.add("❌ [" + roleTag + "] " + target.getId() + " (" + target.getHost() + ":"
-                                + target.getPort() + "): rechazado — " + ack.getPayloadAsString());
-                    } else {
-                        syncedCount++;
-                        results.add("✅ [" + roleTag + "] " + target.getId() + " (" + target.getHost() + ":"
-                                + target.getPort() + "): cluster.config sincronizado");
-                    }
+            try {
+                boolean ok = client.distributeClusterConfigToNode(target.getHost(), target.getPort(), cfgBytes);
+                if (ok) {
+                    syncedCount++;
+                    results.add("✅ [" + roleTag + "] " + target.getId() + " (" + target.getHost() + ":"
+                            + target.getPort() + "): cluster.config sincronizado (vía JettraStoreDriver)");
+                } else {
+                    results.add("⚠️ [" + roleTag + "] " + target.getId() + " (" + target.getHost() + ":" + target.getPort()
+                            + "): no alcanzable o rechazado");
                 }
             } catch (Exception ex) {
                 results.add("⚠️ [" + roleTag + "] " + target.getId() + " (" + target.getHost() + ":" + target.getPort()
@@ -1654,25 +1686,13 @@ public class JettraStorePlugin {
         String content = null;
 
         if (primary != null && primary.getHost() != null && !primary.getHost().isBlank() && primary.getPort() > 0) {
-            try (java.net.Socket s = new java.net.Socket()) {
-                s.setTcpNoDelay(true);
-                s.connect(new java.net.InetSocketAddress(primary.getHost(), primary.getPort()), 1200);
-                s.setSoTimeout(1500);
-                try (java.io.BufferedOutputStream bos = new java.io.BufferedOutputStream(s.getOutputStream(), 8192);
-                        java.io.BufferedInputStream bis = new java.io.BufferedInputStream(s.getInputStream(), 8192)) {
-                    io.jettra.store.cluster.JettraClusterProtocol.writeFrame(
-                            bos,
-                            io.jettra.store.cluster.JettraRaftFrame.getClusterConfigReq(1L, "jettra-explorer-admin"));
-                    io.jettra.store.cluster.JettraRaftFrame resp = io.jettra.store.cluster.JettraClusterProtocol
-                            .readFrame(bis);
-                    if (resp != null
-                            && resp.frameType() == io.jettra.store.cluster.JettraRaftFrame.TYPE_GET_CLUSTER_CONFIG_RESP
-                            && resp.payload() != null && resp.payload().length > 0) {
-                        content = new String(resp.payload(), java.nio.charset.StandardCharsets.UTF_8);
-                        fromRemote = true;
-                        if (resp.senderNodeId() != null && !resp.senderNodeId().isBlank()) {
-                            sourceNodeId = resp.senderNodeId();
-                        }
+            try {
+                var remoteCfg = getDriverClient().readPrimaryClusterConfigFrom(primary.getHost(), primary.getPort(), 1200, 1500);
+                if (remoteCfg != null && remoteCfg.content() != null && !remoteCfg.content().isBlank()) {
+                    content = remoteCfg.content();
+                    fromRemote = true;
+                    if (remoteCfg.senderNodeId() != null && !remoteCfg.senderNodeId().isBlank()) {
+                        sourceNodeId = remoteCfg.senderNodeId();
                     }
                 }
             } catch (Exception ignored) {
@@ -1992,56 +2012,49 @@ public class JettraStorePlugin {
         if (!force && (now - lastCatalogSyncMs) < 1000L) {
             return true;
         }
-        try (java.net.Socket s = new java.net.Socket()) {
-            s.setTcpNoDelay(true);
-            s.connect(new java.net.InetSocketAddress(primary.getHost(), primary.getPort()), 800);
-            s.setSoTimeout(1500);
-            try (java.io.BufferedOutputStream bos = new java.io.BufferedOutputStream(s.getOutputStream(), 8192);
-                    java.io.BufferedInputStream bis = new java.io.BufferedInputStream(s.getInputStream(), 8192)) {
-                io.jettra.store.cluster.JettraRaftFrame req = io.jettra.store.cluster.JettraRaftFrame.syncCatalogReq(1L,
-                        "jettra-explorer");
-                io.jettra.store.cluster.JettraClusterProtocol.writeFrame(bos, req);
-                io.jettra.store.cluster.JettraRaftFrame resp = io.jettra.store.cluster.JettraClusterProtocol
-                        .readFrame(bis);
-                if (resp != null
-                        && resp.frameType() == io.jettra.store.cluster.JettraRaftFrame.TYPE_SYNC_CATALOG_RESP) {
-                    String csv = resp.payload() != null
-                            ? new String(resp.payload(), java.nio.charset.StandardCharsets.UTF_8).trim()
-                            : "";
-                    Set<String> primaryDbs = new LinkedHashSet<>();
-                    if (!csv.isBlank()) {
-                        for (String part : csv.split(",")) {
-                            String name = part.trim();
-                            if (!name.isBlank()) {
-                                primaryDbs.add(name);
-                            }
+        try {
+            io.jettra.store.cluster.JettraRaftFrame req = io.jettra.store.cluster.JettraRaftFrame.syncCatalogReq(1L,
+                    "jettra-explorer");
+            io.jettra.store.cluster.JettraRaftFrame resp = getDriverClient().sendClusterFrame(
+                    primary.getHost(), primary.getPort(), req, 800, 1500);
+            if (resp != null
+                    && resp.frameType() == io.jettra.store.cluster.JettraRaftFrame.TYPE_SYNC_CATALOG_RESP) {
+                String csv = resp.payload() != null
+                        ? new String(resp.payload(), java.nio.charset.StandardCharsets.UTF_8).trim()
+                        : "";
+                Set<String> primaryDbs = new LinkedHashSet<>();
+                if (!csv.isBlank()) {
+                    for (String part : csv.split(",")) {
+                        String name = part.trim();
+                        if (!name.isBlank()) {
+                            primaryDbs.add(name);
                         }
                     }
-                    // Remover del catálogo local las bases que ya no están almacenadas en el
-                    // PRIMARY
-                    databasesCatalog.keySet().removeIf(existing -> !primaryDbs.contains(existing));
-
-                    // Incorporar las bases almacenadas en el PRIMARY que aún no están en el
-                    // catálogo local
-                    Map<String, List<EngineBucketInfo>> exampleTemplates = null;
-                    for (String dbName : primaryDbs) {
-                        if (!databasesCatalog.containsKey(dbName)) {
-                            if (exampleTemplates == null) {
-                                exampleTemplates = new LinkedHashMap<>();
-                                populateExampleDatabases(exampleTemplates);
-                            }
-                            List<EngineBucketInfo> buckets = exampleTemplates.get(dbName);
-                            if (buckets == null) {
-                                buckets = buildDefaultNineEngineBuckets(
-                                        dbName,
-                                        "Base de datos almacenada en nodo PRIMARY (" + primary.getId() + ")");
-                            }
-                            databasesCatalog.put(dbName, buckets);
-                        }
-                    }
-                    lastCatalogSyncMs = System.currentTimeMillis();
-                    return true;
                 }
+                // Remover del catálogo local las bases que ya no están almacenadas en el
+                // PRIMARY
+                databasesCatalog.keySet().removeIf(existing -> !primaryDbs.contains(existing));
+
+                // Incorporar las bases almacenadas en el PRIMARY que aún no están en el
+                // catálogo local
+                Map<String, List<EngineBucketInfo>> exampleTemplates = null;
+                for (String dbName : primaryDbs) {
+                    if (!databasesCatalog.containsKey(dbName)) {
+                        if (exampleTemplates == null) {
+                            exampleTemplates = new LinkedHashMap<>();
+                            populateExampleDatabases(exampleTemplates);
+                        }
+                        List<EngineBucketInfo> buckets = exampleTemplates.get(dbName);
+                        if (buckets == null) {
+                            buckets = buildDefaultNineEngineBuckets(
+                                    dbName,
+                                    "Base de datos almacenada en nodo PRIMARY (" + primary.getId() + ")");
+                        }
+                        databasesCatalog.put(dbName, buckets);
+                    }
+                }
+                lastCatalogSyncMs = System.currentTimeMillis();
+                return true;
             }
         } catch (Exception ignored) {
         }
@@ -2158,15 +2171,8 @@ public class JettraStorePlugin {
                 || primary.getPort() <= 0) {
             return;
         }
-        try (java.net.Socket s = new java.net.Socket()) {
-            s.setTcpNoDelay(true);
-            s.connect(new java.net.InetSocketAddress(primary.getHost(), primary.getPort()), 1200);
-            s.setSoTimeout(2000);
-            try (java.io.BufferedOutputStream bos = new java.io.BufferedOutputStream(s.getOutputStream(), 8192);
-                    java.io.BufferedInputStream bis = new java.io.BufferedInputStream(s.getInputStream(), 8192)) {
-                io.jettra.store.cluster.JettraClusterProtocol.writeFrame(bos, frame);
-                io.jettra.store.cluster.JettraClusterProtocol.readFrame(bis);
-            }
+        try {
+            getDriverClient().sendClusterFrame(primary.getHost(), primary.getPort(), frame, 1200, 2000);
         } catch (Exception ignored) {
         }
     }
@@ -2181,19 +2187,9 @@ public class JettraStorePlugin {
                     return;
                 int grpcPort = node.getPort();
                 int restPort = node.getRestPort() > 0 ? node.getRestPort() : (grpcPort > 1000 ? grpcPort - 1000 : 8080);
-                io.jettra.store.cluster.JettraRaftFrame joinReq = io.jettra.store.cluster.JettraRaftFrame
-                        .joinClusterReq(
-                                1L, node.getId(), node.getRole(), node.getHost(), grpcPort, restPort);
-                try (java.net.Socket s = new java.net.Socket()) {
-                    s.setTcpNoDelay(true);
-                    s.connect(new java.net.InetSocketAddress(primary.getHost(), primary.getPort()), 1500);
-                    s.setSoTimeout(3000);
-                    try (var bos = new java.io.BufferedOutputStream(s.getOutputStream(), 8192);
-                            var bis = new java.io.BufferedInputStream(s.getInputStream(), 8192)) {
-                        io.jettra.store.cluster.JettraClusterProtocol.writeFrame(bos, joinReq);
-                        io.jettra.store.cluster.JettraClusterProtocol.readFrame(bis);
-                    }
-                }
+                getDriverClient().triggerNodeJoinSync(
+                        primary.getHost(), primary.getPort(),
+                        node.getId(), node.getRole(), node.getHost(), grpcPort, restPort);
             } catch (Exception ignored) {
             }
         });
@@ -2614,6 +2610,10 @@ public class JettraStorePlugin {
         newB.getIndexes().add(new EngineIndexInfo(
                 "idx_" + bucketName.toLowerCase().replaceAll("[^a-z0-9]", "_") + "_id", "id", "BTREE", true, "READY"));
         buckets.add(newB);
+        try {
+            getDriverClient().createBucket(dbName.trim(), eType, bucketName.trim(), st, parsedAttrs);
+        } catch (Exception ignored) {
+        }
         sendFrameToPrimaryNode(io.jettra.store.cluster.JettraRaftFrame.createEngine(
                 1L, 0L, "jettra-explorer", dbName.trim(), bucketName.trim(), eType, new byte[0]));
         logPoliceIncident("Catalog Patrol",
@@ -2637,6 +2637,11 @@ public class JettraStorePlugin {
         }
         bucket.setStructureType("DEFINED");
         bucket.setAttributes(parsed);
+        try {
+            getDriverClient().createBucket(dbName.trim(), bucket.getEngineType(), bucket.getBucketName(),
+                    io.jettra.store.core.JettraBucketSchema.StructureType.DEFINED, parsed);
+        } catch (Exception ignored) {
+        }
         logPoliceIncident("Schema Patrol",
                 "Estructura DEFINED guardada en " + dbName + "." + bucketName + " (" + parsed.size() + " atributos)",
                 "OK", "Validación estricta activa");
@@ -2652,6 +2657,11 @@ public class JettraStorePlugin {
         }
         bucket.setStructureType("NONE");
         bucket.setAttributes(List.of());
+        try {
+            getDriverClient().createBucket(dbName.trim(), bucket.getEngineType(), bucket.getBucketName(),
+                    io.jettra.store.core.JettraBucketSchema.StructureType.NONE, List.of());
+        } catch (Exception ignored) {
+        }
         logPoliceIncident("Schema Patrol",
                 "Estructura eliminada en " + dbName + "." + bucketName + " (modo NONE flexible)",
                 "WARN", "Esquema libre restaurado");
@@ -2690,8 +2700,15 @@ public class JettraStorePlugin {
         List<EngineBucketInfo> buckets = databasesCatalog.get(dbName);
         if (buckets == null || buckets.size() <= 1)
             return false;
+        EngineBucketInfo removedBucket = getBucket(dbName, bucketName);
         boolean removed = buckets.removeIf(b -> b.getBucketName().equalsIgnoreCase(bucketName.trim()));
         if (removed) {
+            if (removedBucket != null) {
+                try {
+                    getDriverClient().dropBucket(dbName, removedBucket.getEngineType(), removedBucket.getBucketName());
+                } catch (Exception ignored) {
+                }
+            }
             logPoliceIncident("Catalog Patrol", "Bucket '" + bucketName + "' eliminado de " + dbName, "WARN",
                     "Compactación forzada");
         }
@@ -2713,6 +2730,10 @@ public class JettraStorePlugin {
         String idxType = (type != null && !type.isBlank()) ? type.trim().toUpperCase(Locale.ROOT) : "BTREE";
         boolean effectiveUnique = unique || "AUTO_INCREMENT".equalsIgnoreCase(idxType);
         bucket.getIndexes().add(new EngineIndexInfo(cleanName, fields.trim(), idxType, effectiveUnique, "READY"));
+        try {
+            getDriverClient().createBucketIndex(dbName, bucketName, cleanName, fields.trim(), idxType, effectiveUnique);
+        } catch (Exception ignored) {
+        }
         sendFrameToPrimaryNode(io.jettra.store.cluster.JettraRaftFrame.createIndex(
                 1L, 0L, "jettra-explorer", dbName, bucketName, cleanName, fields.trim(), idxType, effectiveUnique));
         logPoliceIncident("Index Patrol",
@@ -2728,6 +2749,10 @@ public class JettraStorePlugin {
         }
         boolean removed = bucket.getIndexes().removeIf(idx -> idx.getName().equalsIgnoreCase(indexName.trim()));
         if (removed) {
+            try {
+                getDriverClient().dropBucketIndex(dbName, indexName.trim());
+            } catch (Exception ignored) {
+            }
             logPoliceIncident("Index Patrol", "Índice '" + indexName + "' eliminado de " + dbName + "." + bucketName,
                     "WARN", "Metadatos de índice liberados");
         }

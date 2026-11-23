@@ -114,6 +114,39 @@ public final class JettraClient implements AutoCloseable {
      * para obtener el listado exacto de bases de datos almacenadas en el PRIMARY.
      * Retorna null si no se logra contactar al nodo PRIMARY.
      */
+    /**
+     * Consulta la lista de bases de datos directamente en un nodo PRIMARY específico vía transporte Raft.
+     * Retorna {@code null} si el nodo no responde.
+     */
+    public java.util.List<String> fetchDatabasesFromPrimaryNode(String host, int port) {
+        if (host == null || host.isBlank() || port <= 0) return null;
+        try (java.net.Socket s = new java.net.Socket()) {
+            s.setTcpNoDelay(true);
+            s.connect(new java.net.InetSocketAddress(host.trim(), port), 1200);
+            s.setSoTimeout(2000);
+            try (var bos = new java.io.BufferedOutputStream(s.getOutputStream(), 8192);
+                 var bis = new java.io.BufferedInputStream(s.getInputStream(), 8192)) {
+                io.jettra.store.cluster.JettraClusterProtocol.writeFrame(
+                        bos, io.jettra.store.cluster.JettraRaftFrame.syncCatalogReq(1L, "jettra-driver"));
+                var resp = io.jettra.store.cluster.JettraClusterProtocol.readFrame(bis);
+                if (resp != null && resp.frameType() == io.jettra.store.cluster.JettraRaftFrame.TYPE_SYNC_CATALOG_RESP) {
+                    String payload = resp.getPayloadAsString();
+                    List<String> parsed = new ArrayList<>();
+                    if (payload != null && !payload.isBlank()) {
+                        for (String db : payload.split(",")) {
+                            String clean = db.trim();
+                            if (!clean.isEmpty() && !parsed.contains(clean)) {
+                                parsed.add(clean);
+                            }
+                        }
+                    }
+                    return parsed;
+                }
+            }
+        } catch (Exception ignored) {}
+        return null;
+    }
+
     public java.util.List<String> fetchDatabasesFromPrimaryNode() {
         List<String> candidates = new ArrayList<>();
         // 1. Endpoint al que el cliente se conectó explícitamente
@@ -1712,7 +1745,118 @@ public final class JettraClient implements AutoCloseable {
         return syncToCluster ? distributeClusterConfigZeroDowntime(bytes) : 0;
     }
 
-    private int distributeClusterConfigZeroDowntime(byte[] cfgBytes) {
+    public record RemoteClusterConfigResult(String senderNodeId, String content, byte[] rawBytes) {}
+
+    /**
+     * Lee el archivo {@code cluster.config} directamente desde un nodo específico vía protocolo Raft.
+     * Retorna {@code null} si el nodo no responde o no tiene contenido.
+     */
+    public RemoteClusterConfigResult readPrimaryClusterConfigFrom(String host, int port, int connectTimeoutMs, int readTimeoutMs) {
+        if (host == null || host.isBlank() || port <= 0) return null;
+        try (java.net.Socket s = new java.net.Socket()) {
+            s.setTcpNoDelay(true);
+            s.connect(new java.net.InetSocketAddress(host.trim(), port), Math.max(200, connectTimeoutMs));
+            s.setSoTimeout(Math.max(300, readTimeoutMs));
+            try (var bos = new java.io.BufferedOutputStream(s.getOutputStream(), 8192);
+                 var bis = new java.io.BufferedInputStream(s.getInputStream(), 8192)) {
+                io.jettra.store.cluster.JettraClusterProtocol.writeFrame(
+                        bos, io.jettra.store.cluster.JettraRaftFrame.getClusterConfigReq(1L, "jettra-driver"));
+                var resp = io.jettra.store.cluster.JettraClusterProtocol.readFrame(bis);
+                if (resp != null && resp.frameType() == io.jettra.store.cluster.JettraRaftFrame.TYPE_GET_CLUSTER_CONFIG_RESP
+                        && resp.payload() != null && resp.payload().length > 0) {
+                    String content = new String(resp.payload(), java.nio.charset.StandardCharsets.UTF_8);
+                    return new RemoteClusterConfigResult(resp.senderNodeId(), content, resp.payload());
+                }
+            }
+        } catch (Exception ignored) {}
+        return null;
+    }
+
+    /**
+     * Envía una trama {@code TYPE_SYNC_CLUSTER_CONFIG} a un nodo específico del clúster.
+     * Retorna {@code true} si el nodo aceptó la configuración (ACK) y {@code false} si falló o devolvió NACK.
+     */
+    public boolean distributeClusterConfigToNode(String host, int port, byte[] cfgBytes) {
+        if (host == null || host.isBlank() || port <= 0 || cfgBytes == null || cfgBytes.length == 0) return false;
+        var frame = io.jettra.store.cluster.JettraRaftFrame.syncClusterConfig(1L, "jettra-driver-admin", cfgBytes);
+        try (java.net.Socket s = new java.net.Socket()) {
+            s.setTcpNoDelay(true);
+            s.connect(new java.net.InetSocketAddress(host.trim(), port), 1000);
+            s.setSoTimeout(1500);
+            try (var bos = new java.io.BufferedOutputStream(s.getOutputStream(), 8192);
+                 var bis = new java.io.BufferedInputStream(s.getInputStream(), 8192)) {
+                io.jettra.store.cluster.JettraClusterProtocol.writeFrame(bos, frame);
+                var ack = io.jettra.store.cluster.JettraClusterProtocol.readFrame(bis);
+                return ack == null || ack.frameType() != io.jettra.store.cluster.JettraRaftFrame.TYPE_NACK;
+            }
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
+    /**
+     * Solicita al nodo PRIMARY que replique todas las bases de datos y metadatos al nodo objetivo
+     * mediante la trama Raft {@code TYPE_NODE_JOIN_SYNC_REQ}.
+     */
+    public boolean triggerNodeJoinSync(String primaryHost, int primaryPort,
+                                       String nodeId, String role, String nodeHost, int nodeGrpcPort, int nodeRestPort) {
+        if (primaryHost == null || primaryHost.isBlank() || primaryPort <= 0 || nodeId == null || nodeId.isBlank()) {
+            return false;
+        }
+        var joinReq = io.jettra.store.cluster.JettraRaftFrame.joinClusterReq(
+                1L, nodeId, role, nodeHost, nodeGrpcPort, nodeRestPort);
+        return sendClusterFrame(primaryHost, primaryPort, joinReq, 1500, 3000) != null;
+    }
+
+    /**
+     * Envía una trama de apagado controlado {@code TYPE_NODE_STOPPING} ({@code LIFECYCLE_SHUTDOWN:<nodeId>})
+     * a un nodo específico del clúster a través de {@code JettraStoreDriver}.
+     */
+    public boolean sendLifecycleShutdownFrame(String nodeId, String host, int port) {
+        if (nodeId == null || nodeId.isBlank() || host == null || host.isBlank() || port <= 0 || port > 65535) {
+            return false;
+        }
+        var frame = new io.jettra.store.cluster.JettraRaftFrame(
+                io.jettra.store.cluster.JettraRaftFrame.TYPE_NODE_STOPPING,
+                1L, 0L, "jettra-driver-lifecycle", "", "", nodeId.trim(),
+                ("LIFECYCLE_SHUTDOWN:" + nodeId.trim()).getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                System.currentTimeMillis());
+        try (java.net.Socket s = new java.net.Socket()) {
+            s.setTcpNoDelay(true);
+            s.connect(new java.net.InetSocketAddress(host.trim(), port), 600);
+            s.setSoTimeout(800);
+            try (var bos = new java.io.BufferedOutputStream(s.getOutputStream(), 8192)) {
+                io.jettra.store.cluster.JettraClusterProtocol.writeFrame(bos, frame);
+                bos.flush();
+                return true;
+            }
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
+    /**
+     * Envía una trama Raft arbitraria a un nodo del clúster y devuelve la trama de respuesta (o {@code null}).
+     */
+    public io.jettra.store.cluster.JettraRaftFrame sendClusterFrame(
+            String host, int port, io.jettra.store.cluster.JettraRaftFrame frame, int connectTimeoutMs, int readTimeoutMs) {
+        if (host == null || host.isBlank() || port <= 0 || frame == null) return null;
+        try (java.net.Socket s = new java.net.Socket()) {
+            s.setTcpNoDelay(true);
+            s.connect(new java.net.InetSocketAddress(host.trim(), port), Math.max(200, connectTimeoutMs));
+            s.setSoTimeout(Math.max(300, readTimeoutMs));
+            try (var bos = new java.io.BufferedOutputStream(s.getOutputStream(), 8192);
+                 var bis = new java.io.BufferedInputStream(s.getInputStream(), 8192)) {
+                io.jettra.store.cluster.JettraClusterProtocol.writeFrame(bos, frame);
+                bos.flush();
+                return io.jettra.store.cluster.JettraClusterProtocol.readFrame(bis);
+            }
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    public int distributeClusterConfigZeroDowntime(byte[] cfgBytes) {
         int confirmed = 0;
         var integrity = io.jettra.store.core.JettraConfigValidator.validateClusterConfigIntegrity(cfgBytes);
         if (!integrity.isValid()) return 0;

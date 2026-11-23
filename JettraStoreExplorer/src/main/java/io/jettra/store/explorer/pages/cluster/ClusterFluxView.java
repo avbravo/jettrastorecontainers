@@ -677,7 +677,7 @@ public class ClusterFluxView extends FluxView {
 
             async function pollClusterLiveStatus() {
                 try {
-                    const resp = await fetch('/api/cluster/status', { cache: 'no-store' });
+                    const resp = await fetch('/api/cluster/status', { cache: 'no-store', credentials: 'same-origin' });
                     if (!resp.ok) return;
                     const data = await resp.json();
                     applyClusterLiveData(data);

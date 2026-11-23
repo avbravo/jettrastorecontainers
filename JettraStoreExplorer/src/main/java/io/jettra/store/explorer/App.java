@@ -286,7 +286,11 @@ public class App {
             redirect(resp, "/login");
             return;
         }
-        if (getLoggedUser(req) == null && getSessionToken(req) != null) {
+        if (getLoggedUser(req) != null) {
+            redirect(resp, "/cluster");
+            return;
+        }
+        if (getSessionToken(req) != null) {
             clearSession(resp);
         }
         String error = req.getQueryParam("error");
@@ -300,6 +304,8 @@ public class App {
         Map<String, String> form = parseFormBody(req.getBodyAsString());
         String user = form.get("username");
         String pass = form.get("password");
+        if (user == null || user.isBlank()) user = req.getQueryParam("username");
+        if (pass == null || pass.isBlank()) pass = req.getQueryParam("password");
 
         if (user == null || user.isBlank() || pass == null || pass.isBlank()) {
             redirect(resp, "/login?error=empty_fields");
@@ -310,6 +316,7 @@ public class App {
         Optional<JettraUser> auth = plugin.authenticate(user.trim(), pass.trim());
         if (auth.isPresent()) {
             setSession(resp, auth.get().getUsername());
+            resp.header("Cache-Control", "no-store, no-cache, must-revalidate");
             plugin.logPoliceIncident("Security Patrol", "Inicio de sesión concedido para '" + user + "'", "OK", "Sesión WEB activa");
             redirect(resp, "/cluster");
         } else {
@@ -1097,7 +1104,6 @@ public class App {
     // --- Endpoint JSON de Sondeo en Vivo ---
     private static void handleClusterStatusJson(HttpRequest req, HttpResponse resp) {
         if (getLoggedUser(req) == null) {
-            clearSession(resp);
             resp.status(HttpStatus.UNAUTHORIZED)
                 .contentType("application/json; charset=UTF-8")
                 .header("Cache-Control", "no-store, no-cache, must-revalidate")
@@ -1359,29 +1365,47 @@ public class App {
         return true;
     }
 
-    private static String getSessionToken(HttpRequest req) {
+    private static List<String> getAllSessionTokens(HttpRequest req) {
         String cookieHeader = req.getHeader("Cookie");
-        if (cookieHeader != null) {
-            for (String part : cookieHeader.split(";")) {
-                String[] kv = part.trim().split("=", 2);
-                if (kv.length == 2 && "jettra_session".equalsIgnoreCase(kv[0].trim())) {
-                    String token = kv[1].trim();
-                    if (!token.isBlank()) {
-                        return token;
-                    }
+        if (cookieHeader == null || cookieHeader.isBlank()) {
+            cookieHeader = req.getHeader("cookie");
+        }
+        if (cookieHeader == null || cookieHeader.isBlank()) {
+            return Collections.emptyList();
+        }
+        List<String> tokens = new ArrayList<>();
+        for (String part : cookieHeader.split(";")) {
+            String[] kv = part.trim().split("=", 2);
+            if (kv.length == 2 && "jettra_session".equalsIgnoreCase(kv[0].trim())) {
+                String token = kv[1].trim();
+                if (!token.isBlank()) {
+                    tokens.add(token);
+                }
+            }
+        }
+        return tokens;
+    }
+
+    private static String getSessionToken(HttpRequest req) {
+        List<String> tokens = getAllSessionTokens(req);
+        for (String token : tokens) {
+            if (token.startsWith(serverBootId + ".") && ACTIVE_SESSIONS.containsKey(token)) {
+                return token;
+            }
+        }
+        return tokens.isEmpty() ? null : tokens.get(0);
+    }
+
+    private static String getLoggedUser(HttpRequest req) {
+        for (String token : getAllSessionTokens(req)) {
+            if (token.startsWith(serverBootId + ".")) {
+                String user = ACTIVE_SESSIONS.get(token);
+                if (user != null && !user.isBlank()) {
+                    return user;
                 }
             }
         }
         return null;
-    }
-
-    private static String getLoggedUser(HttpRequest req) {
-        String token = getSessionToken(req);
-        if (token == null || !token.startsWith(serverBootId + ".")) {
-            return null;
-        }
-        String user = ACTIVE_SESSIONS.get(token);
-        return (user != null && !user.isBlank()) ? user : null;
     }
 
     private static boolean isLoggedUserAdmin(HttpRequest req) {

@@ -55,7 +55,8 @@ public class LoginFluxView extends FluxView {
         Label userLbl = Label.of("Usuario");
         userLbl.modifier(new Modifier().style("display: block; font-size: 0.8rem; font-weight: 600; color: #94a3b8; margin-bottom: 0.4rem;"));
         Widget userInput = FluxUi.textInput("username", "admin", "", true)
-                .modifier(new Modifier().style("width: 100%; box-sizing: border-box; padding: 0.65rem 0.85rem; background: #050b14; border: 1px solid #1e3a5f; border-radius: 8px; color: #ffffff; font-size: 0.9rem; outline: none;").attribute("type", "text").attribute("required", "required"));
+                .id("login-username")
+                .modifier(new Modifier().style("width: 100%; box-sizing: border-box; padding: 0.65rem 0.85rem; background: #050b14; border: 1px solid #1e3a5f; border-radius: 8px; color: #ffffff; font-size: 0.9rem; outline: none;").attribute("required", "required").attribute("autocomplete", "username"));
         Div userGroup = Div.of(userLbl, userInput);
         userGroup.modifier(new Modifier().style("margin-bottom: 1.25rem;"));
 
@@ -63,7 +64,8 @@ public class LoginFluxView extends FluxView {
         passLbl.modifier(new Modifier().style("display: block; font-size: 0.8rem; font-weight: 600; color: #94a3b8; margin-bottom: 0.4rem;"));
         Widget passInput = FluxUi.passwordInput("password", "", true)
                 .value("admin123")
-                .modifier(new Modifier().style("width: 100%; box-sizing: border-box; padding: 0.65rem 0.85rem; background: #050b14; border: 1px solid #1e3a5f; border-radius: 8px; color: #ffffff; font-size: 0.9rem; outline: none;").attribute("required", "required"));
+                .id("login-password")
+                .modifier(new Modifier().style("width: 100%; box-sizing: border-box; padding: 0.65rem 0.85rem; background: #050b14; border: 1px solid #1e3a5f; border-radius: 8px; color: #ffffff; font-size: 0.9rem; outline: none;").attribute("required", "required").attribute("autocomplete", "current-password"));
         Div passGroup = Div.of(passLbl, passInput);
         passGroup.modifier(new Modifier().style("margin-bottom: 1.5rem;"));
 

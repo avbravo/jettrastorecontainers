@@ -2,8 +2,6 @@ package io.jettra.store.explorer.plugin;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import io.jettra.store.cluster.JettraClusterProtocol;
-import io.jettra.store.cluster.JettraRaftFrame;
 import io.jettra.store.explorer.model.ServerNodeInfo;
 
 import java.io.BufferedOutputStream;
@@ -271,25 +269,8 @@ public final class NodeLifecycleManager {
 
     private boolean tryRaftShutdown(String nodeId, String host, int port) {
         if (host.isBlank() || port <= 0 || port > 65535) return false;
-        try (Socket socket = new Socket()) {
-            socket.connect(new InetSocketAddress(host, port), 500);
-            socket.setSoTimeout(500);
-            DataOutputStream out = new DataOutputStream(new BufferedOutputStream(socket.getOutputStream()));
-            // Enviar payload exacto esperado por JettraClusterTransportServer: LIFECYCLE_SHUTDOWN:<nodeId>
-            JettraRaftFrame directFrame = new JettraRaftFrame(
-                JettraRaftFrame.TYPE_NODE_STOPPING,
-                1L,
-                0L,
-                "jettra-explorer-lifecycle",
-                "",
-                "",
-                nodeId,
-                ("LIFECYCLE_SHUTDOWN:" + nodeId).getBytes(java.nio.charset.StandardCharsets.UTF_8),
-                System.currentTimeMillis()
-            );
-            JettraClusterProtocol.writeFrame(out, directFrame);
-            out.flush();
-            return true;
+        try {
+            return JettraStorePlugin.getInstance().getDriverClient().sendLifecycleShutdownFrame(nodeId, host, port);
         } catch (Exception ignored) {
             return false;
         }

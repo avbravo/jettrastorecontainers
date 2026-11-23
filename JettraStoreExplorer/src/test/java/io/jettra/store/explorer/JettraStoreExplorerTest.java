@@ -1946,4 +1946,15 @@ public class JettraStoreExplorerTest {
             }
         }
     }
+
+    @Test
+    @DisplayName("46. Login y sesión: múltiples cookies jettra_session (cookie obsoleta + válida) no deben bloquear el acceso")
+    public void testLoginSessionWithStaleAndValidCookie() throws Exception {
+        String validCookie = getAuthCookie();
+        String combinedCookie = "jettra_session=stale-old-boot-id.0000; " + validCookie;
+        HttpResponse<String> clusterRes = get("/cluster", combinedCookie);
+        JettraAssert.assertEquals(200, clusterRes.statusCode(), "/cluster debe responder 200 si alguna cookie jettra_session es válida");
+        HttpResponse<String> statusRes = get("/api/cluster/status", combinedCookie);
+        JettraAssert.assertEquals(200, statusRes.statusCode(), "/api/cluster/status debe responder 200 con cookie combinada");
+    }
 }
