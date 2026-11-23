@@ -120,14 +120,8 @@ public class RecordExplorerFluxView extends FluxView {
         int currentPage = pageResult.page();
         boolean isStreamed = pageResult.streamed();
 
-        // 1. Notificación Flash si existe
-        Widget flashWidget = null;
-        if (message != null && !message.isBlank()) {
-            Widget flash = Div.of(Text.of("ℹ️ " + message));
-            flash.modifier(new Modifier()
-                    .style("background: rgba(0, 212, 255, 0.15); border: 1px solid #00d4ff; color: #00d4ff; padding: 0.75rem 1rem; border-radius: 8px; margin-bottom: 1.25rem; font-weight: 600; font-size: 0.9rem;"));
-            flashWidget = flash;
-        }
+        // 1. Notificación Flash si existe (errores de validación en rojo, éxitos en cian)
+        Widget flashWidget = FluxUi.flashBanner(message);
 
         // 2. Navegación jerárquica en Árbol (Base de Datos -> Tipo de Engine -> Bucket [NONE|DEFINED] -> Registros)
         Widget treeNav = buildHierarchyTree(plugin, dbs, currentDb, currentBucket);
@@ -200,12 +194,25 @@ public class RecordExplorerFluxView extends FluxView {
 
         Widget responsiveCss = FluxUi.styleSheet("""
                 .explorer-layout { display: flex; gap: 1.25rem; align-items: flex-start; flex-wrap: nowrap; width: 100%; box-sizing: border-box; }
-                .explorer-tree-sidebar { width: 270px; flex-shrink: 0; position: sticky; top: 1rem; max-height: calc(100vh - 130px); overflow-y: auto; box-sizing: border-box; }
-                .explorer-form-card { width: min(92vw, 720px); max-width: 100%; box-sizing: border-box; padding: 1.25rem; }
+                .explorer-tree-sidebar { width: 295px; flex-shrink: 0; position: sticky; top: 1rem; max-height: calc(100vh - 130px); overflow-y: auto; box-sizing: border-box; }
+                .explorer-tree-db { display: flex; align-items: center; justify-content: space-between; gap: 0.4rem; padding: 0.45rem 0.6rem; border-radius: 8px; text-decoration: none; font-weight: 700; font-size: 0.85rem; margin-bottom: 0.25rem; transition: background 0.15s ease, color 0.15s ease; }
+                .explorer-tree-db:hover { background: rgba(0, 212, 255, 0.10); }
+                .explorer-tree-db.is-active { background: rgba(0, 212, 255, 0.16); color: #00d4ff; border-left: 3px solid #00d4ff; }
+                .explorer-tree-engine-group { margin-left: 0.65rem; padding-left: 0.6rem; border-left: 2px solid rgba(148, 163, 184, 0.25); margin-bottom: 0.45rem; }
+                .explorer-tree-engine-label { display: flex; align-items: center; justify-content: space-between; padding: 0.28rem 0.45rem; font-size: 0.72rem; font-weight: 800; letter-spacing: 0.04em; text-transform: uppercase; border-radius: 5px; margin-bottom: 0.2rem; }
+                .explorer-tree-bucket { display: flex; align-items: center; justify-content: space-between; gap: 0.35rem; padding: 0.34rem 0.5rem; border-radius: 6px; text-decoration: none; font-size: 0.8rem; margin-bottom: 0.18rem; transition: background 0.15s ease; }
+                .explorer-tree-bucket:hover { background: rgba(16, 185, 129, 0.10); }
+                .explorer-tree-bucket.is-active { background: rgba(16, 185, 129, 0.18); color: #34d399; font-weight: 700; border-left: 3px solid #10b981; }
+                .explorer-tree-subtree { margin-left: 0.85rem; padding-left: 0.55rem; border-left: 1px dashed rgba(148, 163, 184, 0.45); margin-top: 0.15rem; margin-bottom: 0.4rem; display: flex; flex-direction: column; gap: 0.18rem; }
+                .explorer-tree-subitem { display: flex; align-items: center; justify-content: space-between; gap: 0.35rem; padding: 0.28rem 0.5rem; border-radius: 5px; text-decoration: none; font-size: 0.76rem; transition: background 0.15s ease; }
+                .explorer-tree-subitem:hover { background: rgba(148, 163, 184, 0.14); }
+                .explorer-tree-subitem-action { display: block; padding: 0.2rem 0.5rem 0.2rem 1.25rem; border-radius: 5px; text-decoration: none; font-size: 0.72rem; font-weight: 700; color: #38bdf8; }
+                .explorer-tree-subitem-action:hover { background: rgba(56, 189, 248, 0.14); }
+                .explorer-form-card { width: min(92vw, 760px); max-width: 100%; box-sizing: border-box; padding: 1.25rem; }
                 .explorer-form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 0.9rem; margin-bottom: 1rem; }
                 @media (max-width: 920px) {
                     .explorer-layout { flex-direction: column; }
-                    .explorer-tree-sidebar { width: 100% !important; position: static !important; max-height: 260px !important; }
+                    .explorer-tree-sidebar { width: 100% !important; position: static !important; max-height: 320px !important; }
                 }
                 """);
 
@@ -217,67 +224,130 @@ public class RecordExplorerFluxView extends FluxView {
     private Widget buildHierarchyTree(JettraStorePlugin plugin, List<String> dbs, String currentDb, String currentBucket) {
         List<Widget> treeNodes = new ArrayList<>();
         Header treeTitle = Header.of(4, "🌳 Explorador Jerárquico");
-        treeTitle.modifier(new Modifier().style("margin: 0 0 0.75rem 0; color: #00d4ff; font-size: 0.95rem;"));
+        treeTitle.modifier(new Modifier().style("margin: 0 0 0.25rem 0; color: #00d4ff; font-size: 0.95rem;"));
         treeNodes.add(treeTitle);
 
-        Link newBucketBtn = Link.of("/explorer?db=" + currentDb + "&bucket=" + currentBucket + "&action=new_bucket", "+ Nuevo Bucket");
+        Paragraph treeSubtitle = Paragraph.of("Base de Datos → Engine → Bucket");
+        treeSubtitle.modifier(new Modifier().style("margin: 0 0 0.7rem 0; color: var(--text-muted); font-size: 0.72rem; font-weight: 600;"));
+        treeNodes.add(treeSubtitle);
+
+        Link newBucketBtn = Link.of("/explorer?db=" + currentDb + "&bucket=" + currentBucket + "&action=new_bucket", "➕ Nuevo Bucket");
         newBucketBtn.modifier(new Modifier()
                 .cssClass("app-btn-primary")
-                .style("display: block; text-align: center; margin-bottom: 0.85rem; padding: 0.45rem 0.75rem; font-size: 0.82rem; text-decoration: none;"));
+                .style("display: block; text-align: center; margin-bottom: 0.9rem; padding: 0.45rem 0.75rem; font-size: 0.8rem; text-decoration: none;"));
         treeNodes.add(newBucketBtn);
 
         for (String db : dbs) {
             boolean isCurrentDb = db.equalsIgnoreCase(currentDb);
-            Link dbLink = Link.of("/explorer?db=" + db, (isCurrentDb ? "📂 " : "📁 ") + db);
-            dbLink.modifier(new Modifier().style(
-                    "display: block; padding: 0.35rem 0.5rem; border-radius: 6px; text-decoration: none; font-weight: 700; font-size: 0.84rem; "
-                    + (isCurrentDb ? "background: rgba(0, 212, 255, 0.14); color: #00d4ff;" : "color: var(--text-main);")));
+            List<EngineBucketInfo> dbBuckets = plugin.getBuckets(db);
+            Link dbLink = Link.of("/explorer?db=" + db,
+                    FluxUi.coloredSpan((isCurrentDb ? "▾ 📂 " : "▸ 📁 ") + db, "overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"),
+                    FluxUi.coloredSpan(String.valueOf(dbBuckets.size()),
+                            "font-size: 0.68rem; padding: 1px 6px; border-radius: 9999px; background: rgba(148,163,184,0.18); color: var(--text-muted); flex-shrink: 0;")
+            );
+            dbLink.modifier(new Modifier()
+                    .cssClass(isCurrentDb ? "explorer-tree-db is-active" : "explorer-tree-db")
+                    .attribute("data-tree-level", "database")
+                    .attribute("aria-expanded", isCurrentDb ? "true" : "false")
+                    .style(isCurrentDb ? "" : "color: var(--text-main);"));
             treeNodes.add(dbLink);
 
             if (isCurrentDb) {
                 Map<String, List<EngineBucketInfo>> byEngine = new java.util.LinkedHashMap<>();
-                for (EngineBucketInfo b : plugin.getBuckets(db)) {
+                for (EngineBucketInfo b : dbBuckets) {
                     byEngine.computeIfAbsent(b.getEngineType(), k -> new ArrayList<>()).add(b);
                 }
                 for (var entry : byEngine.entrySet()) {
-                    Div engHeader = Div.of(FluxUi.coloredSpan("⚙️ " + entry.getKey(), "font-size: 0.75rem; font-weight: 700; color: #ffd700;"));
-                    engHeader.modifier(new Modifier().style("padding: 0.35rem 0 0.15rem 0.95rem;"));
-                    treeNodes.add(engHeader);
+                    String engineColor = engineAccentColor(entry.getKey());
+                    List<Widget> engineChildren = new ArrayList<>();
+
+                    Div engHeader = Div.of(
+                            FluxUi.coloredSpan("⚙️ " + entry.getKey(), "color: " + engineColor + ";"),
+                            FluxUi.coloredSpan(entry.getValue().size() + " bucket(s)", "font-size: 0.66rem; color: var(--text-muted); font-weight: 600; text-transform: none;")
+                    );
+                    engHeader.modifier(new Modifier()
+                            .cssClass("explorer-tree-engine-label")
+                            .attribute("data-tree-level", "engine")
+                            .style("background: rgba(148, 163, 184, 0.08);"));
+                    engineChildren.add(engHeader);
 
                     for (EngineBucketInfo b : entry.getValue()) {
                         boolean activeB = b.getBucketName().equalsIgnoreCase(currentBucket);
-                        String stTag = "DEFINED".equalsIgnoreCase(b.getStructureType()) ? "DEFINED" : "NONE";
+                        boolean isDefined = "DEFINED".equalsIgnoreCase(b.getStructureType()) && !b.getAttributes().isEmpty();
+                        String stTag = isDefined ? "DEFINED" : "NONE";
+                        String stBg = isDefined ? "rgba(16, 185, 129, 0.18)" : "rgba(148, 163, 184, 0.16)";
+                        String stColor = isDefined ? "#34d399" : "#94a3b8";
+
                         Link bLink = Link.of("/explorer?db=" + db + "&bucket=" + b.getBucketName() + "&section=records",
-                                (activeB ? "▾ 📦 " : "▸ 📦 ") + b.getBucketName() + " [" + stTag + "]");
-                        bLink.modifier(new Modifier().style(
-                                "display: block; padding: 0.3rem 0.5rem 0.3rem 1.35rem; border-radius: 5px; text-decoration: none; font-size: 0.8rem; "
-                                + (activeB ? "background: rgba(16, 185, 129, 0.18); color: #10b981; font-weight: 700;" : "color: var(--text-main);")));
-                        treeNodes.add(bLink);
+                                FluxUi.coloredSpan((activeB ? "▾ 📦 " : "▸ 📦 ") + b.getBucketName(),
+                                        "overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"),
+                                FluxUi.coloredSpan(stTag,
+                                        "font-size: 0.64rem; font-weight: 800; padding: 1px 6px; border-radius: 9999px; background: " + stBg + "; color: " + stColor + "; flex-shrink: 0;")
+                        );
+                        bLink.modifier(new Modifier()
+                                .cssClass(activeB ? "explorer-tree-bucket is-active" : "explorer-tree-bucket")
+                                .attribute("data-tree-level", "bucket")
+                                .attribute("aria-expanded", activeB ? "true" : "false")
+                                .style(activeB ? "" : "color: var(--text-main);"));
+                        engineChildren.add(bLink);
 
                         // Subárbol explícito por Bucket: Estructura, Índices y Registros
                         if (activeB) {
-                            String subBase = "display: block; padding: 0.22rem 0.45rem 0.22rem 0.75rem; border-radius: 5px; text-decoration: none; font-size: 0.76rem; margin-bottom: 2px; ";
+                            List<Widget> subItems = new ArrayList<>();
+
                             Link schemaNode = Link.of("/explorer?db=" + db + "&bucket=" + b.getBucketName() + "&section=schema",
-                                    "📐 Estructura (" + ("DEFINED".equalsIgnoreCase(stTag) ? b.getAttributes().size() + " campos" : "NONE") + ")");
-                            schemaNode.modifier(new Modifier().style(subBase
-                                    + ("schema".equals(activeSection) ? "background: rgba(0, 212, 255, 0.16); color: #00d4ff; font-weight: 700;" : "color: var(--text-muted);")));
+                                    FluxUi.coloredSpan("📐 Estructura", null),
+                                    FluxUi.coloredSpan(isDefined ? b.getAttributes().size() + " campos" : "NONE",
+                                            "font-size: 0.66rem; opacity: 0.85;")
+                            );
+                            schemaNode.modifier(new Modifier()
+                                    .cssClass("explorer-tree-subitem")
+                                    .attribute("data-tree-sub", "schema")
+                                    .style("schema".equals(activeSection)
+                                            ? "background: rgba(0, 212, 255, 0.18); color: #00d4ff; font-weight: 700;"
+                                            : "color: var(--text-muted);"));
+                            subItems.add(schemaNode);
+
+                            if (!isDefined) {
+                                Link addSchemaQuick = Link.of("/explorer?db=" + db + "&bucket=" + b.getBucketName() + "&section=schema&action=new_schema",
+                                        "➕ Añadir Estructura (DEFINED)");
+                                addSchemaQuick.modifier(new Modifier().cssClass("explorer-tree-subitem-action"));
+                                subItems.add(addSchemaQuick);
+                            }
 
                             Link indexesNode = Link.of("/explorer?db=" + db + "&bucket=" + b.getBucketName() + "&section=indexes",
-                                    "⚡ Índices (" + b.getIndexes().size() + ")");
-                            indexesNode.modifier(new Modifier().style(subBase
-                                    + ("indexes".equals(activeSection) ? "background: rgba(168, 85, 247, 0.18); color: #c084fc; font-weight: 700;" : "color: var(--text-muted);")));
+                                    FluxUi.coloredSpan("⚡ Índices", null),
+                                    FluxUi.coloredSpan(String.valueOf(b.getIndexes().size()), "font-size: 0.66rem; opacity: 0.85;")
+                            );
+                            indexesNode.modifier(new Modifier()
+                                    .cssClass("explorer-tree-subitem")
+                                    .attribute("data-tree-sub", "indexes")
+                                    .style("indexes".equals(activeSection)
+                                            ? "background: rgba(168, 85, 247, 0.20); color: #c084fc; font-weight: 700;"
+                                            : "color: var(--text-muted);"));
+                            subItems.add(indexesNode);
 
                             Link recordsNode = Link.of("/explorer?db=" + db + "&bucket=" + b.getBucketName() + "&section=records",
-                                    "📄 Registros (" + b.getTotalObjects() + ")");
-                            recordsNode.modifier(new Modifier().style(subBase
-                                    + ("records".equals(activeSection) ? "background: rgba(16, 185, 129, 0.16); color: #34d399; font-weight: 700;" : "color: var(--text-muted);")));
+                                    FluxUi.coloredSpan("📄 Registros", null),
+                                    FluxUi.coloredSpan(String.format("%,d", b.getTotalObjects()), "font-size: 0.66rem; opacity: 0.85;")
+                            );
+                            recordsNode.modifier(new Modifier()
+                                    .cssClass("explorer-tree-subitem")
+                                    .attribute("data-tree-sub", "records")
+                                    .style("records".equals(activeSection)
+                                            ? "background: rgba(16, 185, 129, 0.18); color: #34d399; font-weight: 700;"
+                                            : "color: var(--text-muted);"));
+                            subItems.add(recordsNode);
 
-                            Div subTree = Div.of(schemaNode, indexesNode, recordsNode);
-                            subTree.modifier(new Modifier().style(
-                                    "margin-left: 1.7rem; padding-left: 0.45rem; border-left: 1px dashed rgba(148, 163, 184, 0.4); margin-top: 2px; margin-bottom: 4px;"));
-                            treeNodes.add(subTree);
+                            Div subTree = Div.of(subItems.toArray(new Widget[0]));
+                            subTree.modifier(new Modifier().cssClass("explorer-tree-subtree").attribute("data-bucket-subtree", b.getBucketName()));
+                            engineChildren.add(subTree);
                         }
                     }
+
+                    Div engineGroup = Div.of(engineChildren.toArray(new Widget[0]));
+                    engineGroup.modifier(new Modifier().cssClass("explorer-tree-engine-group"));
+                    treeNodes.add(engineGroup);
                 }
             }
         }
@@ -285,8 +355,26 @@ public class RecordExplorerFluxView extends FluxView {
         Div sidebar = Div.of(treeNodes.toArray(new Widget[0]));
         sidebar.modifier(new Modifier()
                 .cssClass("ui-card explorer-tree-sidebar")
+                .attribute("data-explorer-tree", "true")
                 .style("padding: 1rem; border-left: 3px solid #00d4ff;"));
         return sidebar;
+    }
+
+    private static String engineAccentColor(String engineType) {
+        if (engineType == null) return "#94a3b8";
+        return switch (engineType.toUpperCase()) {
+            case "DOCUMENT" -> "#00d4ff";
+            case "RELATIONAL" -> "#ffd700";
+            case "GRAPH" -> "#ec4899";
+            case "VECTOR" -> "#a855f7";
+            case "TIMESERIES" -> "#22c55e";
+            case "KEY_VALUE" -> "#f97316";
+            case "COLUMNAR" -> "#38bdf8";
+            case "GEOSPATIAL" -> "#06b6d4";
+            case "JAVA_RECORD" -> "#3b82f6";
+            case "OBJECT" -> "#eab308";
+            default -> "#94a3b8";
+        };
     }
 
     private Widget buildCreateBucketForm(String currentDb, String currentBucket) {
@@ -426,6 +514,7 @@ public class RecordExplorerFluxView extends FluxView {
 
     private Widget buildBucketIndexesPanel(String currentDb, EngineBucketInfo bucketInfo) {
         if (bucketInfo == null) return Div.of();
+        JettraStorePlugin plugin = JettraStorePlugin.getInstance();
         List<Widget> children = new ArrayList<>();
         String bName = bucketInfo.getBucketName();
 
@@ -433,40 +522,77 @@ public class RecordExplorerFluxView extends FluxView {
         h.modifier(new Modifier().style("margin: 0 0 0.75rem 0; color: #c084fc;"));
         children.add(h);
 
+        // Detectar campos indexables (esquema DEFINED + índices existentes + muestra de registros),
+        // destacando explícitamente los campos NUMERIC y AUTO_INCREMENT
+        List<JettraStorePlugin.IndexableFieldInfo> detectedFields = plugin.detectIndexableFields(bucketInfo);
+        List<Widget> candidateBadges = new ArrayList<>();
+        boolean hasAutoField = false;
+        boolean hasNumericField = false;
+        for (var f : detectedFields) {
+            if (f.autoIncrement()) {
+                hasAutoField = true;
+                candidateBadges.add(FluxUi.pillBadge("🔢 " + f.fieldName() + " (" + f.dataType() + " • AUTO_INCREMENT)", "#f59e0b"));
+            } else if (f.numeric()) {
+                hasNumericField = true;
+                candidateBadges.add(FluxUi.pillBadge("#️⃣ " + f.fieldName() + " (" + f.dataType() + " • NUMERIC)", "#38bdf8"));
+            }
+        }
+        if (!candidateBadges.isEmpty()) {
+            List<Widget> stripItems = new ArrayList<>();
+            stripItems.add(FluxUi.coloredSpan("Campos numéricos / autoincrementables detectados:",
+                    "font-size: 0.76rem; color: var(--text-muted); font-weight: 700;"));
+            stripItems.addAll(candidateBadges);
+            Div detectedStrip = Div.of(stripItems.toArray(new Widget[0]));
+            detectedStrip.modifier(new Modifier()
+                    .attribute("data-detected-numeric-fields", "true")
+                    .style("display: flex; align-items: center; gap: 0.45rem; flex-wrap: wrap; background: rgba(168, 85, 247, 0.08); border: 1px solid rgba(168, 85, 247, 0.25); border-radius: 8px; padding: 0.55rem 0.75rem; margin-bottom: 0.85rem;"));
+            children.add(detectedStrip);
+        }
+
         List<List<Widget>> idxRows = new ArrayList<>();
         for (var idx : bucketInfo.getIndexes()) {
+            Link rebuildIdx = Link.of("/explorer?db=" + currentDb + "&bucket=" + bName
+                    + "&action=rebuild_bucket_index&indexName=" + idx.getName(), "🔄 Reconstruir");
+            rebuildIdx.modifier(new Modifier().cssClass("app-btn-secondary").style("padding: 0.25rem 0.55rem; font-size: 0.75rem; margin-right: 0.35rem;"));
+
             Link dropIdx = Link.of("/explorer?db=" + currentDb + "&bucket=" + bName
-                    + "&action=delete_bucket_index&indexName=" + idx.getName(), "Eliminar");
-            dropIdx.modifier(new Modifier().cssClass("app-btn-danger").style("padding: 0.25rem 0.6rem; font-size: 0.75rem;"));
-            String typeColor = "AUTO_INCREMENT".equalsIgnoreCase(idx.getType()) ? "#f59e0b"
-                    : ("NUMERIC".equalsIgnoreCase(idx.getType()) ? "#38bdf8" : "#00d4ff");
+                    + "&action=delete_bucket_index&indexName=" + idx.getName(), "🗑️ Eliminar");
+            dropIdx.modifier(new Modifier().cssClass("app-btn-danger").style("padding: 0.25rem 0.55rem; font-size: 0.75rem;"));
+
+            String idxTypeUpper = idx.getType() != null ? idx.getType().toUpperCase() : "BTREE";
+            boolean isAutoType = "AUTO_INCREMENT".equals(idxTypeUpper) || "SEQUENTIAL".equals(idxTypeUpper);
+            boolean isNumType = "NUMERIC".equals(idxTypeUpper) || "NUMBER".equals(idxTypeUpper);
+            String typeColor = isAutoType ? "#f59e0b" : (isNumType ? "#38bdf8" : "#00d4ff");
+
             idxRows.add(List.of(
-                    Text.of(idx.getName()),
-                    Text.of(idx.getFields()),
-                    FluxUi.pillBadge(idx.getType(), typeColor),
+                    FluxUi.coloredSpan(idx.getName(), "font-family: monospace; font-weight: 700; color: #00d4ff;"),
+                    FluxUi.coloredSpan(idx.getFields(), "font-family: monospace; color: #ffd700;"),
+                    FluxUi.pillBadge(idxTypeUpper, typeColor),
                     FluxUi.pillBadge(idx.isUnique() ? "UNIQUE" : "NON-UNIQUE", idx.isUnique() ? "#ffd700" : "#10b981"),
                     FluxUi.pillBadge(idx.getStatus(), "#10b981"),
-                    dropIdx
+                    Div.of(rebuildIdx, dropIdx).modifier(new Modifier().style("white-space: nowrap;"))
             ));
         }
         if (!idxRows.isEmpty()) {
             children.add(Datatable.ofWidgets(List.of(Text.of("Índice"), Text.of("Campo(s)"), Text.of("Tipo"), Text.of("Unicidad"), Text.of("Estado"), Text.of("Acciones")), idxRows));
+        } else {
+            Paragraph emptyP = Paragraph.of("Aún no existen índices registrados en este bucket. Seleccione un campo numérico, autoincrementable o de texto para crear el primero.");
+            emptyP.modifier(new Modifier().style("font-size: 0.8rem; color: var(--text-muted); margin: 0 0 0.75rem 0;"));
+            children.add(emptyP);
         }
 
-        // Detectar campos del esquema (resaltando numéricos y AUTO_INCREMENT)
-        List<String> schemaFieldOptions = new ArrayList<>();
-        for (var a : bucketInfo.getAttributes()) {
-            if (!a.atribute_name().isBlank()) {
-                schemaFieldOptions.add(a.atribute_name());
-            }
+        List<String> fieldOptions = new ArrayList<>();
+        for (var f : detectedFields) {
+            fieldOptions.add(f.fieldName());
         }
-        Widget fieldInput = schemaFieldOptions.isEmpty()
+        Widget fieldInput = fieldOptions.isEmpty()
                 ? FluxUi.textInput("indexField", "", "Campo(s) (ej: codigo, precio)", true)
                 : Row.of(
-                        FluxUi.dropdown("indexFieldSelect", schemaFieldOptions, schemaFieldOptions.get(0)),
-                        FluxUi.textInput("indexField", "", "o campo personalizado", false)
-                  ).modifier(new Modifier().style("display: flex; gap: 0.4rem; align-items: center;"));
+                        FluxUi.dropdown("indexFieldSelect", fieldOptions, fieldOptions.get(0)),
+                        FluxUi.textInput("indexField", "", "o campo(s) personalizados", false)
+                  ).modifier(new Modifier().style("display: flex; gap: 0.4rem; align-items: center; flex-wrap: wrap;"));
 
+        String defaultIndexType = hasAutoField ? "AUTO_INCREMENT" : (hasNumericField ? "NUMERIC" : "BTREE");
         Form idxForm = Form.of(
                 FluxUi.hidden("action", "create_bucket_index"),
                 FluxUi.hidden("db", currentDb),
@@ -474,8 +600,8 @@ public class RecordExplorerFluxView extends FluxView {
                 Row.of(
                         FluxUi.textInput("indexName", "", "Nombre índice (ej: idx_precio)", true),
                         fieldInput,
-                        FluxUi.dropdown("indexType", List.of("BTREE", "HASH", "NUMERIC", "AUTO_INCREMENT", "SPARSE", "VECTOR_HNSW", "SPATIAL_R_TREE"), "NUMERIC"),
-                        FluxUi.dropdown("indexUnique", List.of("false", "true"), "false"),
+                        FluxUi.dropdown("indexType", List.of("BTREE", "HASH", "NUMERIC", "AUTO_INCREMENT", "NUMBER", "SEQUENTIAL", "SPARSE", "VECTOR_HNSW", "SPATIAL_R_TREE"), defaultIndexType),
+                        FluxUi.dropdown("indexUnique", List.of("false", "true"), hasAutoField ? "true" : "false"),
                         FluxUi.submitButton("+ Crear Índice", "app-btn-primary", "")
                 ).modifier(new Modifier().style("display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; margin-top: 0.85rem;"))
         ).action("/explorer").method("POST");
@@ -598,9 +724,11 @@ public class RecordExplorerFluxView extends FluxView {
                 String placeholder = isAutoInc ? "Autogenerado automáticamente si se omite" : (desc + (rules.isBlank() ? "" : " [" + rules + "]"));
                 var input = FluxUi.textInput("struct_" + name, val, placeholder, isRequired);
                 Modifier mod = new Modifier().cssClass("app-input");
-                if (lowerType.equals("int") || lowerType.equals("integer") || lowerType.equals("long")) {
+                if (lowerType.equals("int") || lowerType.equals("integer") || lowerType.equals("long")
+                        || lowerType.equals("short") || lowerType.equals("byte")) {
                     mod.attribute("type", "number").attribute("step", "1");
-                } else if (lowerType.equals("double") || lowerType.equals("float") || lowerType.equals("decimal") || lowerType.equals("number")) {
+                } else if (lowerType.equals("double") || lowerType.equals("float") || lowerType.equals("decimal")
+                        || lowerType.equals("bigdecimal") || lowerType.equals("number")) {
                     mod.attribute("type", "number").attribute("step", "any");
                 } else if (upperRules.contains("EMAIL")) {
                     mod.attribute("type", "email");
@@ -610,6 +738,15 @@ public class RecordExplorerFluxView extends FluxView {
                 if (isRequired) mod.attribute("required", "required");
                 if (upperRules.contains("POSITIVE")) mod.attribute("min", "0.0001");
                 else if (upperRules.contains("NON_NEGATIVE")) mod.attribute("min", "0");
+                for (String token : rules.split("[,;|]")) {
+                    String t = token.trim();
+                    String tu = t.toUpperCase();
+                    if (tu.startsWith("MIN:")) mod.attribute("min", t.substring(4).trim());
+                    else if (tu.startsWith("MAX:")) mod.attribute("max", t.substring(4).trim());
+                    else if (tu.startsWith("MIN_LENGTH:")) mod.attribute("minlength", t.substring(11).trim());
+                    else if (tu.startsWith("MAX_LENGTH:")) mod.attribute("maxlength", t.substring(11).trim());
+                    else if (tu.startsWith("REGEX:")) mod.attribute("pattern", t.substring(6).trim());
+                }
                 input.modifier(mod);
                 control = input;
             }

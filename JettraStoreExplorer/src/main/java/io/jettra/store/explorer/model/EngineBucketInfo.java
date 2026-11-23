@@ -34,11 +34,19 @@ public class EngineBucketInfo implements Serializable {
 
     public String getDatabaseName() { return databaseName; }
     public String getBucketName() { return bucketName; }
+    public void setBucketName(String bucketName) {
+        if (bucketName != null && !bucketName.isBlank()) {
+            this.bucketName = bucketName.trim();
+        }
+    }
     public String getEngineType() { return engineType; }
     public long getTotalObjects() { return totalObjects; }
     public void setTotalObjects(long o) { this.totalObjects = o; }
     public long getTotalBytes() { return totalBytes; }
     public String getDescription() { return description; }
+    public void setDescription(String description) {
+        this.description = description != null ? description.trim() : "";
+    }
     public String getStructureType() { return structureType != null ? structureType : "NONE"; }
     public void setStructureType(String structureType) {
         this.structureType = (structureType != null && "DEFINED".equalsIgnoreCase(structureType.trim())) ? "DEFINED" : "NONE";

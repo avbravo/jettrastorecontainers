@@ -232,21 +232,60 @@ public final class JettraBucketSchema {
         if (declaredType == null || declaredType.isBlank() || declaredType.equalsIgnoreCase("Object") || declaredType.equalsIgnoreCase("Any")) {
             return null;
         }
-        String t = declaredType.trim().toLowerCase(Locale.ROOT);
-        switch (t) {
+        String rawType = declaredType.trim();
+        String t = rawType.toLowerCase(Locale.ROOT);
+
+        // 1. Tipos genéricos de colección: List<T>, Set<T>, ArrayList<T>, Collection<T> o colecciones crudas
+        int ltIdx = rawType.indexOf('<');
+        int gtIdx = rawType.lastIndexOf('>');
+        String baseType = (ltIdx > 0 && gtIdx > ltIdx) ? rawType.substring(0, ltIdx).trim().toLowerCase(Locale.ROOT) : t;
+        String innerType = (ltIdx > 0 && gtIdx > ltIdx) ? rawType.substring(ltIdx + 1, gtIdx).trim() : null;
+
+        if (baseType.equals("list") || baseType.equals("set") || baseType.equals("arraylist")
+                || baseType.equals("collection") || baseType.equals("array")) {
+            List<Object> elements = extractCollectionElements(value);
+            if (elements == null) {
+                return String.format("Atributo '%s' espera tipo colección '%s', recibido: %s (%s).",
+                        attr, rawType, value.getClass().getSimpleName(), value);
+            }
+            if (baseType.equals("set")) {
+                Set<String> seen = new HashSet<>();
+                for (Object el : elements) {
+                    String key = String.valueOf(el);
+                    if (!seen.add(key)) {
+                        return String.format("Atributo '%s' (%s) no admite elementos duplicados: '%s'.", attr, rawType, key);
+                    }
+                }
+            }
+            if (innerType != null && !innerType.isBlank()) {
+                for (int i = 0; i < elements.size(); i++) {
+                    Object el = elements.get(i);
+                    if (el == null) {
+                        return String.format("Atributo '%s[%d]' en '%s' no puede ser nulo.", attr, i, rawType);
+                    }
+                    String elErr = validateType(attr + "[" + i + "]", el, innerType);
+                    if (elErr != null) {
+                        return elErr;
+                    }
+                }
+            }
+            return null;
+        }
+
+        switch (baseType) {
             case "string", "text", "varchar" -> {
                 if (!(value instanceof CharSequence)) {
                     return String.format("Atributo '%s' espera tipo String, recibido: %s (%s).",
                             attr, value.getClass().getSimpleName(), value);
                 }
             }
-            case "int", "integer" -> {
-                if (value instanceof Integer) return null;
+            case "int", "integer", "short", "byte" -> {
+                if (value instanceof Integer || value instanceof Short || value instanceof Byte) return null;
                 if (value instanceof Number n && n.doubleValue() == Math.floor(n.doubleValue())) return null;
                 if (value instanceof String s) {
                     try { Integer.parseInt(s.trim()); return null; } catch (Exception ignored) {}
                 }
-                return String.format("Atributo '%s' espera tipo Integer, recibido: '%s'.", attr, value);
+                return String.format("Atributo '%s' espera tipo %s, recibido: '%s'.", attr, rawType, value);
             }
             case "long" -> {
                 if (value instanceof Long || value instanceof Integer) return null;
@@ -258,7 +297,7 @@ public final class JettraBucketSchema {
             }
             case "double", "float", "number", "decimal", "bigdecimal" -> {
                 if (toDouble(value) == null) {
-                    return String.format("Atributo '%s' espera tipo numérico (%s), recibido: '%s'.", attr, declaredType, value);
+                    return String.format("Atributo '%s' espera tipo numérico (%s), recibido: '%s'.", attr, rawType, value);
                 }
             }
             case "boolean", "bool" -> {
@@ -266,19 +305,68 @@ public final class JettraBucketSchema {
                 if (value instanceof String s && ("true".equalsIgnoreCase(s.trim()) || "false".equalsIgnoreCase(s.trim()))) return null;
                 return String.format("Atributo '%s' espera tipo Boolean, recibido: '%s'.", attr, value);
             }
-            case "list", "array" -> {
-                if (!(value instanceof Collection<?>) && !value.getClass().isArray()) {
-                    return String.format("Atributo '%s' espera tipo List/Array, recibido: %s.", attr, value.getClass().getSimpleName());
+            case "uuid" -> {
+                try {
+                    UUID.fromString(String.valueOf(value).trim());
+                    return null;
+                } catch (Exception e) {
+                    return String.format("Atributo '%s' espera tipo UUID válido, recibido: '%s'.", attr, value);
+                }
+            }
+            case "localdate", "date" -> {
+                try {
+                    java.time.LocalDate.parse(String.valueOf(value).trim());
+                    return null;
+                } catch (Exception e) {
+                    return String.format("Atributo '%s' espera fecha ISO LocalDate (YYYY-MM-DD), recibido: '%s'.", attr, value);
+                }
+            }
+            case "localdatetime" -> {
+                try {
+                    java.time.LocalDateTime.parse(String.valueOf(value).trim());
+                    return null;
+                } catch (Exception e) {
+                    return String.format("Atributo '%s' espera fecha/hora ISO LocalDateTime, recibido: '%s'.", attr, value);
+                }
+            }
+            case "instant" -> {
+                try {
+                    java.time.Instant.parse(String.valueOf(value).trim());
+                    return null;
+                } catch (Exception e) {
+                    return String.format("Atributo '%s' espera marca temporal ISO Instant (ej. 2026-11-23T10:15:30Z), recibido: '%s'.", attr, value);
                 }
             }
             case "map", "json" -> {
-                if (!(value instanceof Map<?, ?>)) {
+                if (!(value instanceof Map<?, ?>) && !(value instanceof JsonObject)) {
                     return String.format("Atributo '%s' espera tipo Map/JSON, recibido: %s.", attr, value.getClass().getSimpleName());
                 }
             }
             default -> {
-                // Tipos personalizados o Date/LocalDate aceptan String ISO o el objeto correspondiente
+                // Objetos de dominio o records definidos por el usuario: deben ser una estructura JSON objeto ({ ... })
+                if (!(value instanceof Map<?, ?>) && !(value instanceof JsonObject)) {
+                    return String.format("Atributo '%s' espera objeto de usuario '%s' (estructura JSON { ... }), recibido: %s (%s).",
+                            attr, rawType, value.getClass().getSimpleName(), value);
+                }
             }
+        }
+        return null;
+    }
+
+    private static List<Object> extractCollectionElements(Object value) {
+        if (value instanceof JsonArray ja) {
+            List<Object> out = new ArrayList<>(ja.size());
+            for (int i = 0; i < ja.size(); i++) out.add(ja.get(i));
+            return out;
+        }
+        if (value instanceof Collection<?> col) {
+            return new ArrayList<>(col);
+        }
+        if (value != null && value.getClass().isArray()) {
+            int len = java.lang.reflect.Array.getLength(value);
+            List<Object> out = new ArrayList<>(len);
+            for (int i = 0; i < len; i++) out.add(java.lang.reflect.Array.get(value, i));
+            return out;
         }
         return null;
     }
@@ -332,18 +420,18 @@ public final class JettraBucketSchema {
     }
 
     private static AttributeRule extractAttribute(JsonObject obj) {
-        String name = firstNonBlank(str(obj.get("atribute_name")), str(obj.get("attribute_name")), str(obj.get("name")));
-        String type = firstNonBlank(str(obj.get("type_atribute")), str(obj.get("type_attribute")), str(obj.get("type")));
+        String name = firstNonBlank(str(obj.get("atribute_name")), str(obj.get("attribute_name")), str(obj.get("nombre")), str(obj.get("name")));
+        String type = firstNonBlank(str(obj.get("type_atribute")), str(obj.get("type_attribute")), str(obj.get("tipo")), str(obj.get("type")));
         String rules = firstNonBlank(str(obj.get("jettra_rules")), str(obj.get("rules")), "");
-        String desc = firstNonBlank(str(obj.get("description")), str(obj.get("desc")), "");
+        String desc = firstNonBlank(str(obj.get("description")), str(obj.get("descripcion")), str(obj.get("desc")), "");
         return new AttributeRule(name, type, rules, desc);
     }
 
     private static AttributeRule extractAttribute(Map<?, ?> m) {
-        String name = firstNonBlank(str(m.get("atribute_name")), str(m.get("attribute_name")), str(m.get("name")));
-        String type = firstNonBlank(str(m.get("type_atribute")), str(m.get("type_attribute")), str(m.get("type")));
+        String name = firstNonBlank(str(m.get("atribute_name")), str(m.get("attribute_name")), str(m.get("nombre")), str(m.get("name")));
+        String type = firstNonBlank(str(m.get("type_atribute")), str(m.get("type_attribute")), str(m.get("tipo")), str(m.get("type")));
         String rules = firstNonBlank(str(m.get("jettra_rules")), str(m.get("rules")), "");
-        String desc = firstNonBlank(str(m.get("description")), str(m.get("desc")), "");
+        String desc = firstNonBlank(str(m.get("description")), str(m.get("descripcion")), str(m.get("desc")), "");
         return new AttributeRule(name, type, rules, desc);
     }
 

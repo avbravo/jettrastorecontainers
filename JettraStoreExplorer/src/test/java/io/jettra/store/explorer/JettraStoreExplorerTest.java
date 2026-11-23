@@ -1957,4 +1957,235 @@ public class JettraStoreExplorerTest {
         HttpResponse<String> statusRes = get("/api/cluster/status", combinedCookie);
         JettraAssert.assertEquals(200, statusRes.statusCode(), "/api/cluster/status debe responder 200 con cookie combinada");
     }
+
+    @Test
+    @DisplayName("47. RF-03: Árbol jerárquico mejorado, validación estricta UNIQUE/AUTO_INCREMENT y detección de índices numéricos/autoincrementables")
+    public void testRf03HierarchyTreeStrictValidationAndNumericAutoIncrementIndexes() throws Exception {
+        JettraStorePlugin plugin = JettraStorePlugin.getInstance();
+        String dbName = "rf03_explorer_test_db";
+        try {
+            plugin.createDatabase(dbName, "NotasLibres", "DOCUMENT", "Base de pruebas RF-03");
+            // 1. Bucket NONE: debe permitir flujo flexible, inferir campos numéricos de registros y ofrecer 'Añadir Estructura' en el árbol
+            plugin.addRecord(dbName, "NotasLibres", "NOTA-1", "Nota con monto", "{\"titulo\":\"Factura\",\"monto\":250.75,\"cantidad\":3}");
+            var noneBucket = plugin.getBucket(dbName, "NotasLibres");
+            var detectedNone = plugin.detectIndexableFields(noneBucket);
+            JettraAssert.assertTrue(detectedNone.stream().anyMatch(f -> f.fieldName().equals("monto") && f.numeric()),
+                    "Debe detectar campos numéricos (monto) incluso en buckets NONE a partir de los registros");
+
+            HttpResponse<String> noneTreeRes = get("/explorer?db=" + dbName + "&bucket=NotasLibres&section=schema");
+            JettraAssert.assertEquals(200, noneTreeRes.statusCode(), "Vista /explorer NONE debe responder 200");
+            JettraAssert.assertTrue(noneTreeRes.body().contains("data-explorer-tree=\"true\"")
+                    && noneTreeRes.body().contains("data-tree-level=\"database\"")
+                    && noneTreeRes.body().contains("data-tree-level=\"engine\"")
+                    && noneTreeRes.body().contains("data-tree-level=\"bucket\"")
+                    && noneTreeRes.body().contains("Añadir Estructura (DEFINED)"),
+                    "El árbol debe mostrar jerarquía BD -> Engine -> Bucket y acceso rápido para crear estructura en bucket NONE");
+
+            // 2. Bucket DEFINED con AUTO_INCREMENT, UNIQUE, BigDecimal POSITIVE y MIN_LENGTH
+            plugin.addBucket(dbName, "ProductosRF03", "DOCUMENT", "Productos estructurados", "NONE", "[]");
+            String schemaJson = "["
+                    + "{\"atribute_name\":\"codigo\",\"type_atribute\":\"Long\",\"jettra_rules\":\"AUTO_INCREMENT\",\"description\":\"Secuencia\"},"
+                    + "{\"atribute_name\":\"sku\",\"type_atribute\":\"String\",\"jettra_rules\":\"NOT_NULL,UNIQUE,MIN_LENGTH:3\",\"description\":\"SKU\"},"
+                    + "{\"atribute_name\":\"precio\",\"type_atribute\":\"BigDecimal\",\"jettra_rules\":\"NOT_NULL,POSITIVE\",\"description\":\"Precio\"}"
+                    + "]";
+            HttpResponse<String> saveSchemaRes = postForm("/explorer",
+                    "action=save_schema&db=" + dbName + "&bucket=ProductosRF03&attributesJson="
+                    + java.net.URLEncoder.encode(schemaJson, java.nio.charset.StandardCharsets.UTF_8));
+            JettraAssert.assertEquals(302, saveSchemaRes.statusCode(), "Guardar estructura DEFINED debe redirigir con 302");
+
+            // 3. Insertar registro válido omitiendo AUTO_INCREMENT -> debe autogenerar codigo=1
+            HttpResponse<String> insert1 = postForm("/explorer",
+                    "action=save_new&db=" + dbName + "&bucket=ProductosRF03&recordId=P-1&summary=Mouse"
+                    + "&struct_sku=MOU-01&struct_precio=29.99");
+            JettraAssert.assertEquals(302, insert1.statusCode(), "Inserción válida debe redirigir con 302");
+            JettraAssert.assertTrue(insert1.headers().firstValue("Location").orElse("").contains("msg=record_created"),
+                    "Debe confirmar record_created");
+            EngineRecordInfo rec1 = plugin.getRecord(dbName, "ProductosRF03", "P-1");
+            JettraAssert.assertNotNull(rec1, "P-1 debe existir");
+            JettraAssert.assertTrue(rec1.getDetails().contains("\"codigo\":1") || rec1.getDetails().contains("\"codigo\" : 1"),
+                    "AUTO_INCREMENT debe autogenerar codigo=1 en el primer registro");
+
+            // 4. Segundo registro válido -> debe autogenerar codigo=2
+            HttpResponse<String> insert2 = postForm("/explorer",
+                    "action=save_new&db=" + dbName + "&bucket=ProductosRF03&recordId=P-2&summary=Teclado"
+                    + "&struct_sku=TEC-02&struct_precio=85.00");
+            JettraAssert.assertTrue(insert2.headers().firstValue("Location").orElse("").contains("msg=record_created"),
+                    "Segundo registro válido debe crearse");
+            EngineRecordInfo rec2 = plugin.getRecord(dbName, "ProductosRF03", "P-2");
+            JettraAssert.assertTrue(rec2.getDetails().contains("\"codigo\":2") || rec2.getDetails().contains("\"codigo\" : 2"),
+                    "AUTO_INCREMENT debe incrementar secuencialmente a codigo=2");
+
+            // 5. Intentar insertar SKU duplicado (viola UNIQUE) y tipo numérico inválido -> deben ser rechazados
+            HttpResponse<String> dupRes = postForm("/explorer",
+                    "action=save_new&db=" + dbName + "&bucket=ProductosRF03&recordId=P-3&summary=Dup"
+                    + "&struct_sku=MOU-01&struct_precio=10.00");
+            JettraAssert.assertTrue(dupRes.headers().firstValue("Location").orElse("").contains("Validaci"),
+                    "Debe rechazar registro que viola restricción UNIQUE");
+            JettraAssert.assertNull(plugin.getRecord(dbName, "ProductosRF03", "P-3"),
+                    "P-3 no debe persistirse al fallar validación UNIQUE");
+
+            HttpResponse<String> badNumRes = postForm("/explorer",
+                    "action=save_new&db=" + dbName + "&bucket=ProductosRF03&recordId=P-4&summary=BadNum"
+                    + "&struct_sku=BAD-04&struct_precio=no_es_numero");
+            JettraAssert.assertTrue(badNumRes.headers().firstValue("Location").orElse("").contains("Validaci"),
+                    "Debe rechazar valor no numérico en campo BigDecimal");
+            JettraAssert.assertNull(plugin.getRecord(dbName, "ProductosRF03", "P-4"),
+                    "P-4 no debe persistirse al fallar validación de tipo numérico");
+
+            // 6. Verificar gestor de índices en /explorer y /databases con detección de NUMERIC y AUTO_INCREMENT
+            HttpResponse<String> explorerIdxPage = get("/explorer?db=" + dbName + "&bucket=ProductosRF03&section=indexes");
+            JettraAssert.assertEquals(200, explorerIdxPage.statusCode(), "/explorer?section=indexes debe responder 200");
+            JettraAssert.assertTrue(explorerIdxPage.body().contains("data-detected-numeric-fields=\"true\"")
+                    && explorerIdxPage.body().contains("codigo (Long • AUTO_INCREMENT)")
+                    && explorerIdxPage.body().contains("precio (BigDecimal • NUMERIC)"),
+                    "El gestor de índices en /explorer debe detectar y resaltar campos AUTO_INCREMENT y NUMERIC");
+
+            HttpResponse<String> createIdxRes = postForm("/explorer",
+                    "action=create_bucket_index&db=" + dbName + "&bucket=ProductosRF03"
+                    + "&indexName=idx_rf03_codigo&indexFieldSelect=codigo&indexType=AUTO_INCREMENT&indexUnique=true");
+            JettraAssert.assertTrue(createIdxRes.headers().firstValue("Location").orElse("").contains("msg=index_created"),
+                    "Debe crear índice AUTO_INCREMENT desde /explorer");
+
+            HttpResponse<String> rebuildIdxRes = get("/explorer?db=" + dbName + "&bucket=ProductosRF03&action=rebuild_bucket_index&indexName=idx_rf03_codigo");
+            JettraAssert.assertTrue(rebuildIdxRes.headers().firstValue("Location").orElse("").contains("msg=index_rebuilt"),
+                    "Debe permitir reconstruir índices desde /explorer");
+
+            HttpResponse<String> dbIdxPage = get("/databases?db=" + dbName + "&manage_indexes_db=" + dbName + "&index_bucket=ProductosRF03");
+            JettraAssert.assertEquals(200, dbIdxPage.statusCode(), "/databases gestor de índices debe responder 200");
+            JettraAssert.assertTrue(dbIdxPage.body().contains("data-detected-numeric-fields=\"true\"")
+                    && dbIdxPage.body().contains("name=\"fieldSelect\"")
+                    && dbIdxPage.body().contains("idx_rf03_codigo"),
+                    "El gestor de índices en /databases debe detectar campos numéricos/autoincrementables y listar índices");
+        } finally {
+            plugin.deleteDatabase(dbName);
+        }
+    }
+
+    @Test
+    @DisplayName("48. /database: Índices exclusivos por Bucket dentro de Engine, CRUD Buckets con tabla (nombre|tipo|rules|descripcion) y validación de List<>/Set<>/ArrayList<>/Objetos")
+    public void testDatabaseModalsStrictBucketIndexAndStructureTableValidation() throws Exception {
+        JettraStorePlugin plugin = JettraStorePlugin.getInstance();
+        String dbName = "db_modals_spec_test_db";
+        try {
+            plugin.createDatabase(dbName, "BaseLibre", "DOCUMENT", "Base de pruebas especificación /database");
+
+            // 1. Verificar alias /database: sin add_bucket=true NO incrusta el formulario en la parte superior; con add_bucket=true abre modal superpuesto
+            HttpResponse<String> enginesRes = get("/database?db=" + dbName + "&manage_engines=true");
+            JettraAssert.assertEquals(200, enginesRes.statusCode(), "GET /database?manage_engines=true debe responder HTTP 200");
+            JettraAssert.assertTrue(enginesRes.body().contains("Motores de Almacenamiento y Buckets en [" + dbName + "]"),
+                    "Debe abrir el modal de Motores de Almacenamiento y Buckets");
+            JettraAssert.assertFalse(enginesRes.body().contains("id=\"addBucketModal\""),
+                    "El diálogo Añadir Nuevo Motor / Bucket no debe mostrarse incrustado antes de abrirlo");
+
+            HttpResponse<String> addModalRes = get("/database?db=" + dbName + "&manage_engines=true&add_bucket=true");
+            JettraAssert.assertEquals(200, addModalRes.statusCode(), "GET /database?manage_engines=true&add_bucket=true debe responder HTTP 200");
+            JettraAssert.assertTrue(addModalRes.body().contains("id=\"addBucketModal\"")
+                    && addModalRes.body().contains("data-add-bucket-modal=\"true\"")
+                    && addModalRes.body().contains("data-structure-table=\"true\"")
+                    && addModalRes.body().contains(">nombre<")
+                    && addModalRes.body().contains(">tipo<")
+                    && addModalRes.body().contains(">rules<")
+                    && addModalRes.body().contains(">descripcion<")
+                    && addModalRes.body().contains("Remover Fila")
+                    && addModalRes.body().contains("name=\"attr_rules_select_0\"")
+                    && addModalRes.body().contains("name=\"attr_rules_0\""),
+                    "El diálogo Añadir Nuevo Motor / Bucket debe abrirse como modal superpuesto con tabla (nombre|tipo|rules|descripcion), Remover Fila y selector + personalización de RULES");
+
+            // 2. Añadir Bucket DEFINED vía tabla (incluyendo List<String>, Set<String>, ArrayList<Integer>, Instant, UUID y objeto de usuario Direccion)
+            String addBucketBody = "action=add_bucket&db=" + dbName
+                    + "&bucketName=PedidosEstructurados&engineType=DOCUMENT&structureType=DEFINED&description=Pedidos+tipados"
+                    + "&attr_name_0=codigo&attr_type_0=Long&attr_rules_0=AUTO_INCREMENT&attr_desc_0=Secuencia"
+                    + "&attr_name_1=etiquetas&attr_type_1=List%3CString%3E&attr_rules_1=NOT_NULL&attr_desc_1=Tags"
+                    + "&attr_name_2=categorias&attr_type_2=Set%3CString%3E&attr_rules_2=NOT_NULL&attr_desc_2=Categorias+unicas"
+                    + "&attr_name_3=puntajes&attr_type_3=ArrayList%3CInteger%3E&attr_rules_3=NOT_NULL&attr_desc_3=Puntajes"
+                    + "&attr_name_4=direccion&attr_type_4=String&attr_type_custom_4=Direccion&attr_rules_4=NOT_NULL&attr_desc_4=Objeto+usuario"
+                    + "&attr_name_5=creadoEn&attr_type_5=Instant&attr_rules_5=NOT_NULL&attr_desc_5=Timestamp+ISO";
+            HttpResponse<String> addBRes = postForm("/database", addBucketBody);
+            JettraAssert.assertEquals(302, addBRes.statusCode(), "Añadir bucket DEFINED debe redirigir 302");
+            var structuredBucket = plugin.getBucket(dbName, "PedidosEstructurados");
+            JettraAssert.assertNotNull(structuredBucket, "PedidosEstructurados debe existir");
+            JettraAssert.assertEquals("DEFINED", structuredBucket.getStructureType(), "Debe tener estructura DEFINED");
+            JettraAssert.assertEquals(6, structuredBucket.getAttributes().size(), "Debe persistir los 6 atributos de la tabla");
+
+            // 3. Validación estricta de registros en bucket DEFINED (List<>, Set<>, ArrayList<>, Objeto de usuario, Instant)
+            String validJson = "{\"etiquetas\":[\"vip\",\"express\"],\"categorias\":[\"tech\",\"hogar\"],"
+                    + "\"puntajes\":[10,20,30],\"direccion\":{\"calle\":\"Central\",\"ciudad\":\"Panama\"},"
+                    + "\"creadoEn\":\"2026-11-23T10:15:30Z\"}";
+            JettraAssert.assertTrue(plugin.validateRecordForBucket(dbName, "PedidosEstructurados", validJson).valid(),
+                    "Registro conforme a List<String>, Set<String>, ArrayList<Integer>, Direccion e Instant debe pasar");
+
+            // Rechazar duplicado en Set<String>
+            String dupSetJson = "{\"etiquetas\":[\"vip\"],\"categorias\":[\"tech\",\"tech\"],"
+                    + "\"puntajes\":[10],\"direccion\":{\"calle\":\"A\"},\"creadoEn\":\"2026-11-23T10:15:30Z\"}";
+            JettraAssert.assertFalse(plugin.validateRecordForBucket(dbName, "PedidosEstructurados", dupSetJson).valid(),
+                    "Set<String> debe rechazar elementos duplicados");
+
+            // Rechazar elemento no entero en ArrayList<Integer>
+            String badListJson = "{\"etiquetas\":[\"vip\"],\"categorias\":[\"tech\"],"
+                    + "\"puntajes\":[\"no_int\"],\"direccion\":{\"calle\":\"A\"},\"creadoEn\":\"2026-11-23T10:15:30Z\"}";
+            JettraAssert.assertFalse(plugin.validateRecordForBucket(dbName, "PedidosEstructurados", badListJson).valid(),
+                    "ArrayList<Integer> debe rechazar elementos no enteros");
+
+            // Rechazar primitivo en campo de objeto de usuario Direccion
+            String badObjJson = "{\"etiquetas\":[\"vip\"],\"categorias\":[\"tech\"],"
+                    + "\"puntajes\":[5],\"direccion\":12345,\"creadoEn\":\"2026-11-23T10:15:30Z\"}";
+            JettraAssert.assertFalse(plugin.validateRecordForBucket(dbName, "PedidosEstructurados", badObjJson).valid(),
+                    "Campo de objeto de usuario Direccion debe rechazar un escalar numérico");
+
+            // Bucket sin estructura (NONE): debe aceptar cualquier estructura libre
+            JettraAssert.assertTrue(plugin.validateRecordForBucket(dbName, "BaseLibre", "{\"cualquierCampo\":true,\"mix\":[1,\"a\"]}").valid(),
+                    "Bucket NONE debe permitir registros de estructura libre");
+
+            // 4. Editar Bucket (renombrar + actualizar descripción)
+            HttpResponse<String> editBRes = postForm("/database",
+                    "action=edit_bucket&db=" + dbName + "&originalBucketName=PedidosEstructurados&bucketName=PedidosV2"
+                    + "&structureType=DEFINED&description=Pedidos+actualizados"
+                    + "&attr_name_0=codigo&attr_type_0=Long&attr_rules_0=AUTO_INCREMENT&attr_desc_0=Secuencia"
+                    + "&attr_name_1=etiquetas&attr_type_1=List%3CString%3E&attr_rules_1=NOT_NULL&attr_desc_1=Tags");
+            JettraAssert.assertEquals(302, editBRes.statusCode(), "Editar bucket debe redirigir 302");
+            JettraAssert.assertNotNull(plugin.getBucket(dbName, "PedidosV2"), "El bucket debe haberse renombrado a PedidosV2");
+
+            // 5. Regla estricta de Índices: bloquear asignación directa al Engine y validar coherencia de campos en bucket DEFINED
+            JettraAssert.assertFalse(plugin.addIndex(dbName, "DOCUMENT", "idx_bad_engine", "codigo", "BTREE", false),
+                    "Debe bloquear asignar un índice directamente al Engine DOCUMENT");
+            JettraAssert.assertTrue(plugin.getLastIndexOperationError() != null && plugin.getLastIndexOperationError().contains("Engine"),
+                    "El error debe explicar que el índice no se asigna al Engine sino a un Bucket");
+
+            JettraAssert.assertFalse(plugin.addIndex(dbName, "PedidosV2", "idx_inexistente", "campo_fantasma", "BTREE", false),
+                    "Debe rechazar crear índice sobre un campo que no existe en la estructura DEFINED del bucket");
+
+            // Añadir, Editar y Eliminar índice sobre el Bucket concreto PedidosV2
+            HttpResponse<String> idxModalRes = get("/database?db=" + dbName + "&manage_indexes_db=" + dbName + "&index_bucket=PedidosV2");
+            JettraAssert.assertEquals(200, idxModalRes.statusCode(), "Modal de índices debe responder 200");
+            JettraAssert.assertTrue(idxModalRes.body().contains("data-strict-bucket-index-rule=\"true\"")
+                    && idxModalRes.body().contains("data-index-engine=\"DOCUMENT\"")
+                    && idxModalRes.body().contains("data-index-bucket=\"PedidosV2\""),
+                    "El modal de índices debe agrupar por Engine -> Bucket y mostrar la regla estricta");
+
+            HttpResponse<String> createIdx = postForm("/database",
+                    "action=add_index&db=" + dbName + "&bucket=PedidosV2&indexName=idx_ped_codigo&fields=codigo&indexType=AUTO_INCREMENT&unique=SI");
+            JettraAssert.assertTrue(createIdx.headers().firstValue("Location").orElse("").contains("msg=index_added"),
+                    "Debe crear índice AUTO_INCREMENT sobre el bucket PedidosV2");
+
+            HttpResponse<String> editIdx = postForm("/database",
+                    "action=edit_index&db=" + dbName + "&bucket=PedidosV2&originalIndexName=idx_ped_codigo&indexName=idx_ped_codigo_v2&fields=codigo&indexType=NUMERIC&unique=SI");
+            JettraAssert.assertTrue(editIdx.headers().firstValue("Location").orElse("").contains("msg=index_updated"),
+                    "Debe editar el índice existente del bucket PedidosV2");
+            JettraAssert.assertTrue(plugin.getBucket(dbName, "PedidosV2").getIndexes().stream()
+                    .anyMatch(i -> "idx_ped_codigo_v2".equals(i.getName()) && "NUMERIC".equals(i.getType())),
+                    "El índice editado debe reflejar nuevo nombre y tipo NUMERIC");
+
+            HttpResponse<String> delIdx = postForm("/database",
+                    "action=delete_index&db=" + dbName + "&bucket=PedidosV2&indexName=idx_ped_codigo_v2");
+            JettraAssert.assertTrue(delIdx.headers().firstValue("Location").orElse("").contains("msg=index_deleted"),
+                    "Debe eliminar el índice del bucket PedidosV2");
+
+            // 6. Remover Bucket
+            HttpResponse<String> delBRes = get("/database?action=delete_bucket&db=" + dbName + "&bucket=PedidosV2");
+            JettraAssert.assertEquals(302, delBRes.statusCode(), "Remover bucket debe redirigir 302");
+            JettraAssert.assertNull(plugin.findBucketExact(dbName, "PedidosV2"), "PedidosV2 debe haber sido removido");
+        } finally {
+            plugin.deleteDatabase(dbName);
+        }
+    }
 }

@@ -2472,12 +2472,20 @@ public class JettraStorePlugin {
     }
 
     public EngineBucketInfo getBucket(String dbName, String bucketName) {
+        EngineBucketInfo exact = findBucketExact(dbName, bucketName);
+        if (exact != null) return exact;
         List<EngineBucketInfo> list = getBuckets(dbName);
-        for (EngineBucketInfo b : list) {
-            if (b.getBucketName().equalsIgnoreCase(bucketName))
-                return b;
-        }
         return list.isEmpty() ? null : list.get(0);
+    }
+
+    public EngineBucketInfo findBucketExact(String dbName, String bucketName) {
+        if (dbName == null || bucketName == null || bucketName.isBlank()) return null;
+        for (EngineBucketInfo b : getBuckets(dbName)) {
+            if (b.getBucketName().equalsIgnoreCase(bucketName.trim())) {
+                return b;
+            }
+        }
+        return null;
     }
 
     public synchronized boolean createDatabase(String dbName, String description) {
@@ -2622,6 +2630,92 @@ public class JettraStorePlugin {
         return true;
     }
 
+    public synchronized boolean updateBucket(String dbName, String originalBucketName, String newBucketName,
+            String description, String structureType, String attributesJson) {
+        this.lastBucketOperationError = null;
+        if (dbName == null || originalBucketName == null || originalBucketName.isBlank()) {
+            this.lastBucketOperationError = "La base de datos y el bucket original son obligatorios.";
+            return false;
+        }
+        EngineBucketInfo bucket = findBucketExact(dbName, originalBucketName);
+        if (bucket == null) {
+            this.lastBucketOperationError = "Bucket '" + originalBucketName + "' no encontrado en '" + dbName + "'.";
+            return false;
+        }
+        String targetName = (newBucketName != null && !newBucketName.isBlank()) ? newBucketName.trim() : bucket.getBucketName();
+        if (!targetName.equalsIgnoreCase(bucket.getBucketName())) {
+            for (EngineBucketInfo other : getBuckets(dbName)) {
+                if (other != bucket && other.getBucketName().equalsIgnoreCase(targetName)
+                        && other.getEngineType().equalsIgnoreCase(bucket.getEngineType())) {
+                    this.lastBucketOperationError = "Ya existe otro bucket llamado '" + targetName + "' en el engine '" + bucket.getEngineType() + "'.";
+                    return false;
+                }
+            }
+        }
+        var st = io.jettra.store.core.JettraBucketSchema.StructureType.fromString(structureType);
+        List<io.jettra.store.core.JettraBucketSchema.AttributeRule> parsedAttrs = List.of();
+        if (st == io.jettra.store.core.JettraBucketSchema.StructureType.DEFINED) {
+            parsedAttrs = io.jettra.store.core.JettraBucketSchema.parseAttributesJson(attributesJson);
+            if (parsedAttrs.isEmpty()) {
+                this.lastBucketOperationError = "Un bucket con estructura DEFINED debe incluir al menos un atributo válido en la tabla.";
+                return false;
+            }
+        }
+        bucket.setBucketName(targetName);
+        if (description != null) {
+            bucket.setDescription(description.trim());
+        }
+        bucket.setStructureType(st.name());
+        bucket.setAttributes(parsedAttrs);
+        try {
+            getDriverClient().createBucket(dbName.trim(), bucket.getEngineType(), targetName, st, parsedAttrs);
+        } catch (Exception ignored) {
+        }
+        logPoliceIncident("Catalog Patrol",
+                "Bucket '" + targetName + "' [" + bucket.getEngineType() + " | " + st.name() + "] actualizado en " + dbName,
+                "OK", parsedAttrs.size() + " atributo(s)");
+        return true;
+    }
+
+    public static String buildAttributesJsonFromTableForm(Map<String, String> form) {
+        if (form == null || form.isEmpty()) return "[]";
+        List<Integer> indices = new ArrayList<>();
+        for (String key : form.keySet()) {
+            if (key.startsWith("attr_name_")) {
+                try {
+                    indices.add(Integer.parseInt(key.substring("attr_name_".length())));
+                } catch (NumberFormatException ignored) {}
+            }
+        }
+        if (indices.isEmpty()) {
+            return form.getOrDefault("attributesJson", "[]");
+        }
+        indices.sort(Integer::compareTo);
+        List<io.jettra.store.core.JettraBucketSchema.AttributeRule> attrs = new ArrayList<>();
+        for (int i : indices) {
+            String name = form.get("attr_name_" + i);
+            if (name == null || name.isBlank()) continue;
+            String type = form.getOrDefault("attr_type_" + i, "String");
+            if (type == null || type.isBlank()) type = "String";
+            String customType = form.get("attr_type_custom_" + i);
+            if (customType != null && !customType.isBlank()) {
+                type = customType.trim();
+            }
+            String rules = form.getOrDefault("attr_rules_" + i, "");
+            if (rules == null || rules.isBlank()) {
+                String selRule = form.getOrDefault("attr_rules_select_" + i, "");
+                if (selRule != null && !selRule.isBlank() && !"NONE".equalsIgnoreCase(selRule.trim())) {
+                    rules = selRule.trim();
+                } else {
+                    rules = "";
+                }
+            }
+            String desc = form.getOrDefault("attr_desc_" + i, "");
+            attrs.add(new io.jettra.store.core.JettraBucketSchema.AttributeRule(name.trim(), type.trim(), rules.trim(), desc.trim()));
+        }
+        return io.jettra.store.core.JettraBucketSchema.toAttributesJson(attrs);
+    }
+
     public synchronized boolean saveBucketStructure(String dbName, String bucketName, String attributesJson) {
         this.lastBucketOperationError = null;
         EngineBucketInfo bucket = getBucket(dbName, bucketName);
@@ -2668,32 +2762,187 @@ public class JettraStorePlugin {
         return true;
     }
 
+    public record IndexableFieldInfo(String fieldName, String dataType, boolean numeric, boolean autoIncrement, String source) {
+        public String displayLabel() {
+            if (autoIncrement) return fieldName + " (" + dataType + " • AUTO_INCREMENT)";
+            if (numeric) return fieldName + " (" + dataType + " • NUMERIC)";
+            return fieldName + " (" + dataType + ")";
+        }
+    }
+
+    public static boolean isNumericTypeName(String typeName) {
+        if (typeName == null || typeName.isBlank()) return false;
+        String t = typeName.trim().toLowerCase(Locale.ROOT);
+        return t.equals("int") || t.equals("integer") || t.equals("long")
+                || t.equals("double") || t.equals("float") || t.equals("decimal")
+                || t.equals("bigdecimal") || t.equals("number") || t.equals("short") || t.equals("byte");
+    }
+
+    public static boolean isAutoIncrementRule(String rules) {
+        if (rules == null || rules.isBlank()) return false;
+        String up = rules.toUpperCase(Locale.ROOT);
+        return up.contains("AUTO_INCREMENT") || up.contains("AUTOINCREMENT")
+                || up.contains("SEQUENTIAL") || up.contains("SEQUENCE");
+    }
+
+    /**
+     * Detecta todos los campos indexables del bucket (esquema DEFINED, índices existentes y muestra de registros),
+     * clasificando explícitamente campos numéricos (NUMERIC) y autoincrementables (AUTO_INCREMENT).
+     */
+    public List<IndexableFieldInfo> detectIndexableFields(EngineBucketInfo bucket) {
+        if (bucket == null) return List.of();
+        Map<String, IndexableFieldInfo> discovered = new LinkedHashMap<>();
+
+        // 1. Campos definidos en la estructura del bucket
+        for (var attr : bucket.getAttributes()) {
+            String name = attr.atribute_name();
+            if (name == null || name.isBlank()) continue;
+            String type = (attr.type_atribute() != null && !attr.type_atribute().isBlank()) ? attr.type_atribute().trim() : "String";
+            boolean autoInc = isAutoIncrementRule(attr.jettra_rules());
+            boolean numeric = autoInc || isNumericTypeName(type);
+            discovered.put(name, new IndexableFieldInfo(name, type, numeric, autoInc, "SCHEMA"));
+        }
+
+        // 2. Campos presentes en índices existentes (respetando AUTO_INCREMENT / NUMERIC)
+        for (EngineIndexInfo idx : bucket.getIndexes()) {
+            if (idx.getFields() == null || idx.getFields().isBlank()) continue;
+            String idxType = idx.getType() != null ? idx.getType().toUpperCase(Locale.ROOT) : "";
+            boolean isAuto = "AUTO_INCREMENT".equals(idxType) || "SEQUENTIAL".equals(idxType);
+            boolean isNum = isAuto || "NUMERIC".equals(idxType) || "NUMBER".equals(idxType);
+            for (String rawF : idx.getFields().split(",")) {
+                String f = rawF.trim();
+                if (f.isEmpty()) continue;
+                IndexableFieldInfo prev = discovered.get(f);
+                if (prev == null) {
+                    discovered.put(f, new IndexableFieldInfo(f, isAuto ? "Long" : (isNum ? "Number" : "String"), isNum, isAuto, "INDEX"));
+                } else if ((isAuto && !prev.autoIncrement()) || (isNum && !prev.numeric())) {
+                    discovered.put(f, new IndexableFieldInfo(f, prev.dataType(), prev.numeric() || isNum, prev.autoIncrement() || isAuto, prev.source()));
+                }
+            }
+        }
+
+        // 3. Campos inferidos desde los registros del bucket (incluye buckets NONE)
+        io.jettra.json.JettraJson parser = new io.jettra.json.JettraJson();
+        int inspected = 0;
+        for (EngineRecordInfo rec : bucket.getSampleRecords()) {
+            if (++inspected > 50) break;
+            if (rec.getDetails() == null || rec.getDetails().isBlank()) continue;
+            try {
+                Object parsed = parser.parse(rec.getDetails().trim());
+                Map<?, ?> rawMap = null;
+                if (parsed instanceof io.jettra.json.JsonObject jo) {
+                    rawMap = jo.getMap();
+                } else if (parsed instanceof Map<?, ?> m) {
+                    rawMap = m;
+                }
+                if (rawMap != null) {
+                    // Si es JAVA_RECORD con "components" o OBJECT con "properties", inspeccionar también sus campos internos
+                    Object inner = rawMap.containsKey("components") ? rawMap.get("components")
+                            : (rawMap.containsKey("properties") ? rawMap.get("properties") : rawMap);
+                    Map<?, ?> targetMap = (inner instanceof io.jettra.json.JsonObject ijo) ? ijo.getMap()
+                            : (inner instanceof Map<?, ?> im ? im : rawMap);
+                    for (Map.Entry<?, ?> entry : targetMap.entrySet()) {
+                        String field = String.valueOf(entry.getKey()).trim();
+                        if (field.isEmpty() || discovered.containsKey(field)) continue;
+                        Object val = entry.getValue();
+                        boolean isNum = val instanceof Number;
+                        String inferredType = val instanceof Integer || val instanceof Long ? "Long"
+                                : (val instanceof Number ? "Double"
+                                : (val instanceof Boolean ? "Boolean" : "String"));
+                        discovered.put(field, new IndexableFieldInfo(field, inferredType, isNum, false, "DATA"));
+                    }
+                }
+            } catch (Exception ignored) {}
+        }
+
+        List<IndexableFieldInfo> sorted = new ArrayList<>(discovered.values());
+        sorted.sort((a, b) -> {
+            int scoreA = a.autoIncrement() ? 0 : (a.numeric() ? 1 : 2);
+            int scoreB = b.autoIncrement() ? 0 : (b.numeric() ? 1 : 2);
+            if (scoreA != scoreB) return Integer.compare(scoreA, scoreB);
+            return a.fieldName().compareToIgnoreCase(b.fieldName());
+        });
+        return sorted;
+    }
+
     public io.jettra.store.core.JettraBucketSchema.ValidationResult validateRecordForBucket(String dbName,
             String bucketName, String detailsJson) {
+        return validateRecordForBucket(dbName, bucketName, detailsJson, null);
+    }
+
+    public io.jettra.store.core.JettraBucketSchema.ValidationResult validateRecordForBucket(String dbName,
+            String bucketName, String detailsJson, String excludeRecordId) {
         EngineBucketInfo bucket = getBucket(dbName, bucketName);
         if (bucket == null || !"DEFINED".equalsIgnoreCase(bucket.getStructureType())) {
             return io.jettra.store.core.JettraBucketSchema.ValidationResult.ok();
         }
-        Map<String, Object> recordMap = new LinkedHashMap<>();
-        if (detailsJson != null && !detailsJson.isBlank()) {
-            try {
-                io.jettra.json.JettraJson parser = new io.jettra.json.JettraJson();
-                Object parsed = parser.parse(detailsJson.trim());
-                if (parsed instanceof io.jettra.json.JsonObject jo) {
-                    jo.getMap().forEach((k, v) -> recordMap.put(String.valueOf(k), v));
-                } else if (parsed instanceof Map<?, ?> m) {
-                    m.forEach((k, v) -> recordMap.put(String.valueOf(k), v));
-                }
-            } catch (Exception e) {
-                return io.jettra.store.core.JettraBucketSchema.ValidationResult.fail(
-                        List.of("JSON inválido para bucket DEFINED '" + bucketName + "': " + e.getMessage()));
-            }
+        Map<String, Object> recordMap = parseJsonRecordMap(detailsJson);
+        if (recordMap == null) {
+            return io.jettra.store.core.JettraBucketSchema.ValidationResult.fail(
+                    List.of("JSON inválido para bucket DEFINED '" + bucketName + "'."));
         }
         var meta = new io.jettra.store.core.JettraBucketSchema.BucketMetadata(
                 dbName, bucket.getEngineType(), bucket.getBucketName(),
                 io.jettra.store.core.JettraBucketSchema.StructureType.DEFINED,
                 bucket.getAttributes(), 0L);
-        return io.jettra.store.core.JettraBucketSchema.validateRecord(meta, recordMap);
+        var baseResult = io.jettra.store.core.JettraBucketSchema.validateRecord(meta, recordMap);
+        List<String> allErrors = new ArrayList<>(baseResult.errors());
+
+        // Validar unicidad (UNIQUE / AUTO_INCREMENT / índices únicos) contra registros existentes del bucket
+        Set<String> uniqueFields = new LinkedHashSet<>();
+        for (var attr : bucket.getAttributes()) {
+            String rulesUp = attr.jettra_rules() != null ? attr.jettra_rules().toUpperCase(Locale.ROOT) : "";
+            if (rulesUp.contains("UNIQUE") || isAutoIncrementRule(rulesUp)) {
+                uniqueFields.add(attr.atribute_name());
+            }
+        }
+        for (EngineIndexInfo idx : bucket.getIndexes()) {
+            if (idx.isUnique() && idx.getFields() != null && !idx.getFields().contains(",")) {
+                uniqueFields.add(idx.getFields().trim());
+            }
+        }
+        if (!uniqueFields.isEmpty()) {
+            for (String uField : uniqueFields) {
+                Object candidateVal = recordMap.get(uField);
+                if (candidateVal == null || String.valueOf(candidateVal).isBlank()) continue;
+                String candidateNorm = String.valueOf(candidateVal).trim();
+                for (EngineRecordInfo existing : bucket.getSampleRecords()) {
+                    if (excludeRecordId != null && existing.getId().equalsIgnoreCase(excludeRecordId)) continue;
+                    Map<String, Object> exMap = parseJsonRecordMap(existing.getDetails());
+                    if (exMap != null && exMap.get(uField) != null
+                            && candidateNorm.equalsIgnoreCase(String.valueOf(exMap.get(uField)).trim())) {
+                        allErrors.add("Atributo '" + uField + "' viola la restricción UNIQUE: el valor '"
+                                + candidateNorm + "' ya existe en el registro '" + existing.getId() + "'.");
+                        break;
+                    }
+                }
+            }
+        }
+
+        return allErrors.isEmpty()
+                ? io.jettra.store.core.JettraBucketSchema.ValidationResult.ok()
+                : io.jettra.store.core.JettraBucketSchema.ValidationResult.fail(allErrors);
+    }
+
+    private Map<String, Object> parseJsonRecordMap(String detailsJson) {
+        Map<String, Object> recordMap = new LinkedHashMap<>();
+        if (detailsJson == null || detailsJson.isBlank()) {
+            return recordMap;
+        }
+        try {
+            io.jettra.json.JettraJson parser = new io.jettra.json.JettraJson();
+            Object parsed = parser.parse(detailsJson.trim());
+            if (parsed instanceof io.jettra.json.JsonObject jo) {
+                jo.getMap().forEach((k, v) -> recordMap.put(String.valueOf(k), v));
+                return recordMap;
+            } else if (parsed instanceof Map<?, ?> m) {
+                m.forEach((k, v) -> recordMap.put(String.valueOf(k), v));
+                return recordMap;
+            }
+            return null;
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     public synchronized boolean deleteBucket(String dbName, String bucketName) {
@@ -2715,20 +2964,51 @@ public class JettraStorePlugin {
         return removed;
     }
 
+    private volatile String lastIndexOperationError;
+
+    public String getLastIndexOperationError() {
+        return lastIndexOperationError;
+    }
+
+    private static final Set<String> ENGINE_NAMES_SET = Set.of(
+            "DOCUMENT", "RELATIONAL", "KEY_VALUE", "GRAPH", "VECTOR",
+            "TIMESERIES", "COLUMNAR", "GEOSPATIAL", "JAVA_RECORD", "OBJECT"
+    );
+
     public synchronized boolean addIndex(String dbName, String bucketName, String indexName, String fields, String type,
             boolean unique) {
-        EngineBucketInfo bucket = getBucket(dbName, bucketName);
-        if (bucket == null || indexName == null || indexName.isBlank() || fields == null || fields.isBlank()) {
+        this.lastIndexOperationError = null;
+        if (bucketName == null || bucketName.isBlank()) {
+            this.lastIndexOperationError = "Regla estricta: un índice nunca se asigna directamente a un Engine; debe seleccionar un Bucket concreto.";
+            return false;
+        }
+        EngineBucketInfo bucket = findBucketExact(dbName, bucketName);
+        if (bucket == null) {
+            if (ENGINE_NAMES_SET.contains(bucketName.trim().toUpperCase(Locale.ROOT))) {
+                this.lastIndexOperationError = "Regla estricta: '" + bucketName.trim() + "' es un Engine, no un Bucket. Todo índice debe asignarse exclusivamente a un Bucket concreto.";
+            } else {
+                this.lastIndexOperationError = "Bucket '" + bucketName + "' no encontrado en '" + dbName + "'.";
+            }
+            return false;
+        }
+        if (indexName == null || indexName.isBlank() || fields == null || fields.isBlank()) {
+            this.lastIndexOperationError = "El nombre del índice y al menos un campo son obligatorios.";
+            return false;
+        }
+        String fieldErr = validateIndexFieldsAgainstBucketStructure(bucket, fields);
+        if (fieldErr != null) {
+            this.lastIndexOperationError = fieldErr;
             return false;
         }
         String cleanName = indexName.trim();
         for (EngineIndexInfo idx : bucket.getIndexes()) {
             if (idx.getName().equalsIgnoreCase(cleanName)) {
+                this.lastIndexOperationError = "Ya existe un índice llamado '" + cleanName + "' en el bucket '" + bucket.getBucketName() + "'.";
                 return false;
             }
         }
         String idxType = (type != null && !type.isBlank()) ? type.trim().toUpperCase(Locale.ROOT) : "BTREE";
-        boolean effectiveUnique = unique || "AUTO_INCREMENT".equalsIgnoreCase(idxType);
+        boolean effectiveUnique = unique || "AUTO_INCREMENT".equalsIgnoreCase(idxType) || "SEQUENTIAL".equalsIgnoreCase(idxType);
         bucket.getIndexes().add(new EngineIndexInfo(cleanName, fields.trim(), idxType, effectiveUnique, "READY"));
         try {
             getDriverClient().createBucketIndex(dbName, bucketName, cleanName, fields.trim(), idxType, effectiveUnique);
@@ -2740,6 +3020,82 @@ public class JettraStorePlugin {
                 "Índice '" + cleanName + "' [" + idxType + "] creado en " + dbName + "." + bucketName, "OK",
                 "Índice Zero-Lock READY");
         return true;
+    }
+
+    public synchronized boolean updateIndex(String dbName, String bucketName, String originalIndexName,
+            String newIndexName, String fields, String type, boolean unique) {
+        this.lastIndexOperationError = null;
+        if (bucketName == null || bucketName.isBlank()) {
+            this.lastIndexOperationError = "Regla estricta: un índice solo puede editarse sobre un Bucket concreto.";
+            return false;
+        }
+        EngineBucketInfo bucket = findBucketExact(dbName, bucketName);
+        if (bucket == null) {
+            this.lastIndexOperationError = "Bucket '" + bucketName + "' no encontrado en '" + dbName + "'.";
+            return false;
+        }
+        if (originalIndexName == null || originalIndexName.isBlank() || fields == null || fields.isBlank()) {
+            this.lastIndexOperationError = "El índice original y los campos son obligatorios.";
+            return false;
+        }
+        String fieldErr = validateIndexFieldsAgainstBucketStructure(bucket, fields);
+        if (fieldErr != null) {
+            this.lastIndexOperationError = fieldErr;
+            return false;
+        }
+        String targetName = (newIndexName != null && !newIndexName.isBlank()) ? newIndexName.trim() : originalIndexName.trim();
+        List<EngineIndexInfo> list = bucket.getIndexes();
+        int targetPos = -1;
+        for (int i = 0; i < list.size(); i++) {
+            EngineIndexInfo idx = list.get(i);
+            if (idx.getName().equalsIgnoreCase(originalIndexName.trim())) {
+                targetPos = i;
+            } else if (idx.getName().equalsIgnoreCase(targetName)) {
+                this.lastIndexOperationError = "Ya existe otro índice llamado '" + targetName + "' en el bucket '" + bucket.getBucketName() + "'.";
+                return false;
+            }
+        }
+        if (targetPos < 0) {
+            this.lastIndexOperationError = "Índice '" + originalIndexName + "' no encontrado en '" + bucket.getBucketName() + "'.";
+            return false;
+        }
+        String idxType = (type != null && !type.isBlank()) ? type.trim().toUpperCase(Locale.ROOT) : "BTREE";
+        boolean effectiveUnique = unique || "AUTO_INCREMENT".equalsIgnoreCase(idxType) || "SEQUENTIAL".equalsIgnoreCase(idxType);
+        list.set(targetPos, new EngineIndexInfo(targetName, fields.trim(), idxType, effectiveUnique, "READY"));
+        try {
+            if (!originalIndexName.trim().equalsIgnoreCase(targetName)) {
+                getDriverClient().dropBucketIndex(dbName, originalIndexName.trim());
+            }
+            getDriverClient().createBucketIndex(dbName, bucketName, targetName, fields.trim(), idxType, effectiveUnique);
+        } catch (Exception ignored) {
+        }
+        sendFrameToPrimaryNode(io.jettra.store.cluster.JettraRaftFrame.createIndex(
+                1L, 0L, "jettra-explorer", dbName, bucketName, targetName, fields.trim(), idxType, effectiveUnique));
+        logPoliceIncident("Index Patrol",
+                "Índice '" + targetName + "' [" + idxType + "] actualizado en " + dbName + "." + bucketName, "OK",
+                "Índice actualizado y READY");
+        return true;
+    }
+
+    private String validateIndexFieldsAgainstBucketStructure(EngineBucketInfo bucket, String fields) {
+        if (bucket == null || !"DEFINED".equalsIgnoreCase(bucket.getStructureType()) || bucket.getAttributes().isEmpty()) {
+            return null;
+        }
+        Set<String> allowed = new HashSet<>();
+        allowed.add("id");
+        for (var attr : bucket.getAttributes()) {
+            if (attr.atribute_name() != null && !attr.atribute_name().isBlank()) {
+                allowed.add(attr.atribute_name().trim().toLowerCase(Locale.ROOT));
+            }
+        }
+        for (String rawF : fields.split(",")) {
+            String f = rawF.trim();
+            if (f.isEmpty()) continue;
+            if (!allowed.contains(f.toLowerCase(Locale.ROOT))) {
+                return "Campo '" + f + "' no existe en la estructura DEFINED del bucket '" + bucket.getBucketName() + "'.";
+            }
+        }
+        return null;
     }
 
     public synchronized boolean deleteIndex(String dbName, String bucketName, String indexName) {
@@ -3089,17 +3445,69 @@ public class JettraStorePlugin {
     public synchronized void addRecord(String dbName, String bucketName, String id, String summary, String details) {
         EngineBucketInfo bucket = getBucket(dbName, bucketName);
         if (bucket != null) {
+            String effectiveDetails = populateAutoIncrementFields(bucket, details);
             String now = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
-            EngineRecordInfo r = new EngineRecordInfo(id, bucket.getEngineType(), bucketName, summary, details, now, 1);
+            EngineRecordInfo r = new EngineRecordInfo(id, bucket.getEngineType(), bucketName, summary, effectiveDetails, now, 1);
             bucket.getSampleRecords().add(0, r);
             bucket.setTotalObjects(bucket.getTotalObjects() + 1);
-            byte[] docBytes = (details != null && !details.isBlank() ? details : "{\"id\":\"" + id + "\"}")
+            byte[] docBytes = (effectiveDetails != null && !effectiveDetails.isBlank() ? effectiveDetails : "{\"id\":\"" + id + "\"}")
                     .getBytes(java.nio.charset.StandardCharsets.UTF_8);
             sendFrameToPrimaryNode(io.jettra.store.cluster.JettraRaftFrame.putDocument(1L, 0L, "jettra-explorer",
                     dbName, bucketName, id, docBytes));
             logPoliceIncident("MemTable Purge Dog", "Nuevo registro '" + id + "' insertado en " + bucketName, "OK",
                     "Escritura en WAL y MemTable");
         }
+    }
+
+    private String populateAutoIncrementFields(EngineBucketInfo bucket, String details) {
+        if (bucket == null) return details;
+        Set<String> autoFields = new LinkedHashSet<>();
+        for (var attr : bucket.getAttributes()) {
+            if (isAutoIncrementRule(attr.jettra_rules()) && !attr.atribute_name().isBlank()) {
+                autoFields.add(attr.atribute_name());
+            }
+        }
+        for (EngineIndexInfo idx : bucket.getIndexes()) {
+            if (("AUTO_INCREMENT".equalsIgnoreCase(idx.getType()) || "SEQUENTIAL".equalsIgnoreCase(idx.getType()))
+                    && idx.getFields() != null && !idx.getFields().isBlank() && !idx.getFields().contains(",")) {
+                autoFields.add(idx.getFields().trim());
+            }
+        }
+        if (autoFields.isEmpty()) return details;
+
+        Map<String, Object> recMap = parseJsonRecordMap(details);
+        if (recMap == null) return details;
+
+        boolean modified = false;
+        for (String field : autoFields) {
+            Object existingVal = recMap.get(field);
+            if (existingVal == null || String.valueOf(existingVal).isBlank()) {
+                long nextSeq = computeNextAutoIncrementValue(bucket, field);
+                recMap.put(field, nextSeq);
+                modified = true;
+            }
+        }
+        if (!modified) return details;
+        try {
+            return mapper.writeValueAsString(recMap);
+        } catch (Exception e) {
+            return details;
+        }
+    }
+
+    private long computeNextAutoIncrementValue(EngineBucketInfo bucket, String fieldName) {
+        long max = 0L;
+        for (EngineRecordInfo rec : bucket.getSampleRecords()) {
+            Map<String, Object> m = parseJsonRecordMap(rec.getDetails());
+            if (m != null && m.get(fieldName) != null) {
+                Object v = m.get(fieldName);
+                try {
+                    long num = (v instanceof Number n) ? n.longValue() : Long.parseLong(String.valueOf(v).trim());
+                    if (num > max) max = num;
+                } catch (Exception ignored) {}
+            }
+        }
+        return max + 1L;
     }
 
     public synchronized void updateRecord(String dbName, String bucketName, String id, String summary, String details) {

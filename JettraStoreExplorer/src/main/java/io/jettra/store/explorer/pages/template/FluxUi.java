@@ -26,7 +26,8 @@ public final class FluxUi {
     public static Widget flashBanner(String message) {
         if (message == null || message.isBlank()) return null;
         String lower = message.toLowerCase();
-        boolean isError = lower.contains("denegado") || lower.contains("permiso") || lower.contains("error");
+        boolean isError = lower.contains("denegado") || lower.contains("permiso")
+                || lower.contains("error") || lower.contains("fallida") || lower.contains("inválid");
         String bg = isError ? "rgba(239, 68, 68, 0.15)" : "rgba(0, 212, 255, 0.15)";
         String border = isError ? "#ef4444" : "#00d4ff";
         String color = isError ? "#ef4444" : "#00d4ff";

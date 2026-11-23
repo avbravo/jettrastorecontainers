@@ -81,35 +81,168 @@ Todas las vistas están construidas exclusivamente con componentes **JettraFlux*
 
 ---
 
-## 7. Subárboles por Bucket y CRUD Completo de Estructura (`/explorer`)
+## 7. Árbol Jerárquico, Subárboles por Bucket, CRUD de Estructura e Índices Numéricos / Autoincrementables (`/explorer` y `/databases`)
 
-### 7.1 Jerarquía Completa del Árbol de Navegación
-Al abrir `/explorer`, la barra lateral izquierda muestra la jerarquía completa en cuatro niveles:
+### 7.1 Árbol de Navegación (`Base de Datos` → `Engine` → `Bucket` → Subárboles)
+Al acceder a `/explorer`, la barra lateral izquierda (`JettraFlux` sticky y responsiva) organiza todo el catálogo en cuatro niveles visuales con indicadores de expansión (`▾` / `▸`), etiquetas de motor por color, estado del esquema (`DEFINED` / `NONE`) y contadores en vivo:
+
 ```text
-📂 examplesedb
-  ⚙️ JAVA_RECORD
-    ▾ 📦 Pais [DEFINED]
-       ├─ 📐 Estructura (3 campos)   → /explorer?db=examplesedb&bucket=Pais&section=schema
-       ├─ ⚡ Índices (2)             → /explorer?db=examplesedb&bucket=Pais&section=indexes
-       └─ 📄 Registros (15)          → /explorer?db=examplesedb&bucket=Pais&section=records
-  ⚙️ DOCUMENT
-    ▸ 📦 NotasLibres [NONE]
+▾ 📂 ventas_db (3)
+   ├─ ⚙️ DOCUMENT (2 bucket(s))
+   │   ├─ ▾ 📦 Productos [DEFINED]
+   │   │    ├─ 📐 Estructura (4 campos)   → /explorer?db=ventas_db&bucket=Productos&section=schema
+   │   │    ├─ ⚡ Índices (2)             → /explorer?db=ventas_db&bucket=Productos&section=indexes
+   │   │    └─ 📄 Registros (12)          → /explorer?db=ventas_db&bucket=Productos&section=records
+   │   └─ ▸ 📦 NotasLibres [NONE]
+   │        ├─ 📐 Estructura (NONE)       → /explorer?db=ventas_db&bucket=NotasLibres&section=schema
+   │        │    └─ ➕ Añadir Estructura  → /explorer?db=ventas_db&bucket=NotasLibres&section=schema&action=new_schema
+   │        ├─ ⚡ Índices (0)             → /explorer?db=ventas_db&bucket=NotasLibres&section=indexes
+   │        └─ 📄 Registros (5)           → /explorer?db=ventas_db&bucket=NotasLibres&section=records
+   └─ ⚙️ JAVA_RECORD (1 bucket(s))
+       └─ ▸ 📦 Paises [DEFINED]
 ```
 
-### 7.2 CRUD Completo de Estructura (`NONE` ↔ `DEFINED`)
-Desde el subárbol **📐 Estructura** de cualquier bucket:
-- **Crear Estructura (`NONE` → `DEFINED`)**: clic en **`➕ Crear Estructura (DEFINED)`** y definir el arreglo JSON de atributos:
-  ```json
-  [
-    { "atribute_name": "codigo", "type_atribute": "Long", "jettra_rules": "AUTO_INCREMENT", "description": "Código secuencial" },
-    { "atribute_name": "name", "type_atribute": "String", "jettra_rules": "NOT_NULL", "description": "Nombre del país" },
-    { "atribute_name": "precio", "type_atribute": "Double", "jettra_rules": "POSITIVE", "description": "Valor numérico" }
-  ]
-  ```
-- **Consultar / Ver JSON**: clic en **`👁️ Ver JSON`** para inspeccionar la definición exacta del esquema.
-- **Editar / Actualizar Estructura**: clic en **`✏️ Editar Estructura`** para agregar, modificar o quitar atributos y reglas `jettra_rules`.
-- **Eliminar Estructura (`DEFINED` → `NONE`)**: clic en **`🗑️ Eliminar Estructura`** (con confirmación) para regresar el bucket a modo libre sin borrar los registros existentes.
+Cada bucket activo despliega tres subárboles dedicados:
+1. **📐 Estructura (`section=schema`)**: administra el esquema del bucket (`NONE` o `DEFINED`).
+2. **⚡ Índices (`section=indexes`)**: lista, crea, reconstruye y elimina índices secundarios del bucket.
+3. **📄 Registros (`section=records`)**: explora, busca, pagina, inserta, edita, versiona y elimina registros.
 
-### 7.3 Validación Estricta de Registros e Índices Numéricos / Autoincrementables
-- Al abrir **`➕ Nuevo Registro`** o **`✏️ Editar`** sobre un bucket `DEFINED`, el formulario carga dinámicamente los campos de la estructura con sus restricciones (`required`, `number`, `step="1"`/`"any"`, `min`, `email`, `AUTO_INCREMENT`) y rechaza cualquier registro que incumpla una regla antes de persistir.
-- En el subárbol **⚡ Índices**, el selector de campos lista automáticamente los atributos del bucket (incluyendo campos numéricos y autoincrementables) junto con los tipos `NUMERIC`, `AUTO_INCREMENT`, `BTREE`, `HASH`, `SPARSE`, `VECTOR_HNSW` y `SPATIAL_R_TREE`.
+---
+
+### 7.2 CRUD Completo de Estructuras de Bucket (`NONE` ↔ `DEFINED`)
+En el subárbol **📐 Estructura** se presentan botones explícitos según el estado actual del bucket:
+
+| Operación CRUD | Estado del Bucket | Botón / Ruta en JettraStoreExplorer | Acción |
+| :--- | :--- | :--- | :--- |
+| **Create** | `NONE` | **`➕ Crear Estructura (DEFINED)`** (`?db=...&bucket=...&section=schema&action=new_schema`) | Abre el modal JettraFlux para definir el arreglo JSON de atributos y activar validación estricta. |
+| **Read / View** | `DEFINED` | **`👁️ Ver JSON`** (`?db=...&bucket=...&section=schema&action=view_schema`) | Muestra el contrato JSON exacto de atributos (`atribute_name`, `type_atribute`, `jettra_rules`, `description`). |
+| **Update / Edit** | `DEFINED` | **`✏️ Editar Estructura`** (`?db=...&bucket=...&section=schema&action=edit_schema`) | Permite agregar, modificar o quitar atributos y reglas de validación. |
+| **Delete** | `DEFINED` | **`🗑️ Eliminar Estructura`** (`?db=...&bucket=...&section=schema&action=delete_schema`) | Elimina la estructura `DEFINED` y regresa el bucket a modo flexible `NONE` sin borrar registros existentes. |
+
+#### Ejemplo real de estructura `DEFINED` para un bucket `Productos`
+```json
+[
+  {
+    "atribute_name": "codigo",
+    "type_atribute": "Long",
+    "jettra_rules": "AUTO_INCREMENT",
+    "description": "Secuencia autoincrementable única del producto"
+  },
+  {
+    "atribute_name": "sku",
+    "type_atribute": "String",
+    "jettra_rules": "NOT_NULL,UNIQUE,MIN_LENGTH:3",
+    "description": "Código SKU único"
+  },
+  {
+    "atribute_name": "nombre",
+    "type_atribute": "String",
+    "jettra_rules": "NOT_NULL,NOT_BLANK",
+    "description": "Nombre comercial del producto"
+  },
+  {
+    "atribute_name": "precio",
+    "type_atribute": "BigDecimal",
+    "jettra_rules": "NOT_NULL,POSITIVE",
+    "description": "Precio unitario mayor a 0"
+  }
+]
+```
+
+#### Reglas `jettra_rules` soportadas
+- `NOT_NULL`, `REQUIRED`, `NOT_EMPTY`, `NOT_BLANK`: campos obligatorios.
+- `UNIQUE`: garantiza unicidad del valor frente a los registros existentes del bucket (al crear y al editar).
+- `AUTO_INCREMENT` (o `SEQUENTIAL`): secuencia numérica autoincrementable; si se omite en el formulario de inserción, `JettraStoreExplorer` calcula e inyecta automáticamente el siguiente valor consecutivo (`1`, `2`, `3`, ...).
+- `POSITIVE` (`> 0`), `NON_NEGATIVE` (`>= 0`), `MIN:<valor>`, `MAX:<valor>`: restricciones numéricas.
+- `MIN_LENGTH:<n>`, `MAX_LENGTH:<n>`, `EMAIL`, `REGEX:<patron>`: restricciones de texto.
+
+---
+
+### 7.3 Validación Estricta en Registros (`DEFINED`) vs Flujo Flexible (`NONE`)
+- **Bucket `DEFINED`**:
+  - Al abrir **`➕ Nuevo Registro`** (`/explorer?db=ventas_db&bucket=Productos&action=new`) o **`✏️ Editar`** (`/explorer?db=ventas_db&bucket=Productos&edit_id=PROD-001`), el formulario carga dinámicamente los controles tipados (`type="number"`, `step="1"` o `step="any"`, `min`, `max`, `minlength`, `maxlength`, `pattern`, `required`, `email`, `Dropdown` booleano).
+  - Antes de persistir (`POST /explorer` con `action=save_new` o `action=save_edit`), `JettraStorePlugin.validateRecordForBucket(...)` verifica tipos, obligatoriedad, rangos y unicidad (`UNIQUE`).
+  - **Ejemplo rechazado** (precio negativo y `nombre` vacío):
+    ```json
+    { "sku": "TEC-01", "nombre": "", "precio": -15.0 }
+    ```
+    Resultado: se cancela la escritura y se muestra la alerta roja `⛔ Validación fallida: Atributo 'nombre' no puede estar vacío (regla NOT_NULL). | Atributo 'precio' debe ser un número positivo (> 0).`
+  - **Ejemplo aceptado** (omitiendo `codigo` para autogeneración `AUTO_INCREMENT`):
+    ```json
+    { "sku": "TEC-01", "nombre": "Teclado Mecánico", "precio": 89.50 }
+    ```
+    Resultado: `JettraStoreExplorer` asigna automáticamente `"codigo": 1`, persiste el registro y lo replica al nodo `PRIMARY`.
+- **Bucket `NONE`**:
+  - Permite crear y editar registros usando el editor específico del motor (`DOCUMENT` JSON, `JAVA_RECORD`, `KEY_VALUE`, `GRAPH`, `VECTOR`, `TIMESERIES`, `GEOSPATIAL`, `COLUMNAR`, `RELATIONAL`) sin exigir esquema previo, manteniendo la acción directa `➕ Añadir Estructura (DEFINED)` en el árbol.
+
+---
+
+### 7.4 Gestor de Índices con Soporte de Campos Numéricos y Autoincrementables
+Tanto en **`/explorer?db=<db>&bucket=<bucket>&section=indexes`** como en **`/databases?db=<db>&manage_indexes_db=<db>&index_bucket=<bucket>`**:
+
+1. **Detección automática de campos numéricos y autoincrementables (`detectIndexableFields`)**:
+   - Inspecciona los atributos del esquema `DEFINED`, los índices ya creados y hasta 50 registros de muestra del bucket (funcionando también en buckets `NONE`).
+   - Clasifica y resalta con insignias dedicadas los campos **autoincrementables** (`🔢 codigo (Long • AUTO_INCREMENT)`) y **numéricos** (`#️⃣ precio (BigDecimal • NUMERIC)`), precargándolos en el selector de campos del formulario.
+2. **Creación, Reconstrucción y Eliminación de índices**:
+   - Tipos disponibles: `BTREE`, `HASH`, `NUMERIC`, `AUTO_INCREMENT`, `NUMBER`, `SEQUENTIAL`, `SPARSE`, `FULLTEXT`, `VECTOR_HNSW`, `GRAPH_ADJACENCY`, `TIMESERIES_BRIN`, `SPATIAL_R_TREE`.
+   - Los índices `AUTO_INCREMENT` y `SEQUENTIAL` se crean automáticamente como `UNIQUE` y propagan la operación al nodo `PRIMARY` vía trama Raft.
+   - Ejemplo real de creación vía formulario (`POST /explorer`):
+     ```text
+     action=create_bucket_index&db=ventas_db&bucket=Productos&indexName=idx_productos_codigo&indexFieldSelect=codigo&indexType=AUTO_INCREMENT&indexUnique=true
+     action=create_bucket_index&db=ventas_db&bucket=Productos&indexName=idx_productos_precio&indexFieldSelect=precio&indexType=NUMERIC&indexUnique=false
+     ```
+   - Cada fila de la tabla de índices ofrece acciones directas de **`🔄 Reconstruir`** (`action=rebuild_bucket_index`) y **`🗑️ Eliminar`** (`action=delete_bucket_index`).
+
+---
+
+## 8. Administración de Índices, Motores de Almacenamiento y Buckets en `/database` (`/databases`)
+
+La página **`/database`** (alias directo de `/databases`) centraliza dos diálogos modales JettraFlux sobre el catálogo maestro de bases de datos:
+
+### 8.1 Diálogo "Administración de Índices en `[nombre-base-de-datos]`"
+Al hacer clic en **`⚡ Administrar Índices`** (`/database?db=ventas_db&manage_indexes_db=ventas_db`):
+1. **Agrupación jerárquica `Engine` → `Bucket`**: lista los motores activos de la base de datos y, dentro de cada motor, los **Buckets** disponibles para indexar.
+2. **Regla estricta de asignación**:
+   - Un índice **nunca** se asigna directamente al `Engine`.
+   - Toda operación de consulta, creación (`add_index`), edición (`edit_index`), reconstrucción (`rebuild_index`) o eliminación (`delete_index`) se ejecuta **exclusivamente sobre un Bucket concreto** dentro de su Engine.
+3. **Coherencia con la estructura del Bucket**:
+   - En buckets con estructura **`DEFINED`**, el servidor verifica que todos los campos del índice pertenezcan a los atributos declarados en el esquema (además de `id`). Si se intenta indexar un campo inexistente, la operación es rechazada con un mensaje de error claro.
+   - En buckets sin estructura (**`NONE`**), los campos indexados se aceptan de forma segura y los campos numéricos existentes se detectan automáticamente desde los registros de muestra.
+4. **Acciones por índice**: **`➕ Crear Índice`**, **`✏️ Editar`**, **`🔄 Reconstruir`** y **`🗑️ Eliminar`**, con soporte completo para `BTREE`, `HASH`, `NUMERIC`, `AUTO_INCREMENT`, `NUMBER`, `SEQUENTIAL`, `FULLTEXT`, `VECTOR_HNSW`, `GRAPH_ADJACENCY`, `TIMESERIES_BRIN` y `SPATIAL_R_TREE`.
+
+### 8.2 Diálogo "Motores de Almacenamiento y Buckets en `[nombre-base-de-datos]`"
+Al hacer clic en **`⚙️ Administrar Motores`** (`/database?db=ventas_db&manage_engines=true`):
+1. **Listado por Engine**: muestra todos los Engines de almacenamiento (`DOCUMENT`, `KEY_VALUE`, `GRAPH`, `TIMESERIES`, `GEOSPATIAL`, `JAVA_RECORD`, `VECTOR`, `COLUMNAR`, `OBJECT`, `RELATIONAL`) y, dentro de cada uno, sus **Buckets** asociados con estado de estructura (`DEFINED` / `NONE`), conteo de objetos e índices activos.
+2. **Operaciones CRUD sobre Buckets**:
+   - **Añadir Bucket (`action=add_bucket`)**: dentro del Engine seleccionado, eligiendo modo `NONE` (esquema libre) o `DEFINED` (validación estricta).
+   - **Editar Bucket (`action=edit_bucket`)**: permite renombrar el bucket, actualizar su descripción, conmutar entre `NONE` y `DEFINED`, y editar su tabla de estructura.
+   - **Remover Bucket (`action=delete_bucket`)**: elimina el bucket con confirmación explícita limpiando sus registros e índices asociados.
+3. **Tabla de Definición de Estructura (`| nombre | tipo | rules | descripcion |`)**:
+   Cuando el bucket utiliza modo **`DEFINED`**, sus campos se administran mediante la tabla estructurada con botón **`➕ Añadir Fila`**:
+
+| nombre | tipo | rules | descripcion |
+| :--- | :--- | :--- | :--- |
+| `codigo` | `Long` | `AUTO_INCREMENT` | Identificador secuencial único |
+| `creadoEn` | `Instant` | `NOT_NULL` | Fecha y hora UTC ISO-8601 |
+| `etiquetas` | `List<String>` | `NOT_NULL` | Lista ordenada de etiquetas de texto |
+| `categorias` | `Set<String>` | `NOT_NULL` | Conjunto de categorías sin duplicados |
+| `puntajes` | `ArrayList<Integer>` | `NOT_NULL` | Arreglo dinámico de enteros |
+| `direccion` | `Direccion` | `NOT_NULL` | Objeto de dominio definido por el usuario (`{ "calle": "...", "ciudad": "..." }`) |
+
+- **Tipos soportados en la columna `tipo`**:
+  - **Estándar Java**: `String`, `Integer`/`int`, `Long`/`long`, `Double`/`double`, `Float`/`float`, `Short`, `Byte`, `BigDecimal`, `Boolean`, `Instant`, `LocalDate`, `LocalDateTime`, `UUID`.
+  - **Colecciones genéricas parametrizadas**: `List<T>`, `Set<T>` (valida ausencia de duplicados) y `ArrayList<T>` (valida cada elemento contra `T`, por ejemplo `List<String>`, `Set<MiObjeto>`, `ArrayList<Integer>`).
+  - **Objetos/Records de dominio del usuario**: cualquier clase o `record` personalizado (ej. `Direccion`, `MiObjeto`, `io.jettra.domain.Cliente`), validado estrictamente como estructura JSON objeto (`{ ... }`).
+
+---
+
+## 9. Compilación, Pruebas (`JettraTest`) y Ejecución
+
+```bash
+# Compilar y ejecutar toda la suite de pruebas JettraTest (Java 25+)
+cd JettraStoreExplorer
+mvn clean verify
+
+# Ejecutar JettraStoreExplorer (puerto por defecto 8085 según microprofile-config.properties)
+java -jar target/JettraStoreExplorer-1.0.0-SNAPSHOT.jar
+```

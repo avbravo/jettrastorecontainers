@@ -214,9 +214,11 @@ public class App {
         server.get("/status", (req, resp) -> handleStatusGet(req, resp, server));
         server.get("/telemetry", (req, resp) -> handleStatusGet(req, resp, server));
 
-        // 4. Administración de Bases de Datos y Motores (/databases y /engines)
+        // 4. Administración de Bases de Datos y Motores (/databases, /database y /engines)
         server.get("/databases", (req, resp) -> handleDatabasesGet(req, resp, server));
         server.post("/databases", (req, resp) -> handleDatabasesPost(req, resp));
+        server.get("/database", (req, resp) -> handleDatabasesGet(req, resp, server));
+        server.post("/database", (req, resp) -> handleDatabasesPost(req, resp));
         server.get("/engines", (req, resp) -> handleDatabasesGet(req, resp, server));
 
         // 5. Explorador de Registros con Operaciones CRUD (/explorer y /records)
@@ -534,20 +536,28 @@ public class App {
         String manageUsersDb = req.getQueryParam("manage_users_db");
         String manageIndexesDb = req.getQueryParam("manage_indexes_db");
         String indexBucket = req.getQueryParam("index_bucket");
+        String editIndex = req.getQueryParam("edit_index");
+        String editBucket = req.getQueryParam("edit_bucket");
+        String addBucketEngine = req.getQueryParam("add_bucket_engine");
+        boolean showAddBucketDialog = "true".equalsIgnoreCase(req.getQueryParam("add_bucket"))
+                || (addBucketEngine != null && !addBucketEngine.isBlank());
         boolean manageEngines = "true".equalsIgnoreCase(req.getQueryParam("manage_engines"));
         boolean isAdmin = isLoggedUserAdmin(req);
         String msg = req.getQueryParam("msg");
         String messageText = null;
         if ("db_created".equals(msg)) messageText = "Base de datos creada exitosamente.";
         else if ("db_deleted".equals(msg)) messageText = "Base de datos eliminada.";
-        else if ("bucket_added".equals(msg)) messageText = "Nuevo motor/bucket añadido a la base de datos.";
+        else if ("bucket_added".equals(msg)) messageText = "Nuevo bucket añadido al engine exitosamente.";
+        else if ("bucket_updated".equals(msg)) messageText = "Bucket y su estructura actualizados correctamente.";
         else if ("bucket_deleted".equals(msg)) messageText = "Bucket eliminado.";
         else if ("db_user_added".equals(msg)) messageText = "Usuario añadido/actualizado en la base de datos.";
         else if ("db_user_removed".equals(msg)) messageText = "Usuario removido de la base de datos.";
-        else if ("index_added".equals(msg)) messageText = "Índice creado y habilitado exitosamente.";
+        else if ("index_added".equals(msg)) messageText = "Índice creado y habilitado exitosamente en el bucket.";
+        else if ("index_updated".equals(msg)) messageText = "Índice actualizado correctamente en el bucket.";
         else if ("index_deleted".equals(msg)) messageText = "Índice eliminado del bucket.";
         else if ("index_rebuilt".equals(msg)) messageText = "Índice reconstruido en caliente (Zero-Lock).";
         else if ("forbidden".equals(msg)) messageText = "Acceso denegado: se requiere rol ADMIN para administrar usuarios de la base de datos.";
+        else if (msg != null && !msg.isBlank()) messageText = msg;
 
         if (manageUsersDb != null && !manageUsersDb.isBlank() && !isAdmin) {
             manageUsersDb = null;
@@ -556,7 +566,8 @@ public class App {
             }
         }
 
-        Widget content = new DatabasesFluxView(db, manageUsersDb, manageIndexesDb, indexBucket, manageEngines, isAdmin, messageText);
+        Widget content = new DatabasesFluxView(db, manageUsersDb, manageIndexesDb, indexBucket, editIndex,
+                manageEngines, showAddBucketDialog, editBucket, addBucketEngine, isAdmin, messageText);
         renderTemplate(resp, server, getLoggedUser(req), "Catálogo de Bases de Datos & Motores", "databases", content);
     }
 
@@ -584,9 +595,34 @@ public class App {
             String bucketName = form.get("bucketName");
             String engineType = form.get("engineType");
             String description = form.get("description");
+            String structureType = form.getOrDefault("structureType", "NONE");
+            String attributesJson = JettraStorePlugin.buildAttributesJsonFromTableForm(form);
 
-            plugin.addBucket(db, bucketName, engineType, description);
+            boolean ok = plugin.addBucket(db, bucketName, engineType, description, structureType, attributesJson);
+            if (!ok) {
+                String err = plugin.getLastBucketOperationError();
+                redirect(resp, "/databases?db=" + db + "&manage_engines=true&msg="
+                        + java.net.URLEncoder.encode(err != null ? err : "Error añadiendo bucket", StandardCharsets.UTF_8));
+                return;
+            }
             redirect(resp, "/databases?db=" + db + "&manage_engines=true&msg=bucket_added");
+            return;
+        } else if ("edit_bucket".equalsIgnoreCase(action)) {
+            String db = form.get("db");
+            String originalBucket = form.get("originalBucketName");
+            String newBucket = form.get("bucketName");
+            String description = form.get("description");
+            String structureType = form.getOrDefault("structureType", "NONE");
+            String attributesJson = JettraStorePlugin.buildAttributesJsonFromTableForm(form);
+
+            boolean ok = plugin.updateBucket(db, originalBucket, newBucket, description, structureType, attributesJson);
+            if (!ok) {
+                String err = plugin.getLastBucketOperationError();
+                redirect(resp, "/databases?db=" + db + "&manage_engines=true&edit_bucket=" + (originalBucket != null ? originalBucket : "") + "&msg="
+                        + java.net.URLEncoder.encode(err != null ? err : "Error editando bucket", StandardCharsets.UTF_8));
+                return;
+            }
+            redirect(resp, "/databases?db=" + db + "&manage_engines=true&msg=bucket_updated");
             return;
         } else if ("add_db_user".equalsIgnoreCase(action)) {
             String db = form.get("db");
@@ -618,10 +654,37 @@ public class App {
             String bucket = form.get("bucket");
             String indexName = form.get("indexName");
             String fields = form.get("fields");
+            if (fields == null || fields.isBlank()) {
+                fields = form.get("fieldSelect");
+            }
             String indexType = form.get("indexType");
             boolean unique = "SI".equalsIgnoreCase(form.get("unique")) || "true".equalsIgnoreCase(form.get("unique"));
-            plugin.addIndex(db, bucket, indexName, fields, indexType, unique);
+            boolean ok = plugin.addIndex(db, bucket, indexName, fields, indexType, unique);
+            if (!ok) {
+                String err = plugin.getLastIndexOperationError();
+                redirect(resp, "/databases?db=" + db + "&manage_indexes_db=" + db + "&index_bucket=" + (bucket != null ? bucket : "") + "&msg="
+                        + java.net.URLEncoder.encode(err != null ? err : "Error creando índice", StandardCharsets.UTF_8));
+                return;
+            }
             redirect(resp, "/databases?db=" + db + "&manage_indexes_db=" + db + "&index_bucket=" + bucket + "&msg=index_added");
+            return;
+        } else if ("edit_index".equalsIgnoreCase(action)) {
+            String db = form.get("db");
+            String bucket = form.get("bucket");
+            String originalIndexName = form.get("originalIndexName");
+            String newIndexName = form.get("indexName");
+            String fields = form.get("fields");
+            String indexType = form.get("indexType");
+            boolean unique = "SI".equalsIgnoreCase(form.get("unique")) || "true".equalsIgnoreCase(form.get("unique"));
+            boolean ok = plugin.updateIndex(db, bucket, originalIndexName, newIndexName, fields, indexType, unique);
+            if (!ok) {
+                String err = plugin.getLastIndexOperationError();
+                redirect(resp, "/databases?db=" + db + "&manage_indexes_db=" + db + "&index_bucket=" + (bucket != null ? bucket : "")
+                        + "&edit_index=" + (originalIndexName != null ? originalIndexName : "") + "&msg="
+                        + java.net.URLEncoder.encode(err != null ? err : "Error editando índice", StandardCharsets.UTF_8));
+                return;
+            }
+            redirect(resp, "/databases?db=" + db + "&manage_indexes_db=" + db + "&index_bucket=" + bucket + "&msg=index_updated");
             return;
         } else if ("delete_index".equalsIgnoreCase(action)) {
             String db = form.get("db");
@@ -676,6 +739,13 @@ public class App {
             }
             redirect(resp, "/explorer?db=" + db + "&bucket=" + bucket + "&section=indexes&msg=index_deleted");
             return;
+        } else if ("rebuild_bucket_index".equalsIgnoreCase(action)) {
+            String indexName = req.getQueryParam("indexName");
+            if (db != null && bucket != null && indexName != null) {
+                plugin.rebuildIndex(db, bucket, indexName);
+            }
+            redirect(resp, "/explorer?db=" + db + "&bucket=" + bucket + "&section=indexes&msg=index_rebuilt");
+            return;
         } else if ("delete_schema".equalsIgnoreCase(action)) {
             if (db != null && bucket != null) {
                 plugin.deleteBucketStructure(db, bucket);
@@ -718,6 +788,7 @@ public class App {
         else if ("schema_saved".equals(msg)) messageText = "Estructura DEFINED guardada y activada para el bucket.";
         else if ("schema_deleted".equals(msg)) messageText = "Estructura eliminada; el bucket opera ahora en modo NONE (flexible).";
         else if ("index_created".equals(msg)) messageText = "Índice secundario creado en el bucket.";
+        else if ("index_rebuilt".equals(msg)) messageText = "Índice reconstruido y optimizado exitosamente.";
         else if ("index_deleted".equals(msg)) messageText = "Índice eliminado del bucket.";
         else if (msg != null && !msg.isBlank()) messageText = msg;
 
@@ -791,7 +862,7 @@ public class App {
             io.jettra.store.explorer.model.EngineRecordInfo existing = plugin.getRecord(db, bucket, recordId);
             String details = buildStructuredDetailsOrFallback(plugin, db, bucket, form,
                     existing != null ? existing.getDetails() : "");
-            var validation = plugin.validateRecordForBucket(db, bucket, details);
+            var validation = plugin.validateRecordForBucket(db, bucket, details, recordId);
             if (!validation.valid()) {
                 redirect(resp, "/explorer?db=" + db + "&bucket=" + bucket + "&msg="
                         + java.net.URLEncoder.encode("Validación fallida: " + validation.getSummary(), java.nio.charset.StandardCharsets.UTF_8));
@@ -835,8 +906,7 @@ public class App {
                     if (count++ > 0) json.append(", ");
                     json.append("\"").append(name.replace("\"", "\\\"")).append("\": ");
                     String t = attr.type_atribute() != null ? attr.type_atribute().toLowerCase() : "string";
-                    if (t.equals("int") || t.equals("integer") || t.equals("long")
-                            || t.equals("double") || t.equals("float") || t.equals("decimal") || t.equals("number")) {
+                    if (JettraStorePlugin.isNumericTypeName(t) && rawVal.trim().matches("-?\\d+(\\.\\d+)?")) {
                         json.append(rawVal.trim());
                     } else if (t.equals("boolean") || t.equals("bool")) {
                         json.append("true".equalsIgnoreCase(rawVal.trim()) ? "true" : "false");

@@ -12,11 +12,4 @@
   "host" : "127.0.0.1",
   "port" : 50003,
   "heapMaxMb" : 2048
-}, {
-  "id" : "node-04",
-  "name" : "node-04",
-  "role" : "SECONDARY",
-  "host" : "127.0.0.1",
-  "port" : 50004,
-  "heapMaxMb" : 2048
 } ]
