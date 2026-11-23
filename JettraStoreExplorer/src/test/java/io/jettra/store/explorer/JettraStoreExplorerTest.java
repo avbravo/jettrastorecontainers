@@ -2333,4 +2333,65 @@ public class JettraStoreExplorerTest {
             plugin.deleteDatabase(dbName);
         }
     }
+
+    @Test
+    @DisplayName("52. JettraId en /explorer: prellenado automático, botón Regenerar JettraId, descripción opcional y rechazo de duplicado sin cerrar diálogo")
+    public void testJettraIdCreateDialogPrefillOptionalDescriptionAndDuplicateFeedback() throws Exception {
+        JettraStorePlugin plugin = JettraStorePlugin.getInstance();
+        String dbName = "jettraid_explorer_test_db";
+        try {
+            plugin.createDatabase(dbName, "ProductosId", "DOCUMENT", "Base pruebas JettraId");
+
+            // 1. Abrir diálogo + Nuevo Registro -> prellenado con JettraId válido, botón Regenerar JettraId, descripción no obligatoria
+            HttpResponse<String> newFormRes = get("/explorer?db=" + dbName + "&bucket=ProductosId&action=new");
+            JettraAssert.assertEquals(200, newFormRes.statusCode(), "GET /explorer?action=new debe responder HTTP 200");
+            String formHtml = newFormRes.body();
+            JettraAssert.assertTrue(formHtml.contains("id=\"createRecordIdInput\"")
+                    && formHtml.contains("data-jettraid-input=\"true\"")
+                    && formHtml.contains("Regenerar JettraId")
+                    && formHtml.contains("/api/jettraid/generate"),
+                    "El diálogo debe prellenar JettraId e incluir botón de regeneración rápida");
+
+            // Extraer el valor prellenado y verificar que es un JettraId válido con hash de (dbName, ProductosId)
+            java.util.regex.Matcher m = java.util.regex.Pattern.compile("name=\"recordId\"[^>]*value=\"([0-9a-f]{32})\"").matcher(formHtml);
+            if (!m.find()) {
+                m = java.util.regex.Pattern.compile("value=\"([0-9a-f]{32})\"[^>]*name=\"recordId\"").matcher(formHtml);
+                JettraAssert.assertTrue(m.find(), "El campo recordId debe venir prellenado con un JettraId de 32 caracteres hex");
+            }
+            String prefilledId = m.group(1);
+            JettraAssert.assertTrue(io.jettra.store.core.JettraId.isValidHex(prefilledId), "El ID prellenado debe ser un JettraId válido");
+            JettraAssert.assertEquals(io.jettra.store.core.JettraId.computeScopeHash(dbName, "ProductosId"),
+                    io.jettra.store.core.JettraId.fromHex(prefilledId).databaseBucketHash(),
+                    "El JettraId prellenado debe corresponder al hash de la BD y bucket activos");
+
+            // 2. Endpoint de regeneración rápida /api/jettraid/generate
+            HttpResponse<String> regenRes = get("/api/jettraid/generate?db=" + dbName + "&bucket=ProductosId");
+            JettraAssert.assertEquals(200, regenRes.statusCode(), "/api/jettraid/generate debe responder HTTP 200");
+            JettraAssert.assertTrue(regenRes.body().contains("\"jettraId\":\""), "Debe devolver JSON con jettraId");
+
+            // 3. Guardar registro dejando ID y descripción vacíos -> asigna JettraId automáticamente y guarda exitosamente
+            HttpResponse<String> autoSaveRes = postForm("/explorer",
+                    "action=save_new&db=" + dbName + "&bucket=ProductosId&recordId=&summary=&details=%7B%22item%22%3A%22Auto%22%7D");
+            JettraAssert.assertEquals(302, autoSaveRes.statusCode(), "Guardar sin ID ni descripción debe redirigir con 302");
+            JettraAssert.assertTrue(autoSaveRes.headers().firstValue("Location").orElse("").contains("msg=record_created"),
+                    "Debe crear el registro automáticamente con JettraId aunque descripción e ID vengan vacíos");
+
+            // 4. Guardar con ID personalizado y luego intentar duplicarlo -> muestra error sin cerrar el diálogo ni perder datos
+            HttpResponse<String> customSave = postForm("/explorer",
+                    "action=save_new&db=" + dbName + "&bucket=ProductosId&recordId=CUSTOM-ID-99&summary=Original&details=%7B%22item%22%3A%22A%22%7D");
+            JettraAssert.assertEquals(302, customSave.statusCode(), "Guardar con ID personalizado debe redirigir con 302");
+
+            HttpResponse<String> dupSave = postForm("/explorer",
+                    "action=save_new&db=" + dbName + "&bucket=ProductosId&recordId=CUSTOM-ID-99&summary=MiResumenPreservado&details=%7B%22item%22%3A%22DatosConservados%22%7D");
+            JettraAssert.assertEquals(200, dupSave.statusCode(), "ID duplicado debe re-renderizar HTTP 200 manteniendo el diálogo abierto");
+            JettraAssert.assertTrue(dupSave.body().contains("id=\"explorerActionDialog\"")
+                    && dupSave.body().contains("data-create-record-error=\"true\"")
+                    && dupSave.body().contains("CUSTOM-ID-99")
+                    && dupSave.body().contains("MiResumenPreservado")
+                    && dupSave.body().contains("DatosConservados"),
+                    "Al detectar ID duplicado debe mostrar error claro sin cerrar el diálogo ni perder los datos capturados");
+        } finally {
+            plugin.deleteDatabase(dbName);
+        }
+    }
 }

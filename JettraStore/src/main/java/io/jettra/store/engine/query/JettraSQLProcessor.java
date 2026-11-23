@@ -856,9 +856,19 @@ public final class JettraSQLProcessor {
                 if (valPart.startsWith("(") && valPart.endsWith(")")) {
                     valPart = valPart.substring(1, valPart.length() - 1).trim();
                 }
-                String[] parts = valPart.split(",", 2);
-                String id = sanitize(parts[0]);
-                String dataStr = parts.length > 1 ? parts[1].trim() : "{}";
+                String id;
+                String dataStr;
+                if (valPart.startsWith("{") && valPart.endsWith("}")) {
+                    id = io.jettra.store.core.JettraId.generate(database.getDatabaseName(), col).toHexString();
+                    dataStr = valPart;
+                } else {
+                    String[] parts = valPart.split(",", 2);
+                    id = sanitize(parts[0]);
+                    if (id.isBlank()) {
+                        id = io.jettra.store.core.JettraId.generate(database.getDatabaseName(), col).toHexString();
+                    }
+                    dataStr = parts.length > 1 ? parts[1].trim() : "{}";
+                }
                 
                 Map<String, Object> doc = new LinkedHashMap<>();
                 doc.put("_id", id);

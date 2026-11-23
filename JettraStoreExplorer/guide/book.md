@@ -239,3 +239,17 @@ mvn clean verify
 # Ejecutar JettraStoreExplorer (puerto por defecto 8085 según microprofile-config.properties)
 java -jar target/JettraStoreExplorer-1.0.0-SNAPSHOT.jar
 ```
+
+
+---
+
+## 10. Identificador Automático `JettraId` en `/explorer` (`➕ Crear Nuevo Registro`)
+
+El diálogo **`➕ Crear Nuevo Registro en [ <db> / <bucket> ] • Motor: ... • Estructura: ...`** en `/explorer` integra **`JettraId`** (16 bytes / 32 caracteres hexadecimales en orden big-endian: **4 bytes** timestamp Unix + **5 bytes** ID aleatorio de proceso/máquina + **4 bytes** hash FNV-1a de `database:bucket` + **3 bytes** contador atómico de 24 bits):
+
+1. **Prellenado automático:** Al abrir `+ Nuevo Registro (Create)`, el campo **`Identificador Único (ID / Clave Primaria)`** se prellena automáticamente con un `JettraId` generado para la base de datos y bucket activos.
+2. **Edición libre y regeneración rápida:** El usuario puede sustituir el `JettraId` por cualquier identificador personalizado o pulsar **`🔄 Regenerar JettraId`** (consulta `GET /api/jettraid/generate?db=<db>&bucket=<bucket>`) para obtener un nuevo `JettraId` sin perder los demás datos del formulario.
+3. **Descripción opcional:** El campo **`Descripción / Resumen Corto (Opcional)`** no es obligatorio (`required = false`), permitiendo guardar el registro aun cuando se deje vacío.
+4. **Integridad y validación sin pérdida de datos:**
+   - Si el usuario vacía el campo de ID antes de guardar, el servidor asigna automáticamente un `JettraId`.
+   - Si el identificador ingresado ya existe en el bucket, se muestra una notificación de error clara dentro del mismo diálogo **sin cerrarlo ni perder los datos capturados**.

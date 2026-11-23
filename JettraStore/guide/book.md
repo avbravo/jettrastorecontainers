@@ -3293,3 +3293,40 @@ REMOVE NODE node-04
 ## Capítulo 24: Proyecto de Referencia `JettraStoreExampleSE` y Sincronización Automática de Clientes
 
 El ecosistema incluye el módulo **`JettraStoreExampleSE`** (`JettraStoreExampleSE/guide/book.md`) como guía ejecutable en Java 25+ que integra `JettraStoreDriver`, `JettraRules`, modelos inmutables Java `record`, el Patrón Repository, la base `examplesedb` (buckets `DEFINED` y `NONE`), índices `NUMERIC` y `AUTO_INCREMENT`, y pruebas automatizadas de resiliencia ante parada, reinicio y remoción de nodos con `JettraTest`.
+
+
+---
+
+## Arquitectura e Implementación de `JettraId` (Clave Primaria Interna por Defecto)
+
+**`JettraId`** (`io.jettra.store.core.JettraId`) es el identificador único interno y clave primaria por defecto de **JettraStore**. Posee una longitud fija de **16 bytes** (representación canónica hexadecimal en minúsculas de **32 caracteres**) codificada en orden **big-endian**:
+
+| Desplazamiento | Tamaño | Campo | Descripción |
+| :--- | :---: | :--- | :--- |
+| Bytes `0..3` | **4 bytes** | **Timestamp Unix** | Segundos desde `1970-01-01T00:00:00Z`. Permite ordenación aproximada por creación y extracción con `createdAt()`. |
+| Bytes `4..8` | **5 bytes** | **ID de Proceso / Máquina** | Valor aleatorio de 40 bits generado una vez al arrancar la JVM mediante `SecureRandom`, evitando colisiones entre nodos o procesos concurrentes. |
+| Bytes `9..12` | **4 bytes** | **Código de Base de Datos y Bucket** | Hash determinista FNV-1a de 32 bits calculado sobre `databaseName + ":" + bucketName` para aislar el espacio de claves de cada base de datos y bucket. |
+| Bytes `13..15` | **3 bytes** | **Contador Incremental de Proceso** | Contador atómico de 24 bits (`AtomicInteger` enmascarado con `0xFFFFFF`, inicializado con semilla aleatoria) que garantiza unicidad en inserciones simultáneas dentro del mismo segundo con Virtual Threads. |
+
+### Uso de `JettraId` en Java 25+ (`JettraStore`)
+```java
+import io.jettra.store.core.JettraId;
+import io.jettra.store.core.JettraDatabase;
+import java.util.Map;
+
+// 1. Generación explícita e inspección de metadatos
+JettraId id = JettraId.generate("ventas_db", "Facturas");
+String hex = id.toHexString();            // 32 caracteres hexadecimales en minúsculas
+byte[] raw = id.toBytes();                // 16 bytes big-endian
+JettraId parsed = JettraId.fromHex(hex);  // Parseo y validación
+var created = parsed.createdAt();         // Instant extraído de los primeros 4 bytes
+int scopeHash = parsed.databaseBucketHash();
+int seq = parsed.counter();
+
+// 2. Inserción automática sin ID (JettraStore genera JettraId, lo guarda en _id y lo retorna)
+String assignedId = db.insertBucketRecord("DOCUMENT", "Facturas", null, Map.of("cliente", "ACME", "total", 1500.0));
+
+// 3. Inserción con ID personalizado y protección contra duplicados de clave primaria
+String customId = db.insertBucketRecord("DOCUMENT", "Facturas", "FAC-2026-001", Map.of("cliente", "Beta"));
+// Un segundo insertBucketRecord con "FAC-2026-001" lanza IllegalStateException ([PRIMARY KEY VIOLATION])
+```

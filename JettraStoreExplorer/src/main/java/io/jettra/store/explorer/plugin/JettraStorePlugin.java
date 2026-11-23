@@ -3442,21 +3442,26 @@ public class JettraStorePlugin {
     }
 
     // --- Operaciones CRUD Registros ---
-    public synchronized void addRecord(String dbName, String bucketName, String id, String summary, String details) {
+    public synchronized String addRecord(String dbName, String bucketName, String id, String summary, String details) {
         EngineBucketInfo bucket = getBucket(dbName, bucketName);
+        String effectiveId = (id != null && !id.isBlank())
+                ? id.trim()
+                : io.jettra.store.core.JettraId.generate(dbName, bucketName).toHexString();
         if (bucket != null) {
             String effectiveDetails = populateAutoIncrementFields(bucket, details);
+            String effectiveSummary = (summary != null) ? summary : "";
             String now = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
-            EngineRecordInfo r = new EngineRecordInfo(id, bucket.getEngineType(), bucketName, summary, effectiveDetails, now, 1);
+            EngineRecordInfo r = new EngineRecordInfo(effectiveId, bucket.getEngineType(), bucketName, effectiveSummary, effectiveDetails, now, 1);
             bucket.getSampleRecords().add(0, r);
             bucket.setTotalObjects(bucket.getTotalObjects() + 1);
-            byte[] docBytes = (effectiveDetails != null && !effectiveDetails.isBlank() ? effectiveDetails : "{\"id\":\"" + id + "\"}")
+            byte[] docBytes = (effectiveDetails != null && !effectiveDetails.isBlank() ? effectiveDetails : "{\"id\":\"" + effectiveId + "\"}")
                     .getBytes(java.nio.charset.StandardCharsets.UTF_8);
             sendFrameToPrimaryNode(io.jettra.store.cluster.JettraRaftFrame.putDocument(1L, 0L, "jettra-explorer",
-                    dbName, bucketName, id, docBytes));
-            logPoliceIncident("MemTable Purge Dog", "Nuevo registro '" + id + "' insertado en " + bucketName, "OK",
+                    dbName, bucketName, effectiveId, docBytes));
+            logPoliceIncident("MemTable Purge Dog", "Nuevo registro '" + effectiveId + "' insertado en " + bucketName, "OK",
                     "Escritura en WAL y MemTable");
         }
+        return effectiveId;
     }
 
     private String populateAutoIncrementFields(EngineBucketInfo bucket, String details) {

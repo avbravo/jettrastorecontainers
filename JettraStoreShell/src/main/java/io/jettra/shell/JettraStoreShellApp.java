@@ -2409,14 +2409,24 @@ public final class JettraStoreShellApp implements AutoCloseable {
     }
 
     private String handleInsertBucketRecordCommand(String command) {
-        // Sintaxis: INSERT BUCKET <bucketName> <json>
+        // Sintaxis: INSERT BUCKET <bucketName> [ID <customId>] <json>
         String rest = command.substring("INSERT BUCKET ".length()).trim();
         int sp = rest.indexOf(' ');
         if (sp <= 0) {
-            return "[ERROR] Uso: INSERT BUCKET <bucketName> {\"campo\":\"valor\",...}";
+            return "[ERROR] Uso: INSERT BUCKET <bucketName> [ID <idPersonalizado>] {\"campo\":\"valor\",...}";
         }
         String bucketName = rest.substring(0, sp).trim();
-        String json = rest.substring(sp + 1).trim();
+        String tail = rest.substring(sp + 1).trim();
+        String customId = null;
+        String json = tail;
+        if (tail.toUpperCase().startsWith("ID ")) {
+            String afterId = tail.substring(3).trim();
+            int jsonStart = afterId.indexOf('{');
+            if (jsonStart > 0) {
+                customId = cleanQuotes(afterId.substring(0, jsonStart).trim());
+                json = afterId.substring(jsonStart).trim();
+            }
+        }
         String dbName = resolveActiveDb();
         try {
             io.jettra.json.JettraJson parser = new io.jettra.json.JettraJson();
@@ -2431,9 +2441,11 @@ public final class JettraStoreShellApp implements AutoCloseable {
             }
             var meta = client.getDatabase(dbName).findBucketMetadata(bucketName);
             String engineType = meta != null ? meta.engineType() : "DOCUMENT";
-            String id = client.upsertBucketRecord(dbName, engineType, bucketName, null, record);
-            return String.format("[SUCCESS] Registro '%s' insertado y validado en bucket '%s' (%s).", id, bucketName,
-                    engineType);
+            String assignedId = client.insertBucketRecord(dbName, engineType, bucketName, customId, record);
+            return String.format("[SUCCESS] Registro con JettraId '%s' insertado y validado en bucket '%s' (%s).",
+                    assignedId, bucketName, engineType);
+        } catch (IllegalStateException pkEx) {
+            return "[ERROR] " + pkEx.getMessage();
         } catch (IllegalArgumentException valEx) {
             return "[VALIDATION ALERT] Registro rechazado por estructura del bucket '" + bucketName + "': "
                     + valEx.getMessage();
@@ -3707,17 +3719,27 @@ public final class JettraStoreShellApp implements AutoCloseable {
             String after = command.substring("INSERT INTO ".length()).trim();
             int idIdx = after.toUpperCase().indexOf(" ID ");
             int jsonIdx = after.toUpperCase().indexOf(" JSON ");
-            if (idIdx != -1 && jsonIdx != -1) {
-                String col = cleanQuotes(after.substring(0, idIdx).trim());
-                String id = cleanQuotes(after.substring(idIdx + 4, jsonIdx).trim());
+            if (jsonIdx != -1) {
+                String col;
+                String id;
+                if (idIdx != -1 && idIdx < jsonIdx) {
+                    col = cleanQuotes(after.substring(0, idIdx).trim());
+                    id = cleanQuotes(after.substring(idIdx + 4, jsonIdx).trim());
+                } else {
+                    col = cleanQuotes(after.substring(0, jsonIdx).trim());
+                    id = null;
+                }
                 String jsonPart = after.substring(jsonIdx + 6).trim();
                 Map<String, Object> data = parseJsonOrKeyValues(jsonPart);
-                JettraDatabase db = client.getDatabase(currentDatabase);
-                db.getDocumentEngine(col).insert(id, data);
-                db.getIndexManager().onDocumentInsert(col, id, data);
+                String assignedId = (id != null && !id.isBlank())
+                        ? id
+                        : io.jettra.store.core.JettraId.generate(resolveActiveDb(), col).toHexString();
+                JettraDatabase db = client.getDatabase(resolveActiveDb());
+                db.getDocumentEngine(col).insertStrict(assignedId, data);
+                db.getIndexManager().onDocumentInsert(col, assignedId, data);
                 db.saveToDisk();
-                client.replicatePutDocument(currentDatabase, col, id, data);
-                return String.format("[SUCCESS] Registro con _id '%s' insertado en la colección '%s'.", id, col);
+                client.replicatePutDocument(resolveActiveDb(), col, assignedId, data);
+                return String.format("[SUCCESS] Registro con _id '%s' (JettraId) insertado en la colección '%s'.", assignedId, col);
             }
             int valIdx = after.toUpperCase().indexOf(" VALUES");
             if (valIdx != -1) {
@@ -3726,23 +3748,34 @@ public final class JettraStoreShellApp implements AutoCloseable {
                 if (rawVals.startsWith("(") && rawVals.endsWith(")")) {
                     rawVals = rawVals.substring(1, rawVals.length() - 1).trim();
                 }
-                String[] parts = rawVals.split(",", 2);
-                String id = cleanQuotes(parts[0]);
-                String jsonPart = parts.length > 1 ? parts[1].trim() : "{}";
+                String id;
+                String jsonPart;
+                String stripped = cleanQuotes(rawVals);
+                if (stripped.startsWith("{") && stripped.endsWith("}")) {
+                    id = io.jettra.store.core.JettraId.generate(resolveActiveDb(), col).toHexString();
+                    jsonPart = stripped;
+                } else {
+                    String[] parts = rawVals.split(",", 2);
+                    id = cleanQuotes(parts[0]);
+                    if (id.isBlank()) {
+                        id = io.jettra.store.core.JettraId.generate(resolveActiveDb(), col).toHexString();
+                    }
+                    jsonPart = parts.length > 1 ? parts[1].trim() : "{}";
+                }
                 Map<String, Object> data = parseJsonOrKeyValues(jsonPart);
 
-                JettraDatabase db = client.getDatabase(currentDatabase);
-                db.getDocumentEngine(col).insert(id, data);
+                JettraDatabase db = client.getDatabase(resolveActiveDb());
+                db.getDocumentEngine(col).insertStrict(id, data);
                 db.getIndexManager().onDocumentInsert(col, id, data);
                 db.saveToDisk();
-                client.replicatePutDocument(currentDatabase, col, id, data);
-                return String.format("[SUCCESS] Registro con _id '%s' insertado en la colección '%s'.", id, col);
+                client.replicatePutDocument(resolveActiveDb(), col, id, data);
+                return String.format("[SUCCESS] Registro con _id '%s' (JettraId) insertado en la colección '%s'.", id, col);
             }
-        } catch (UnsupportedOperationException e) {
+        } catch (UnsupportedOperationException | IllegalStateException e) {
             return "[ERROR] " + e.getMessage();
         } catch (Exception ignored) {
         }
-        return "[ERROR] Formato inválido. Uso: INSERT INTO <col> ID <id> JSON {...} o INSERT INTO <col> VALUES ('<id>', '{...}')";
+        return "[ERROR] Formato inválido. Uso: INSERT INTO <col> [ID <id>] JSON {...} o INSERT INTO <col> VALUES ('<id>', '{...}')";
     }
 
     private String handleGetRecord(String command) {

@@ -35,27 +35,90 @@ public final class DocumentEngine implements Iterable<Map<String, Object>> {
     }
 
     public void insert(String id, Map<String, Object> document) {
+        String effectiveId = resolveEffectiveId(id, document);
         if (database != null) {
             database.assertWritable();
         }
         Map<String, Object> copy = null;
         wLock.lock();
         try {
-            copy = UnifiedMap.newMap(Math.max(4, document.size() + 1));
-            copy.putAll(document);
-            copy.put("_id", id);
-            documents.put(id, copy);
+            copy = UnifiedMap.newMap(Math.max(4, (document != null ? document.size() : 0) + 1));
+            if (document != null) {
+                copy.putAll(document);
+            }
+            copy.put("_id", effectiveId);
+            documents.put(effectiveId, copy);
             if (database != null && database.getStorageMode().isDiskMemory()) {
-                persistToDiskMemory(id, copy);
+                persistToDiskMemory(effectiveId, copy);
             } else if (database != null && database.getStorageMode().isOffHeap()) {
-                persistToOffHeap(id, copy);
+                persistToOffHeap(effectiveId, copy);
             }
         } finally {
             wLock.unlock();
         }
         if (database != null && copy != null) {
-            database.onDocumentInsert(collectionName, id, copy);
+            database.onDocumentInsert(collectionName, effectiveId, copy);
         }
+    }
+
+    /**
+     * Inserta un documento generando automáticamente un {@link io.jettra.store.core.JettraId} si no se provee ID,
+     * validando estrictamente la unicidad de clave primaria dentro del bucket y retornando el identificador asignado.
+     */
+    public String save(Map<String, Object> document) {
+        return insertStrict(null, document);
+    }
+
+    /**
+     * Inserta un documento con ID personalizado o {@link io.jettra.store.core.JettraId} autogenerado,
+     * rechazando duplicados con una excepción de integridad de clave primaria.
+     */
+    public String insertStrict(String id, Map<String, Object> document) {
+        String effectiveId = resolveEffectiveId(id, document);
+        if (database != null) {
+            database.assertWritable();
+        }
+        Map<String, Object> copy;
+        wLock.lock();
+        try {
+            if (documents.containsKey(effectiveId)
+                    || (database != null && database.getStorageMode().isDiskMemory() && loadFromDiskMemory(effectiveId) != null)
+                    || (database != null && database.getStorageMode().isOffHeap() && loadFromOffHeap(effectiveId) != null)) {
+                throw new IllegalStateException("[PRIMARY KEY VIOLATION] Ya existe un registro con el identificador '"
+                        + effectiveId + "' en el bucket '" + collectionName + "'.");
+            }
+            copy = UnifiedMap.newMap(Math.max(4, (document != null ? document.size() : 0) + 1));
+            if (document != null) {
+                copy.putAll(document);
+            }
+            copy.put("_id", effectiveId);
+            documents.put(effectiveId, copy);
+            if (database != null && database.getStorageMode().isDiskMemory()) {
+                persistToDiskMemory(effectiveId, copy);
+            } else if (database != null && database.getStorageMode().isOffHeap()) {
+                persistToOffHeap(effectiveId, copy);
+            }
+        } finally {
+            wLock.unlock();
+        }
+        if (database != null) {
+            database.onDocumentInsert(collectionName, effectiveId, copy);
+        }
+        return effectiveId;
+    }
+
+    private String resolveEffectiveId(String id, Map<String, Object> document) {
+        if (id != null && !id.isBlank()) {
+            return id.trim();
+        }
+        if (document != null) {
+            Object docId = document.get("_id");
+            if (docId != null && !String.valueOf(docId).isBlank()) {
+                return String.valueOf(docId).trim();
+            }
+        }
+        String dbName = database != null ? database.getDatabaseName() : "default";
+        return io.jettra.store.core.JettraId.generate(dbName, collectionName).toHexString();
     }
 
     /**

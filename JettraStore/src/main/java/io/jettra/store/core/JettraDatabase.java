@@ -2364,6 +2364,34 @@ public final class JettraDatabase implements AutoCloseable {
     }
 
     /**
+     * Inserta un nuevo registro en un bucket generando automáticamente un {@link JettraId} si no se indica ID,
+     * validando estrictamente la unicidad de clave primaria (rechaza duplicados) y aplicando validación de estructura.
+     */
+    public synchronized String insertBucketRecord(String engineType, String bucketName, String id, Map<String, Object> record) {
+        assertWritable();
+        JettraBucketSchema.ValidationResult val = validateBucketRecord(engineType, bucketName, record);
+        if (!val.valid()) {
+            throw new IllegalArgumentException("Validación de estructura fallida para bucket '" + bucketName + "': " + val.getSummary());
+        }
+        String effectiveId = resolveJettraId(bucketName, id, record);
+        Map<String, Object> payload = new LinkedHashMap<>();
+        if (record != null) payload.putAll(record);
+        payload.put("_id", effectiveId);
+
+        DocumentEngine docEngine = getDocumentEngine(bucketName.trim());
+        if (docEngine.findById(effectiveId) != null) {
+            throw new IllegalStateException("[PRIMARY KEY VIOLATION] Ya existe un registro con el identificador '"
+                    + effectiveId + "' en el bucket '" + bucketName.trim() + "'.");
+        }
+
+        indexManager.prepareAndValidateForInsert(bucketName.trim(), effectiveId, payload);
+        docEngine.insertStrict(effectiveId, payload);
+        indexManager.onDocumentInsert(bucketName.trim(), effectiveId, payload);
+        saveToDisk();
+        return effectiveId;
+    }
+
+    /**
      * Inserta o actualiza un registro en un bucket aplicando validación de estructura ({@code NONE}/{@code DEFINED}),
      * manteniendo coherentes los índices secundarios del bucket y persistiendo en disco.
      */
@@ -2373,9 +2401,7 @@ public final class JettraDatabase implements AutoCloseable {
         if (!val.valid()) {
             throw new IllegalArgumentException("Validación de estructura fallida para bucket '" + bucketName + "': " + val.getSummary());
         }
-        String effectiveId = (id != null && !id.isBlank())
-                ? id.trim()
-                : (record != null && record.get("_id") != null ? String.valueOf(record.get("_id")) : UUID.randomUUID().toString());
+        String effectiveId = resolveJettraId(bucketName, id, record);
         Map<String, Object> payload = new LinkedHashMap<>();
         if (record != null) payload.putAll(record);
         payload.put("_id", effectiveId);
@@ -2394,6 +2420,16 @@ public final class JettraDatabase implements AutoCloseable {
         indexManager.onDocumentInsert(bucketName.trim(), effectiveId, payload);
         saveToDisk();
         return effectiveId;
+    }
+
+    private String resolveJettraId(String bucketName, String id, Map<String, Object> record) {
+        if (id != null && !id.isBlank()) {
+            return id.trim();
+        }
+        if (record != null && record.get("_id") != null && !String.valueOf(record.get("_id")).isBlank()) {
+            return String.valueOf(record.get("_id")).trim();
+        }
+        return JettraId.generate(databaseName, bucketName != null ? bucketName.trim() : "").toHexString();
     }
 
     public synchronized boolean deleteBucketRecord(String engineType, String bucketName, String id) {

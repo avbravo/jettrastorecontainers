@@ -26,13 +26,49 @@ public final class KeyValueEngine {
     }
 
     public void put(String key, byte[] value) {
+        String effectiveKey = (key != null && !key.isBlank())
+                ? key.trim()
+                : io.jettra.store.core.JettraId.generate(
+                        database != null ? database.getDatabaseName() : "default", namespace).toHexString();
         if (database != null) {
             database.assertWritable();
         }
-        applyReplicatedPut(key, value);
+        applyReplicatedPut(effectiveKey, value);
         if (database != null) {
-            database.onKeyValuePut(namespace, key, value);
+            database.onKeyValuePut(namespace, effectiveKey, value);
         }
+    }
+
+    /**
+     * Inserta un valor generando automáticamente un {@link io.jettra.store.core.JettraId} como clave primaria.
+     */
+    public String put(byte[] value) {
+        String generatedKey = io.jettra.store.core.JettraId.generate(
+                database != null ? database.getDatabaseName() : "default", namespace).toHexString();
+        put(generatedKey, value);
+        return generatedKey;
+    }
+
+    /**
+     * Inserta un par clave-valor validando unicidad de clave primaria (autogenerando {@code JettraId} si {@code key} es nulo/vacío).
+     */
+    public String putStrict(String key, byte[] value) {
+        String effectiveKey = (key != null && !key.isBlank())
+                ? key.trim()
+                : io.jettra.store.core.JettraId.generate(
+                        database != null ? database.getDatabaseName() : "default", namespace).toHexString();
+        if (database != null) {
+            database.assertWritable();
+        }
+        if (containsKey(effectiveKey)) {
+            throw new IllegalStateException("[PRIMARY KEY VIOLATION] Ya existe una entrada con la clave '"
+                    + effectiveKey + "' en el bucket KeyValue '" + namespace + "'.");
+        }
+        applyReplicatedPut(effectiveKey, value);
+        if (database != null) {
+            database.onKeyValuePut(namespace, effectiveKey, value);
+        }
+        return effectiveKey;
     }
 
     public void applyReplicatedPut(String key, byte[] value) {

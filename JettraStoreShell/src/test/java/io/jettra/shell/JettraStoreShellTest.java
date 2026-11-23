@@ -1140,4 +1140,41 @@ public class JettraStoreShellTest {
             JettraShellTestCleanup.deleteRecursively(tempStorage);
         }
     }
+
+    @Test
+    @DisplayName("JettraId en JettraStoreShell: inserción sin ID autogenera JettraId y ID manual rechaza duplicados")
+    public void testJettraIdShellInsertAutoAndCustomId() {
+        JettraStoreShellApp shell = new JettraStoreShellApp(false);
+        String dbName = "shell_jettraid_test_db";
+        try {
+            shell.executeCommand("login admin admin-jettra");
+            shell.executeCommand("CREATE DATABASE " + dbName);
+            shell.executeCommand("USE " + dbName);
+
+            // 1. INSERT INTO sin ID -> autogenera JettraId y lo imprime en consola
+            String outAuto = shell.executeCommand("INSERT INTO Ventas JSON {\"cliente\":\"ACME\",\"total\":500}");
+            assertTrue(outAuto.contains("[SUCCESS]") && outAuto.contains("JettraId"),
+                    "Debe generar JettraId y mostrarlo en la salida de consola: " + outAuto);
+
+            // 2. INSERT INTO con ID personalizado -> acepta y luego rechaza duplicado
+            String outCustom = shell.executeCommand("INSERT INTO Ventas ID VEN-001 JSON {\"cliente\":\"Beta\",\"total\":200}");
+            assertTrue(outCustom.contains("[SUCCESS]") && outCustom.contains("VEN-001"),
+                    "Debe aceptar ID personalizado: " + outCustom);
+
+            String outDup = shell.executeCommand("INSERT INTO Ventas ID VEN-001 JSON {\"cliente\":\"Dup\",\"total\":100}");
+            assertTrue(outDup.contains("[ERROR]") && outDup.contains("PRIMARY KEY VIOLATION"),
+                    "Debe rechazar ID duplicado en Shell: " + outDup);
+
+            // 3. INSERT BUCKET sin ID y con ID opcional
+            String outBucketAuto = shell.executeCommand("INSERT BUCKET Facturas {\"folio\":\"F1\",\"total\":90}");
+            assertTrue(outBucketAuto.contains("[SUCCESS]") && outBucketAuto.contains("JettraId"),
+                    "INSERT BUCKET sin ID debe generar JettraId: " + outBucketAuto);
+
+            String outBucketCustom = shell.executeCommand("INSERT BUCKET Facturas ID FAC-99 {\"folio\":\"F99\",\"total\":99}");
+            assertTrue(outBucketCustom.contains("[SUCCESS]") && outBucketCustom.contains("FAC-99"),
+                    "INSERT BUCKET con ID personalizado debe respetarlo: " + outBucketCustom);
+        } finally {
+            try { shell.executeCommand("DROP DATABASE " + dbName); } catch (Exception ignored) {}
+        }
+    }
 }

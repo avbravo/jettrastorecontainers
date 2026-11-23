@@ -1361,3 +1361,30 @@ El proyecto **`JettraStoreExampleSE`** demuestra el patrón recomendado para apl
 - **Modelos de dominio** como `record` anotados con `@NotBlank`, `@Size`, `@Positive` (`JettraRules`).
 - **Repositorios** (`PaisRepository`, `ProductoRepository`, `NotaLibreRepository`) que validan con `JettraRulesEngine.validate(entity)`, invocan `upsertBucketRecord` y aprovechan índices `AUTO_INCREMENT` y `NUMERIC` (`findIdsByNumericRange`).
 - **Ciclo de vida y resiliencia** desde el driver con `stopClusterNode(nodeId)`, `startClusterNode(nodeId)` y `removeStoppedClusterNode(nodeId)`.
+
+
+---
+
+## Generación Automática de `JettraId` e Integridad de Clave Primaria en `JettraStoreDriver`
+
+`JettraStoreDriver` integra **`io.jettra.store.core.JettraId`** (16 bytes / 32 caracteres hexadecimales en orden big-endian: **4 bytes** Timestamp Unix + **5 bytes** ID aleatorio de proceso/máquina + **4 bytes** hash FNV-1a de `database:bucket` + **3 bytes** contador atómico incremental de 24 bits).
+
+### Generación en Cliente y Sobrescritura Personalizada
+- Si el desarrollador omite el identificador (`null` o vacío), `JettraClient` genera automáticamente un `JettraId` en el cliente para la pareja `(databaseName, bucketName)` y lo retorna al invocador (manteniendo también compatibilidad con el fallback del servidor `JettraStore`).
+- Si el desarrollador provee un ID personalizado, `JettraClient` lo respeta y el motor valida su unicidad dentro del bucket, rechazando duplicados con `IllegalStateException`.
+
+```java
+import io.jettra.driver.JettraClient;
+import io.jettra.store.core.JettraId;
+import java.util.Map;
+
+// 1. Inserción sin ID -> JettraStoreDriver genera JettraId automáticamente y lo retorna
+String generatedId = client.saveDocument("ventas_db", "Pedidos", Map.of("cliente", "ACME", "monto", 420.50));
+assert JettraId.isValidHex(generatedId);
+
+// 2. Inserción con ID personalizado (sobrescritura) -> se respeta y se valida unicidad
+String customId = client.insertDocumentReturningId("ventas_db", "Pedidos", "PED-1001", Map.of("cliente", "Beta"));
+
+// 3. Inserción estricta en bucket tipado / multimodelo
+String bucketId = client.insertBucketRecord("ventas_db", "DOCUMENT", "Pedidos", null, Map.of("estado", "PAGADO"));
+```

@@ -2622,3 +2622,27 @@ DROP BUCKET INDEX idx_pais_siglas
 1. **Al conectar (`connectAndLogin`)**: solicita el archivo `cluster.config` vigente al nodo `PRIMARY` mediante `TYPE_GET_CLUSTER_CONFIG_REQ`, valida su integridad y lo persiste atómicamente en disco local.
 2. **Ante eventos de clúster (`ADD NODE`, `REMOVE NODE`, failover o cambios desde `JettraStoreExplorer`)**: un listener sobre `JettraClusterEventBus` detecta los eventos de membresía y refresca `cluster.config` y `ringEngine` automáticamente sin intervención manual.
 3. **En `SHOW NODES`**: consulta siempre la topología viva del `PRIMARY` y aplica el invariante de líder único (nunca duplica `PRIMARY`/`LEADER` ni muestra nodos fantasma eliminados desde otro cliente).
+
+
+---
+
+## Identificador Automático `JettraId` en Comandos de Inserción (`JettraStoreShell`)
+
+`JettraStoreShell` genera automáticamente un **`JettraId`** (16 bytes / 32 caracteres hexadecimales: 4B timestamp Unix + 5B proceso/máquina + 4B hash `database:bucket` + 3B contador incremental de 24 bits) cuando se ejecutan comandos de inserción sin especificar un ID explícito, imprimiendo el `JettraId` asignado en la salida de consola. También admite especificar un ID personalizado opcional y rechaza duplicados de clave primaria.
+
+### Ejemplos de Comandos en Consola
+```sql
+-- 1. Inserción en colección sin ID (autogenera JettraId y lo muestra en consola)
+INSERT INTO Facturas JSON {"cliente":"ACME","total":1250.00}
+-- Salida: [SUCCESS] Registro con _id '69231f2a...' (JettraId) insertado en la colección 'Facturas'.
+
+-- 2. Inserción con sintaxis VALUES sin ID (autogenera JettraId)
+INSERT INTO Facturas VALUES ('{"cliente":"Beta","total":890.00}')
+
+-- 3. Inserción con ID personalizado (rechaza duplicados con [ERROR] [PRIMARY KEY VIOLATION])
+INSERT INTO Facturas ID FAC-2026-001 JSON {"cliente":"Gamma","total":300.00}
+
+-- 4. Inserción en Bucket (con o sin ID opcional)
+INSERT BUCKET Productos {"nombre":"Teclado","precio":45.50}
+INSERT BUCKET Productos ID PROD-001 {"nombre":"Mouse","precio":25.00}
+```

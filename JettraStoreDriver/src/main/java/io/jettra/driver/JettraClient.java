@@ -1214,7 +1214,33 @@ public final class JettraClient implements AutoCloseable {
     }
 
     public void insertDocument(String databaseName, String bucketName, String id, Map<String, Object> data) {
-        getDatabase(databaseName).getDocumentEngine(bucketName).insert(id, data);
+        String effectiveId = (id != null && !id.isBlank())
+                ? id.trim()
+                : (data != null && data.get("_id") != null && !String.valueOf(data.get("_id")).isBlank()
+                        ? String.valueOf(data.get("_id")).trim()
+                        : io.jettra.store.core.JettraId.generate(databaseName, bucketName).toHexString());
+        getDatabase(databaseName).getDocumentEngine(bucketName).insert(effectiveId, data);
+    }
+
+    /**
+     * Inserta un documento generando automáticamente un {@link io.jettra.store.core.JettraId} en el cliente
+     * si no viene asignado, valida unicidad de clave primaria y retorna el identificador resultante.
+     */
+    public String saveDocument(String databaseName, String bucketName, Map<String, Object> data) {
+        return insertDocumentReturningId(databaseName, bucketName, null, data);
+    }
+
+    /**
+     * Inserta un documento respetando el ID personalizado o generando un {@link io.jettra.store.core.JettraId}
+     * en el cliente si el ID es nulo/vacío, rechazando duplicados y retornando el ID asignado.
+     */
+    public String insertDocumentReturningId(String databaseName, String bucketName, String id, Map<String, Object> data) {
+        String effectiveId = (id != null && !id.isBlank())
+                ? id.trim()
+                : (data != null && data.get("_id") != null && !String.valueOf(data.get("_id")).isBlank()
+                        ? String.valueOf(data.get("_id")).trim()
+                        : io.jettra.store.core.JettraId.generate(databaseName, bucketName).toHexString());
+        return getDatabase(databaseName).getDocumentEngine(bucketName).insertStrict(effectiveId, data);
     }
 
     public void createBucket(String databaseName, String bucketName, String engineType) {
@@ -1350,32 +1376,40 @@ public final class JettraClient implements AutoCloseable {
     }
 
     public void insertRecord(String databaseName, String bucketName, String id, String rawData) {
+        insertRecordReturningId(databaseName, bucketName, id, rawData);
+    }
+
+    public String insertRecordReturningId(String databaseName, String bucketName, String id, String rawData) {
+        String effectiveId = (id != null && !id.isBlank())
+                ? id.trim()
+                : io.jettra.store.core.JettraId.generate(databaseName, bucketName).toHexString();
         var db = getDatabase(databaseName);
         if (db.getDocumentEngineNames().contains(bucketName)) {
             Map<String, Object> map = new HashMap<>();
-            map.put("_id", id);
+            map.put("_id", effectiveId);
             map.put("raw_data", rawData);
-            db.getDocumentEngine(bucketName).insert(id, map);
+            db.getDocumentEngine(bucketName).insert(effectiveId, map);
         } else if (db.getKeyValueEngineNames().contains(bucketName)) {
-            db.getKeyValueEngine(bucketName).put(id, rawData.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            db.getKeyValueEngine(bucketName).put(effectiveId, rawData.getBytes(java.nio.charset.StandardCharsets.UTF_8));
         } else if (db.getVectorEngineNames().contains(bucketName)) {
             String[] parts = rawData.replace("[", "").replace("]", "").split(",");
             float[] floats = new float[parts.length];
             for (int i = 0; i < parts.length; i++) floats[i] = Float.parseFloat(parts[i].trim());
-            db.getVectorEngine(bucketName, floats.length).index(id, floats);
+            db.getVectorEngine(bucketName, floats.length).index(effectiveId, floats);
         } else if (db.getGraphEngineNames().contains(bucketName)) {
-            db.getGraphEngine(bucketName).addVertex(id);
+            db.getGraphEngine(bucketName).addVertex(effectiveId);
         } else if (db.getTimeSeriesEngineNames().contains(bucketName)) {
             db.getTimeSeriesEngine(bucketName).record(System.currentTimeMillis(), Double.parseDouble(rawData.trim()));
         } else if (db.getGeospatialEngineNames().contains(bucketName)) {
             String[] parts = rawData.split(",");
-            db.getGeospatialEngine(bucketName).insertPoint(id, Double.parseDouble(parts[0].trim()), Double.parseDouble(parts[1].trim()));
+            db.getGeospatialEngine(bucketName).insertPoint(effectiveId, Double.parseDouble(parts[0].trim()), Double.parseDouble(parts[1].trim()));
         } else {
             Map<String, Object> map = new HashMap<>();
-            map.put("_id", id);
+            map.put("_id", effectiveId);
             map.put("raw_data", rawData);
-            db.getDocumentEngine(bucketName).insert(id, map);
+            db.getDocumentEngine(bucketName).insert(effectiveId, map);
         }
+        return effectiveId;
     }
 
     // =========================================================================
@@ -1939,9 +1973,24 @@ public final class JettraClient implements AutoCloseable {
         return getDatabase(databaseName).validateBucketRecord(engineType, bucketName, record);
     }
 
+    public String insertBucketRecord(
+            String databaseName, String engineType, String bucketName, String id, Map<String, Object> record) {
+        String effectiveId = (id != null && !id.isBlank())
+                ? id.trim()
+                : (record != null && record.get("_id") != null && !String.valueOf(record.get("_id")).isBlank()
+                        ? String.valueOf(record.get("_id")).trim()
+                        : io.jettra.store.core.JettraId.generate(databaseName, bucketName).toHexString());
+        return getDatabase(databaseName).insertBucketRecord(engineType, bucketName, effectiveId, record);
+    }
+
     public String upsertBucketRecord(
             String databaseName, String engineType, String bucketName, String id, Map<String, Object> record) {
-        return getDatabase(databaseName).upsertBucketRecord(engineType, bucketName, id, record);
+        String effectiveId = (id != null && !id.isBlank())
+                ? id.trim()
+                : (record != null && record.get("_id") != null && !String.valueOf(record.get("_id")).isBlank()
+                        ? String.valueOf(record.get("_id")).trim()
+                        : io.jettra.store.core.JettraId.generate(databaseName, bucketName).toHexString());
+        return getDatabase(databaseName).upsertBucketRecord(engineType, bucketName, effectiveId, record);
     }
 
     public boolean deleteBucketRecord(String databaseName, String engineType, String bucketName, String id) {

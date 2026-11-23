@@ -49,12 +49,29 @@ public class RecordExplorerFluxView extends FluxView {
     private final String message;
     private final int requestedPage;
     private final int pageSize;
+    private final String preservedRecordId;
+    private final String preservedSummary;
+    private final String preservedDetails;
+    private final Map<String, String> preservedForm;
+    private final String createFormError;
 
     public RecordExplorerFluxView(String activeDb, String activeBucket, String activeSection, String searchQuery,
                                   String editRecordId, String viewRecordId, String historyRecordId,
                                   boolean showCreateForm, boolean showCreateBucketForm,
                                   boolean showEditSchemaForm, boolean showViewSchemaModal,
                                   String message, int page, int pageSize) {
+        this(activeDb, activeBucket, activeSection, searchQuery, editRecordId, viewRecordId, historyRecordId,
+                showCreateForm, showCreateBucketForm, showEditSchemaForm, showViewSchemaModal,
+                message, page, pageSize, null, null, null, null, null);
+    }
+
+    public RecordExplorerFluxView(String activeDb, String activeBucket, String activeSection, String searchQuery,
+                                  String editRecordId, String viewRecordId, String historyRecordId,
+                                  boolean showCreateForm, boolean showCreateBucketForm,
+                                  boolean showEditSchemaForm, boolean showViewSchemaModal,
+                                  String message, int page, int pageSize,
+                                  String preservedRecordId, String preservedSummary, String preservedDetails,
+                                  Map<String, String> preservedForm, String createFormError) {
         this.activeDb = activeDb;
         this.activeBucket = activeBucket;
         this.activeSection = (activeSection != null && !activeSection.isBlank()) ? activeSection.trim().toLowerCase() : "records";
@@ -69,6 +86,11 @@ public class RecordExplorerFluxView extends FluxView {
         this.message = message;
         this.requestedPage = Math.max(1, page);
         this.pageSize = pageSize > 0 ? Math.min(100, pageSize) : DEFAULT_PAGE_SIZE;
+        this.preservedRecordId = preservedRecordId;
+        this.preservedSummary = preservedSummary;
+        this.preservedDetails = preservedDetails;
+        this.preservedForm = preservedForm;
+        this.createFormError = createFormError;
     }
 
     public RecordExplorerFluxView(String activeDb, String activeBucket, String searchQuery,
@@ -877,28 +899,104 @@ public class RecordExplorerFluxView extends FluxView {
                 + (isDefined ? " • Estructura: DEFINED" : " • Estructura: NONE"));
         header.modifier(new Modifier().style("font-size: 1.1rem; color: #00d4ff; margin: 0 0 1rem 0;"));
 
+        // Prellenado automático con JettraId (editable libremente o regenerable con botón rápido; si se deja vacío, el servidor genera uno)
+        String initialRecordId = (preservedRecordId != null && !preservedRecordId.isBlank())
+                ? preservedRecordId
+                : io.jettra.store.core.JettraId.generate(currentDb, currentBucket).toHexString();
+        var recordIdInput = FluxUi.textInput("recordId", initialRecordId, "JettraId autogenerado o ID personalizado", false);
+        recordIdInput.id("createRecordIdInput");
+        recordIdInput.modifier(new Modifier()
+                .cssClass("app-input")
+                .attribute("type", "text")
+                .attribute("data-jettraid-input", "true")
+                .style("font-family: monospace; flex: 1;"));
+
+        Button regenBtn = Button.of("🔄 Regenerar JettraId");
+        regenBtn.id("regenJettraIdBtn");
+        regenBtn.modifier(new Modifier()
+                .cssClass("app-btn-secondary")
+                .attribute("type", "button")
+                .attribute("onclick", "jettraRegenerateId('" + escapeHtml(currentDb) + "','" + escapeHtml(currentBucket) + "')")
+                .style("padding: 0.38rem 0.65rem; font-size: 0.76rem; white-space: nowrap;"));
+
+        Widget idRow = Div.of(recordIdInput, regenBtn)
+                .modifier(new Modifier().style("display: flex; gap: 0.45rem; align-items: center;"));
+
+        // Descripción opcional (required = false)
+        String initialSummary = preservedSummary != null ? preservedSummary : "";
         Widget topGrid = Div.of(
-                FluxUi.fieldColumn("Identificador Único (ID / Clave Primaria)", FluxUi.textInput("recordId", "", "REG-2026-001", true), null),
-                FluxUi.fieldColumn("Descripción / Resumen Corto", FluxUi.textInput("summary", "", "Descripción breve del documento o entidad", true), null)
+                FluxUi.fieldColumn("Identificador Único (ID / Clave Primaria)", idRow, null),
+                FluxUi.fieldColumn("Descripción / Resumen Corto (Opcional)", FluxUi.textInput("summary", initialSummary, "Descripción breve opcional del documento o entidad", false), null)
         ).modifier(new Modifier().cssClass("explorer-form-grid"));
 
-        Widget fieldsWidget = isDefined
-                ? buildStructuredFieldsSection(bucketInfo, null)
-                : EngineRecordRenderer.renderCreateFieldsWidget(normalizedEngine);
+        Widget fieldsWidget;
+        if (isDefined) {
+            Map<String, Object> preservedStruct = null;
+            if (preservedForm != null) {
+                preservedStruct = new java.util.LinkedHashMap<>();
+                for (var entry : preservedForm.entrySet()) {
+                    if (entry.getKey().startsWith("struct_")) {
+                        preservedStruct.put(entry.getKey().substring("struct_".length()), entry.getValue());
+                    }
+                }
+            }
+            fieldsWidget = buildStructuredFieldsSection(bucketInfo, preservedStruct);
+        } else if ("DOCUMENT".equals(normalizedEngine) && preservedDetails != null && !preservedDetails.isBlank()) {
+            Widget docBox = Div.of(
+                    FluxUi.coloredSpan("📄 Nuevo Documento (Estilo JSON / BSON)",
+                            "font-size: 0.8rem; font-weight: 700; color: #00d4ff; display: block; margin-bottom: 0.45rem;"),
+                    FluxUi.textArea("details", preservedDetails, 8, true, null)
+            );
+            docBox.modifier(new Modifier()
+                    .attribute("data-engine-creator", "DOCUMENT")
+                    .attribute("data-engine-editor", "DOCUMENT")
+                    .style("margin-bottom: 1rem; padding: 0.9rem; border: 1px solid #00d4ff; border-radius: 8px;"));
+            fieldsWidget = docBox;
+        } else {
+            fieldsWidget = EngineRecordRenderer.renderCreateFieldsWidget(normalizedEngine);
+        }
 
         Widget btns = Div.of(
                 FluxUi.linkButton("/explorer?db=" + currentDb + "&bucket=" + currentBucket, "Cancelar", "app-btn-secondary", null),
                 FluxUi.submitButton("💾 Guardar Registro", "app-btn-primary", null)
         ).modifier(new Modifier().style("display: flex; gap: 0.75rem; justify-content: flex-end; margin-top: 0.75rem;"));
 
+        RawScript regenScript = RawScript.of("""
+                async function jettraRegenerateId(db, bucket) {
+                  try {
+                    const res = await fetch('/api/jettraid/generate?db=' + encodeURIComponent(db) + '&bucket=' + encodeURIComponent(bucket), { cache: 'no-store' });
+                    if (!res.ok) return;
+                    const data = await res.json();
+                    const inp = document.getElementById('createRecordIdInput');
+                    if (inp && data && data.jettraId) {
+                      inp.value = data.jettraId;
+                      inp.focus();
+                    }
+                  } catch (e) {}
+                }
+                """);
+
         Form form = Form.of(
                 FluxUi.hidden("action", "save_new"),
                 FluxUi.hidden("db", currentDb),
                 FluxUi.hidden("bucket", currentBucket),
-                topGrid, fieldsWidget, btns
+                topGrid, fieldsWidget, btns, regenScript
         ).action("/explorer").method("POST");
 
-        Widget card = Div.of(header, form);
+        List<Widget> cardItems = new ArrayList<>();
+        cardItems.add(header);
+        if (createFormError != null && !createFormError.isBlank()) {
+            Widget errBanner = FluxUi.flashBanner(createFormError);
+            if (errBanner != null) {
+                errBanner.modifier(new Modifier()
+                        .attribute("data-create-record-error", "true")
+                        .style("background: rgba(239, 68, 68, 0.15); border: 1px solid #ef4444; color: #ef4444; padding: 0.75rem 1rem; border-radius: 8px; margin-bottom: 1rem; font-weight: 600; font-size: 0.88rem;"));
+                cardItems.add(errBanner);
+            }
+        }
+        cardItems.add(form);
+
+        Widget card = Div.of(cardItems.toArray(new Widget[0]));
         card.modifier(new Modifier().cssClass("ui-card explorer-form-card").style("border-left: 4px solid #00d4ff; background: var(--bg-subtle);"));
         return card;
     }

@@ -14,7 +14,25 @@ public final class RecordsEngine<T extends Record> {
     }
 
     public void persist(String id, T instance) {
-        records.put(id, instance);
+        String effectiveId = (id != null && !id.isBlank())
+                ? id.trim()
+                : io.jettra.store.core.JettraId.generate("default", entityName).toHexString();
+        records.put(effectiveId, instance);
+    }
+
+    public String persist(T instance) {
+        return insertStrict(null, "default", instance);
+    }
+
+    public String insertStrict(String id, String databaseName, T instance) {
+        String effectiveId = (id != null && !id.isBlank())
+                ? id.trim()
+                : io.jettra.store.core.JettraId.generate(databaseName, entityName).toHexString();
+        if (records.putIfAbsent(effectiveId, instance) != null) {
+            throw new IllegalStateException("[PRIMARY KEY VIOLATION] Ya existe un record con el identificador '"
+                    + effectiveId + "' en el bucket '" + entityName + "'.");
+        }
+        return effectiveId;
     }
 
     public T find(String id) {

@@ -492,4 +492,33 @@ public class JettraClientTest {
             try { node04Server.stop(); } catch (Exception ignored) {}
         }
     }
+
+    @Test
+    @DisplayName("JettraId en JettraStoreDriver: generación automática en cliente, ID personalizado y rechazo de duplicados")
+    public void testJettraIdDriverAutoCustomAndDuplicateRejection() {
+        String dbName = "driver_jettraid_test_db";
+        try (JettraClient client = JettraClient.connect("127.0.0.1", 50001, "admin", "admin-jettra")) {
+            client.createDatabase(dbName);
+            String autoId = client.saveDocument(dbName, "Clientes", java.util.Map.of("nombre", "ACME"));
+            assertTrue(io.jettra.store.core.JettraId.isValidHex(autoId), "saveDocument debe generar JettraId hex válido");
+            assertEquals(io.jettra.store.core.JettraId.computeScopeHash(dbName, "Clientes"),
+                    io.jettra.store.core.JettraId.fromHex(autoId).databaseBucketHash(),
+                    "JettraId debe codificar el hash de database:bucket");
+
+            String customId = client.insertDocumentReturningId(dbName, "Clientes", "CLI-CUSTOM-01", java.util.Map.of("nombre", "Beta"));
+            assertEquals("CLI-CUSTOM-01", customId, "Debe respetar ID personalizado");
+
+            boolean dupRejected = false;
+            try {
+                client.insertDocumentReturningId(dbName, "Clientes", "CLI-CUSTOM-01", java.util.Map.of("nombre", "Dup"));
+            } catch (IllegalStateException ex) {
+                dupRejected = ex.getMessage().contains("PRIMARY KEY VIOLATION");
+            }
+            assertTrue(dupRejected, "Debe rechazar ID personalizado duplicado");
+        } finally {
+            try (JettraClient cleanup = JettraClient.connect("127.0.0.1", 50001, "admin", "admin-jettra")) {
+                cleanup.dropDatabase(dbName);
+            } catch (Exception ignored) {}
+        }
+    }
 }

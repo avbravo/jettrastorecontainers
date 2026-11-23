@@ -223,8 +223,9 @@ public class App {
 
         // 5. Explorador de Registros con Operaciones CRUD (/explorer y /records)
         server.get("/explorer", (req, resp) -> handleExplorerGet(req, resp, server));
-        server.post("/explorer", (req, resp) -> handleExplorerPost(req, resp));
+        server.post("/explorer", (req, resp) -> handleExplorerPost(req, resp, server));
         server.get("/records", (req, resp) -> handleExplorerGet(req, resp, server));
+        server.get("/api/jettraid/generate", (req, resp) -> handleGenerateJettraIdApi(req, resp));
 
         // 6. Consola Interactiva JettraSQL / JQL / Shell (/query)
         server.get("/query", (req, resp) -> handleQueryGet(req, resp, server));
@@ -797,7 +798,25 @@ public class App {
         renderTemplate(resp, server, getLoggedUser(req), "Explorador de Registros CRUD", "explorer", content);
     }
 
-    private static void handleExplorerPost(HttpRequest req, HttpResponse resp) {
+    private static void handleGenerateJettraIdApi(HttpRequest req, HttpResponse resp) {
+        if (getLoggedUser(req) == null) {
+            resp.status(HttpStatus.UNAUTHORIZED)
+                .contentType("application/json; charset=UTF-8")
+                .header("Cache-Control", "no-store")
+                .body("{\"error\":\"unauthorized\"}");
+            return;
+        }
+        String db = req.getQueryParam("db");
+        String bucket = req.getQueryParam("bucket");
+        String generated = io.jettra.store.core.JettraId.generate(
+                db != null ? db : "", bucket != null ? bucket : "").toHexString();
+        resp.contentType("application/json; charset=UTF-8")
+            .header("Cache-Control", "no-store")
+            .body("{\"jettraId\":\"" + generated + "\",\"database\":\"" + escapeJson(db != null ? db : "")
+                + "\",\"bucket\":\"" + escapeJson(bucket != null ? bucket : "") + "\"}");
+    }
+
+    private static void handleExplorerPost(HttpRequest req, HttpResponse resp, JettraServer server) {
         if (!requireAuth(req, resp)) return;
         Map<String, String> form = parseFormBody(req.getBodyAsString());
         String action = form.get("action");
@@ -843,9 +862,24 @@ public class App {
             redirect(resp, "/explorer?db=" + db + "&bucket=" + bucket + "&section=indexes&msg=" + (ok ? "index_created" : "Error+creando+indice"));
             return;
         } else if ("save_new".equalsIgnoreCase(action)) {
-            String recordId = form.get("recordId");
-            String summary = form.get("summary");
+            String rawRecordId = form.get("recordId");
+            String recordId = (rawRecordId != null && !rawRecordId.isBlank())
+                    ? rawRecordId.trim()
+                    : io.jettra.store.core.JettraId.generate(db, bucket).toHexString();
+            String summary = form.getOrDefault("summary", "");
             String details = buildStructuredDetailsOrFallback(plugin, db, bucket, form, "");
+
+            // Validar unicidad de clave primaria sin cerrar el diálogo ni perder datos capturados
+            if (plugin.getRecord(db, bucket, recordId) != null) {
+                String dupErr = "Error de integridad: ya existe un registro con el identificador '"
+                        + recordId + "' en el bucket '" + bucket + "'. Modifique el ID o regenere un nuevo JettraId.";
+                Widget content = new RecordExplorerFluxView(db, bucket, "records", "", null, null, null,
+                        true, false, false, false, null, 1, RecordExplorerFluxView.DEFAULT_PAGE_SIZE,
+                        recordId, summary, details, form, dupErr);
+                renderTemplate(resp, server, getLoggedUser(req), "Explorador de Registros CRUD", "explorer", content);
+                return;
+            }
+
             var validation = plugin.validateRecordForBucket(db, bucket, details);
             if (!validation.valid()) {
                 redirect(resp, "/explorer?db=" + db + "&bucket=" + bucket + "&msg="
