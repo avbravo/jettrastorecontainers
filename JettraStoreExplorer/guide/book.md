@@ -264,3 +264,20 @@ El diálogo **`➕ Crear Nuevo Registro en [ <db> / <bucket> ] • Motor: ... �
    - Si no hay ningún bucket seleccionado en la base de datos activa, muestra un estado vacío legible indicando cómo seleccionar un bucket desde el **Tree Explorador Jerárquico**.
 2. **Controles `⊞ Expandir todo` y `⊟ Colapsar todo` en el Tree Explorador Jerárquico:**
    - Permiten desplegar de inmediato todos los Engines y subárboles de Buckets (`📐 Estructura`, `⚡ Índices`, `📄 Registros`) o plegarlos todos en un clic, **conservando intacta la selección actual y el registro activo** en `/explorer`.
+
+
+---
+
+## 12. Distribución Maestro-Detalle en Dos Columnas en `/explorer` (RF-10)
+
+La vista `/explorer` utiliza un **layout maestro-detalle de dos columnas** (`data-explorer-master-detail="true"`) construido con componentes **JettraFlux** y CSS Grid responsivo debajo de la barra superior de **Base de Datos Activa**:
+
+1. **Columna izquierda (`#explorerTreeSidebar`, `28%` con mínimo de `250px` en escritorio):**
+   - Contiene el **Tree Explorador Jerárquico** (`Database -> Engine -> Bucket`) junto con sus controles **`⊞ Expandir todo`** y **`⊟ Colapsar todo`**.
+   - Se fija con `position: sticky` y desplazamiento vertical independiente (`overflow-y: auto`) para navegar múltiples motores y buckets sin comprimir ni desplazar la tabla principal.
+2. **Columna derecha (`#explorerMainCol`, `minmax(0, 1fr)`):**
+   - Alineada en la parte superior junto al árbol, presenta de inmediato el bloque informativo **`📦 Bucket Seleccionado: [nombre-bucket]`** (Engine, base de datos, modo de estructura y conteo de registros/índices), seguido por la barra de búsqueda y el **`DataTable`** de registros (`| ID | MOTOR | RESUMEN | VERSION | FECHA MUTACION | ACCIONES |`).
+   - Al seleccionar un Bucket desde el árbol izquierdo, el panel derecho se actualiza en sitio de forma inmediata y se persiste el estado expandido/colapsado y la posición de desplazamiento (`scrollTop`) del árbol en `sessionStorage`.
+3. **Comportamiento responsivo:**
+   - En **escritorio (`> 920px`)**, ambas columnas se muestran lado a lado alineadas superiormente.
+   - En **móvil / tablet (`<= 920px`)**, el Grid cambia a una sola columna (`grid-template-columns: 1fr`), apilando el **Tree Explorador Jerárquico** encima del panel de **Bucket Seleccionado** y el **`DataTable`** para evitar cortes horizontales.

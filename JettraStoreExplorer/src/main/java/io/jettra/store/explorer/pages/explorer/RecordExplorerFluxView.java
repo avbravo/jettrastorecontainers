@@ -178,8 +178,6 @@ public class RecordExplorerFluxView extends FluxView {
         Widget recordsTable = buildRecordsTable(pageRecords, totalRecords, currentDb, currentBucket, searchQuery, currentPage, totalPages, pageSize, isStreamed);
 
         List<Widget> mainColChildren = new java.util.ArrayList<>();
-        if (flashWidget != null) mainColChildren.add(flashWidget);
-        mainColChildren.add(dbHeaderBar);
         if (formPanel != null) {
             Modal dialog = Modal.of(formPanel).open(true);
             dialog.id("explorerActionDialog");
@@ -198,16 +196,22 @@ public class RecordExplorerFluxView extends FluxView {
         mainColChildren.add(recordsTable);
 
         Div mainCol = Div.of(mainColChildren.toArray(new Widget[0]));
-        mainCol.modifier(new Modifier().cssClass("explorer-main-col").style("flex: 1; min-width: 0; overflow-x: auto;"));
+        mainCol.id("explorerMainCol");
+        mainCol.modifier(new Modifier()
+                .cssClass("explorer-main-col")
+                .attribute("data-explorer-detail-panel", "true")
+                .style("min-width: 0; width: 100%; overflow-x: auto; box-sizing: border-box;"));
 
         Widget responsiveCss = FluxUi.styleSheet("""
-                .explorer-layout { display: flex; gap: 1.25rem; align-items: flex-start; flex-wrap: nowrap; width: 100%; box-sizing: border-box; }
-                .explorer-tree-sidebar { width: 295px; flex-shrink: 0; position: sticky; top: 1rem; max-height: calc(100vh - 130px); overflow-y: auto; box-sizing: border-box; }
+                .explorer-page { display: flex; flex-direction: column; gap: 0.9rem; width: 100%; box-sizing: border-box; }
+                .explorer-layout { display: grid; grid-template-columns: minmax(250px, 28%) minmax(0, 1fr); gap: 1.25rem; align-items: start; width: 100%; box-sizing: border-box; }
+                .explorer-tree-sidebar { width: 100%; min-width: 0; position: sticky; top: 1rem; max-height: calc(100vh - 140px); overflow-y: auto; overflow-x: hidden; box-sizing: border-box; }
                 .explorer-tree-db { display: flex; align-items: center; justify-content: space-between; gap: 0.4rem; padding: 0.45rem 0.6rem; border-radius: 8px; text-decoration: none; font-weight: 700; font-size: 0.85rem; margin-bottom: 0.25rem; transition: background 0.15s ease, color 0.15s ease; }
                 .explorer-tree-db:hover { background: rgba(0, 212, 255, 0.10); }
                 .explorer-tree-db.is-active { background: rgba(0, 212, 255, 0.16); color: #00d4ff; border-left: 3px solid #00d4ff; }
                 .explorer-tree-engine-group { margin-left: 0.65rem; padding-left: 0.6rem; border-left: 2px solid rgba(148, 163, 184, 0.25); margin-bottom: 0.45rem; }
-                .explorer-tree-engine-label { display: flex; align-items: center; justify-content: space-between; padding: 0.28rem 0.45rem; font-size: 0.72rem; font-weight: 800; letter-spacing: 0.04em; text-transform: uppercase; border-radius: 5px; margin-bottom: 0.2rem; }
+                .explorer-tree-engine-label { display: flex; align-items: center; justify-content: space-between; padding: 0.28rem 0.45rem; font-size: 0.72rem; font-weight: 800; letter-spacing: 0.04em; text-transform: uppercase; border-radius: 5px; margin-bottom: 0.2rem; cursor: pointer; user-select: none; }
+                .explorer-tree-engine-label:hover { background: rgba(148, 163, 184, 0.16) !important; }
                 .explorer-tree-bucket { display: flex; align-items: center; justify-content: space-between; gap: 0.35rem; padding: 0.34rem 0.5rem; border-radius: 6px; text-decoration: none; font-size: 0.8rem; margin-bottom: 0.18rem; transition: background 0.15s ease; }
                 .explorer-tree-bucket:hover { background: rgba(16, 185, 129, 0.10); }
                 .explorer-tree-bucket.is-active { background: rgba(16, 185, 129, 0.18); color: #34d399; font-weight: 700; border-left: 3px solid #10b981; }
@@ -219,14 +223,25 @@ public class RecordExplorerFluxView extends FluxView {
                 .explorer-form-card { width: min(92vw, 760px); max-width: 100%; box-sizing: border-box; padding: 1.25rem; }
                 .explorer-form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 0.9rem; margin-bottom: 1rem; }
                 @media (max-width: 920px) {
-                    .explorer-layout { flex-direction: column; }
-                    .explorer-tree-sidebar { width: 100% !important; position: static !important; max-height: 320px !important; }
+                    .explorer-layout { grid-template-columns: 1fr; }
+                    .explorer-tree-sidebar { width: 100% !important; position: static !important; max-height: 340px !important; }
                 }
                 """);
 
-        Div layout = Div.of(responsiveCss, treeNav, mainCol);
-        layout.modifier(new Modifier().cssClass("explorer-layout"));
-        return layout;
+        Div masterDetailLayout = Div.of(treeNav, mainCol);
+        masterDetailLayout.modifier(new Modifier()
+                .cssClass("explorer-layout")
+                .attribute("data-explorer-master-detail", "true"));
+
+        List<Widget> pageChildren = new java.util.ArrayList<>();
+        pageChildren.add(responsiveCss);
+        if (flashWidget != null) pageChildren.add(flashWidget);
+        pageChildren.add(dbHeaderBar);
+        pageChildren.add(masterDetailLayout);
+
+        Div pageWrapper = Div.of(pageChildren.toArray(new Widget[0]));
+        pageWrapper.modifier(new Modifier().cssClass("explorer-page"));
+        return pageWrapper;
     }
 
     private Widget buildHierarchyTree(JettraStorePlugin plugin, String currentDb, String currentBucket) {
@@ -291,6 +306,7 @@ public class RecordExplorerFluxView extends FluxView {
                 engHeader.modifier(new Modifier()
                         .cssClass("explorer-tree-engine-label")
                         .attribute("data-tree-level", "engine")
+                        .attribute("data-engine-toggle", entry.getKey())
                         .attribute("aria-expanded", "true")
                         .style("background: rgba(148, 163, 184, 0.08);"));
 
@@ -310,6 +326,7 @@ public class RecordExplorerFluxView extends FluxView {
                     bLink.modifier(new Modifier()
                             .cssClass(activeB ? "explorer-tree-bucket is-active" : "explorer-tree-bucket")
                             .attribute("data-tree-level", "bucket")
+                            .attribute("data-bucket-name", b.getBucketName())
                             .attribute("aria-expanded", activeB ? "true" : "false")
                             .style(activeB ? "" : "color: var(--text-main);"));
                     bucketWidgets.add(bLink);
@@ -349,6 +366,7 @@ public class RecordExplorerFluxView extends FluxView {
                     recordsNode.modifier(new Modifier()
                             .cssClass("explorer-tree-subitem")
                             .attribute("data-tree-sub", "records")
+                            .attribute("data-bucket-name", b.getBucketName())
                             .style((activeB && "records".equals(activeSection))
                                     ? "background: rgba(16, 185, 129, 0.18); color: #34d399; font-weight: 700;"
                                     : "color: var(--text-muted);"));
@@ -376,39 +394,211 @@ public class RecordExplorerFluxView extends FluxView {
         }
 
         RawScript treeToggleScript = RawScript.of("""
-                function jettraTreeExpandAll() {
-                  document.querySelectorAll('[data-engine-body]').forEach(function(el) {
-                    el.style.display = 'block';
-                    el.setAttribute('data-expanded', 'true');
-                  });
-                  document.querySelectorAll('[data-bucket-subtree]').forEach(function(el) {
-                    el.style.display = 'flex';
-                    el.setAttribute('data-expanded', 'true');
-                  });
-                  document.querySelectorAll('[data-tree-level="engine"], [data-tree-level="bucket"]').forEach(function(el) {
-                    el.setAttribute('aria-expanded', 'true');
-                  });
-                }
-                function jettraTreeCollapseAll() {
-                  document.querySelectorAll('[data-bucket-subtree]').forEach(function(el) {
-                    el.style.display = 'none';
-                    el.setAttribute('data-expanded', 'false');
-                  });
-                  document.querySelectorAll('[data-engine-body]').forEach(function(el) {
-                    el.style.display = 'none';
-                    el.setAttribute('data-expanded', 'false');
-                  });
-                  document.querySelectorAll('[data-tree-level="engine"], [data-tree-level="bucket"]').forEach(function(el) {
-                    el.setAttribute('aria-expanded', 'false');
-                  });
-                }
+                (function() {
+                  function getTreeSidebar() {
+                    return document.querySelector('[data-explorer-tree="true"]');
+                  }
+                  function getStorageKey() {
+                    var sb = getTreeSidebar();
+                    var db = sb ? (sb.getAttribute('data-explorer-db') || 'default') : 'default';
+                    return 'jettra_explorer_tree_state_' + db;
+                  }
+                  function saveTreeState() {
+                    try {
+                      var sb = getTreeSidebar();
+                      if (!sb) return;
+                      var engines = {};
+                      sb.querySelectorAll('[data-engine-body]').forEach(function(el) {
+                        engines[el.getAttribute('data-engine-body')] = el.getAttribute('data-expanded') === 'true';
+                      });
+                      var buckets = {};
+                      sb.querySelectorAll('[data-bucket-subtree]').forEach(function(el) {
+                        buckets[el.getAttribute('data-bucket-subtree')] = el.getAttribute('data-expanded') === 'true';
+                      });
+                      sessionStorage.setItem(getStorageKey(), JSON.stringify({
+                        engines: engines,
+                        buckets: buckets,
+                        scrollTop: sb.scrollTop || 0
+                      }));
+                    } catch (e) {}
+                  }
+                  function restoreTreeState() {
+                    try {
+                      var sb = getTreeSidebar();
+                      if (!sb) return;
+                      var raw = sessionStorage.getItem(getStorageKey());
+                      if (!raw) return;
+                      var st = JSON.parse(raw);
+                      if (st.engines) {
+                        sb.querySelectorAll('[data-engine-body]').forEach(function(el) {
+                          var key = el.getAttribute('data-engine-body');
+                          if (Object.prototype.hasOwnProperty.call(st.engines, key)) {
+                            var exp = !!st.engines[key];
+                            el.style.display = exp ? 'block' : 'none';
+                            el.setAttribute('data-expanded', exp ? 'true' : 'false');
+                            var hdr = sb.querySelector('[data-engine-toggle="' + key + '"]');
+                            if (hdr) hdr.setAttribute('aria-expanded', exp ? 'true' : 'false');
+                          }
+                        });
+                      }
+                      if (st.buckets) {
+                        sb.querySelectorAll('[data-bucket-subtree]').forEach(function(el) {
+                          var key = el.getAttribute('data-bucket-subtree');
+                          if (Object.prototype.hasOwnProperty.call(st.buckets, key)) {
+                            var exp = !!st.buckets[key];
+                            el.style.display = exp ? 'flex' : 'none';
+                            el.setAttribute('data-expanded', exp ? 'true' : 'false');
+                            var bLink = sb.querySelector('[data-tree-level="bucket"][data-bucket-name="' + key + '"]');
+                            if (bLink) bLink.setAttribute('aria-expanded', exp ? 'true' : 'false');
+                          }
+                        });
+                      }
+                      if (typeof st.scrollTop === 'number') {
+                        sb.scrollTop = st.scrollTop;
+                      }
+                    } catch (e) {}
+                  }
+                  window.jettraTreeExpandAll = function() {
+                    document.querySelectorAll('[data-engine-body]').forEach(function(el) {
+                      el.style.display = 'block';
+                      el.setAttribute('data-expanded', 'true');
+                    });
+                    document.querySelectorAll('[data-bucket-subtree]').forEach(function(el) {
+                      el.style.display = 'flex';
+                      el.setAttribute('data-expanded', 'true');
+                    });
+                    document.querySelectorAll('[data-tree-level="engine"], [data-tree-level="bucket"]').forEach(function(el) {
+                      el.setAttribute('aria-expanded', 'true');
+                    });
+                    saveTreeState();
+                  };
+                  window.jettraTreeCollapseAll = function() {
+                    document.querySelectorAll('[data-bucket-subtree]').forEach(function(el) {
+                      el.style.display = 'none';
+                      el.setAttribute('data-expanded', 'false');
+                    });
+                    document.querySelectorAll('[data-engine-body]').forEach(function(el) {
+                      el.style.display = 'none';
+                      el.setAttribute('data-expanded', 'false');
+                    });
+                    document.querySelectorAll('[data-tree-level="engine"], [data-tree-level="bucket"]').forEach(function(el) {
+                      el.setAttribute('aria-expanded', 'false');
+                    });
+                    saveTreeState();
+                  };
+                  function updateActiveTreeSelection(bucketName) {
+                    var sb = getTreeSidebar();
+                    if (!sb || !bucketName) return;
+                    sb.querySelectorAll('[data-tree-level="bucket"]').forEach(function(el) {
+                      var isTarget = (el.getAttribute('data-bucket-name') || '').toLowerCase() === bucketName.toLowerCase();
+                      el.classList.toggle('is-active', isTarget);
+                      el.style.color = isTarget ? '' : 'var(--text-main)';
+                      var labelSpan = el.querySelector('span');
+                      if (labelSpan && labelSpan.textContent) {
+                        var clean = labelSpan.textContent.replace(/^[▾▸]\\s*/, '');
+                        labelSpan.textContent = (isTarget ? '▾ ' : '▸ ') + clean;
+                      }
+                      if (isTarget) {
+                        var sub = sb.querySelector('[data-bucket-subtree="' + el.getAttribute('data-bucket-name') + '"]');
+                        if (sub) {
+                          sub.style.display = 'flex';
+                          sub.setAttribute('data-expanded', 'true');
+                          el.setAttribute('aria-expanded', 'true');
+                        }
+                      }
+                    });
+                    sb.querySelectorAll('[data-tree-sub="records"]').forEach(function(el) {
+                      var isTarget = (el.getAttribute('data-bucket-name') || '').toLowerCase() === bucketName.toLowerCase();
+                      el.style.background = isTarget ? 'rgba(16, 185, 129, 0.18)' : '';
+                      el.style.color = isTarget ? '#34d399' : 'var(--text-muted)';
+                      el.style.fontWeight = isTarget ? '700' : '';
+                    });
+                  }
+                  function loadDetailPanelInPlace(href, bucketName, pushHistory) {
+                    var mainCol = document.getElementById('explorerMainCol');
+                    if (!mainCol || typeof fetch !== 'function' || typeof DOMParser === 'undefined') {
+                      saveTreeState();
+                      window.location.href = href;
+                      return;
+                    }
+                    var sb = getTreeSidebar();
+                    var prevScroll = sb ? sb.scrollTop : 0;
+                    mainCol.style.opacity = '0.6';
+                    fetch(href, { headers: { 'X-Requested-With': 'JettraExplorerTree' } })
+                      .then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.text(); })
+                      .then(function(html) {
+                        var doc = new DOMParser().parseFromString(html, 'text/html');
+                        var nextMain = doc.getElementById('explorerMainCol');
+                        if (!nextMain) {
+                          saveTreeState();
+                          window.location.href = href;
+                          return;
+                        }
+                        mainCol.innerHTML = nextMain.innerHTML;
+                        mainCol.style.opacity = '1';
+                        updateActiveTreeSelection(bucketName);
+                        if (sb) sb.scrollTop = prevScroll;
+                        saveTreeState();
+                        if (pushHistory && window.history && window.history.pushState) {
+                          window.history.pushState({ url: href, bucket: bucketName }, '', href);
+                        }
+                      })
+                      .catch(function() {
+                        saveTreeState();
+                        window.location.href = href;
+                      });
+                  }
+                  function initExplorerTree() {
+                    var sb = getTreeSidebar();
+                    if (!sb) return;
+                    restoreTreeState();
+                    sb.addEventListener('scroll', saveTreeState, { passive: true });
+                    sb.querySelectorAll('[data-engine-toggle]').forEach(function(hdr) {
+                      hdr.addEventListener('click', function() {
+                        var eng = hdr.getAttribute('data-engine-toggle');
+                        var body = sb.querySelector('[data-engine-body="' + eng + '"]');
+                        if (!body) return;
+                        var nextExp = body.getAttribute('data-expanded') !== 'true';
+                        body.style.display = nextExp ? 'block' : 'none';
+                        body.setAttribute('data-expanded', nextExp ? 'true' : 'false');
+                        hdr.setAttribute('aria-expanded', nextExp ? 'true' : 'false');
+                        saveTreeState();
+                      });
+                    });
+                    sb.querySelectorAll('[data-tree-level="bucket"], [data-tree-sub="records"]').forEach(function(link) {
+                      link.addEventListener('click', function(ev) {
+                        if (ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey || ev.button !== 0) return;
+                        var href = link.getAttribute('href');
+                        var bName = link.getAttribute('data-bucket-name');
+                        if (!href || !bName) return;
+                        ev.preventDefault();
+                        loadDetailPanelInPlace(href, bName, true);
+                      });
+                    });
+                    sb.querySelectorAll('a[data-tree-sub="schema"], a[data-tree-sub="indexes"], a.explorer-tree-db').forEach(function(link) {
+                      link.addEventListener('click', saveTreeState);
+                    });
+                    window.addEventListener('popstate', function(ev) {
+                      if (ev.state && ev.state.url && ev.state.bucket) {
+                        loadDetailPanelInPlace(ev.state.url, ev.state.bucket, false);
+                      }
+                    });
+                  }
+                  if (document.readyState === 'loading') {
+                    document.addEventListener('DOMContentLoaded', initExplorerTree);
+                  } else {
+                    initExplorerTree();
+                  }
+                })();
                 """);
         treeNodes.add(treeToggleScript);
 
         Div sidebar = Div.of(treeNodes.toArray(new Widget[0]));
+        sidebar.id("explorerTreeSidebar");
         sidebar.modifier(new Modifier()
                 .cssClass("ui-card explorer-tree-sidebar")
                 .attribute("data-explorer-tree", "true")
+                .attribute("data-explorer-db", currentDb != null ? currentDb : "")
                 .style("padding: 1rem; border-left: 3px solid #00d4ff;"));
         return sidebar;
     }

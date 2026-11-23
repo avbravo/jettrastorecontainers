@@ -2448,4 +2448,63 @@ public class JettraStoreExplorerTest {
             plugin.deleteDatabase(dbName);
         }
     }
+
+    @Test
+    @DisplayName("54. RF-10: Layout maestro-detalle en dos columnas en /explorer (Tree a la izquierda, Bucket Seleccionado + DataTable a la derecha, responsivo y estado persistente)")
+    public void testRf10ExplorerTwoColumnMasterDetailLayoutAndTreeStatePersistence() throws Exception {
+        JettraStorePlugin plugin = JettraStorePlugin.getInstance();
+        String dbName = "rf10_two_col_test_db";
+        try {
+            plugin.createDatabase(dbName, "ClientesRF10", "DOCUMENT", "Clientes activos");
+            plugin.addBucket(dbName, "EventosRF10", "TIMESERIES", "Eventos de telemetría", "NONE", "[]");
+            plugin.addRecord(dbName, "ClientesRF10", "CLI-RF10-1", "Cliente Uno", "{\"nombre\":\"Ana\"}");
+            plugin.addRecord(dbName, "EventosRF10", "EVT-RF10-1", "Evento Uno", "{\"metric\":99}");
+
+            // 1. Verificar estructura maestro-detalle en dos columnas: Tree izquierdo contiguo al panel derecho (Bucket Seleccionado + DataTable)
+            HttpResponse<String> res1 = get("/explorer?db=" + dbName + "&bucket=ClientesRF10");
+            JettraAssert.assertEquals(200, res1.statusCode(), "GET /explorer RF-10 debe responder HTTP 200");
+            String body1 = res1.body();
+
+            int layoutPos = body1.indexOf("data-explorer-master-detail=\"true\"");
+            int treePos = body1.indexOf("id=\"explorerTreeSidebar\"");
+            int detailPos = body1.indexOf("id=\"explorerMainCol\"");
+            int bucketHeaderPos = body1.indexOf("data-selected-bucket-header=\"true\"", detailPos);
+            int tablePos = body1.indexOf("<table", bucketHeaderPos);
+
+            JettraAssert.assertTrue(layoutPos > 0 && treePos > layoutPos && detailPos > treePos,
+                    "El contenedor maestro-detalle debe ubicar el Tree Explorador Jerárquico en la columna izquierda contigua al panel derecho");
+            JettraAssert.assertTrue(bucketHeaderPos > detailPos && tablePos > bucketHeaderPos,
+                    "La columna derecha debe iniciar con 'Bucket Seleccionado' seguido por el DataTable de registros");
+
+            // 2. Verificar CSS responsivo de 2 columnas (28% / 1fr en escritorio, 1fr en móvil/tablet) y scroll independiente del árbol
+            JettraAssert.assertTrue(body1.contains("grid-template-columns: minmax(250px, 28%) minmax(0, 1fr)")
+                    && body1.contains("overflow-y: auto")
+                    && body1.contains("@media (max-width: 920px)")
+                    && body1.contains("grid-template-columns: 1fr"),
+                    "Debe aplicar grid responsivo de dos columnas en escritorio y apilado en pantallas estrechas con scroll vertical independiente en el Tree");
+
+            // 3. Verificar controles Expandir/Colapsar, persistencia de estado/scroll y actualización inmediata del panel derecho sin perder el Tree
+            JettraAssert.assertTrue(body1.contains("id=\"treeExpandAllBtn\"")
+                    && body1.contains("id=\"treeCollapseAllBtn\"")
+                    && body1.contains("jettra_explorer_tree_state_")
+                    && body1.contains("loadDetailPanelInPlace")
+                    && body1.contains("data-explorer-detail-panel=\"true\""),
+                    "Debe incluir persistencia de estado/scroll del Tree y actualización del panel derecho conservando el árbol");
+
+            // 4. Seleccionar otro Bucket actualiza la cabecera y los registros en la columna derecha manteniendo el Tree con ambos buckets
+            HttpResponse<String> res2 = get("/explorer?db=" + dbName + "&bucket=EventosRF10&section=records");
+            JettraAssert.assertEquals(200, res2.statusCode(), "Cambio a EventosRF10 debe responder HTTP 200");
+            String body2 = res2.body();
+            int detailPos2 = body2.indexOf("id=\"explorerMainCol\"");
+            JettraAssert.assertTrue(detailPos2 > 0, "Debe conservar la columna derecha explorerMainCol");
+            String detailHtml2 = body2.substring(detailPos2);
+            JettraAssert.assertTrue(detailHtml2.contains("Bucket Seleccionado: EventosRF10")
+                    && detailHtml2.contains("EVT-RF10-1")
+                    && detailHtml2.contains("Evento Uno")
+                    && body2.contains("ClientesRF10") && body2.contains("EventosRF10"),
+                    "Al seleccionar otro Bucket, la columna derecha debe actualizar cabecera y registros mientras el Tree conserva todos los nodos");
+        } finally {
+            plugin.deleteDatabase(dbName);
+        }
+    }
 }
