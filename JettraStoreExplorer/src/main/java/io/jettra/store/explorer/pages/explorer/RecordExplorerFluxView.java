@@ -126,7 +126,6 @@ public class RecordExplorerFluxView extends FluxView {
         // 2. Navegación jerárquica en Árbol enfocada únicamente en la base de datos activa (Database -> Engine -> Bucket)
         Widget treeNav = buildHierarchyTree(plugin, currentDb, currentBucket);
         Widget dbHeaderBar = buildActiveDbHeaderBar(currentDb);
-        Widget bucketSelector = buildBucketSelector(buckets, currentDb, currentBucket);
 
         // 3. Barra de Búsqueda y Botón "+ Nuevo Registro"
         Widget searchAndActions = buildSearchToolbar(currentDb, currentBucket, searchQuery, totalRecords, currentPage, totalPages, pageSize, isStreamed);
@@ -158,7 +157,6 @@ public class RecordExplorerFluxView extends FluxView {
         List<Widget> mainColChildren = new java.util.ArrayList<>();
         if (flashWidget != null) mainColChildren.add(flashWidget);
         mainColChildren.add(dbHeaderBar);
-        mainColChildren.add(bucketSelector);
         if (formPanel != null) {
             Modal dialog = Modal.of(formPanel).open(true);
             dialog.id("explorerActionDialog");

@@ -2295,4 +2295,42 @@ public class JettraStoreExplorerTest {
             plugin.deleteDatabase(dbName);
         }
     }
+
+    @Test
+    @DisplayName("51. RF-07: Eliminación de la sección redundante de Engines bajo 'Base de Datos Activa' en /explorer y navegación exclusiva en el Tree")
+    public void testRf07NoRedundantEnginesStripUnderActiveDbAndTreeNavigationWorks() throws Exception {
+        JettraStorePlugin plugin = JettraStorePlugin.getInstance();
+        String dbName = "rf07_clean_explorer_test_db";
+        try {
+            plugin.createDatabase(dbName, "ClientesRF07", "DOCUMENT", "Base de pruebas RF-07");
+            plugin.addBucket(dbName, "MetricasRF07", "TIMESERIES", "Métricas", "NONE", "[]");
+            plugin.addRecord(dbName, "MetricasRF07", "MET-1", "Lectura CPU", "{\"cpu\":42.5}");
+
+            HttpResponse<String> res = get("/explorer?db=" + dbName + "&bucket=ClientesRF07");
+            JettraAssert.assertEquals(200, res.statusCode(), "GET /explorer debe responder HTTP 200");
+            String body = res.body();
+
+            // 1. El Tree principal muestra ambos Engines y Buckets
+            JettraAssert.assertTrue(body.contains("data-explorer-tree=\"true\"")
+                    && body.contains("data-tree-level=\"engine\"")
+                    && body.contains("DOCUMENT") && body.contains("TIMESERIES")
+                    && body.contains("ClientesRF07") && body.contains("MetricasRF07"),
+                    "Los Engines y Buckets deben permanecer accesibles desde el Tree principal");
+
+            // 2. Debajo de 'Base de Datos Activa' (dentro de explorer-main-col) no debe existir la barra duplicada de Engines/Buckets
+            int mainColIdx = body.indexOf("explorer-main-col");
+            JettraAssert.assertTrue(mainColIdx > 0, "Debe existir la columna principal explorer-main-col");
+            String mainColHtml = body.substring(mainColIdx);
+            JettraAssert.assertFalse(mainColHtml.contains("/explorer?db=" + dbName + "&bucket=MetricasRF07"),
+                    "No debe renderizarse una sección redundante de Engines/Buckets debajo de Base de Datos Activa");
+
+            // 3. Seleccionar el bucket de otro Engine desde el Tree actualiza el contexto y muestra sus registros
+            HttpResponse<String> switchRes = get("/explorer?db=" + dbName + "&bucket=MetricasRF07&section=records");
+            JettraAssert.assertEquals(200, switchRes.statusCode(), "Cambiar de bucket desde el Tree debe responder 200");
+            JettraAssert.assertTrue(switchRes.body().contains("MET-1") && switchRes.body().contains("Lectura CPU"),
+                    "Seleccionar un bucket desde el Tree debe cargar correctamente sus registros");
+        } finally {
+            plugin.deleteDatabase(dbName);
+        }
+    }
 }
