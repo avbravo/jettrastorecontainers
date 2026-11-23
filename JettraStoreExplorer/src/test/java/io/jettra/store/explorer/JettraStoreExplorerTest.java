@@ -1883,8 +1883,8 @@ public class JettraStoreExplorerTest {
                 "RF02 Schema");
         JettraAssert.assertTrue(htmlSchema.contains("section=schema") && htmlSchema.contains("section=indexes") && htmlSchema.contains("section=records"),
                 "El árbol debe renderizar los subárboles Estructura, Índices y Registros");
-        JettraAssert.assertTrue(htmlSchema.contains("Editar Estructura") && htmlSchema.contains("Eliminar Estructura") && htmlSchema.contains("Ver JSON"),
-                "La sección de estructura DEFINED debe mostrar botones CRUD completos");
+        JettraAssert.assertTrue(htmlSchema.contains("id=\"bucketStructureModal\"") && htmlSchema.contains("data-bucket-structure-table=\"true\""),
+                "La sección de estructura en /explorer debe abrir el diálogo modal DataTable de consulta");
 
         String htmlIndexes = renderer.render(
                 new io.jettra.store.explorer.pages.explorer.RecordExplorerFluxView(
@@ -1978,8 +1978,8 @@ public class JettraStoreExplorerTest {
                     && noneTreeRes.body().contains("data-tree-level=\"database\"")
                     && noneTreeRes.body().contains("data-tree-level=\"engine\"")
                     && noneTreeRes.body().contains("data-tree-level=\"bucket\"")
-                    && noneTreeRes.body().contains("Añadir Estructura (DEFINED)"),
-                    "El árbol debe mostrar jerarquía BD -> Engine -> Bucket y acceso rápido para crear estructura en bucket NONE");
+                    && noneTreeRes.body().contains("id=\"bucketStructureModal\""),
+                    "El árbol debe mostrar jerarquía BD -> Engine -> Bucket y abrir el diálogo modal de estructura");
 
             // 2. Bucket DEFINED con AUTO_INCREMENT, UNIQUE, BigDecimal POSITIVE y MIN_LENGTH
             plugin.addBucket(dbName, "ProductosRF03", "DOCUMENT", "Productos estructurados", "NONE", "[]");
@@ -2186,6 +2186,66 @@ public class JettraStoreExplorerTest {
             JettraAssert.assertNull(plugin.findBucketExact(dbName, "PedidosV2"), "PedidosV2 debe haber sido removido");
         } finally {
             plugin.deleteDatabase(dbName);
+        }
+    }
+
+    @Test
+    @DisplayName("49. RF-05: /explorer muestra solo la BD seleccionada, sin '+ Nuevo Bucket', y abre modal DataTable de Estructura sin Ver JSON/Editar/Eliminar")
+    public void testRf05ExplorerSingleDbNoNewBucketAndReadOnlyStructureModal() throws Exception {
+        JettraStorePlugin plugin = JettraStorePlugin.getInstance();
+        String dbPrimary = "rf05_activa_test_db";
+        String dbOther = "rf05_oculta_test_db";
+        try {
+            plugin.createDatabase(dbPrimary, "FacturasRF05", "DOCUMENT", "BD activa RF-05");
+            plugin.createDatabase(dbOther, "OtraColeccion", "DOCUMENT", "Otra BD que no debe listarse en /explorer");
+            plugin.addBucket(dbPrimary, "LibreRF05", "DOCUMENT", "Bucket sin estructura", "NONE", "[]");
+
+            String schemaJson = "["
+                    + "{\"atribute_name\":\"codigo\",\"type_atribute\":\"Long\",\"jettra_rules\":\"AUTO_INCREMENT\",\"description\":\"Código único\"},"
+                    + "{\"atribute_name\":\"cliente\",\"type_atribute\":\"String\",\"jettra_rules\":\"NOT_NULL\",\"description\":\"Nombre del cliente\"}"
+                    + "]";
+            plugin.saveBucketStructure(dbPrimary, "FacturasRF05", schemaJson);
+
+            // 1. Vista /explorer normal: solo muestra dbPrimary, NO lista dbOther, NO expone '+ Nuevo Bucket'
+            HttpResponse<String> explorerRes = get("/explorer?db=" + dbPrimary + "&bucket=FacturasRF05");
+            JettraAssert.assertEquals(200, explorerRes.statusCode(), "GET /explorer debe responder HTTP 200");
+            String body = explorerRes.body();
+            JettraAssert.assertTrue(body.contains(dbPrimary) && body.contains("data-active-db-only=\"" + dbPrimary + "\""),
+                    "Debe mostrar únicamente la base de datos seleccionada");
+            JettraAssert.assertFalse(body.contains(dbOther),
+                    "No debe listar otras bases de datos en /explorer");
+            JettraAssert.assertFalse(body.contains("Nuevo Bucket"),
+                    "No debe mostrar el botón '+ Nuevo Bucket' en /explorer");
+            JettraAssert.assertTrue(body.contains("/database?db=" + dbPrimary),
+                    "Debe incluir enlace para cambiar/administrar BD en /database");
+
+            // 2. Clic en Estructura sobre bucket DEFINED -> modal DataTable superpuesto sin Ver JSON, Editar Estructura ni Eliminar Estructura
+            HttpResponse<String> schemaModalRes = get("/explorer?db=" + dbPrimary + "&bucket=FacturasRF05&section=schema");
+            JettraAssert.assertEquals(200, schemaModalRes.statusCode(), "GET /explorer?section=schema debe responder HTTP 200");
+            String sBody = schemaModalRes.body();
+            JettraAssert.assertTrue(sBody.contains("id=\"bucketStructureModal\"")
+                    && sBody.contains("espresso-modal-overlay")
+                    && sBody.contains("data-structure-readonly-modal=\"true\"")
+                    && sBody.contains("Estructura del Bucket 'FacturasRF05' [" + dbPrimary + "]")
+                    && sBody.contains("data-bucket-structure-table=\"true\"")
+                    && sBody.contains(">Nombre<") && sBody.contains(">Tipo<") && sBody.contains(">Reglas<") && sBody.contains(">Descripción<")
+                    && sBody.contains("codigo") && sBody.contains("cliente"),
+                    "Debe abrir el diálogo modal DataTable sobre /explorer con los campos de la estructura");
+            JettraAssert.assertFalse(sBody.contains("Ver JSON") || sBody.contains("VER JSON")
+                    || sBody.contains("Editar Estructura") || sBody.contains("Eliminar Estructura"),
+                    "El diálogo de estructura en /explorer no debe incluir botones Ver JSON, Editar Estructura ni Eliminar Estructura");
+
+            // 3. Clic en Estructura sobre bucket NONE -> modal con mensaje claro de esquema libre y sin botones prohibidos
+            HttpResponse<String> noneModalRes = get("/explorer?db=" + dbPrimary + "&bucket=LibreRF05&section=schema");
+            JettraAssert.assertEquals(200, noneModalRes.statusCode(), "GET /explorer?section=schema en bucket NONE debe responder 200");
+            String nBody = noneModalRes.body();
+            JettraAssert.assertTrue(nBody.contains("id=\"bucketStructureModal\"") && nBody.contains("esquema libre"),
+                    "En bucket NONE el modal debe informar claramente que acepta registros sin estructura fija");
+            JettraAssert.assertFalse(nBody.contains("Ver JSON") || nBody.contains("Editar Estructura") || nBody.contains("Eliminar Estructura"),
+                    "En bucket NONE tampoco debe mostrar Ver JSON, Editar Estructura ni Eliminar Estructura");
+        } finally {
+            plugin.deleteDatabase(dbPrimary);
+            plugin.deleteDatabase(dbOther);
         }
     }
 }

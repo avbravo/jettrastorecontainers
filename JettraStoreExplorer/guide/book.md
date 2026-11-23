@@ -83,29 +83,21 @@ Todas las vistas están construidas exclusivamente con componentes **JettraFlux*
 
 ## 7. Árbol Jerárquico, Subárboles por Bucket, CRUD de Estructura e Índices Numéricos / Autoincrementables (`/explorer` y `/databases`)
 
-### 7.1 Árbol de Navegación (`Base de Datos` → `Engine` → `Bucket` → Subárboles)
-Al acceder a `/explorer`, la barra lateral izquierda (`JettraFlux` sticky y responsiva) organiza todo el catálogo en cuatro niveles visuales con indicadores de expansión (`▾` / `▸`), etiquetas de motor por color, estado del esquema (`DEFINED` / `NONE`) y contadores en vivo:
+### 7.1 Vista Simplificada de `/explorer` (RF-05)
+Al acceder a `/explorer?db=<base_de_datos>`:
+- **Base de datos focalizada:** Se muestra **únicamente la base de datos activa/seleccionada** y su jerarquía (`Base de Datos` → `Engine` → `Bucket`), sin listar las demás bases de datos en el árbol ni en la barra superior. Para cambiar de base de datos o administrar motores/buckets, se incluye un acceso directo a **`/database`**.
+- **Sin botón `+ Nuevo Bucket`:** La creación, edición y eliminación de buckets y estructuras está centralizada en **`/database`**.
+- **Diálogo modal de consulta `📐 Estructura del Bucket`:** Al seleccionar un bucket en el árbol y hacer clic en **📐 Estructura** (`/explorer?db=<db>&bucket=<bucket>&section=schema`), se abre un **diálogo modal superpuesto** sobre `/explorer` (cerrable con **`✖ Cerrar`** o `Esc`, sin perder el contexto del árbol ni los registros) que presenta los atributos del bucket en formato **`DataTable`** (`Nombre`, `Tipo`, `Reglas`, `Descripción`), o un mensaje claro si el bucket opera en modo `NONE` (esquema libre). Este modal es exclusivamente de **consulta visual** y no incluye botones de *Ver JSON*, *Editar Estructura* ni *Eliminar Estructura*.
 
 ```text
-▾ 📂 ventas_db (3)
-   ├─ ⚙️ DOCUMENT (2 bucket(s))
-   │   ├─ ▾ 📦 Productos [DEFINED]
-   │   │    ├─ 📐 Estructura (4 campos)   → /explorer?db=ventas_db&bucket=Productos&section=schema
-   │   │    ├─ ⚡ Índices (2)             → /explorer?db=ventas_db&bucket=Productos&section=indexes
-   │   │    └─ 📄 Registros (12)          → /explorer?db=ventas_db&bucket=Productos&section=records
-   │   └─ ▸ 📦 NotasLibres [NONE]
-   │        ├─ 📐 Estructura (NONE)       → /explorer?db=ventas_db&bucket=NotasLibres&section=schema
-   │        │    └─ ➕ Añadir Estructura  → /explorer?db=ventas_db&bucket=NotasLibres&section=schema&action=new_schema
-   │        ├─ ⚡ Índices (0)             → /explorer?db=ventas_db&bucket=NotasLibres&section=indexes
-   │        └─ 📄 Registros (5)           → /explorer?db=ventas_db&bucket=NotasLibres&section=records
-   └─ ⚙️ JAVA_RECORD (1 bucket(s))
-       └─ ▸ 📦 Paises [DEFINED]
+▾ 📂 ventas_db (2)
+   └─ ⚙️ DOCUMENT (2 bucket(s))
+       ├─ ▾ 📦 Productos [DEFINED]
+       │    ├─ 📐 Estructura (4 campos)   → abre modal DataTable sobre /explorer
+       │    ├─ ⚡ Índices (2)             → /explorer?db=ventas_db&bucket=Productos&section=indexes
+       │    └─ 📄 Registros (12)          → /explorer?db=ventas_db&bucket=Productos&section=records
+       └─ ▸ 📦 NotasLibres [NONE]
 ```
-
-Cada bucket activo despliega tres subárboles dedicados:
-1. **📐 Estructura (`section=schema`)**: administra el esquema del bucket (`NONE` o `DEFINED`).
-2. **⚡ Índices (`section=indexes`)**: lista, crea, reconstruye y elimina índices secundarios del bucket.
-3. **📄 Registros (`section=records`)**: explora, busca, pagina, inserta, edita, versiona y elimina registros.
 
 ---
 
