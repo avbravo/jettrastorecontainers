@@ -73,7 +73,9 @@ public final class ProductoRepository implements JettraRepository<Producto> {
         map.put("precio", entity.precio());
 
         String storedId = client.insertBucketRecord(database, ENGINE, BUCKET, idHex, map);
-        JettraId resolvedId = JettraId.fromHex(storedId);
+        JettraId resolvedId = (storedId != null && JettraId.isValidHex(storedId))
+                ? JettraId.fromHex(storedId)
+                : assignedId;
         return findById(resolvedId).orElseGet(() -> entity.withJettraId(resolvedId));
     }
 
@@ -100,13 +102,18 @@ public final class ProductoRepository implements JettraRepository<Producto> {
         map.put("precio", entity.precio());
 
         client.upsertBucketRecord(database, ENGINE, BUCKET, idHex, map);
-        return findById(jettraId).orElseThrow();
+        return findById(jettraId).orElseGet(() -> entity.withJettraId(jettraId));
     }
 
     @Override
     public Optional<Producto> findById(JettraId jettraId) {
         if (jettraId == null) return Optional.empty();
-        Map<String, Object> doc = client.findBucketRecordById(database, BUCKET, jettraId.toHexString());
+        return findByRawId(jettraId.toHexString());
+    }
+
+    public Optional<Producto> findByRawId(String rawId) {
+        if (rawId == null || rawId.isBlank()) return Optional.empty();
+        Map<String, Object> doc = client.findBucketRecordById(database, BUCKET, rawId.trim());
         return doc != null ? Optional.of(toRecord(doc)) : Optional.empty();
     }
 
@@ -114,7 +121,7 @@ public final class ProductoRepository implements JettraRepository<Producto> {
         Set<String> ids = client.findIdsByNumericRange(database, BUCKET, "precio", min, max);
         List<Producto> out = new ArrayList<>();
         for (String id : ids) {
-            findById(JettraId.fromHex(id)).ifPresent(out::add);
+            findByRawId(id).ifPresent(out::add);
         }
         return out;
     }
@@ -138,7 +145,15 @@ public final class ProductoRepository implements JettraRepository<Producto> {
         String idHex = doc.get("jettraId") != null
                 ? String.valueOf(doc.get("jettraId"))
                 : (doc.get("_id") != null ? String.valueOf(doc.get("_id")) : null);
-        JettraId jid = (idHex != null && !idHex.isBlank()) ? JettraId.fromHex(idHex) : null;
+        JettraId jid;
+        if (idHex != null && !idHex.isBlank() && JettraId.isValidHex(idHex)) {
+            jid = JettraId.fromHex(idHex);
+        } else if (idHex != null && !idHex.isBlank()) {
+            // Soporte tolerante para registros legacy o IDs string personalizados
+            jid = JettraId.generate("examplesedb", BUCKET);
+        } else {
+            jid = null;
+        }
         Long sku = doc.get("sku") instanceof Number n ? n.longValue() : null;
         String nombre = doc.get("nombre") != null ? String.valueOf(doc.get("nombre")) : "";
         String categoria = doc.get("categoria") != null ? String.valueOf(doc.get("categoria")) : "";

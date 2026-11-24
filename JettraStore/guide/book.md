@@ -3452,10 +3452,59 @@ curl -s http://localhost:60003/api/v1/cluster/status
 docker start jettra-node-01
 ```
 
-### 5. Construcción y Publicación en Docker Hub
+### 5. Construcción y Publicación de Imagen Limpia en Docker Hub (RF-18)
+La imagen oficial de **JettraStore** se construye sin bases de datos de ejemplo (`sample_*`, `example_factura_db`) ni registros semilla precargados (`JETTRA_SAMPLES_AUTOLOAD=false`, `jettra.samples.autoload=false`), garantizando que al iniciar un contenedor únicamente existan las bases de datos creadas explícitamente por el usuario (o un catálogo vacío al inicio).
+
+#### A. Construcción manual o multi-arquitectura con Docker Buildx
 ```bash
-docker build -t <usuario>/jettrastore:1.0 -t <usuario>/jettrastore:latest ./JettraStore
+# 1. Empaquetar el artefacto JAR limpio con Maven
+mvn clean package -DskipTests
+
+# 2. Autenticarse en Docker Hub
 docker login
-docker push <usuario>/jettrastore:1.0
-docker push <usuario>/jettrastore:latest
+
+# 3. Construir y publicar imagen multi-arquitectura limpia (amd64 y arm64)
+docker buildx build \
+  --platform linux/amd64,linux/arm64 \
+  -t jettra/jettrastore:1.0 \
+  -t jettra/jettrastore:latest \
+  -f Dockerfile . \
+  --push
 ```
+
+#### B. Script automatizado `docker/build-and-push.sh`
+Para simplificar el empaquetado y publicación parametrizada:
+```bash
+# Construcción local de verificación (sin subir a Docker Hub)
+./docker/build-and-push.sh
+
+# Publicación directa en Docker Hub personal o corporativo
+DOCKER_USER="mi-usuario" TAG_VERSION="1.0" PUSH="true" ./docker/build-and-push.sh
+```
+
+#### C. Variables de entorno relevantes para el contenedor
+| Variable | Valor por Defecto | Descripción |
+| :--- | :--- | :--- |
+| `JETTRA_SAMPLES_AUTOLOAD` | `false` | Deshabilita la creación automática de bases de datos de ejemplo al iniciar el nodo. |
+| `JETTRA_STORAGE_PATH` | `/jettra/data` | Directorio de almacenamiento persistente montado en volumen. |
+| `JETTRA_STORAGE_MODE` | `OFF_HEAP` | Motor nativo de almacenamiento (`OFF_HEAP`, `JVM_RAM`, `DISK_MEMORY`). |
+| `JETTRA_MULTINODE_ACTIVE` | `on` (`off` en standalone) | Activa o desactiva el motor distribuido de replicación Raft. |
+| `JETTRA_NODE_ROLE` | `PRIMARY` | Rol del nodo dentro del clúster (`PRIMARY` o `SECONDARY`). |
+
+---
+
+## Migrador de PostgreSQL a JettraStore y Generador de Proyecto Backend (RF-17)
+
+El ecosistema JettraStore integra capacidades de migración fluida desde motores relacionales **PostgreSQL**, permitiendo a las organizaciones modernizar sus esquemas hacia la arquitectura multimodelo de **JettraStore** (Buckets `DEFINED` o `NONE` con índices `BTREE`, `NUMERIC` y `AUTO_INCREMENT`) y generar automáticamente una arquitectura backend limpia en **Java 25+** con `JettraServer`, `JettraRules`, `JettraJWT` y `JettraStoreDriver`.
+
+### 1. Disponibilidad en Herramientas
+- **Web UI (`JettraStoreExplorer`):** Ruta interactiva `/migrator` con formulario de conexión, inspección detallada de tablas/columnas, métricas en vivo, terminal de logs y descarga directa del `.zip` del proyecto backend.
+- **CLI (`JettraStoreShell`):** Comando interactivo `migrate` con banderas completas (`--host`, `--port`, `--db`, `--user`, `--password`, `--schema`, `--target-db`, `--target-engine`, `--package`, `--generate-backend`, `--output-zip`, `--dry-run`, `--ssl`).
+
+### 2. Preservación Crítica de Tipos
+- **Decimales de Alta Precisión:** Las columnas `NUMERIC` y `DECIMAL` se leen y transfieren mediante `BigDecimal` sin conversión a tipos de punto flotante primitivos, preservando escala y precisión absoluta.
+- **Fechas y Marcas de Tiempo:**
+  - `TIMESTAMPTZ` / `TIMESTAMP` se representan en formato estándar ISO-8601 (`YYYY-MM-DDTHH:mm:ss.SSSSSSZ`).
+  - `DATE` se conserva como `LocalDate` (`YYYY-MM-DD`).
+- **Identificadores `JettraId`:** Cada registro transferido conserva o recibe un `JettraId` canónico hexadecimal de 32 caracteres vinculado al contexto de la base de datos y Bucket destino.
+

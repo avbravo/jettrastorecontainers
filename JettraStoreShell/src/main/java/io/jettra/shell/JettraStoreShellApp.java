@@ -2,6 +2,9 @@ package io.jettra.shell;
 
 import io.jettra.driver.JettraClient;
 import io.jettra.driver.listener.JettraPoliceEventListener;
+import io.jettra.driver.migrator.*;
+import io.jettra.driver.version.RecordVersion;
+import io.jettra.driver.version.VersionOperation;
 import io.jettra.store.core.StreamResponse;
 import io.jettra.store.police.JettraPoliceNotification;
 import io.jettra.driver.config.JettraClientConfig;
@@ -1282,6 +1285,9 @@ public final class JettraStoreShellApp implements AutoCloseable {
                     || topic.contains("OFF_HEAP") || topic.contains("OFF-HEAP") || topic.contains("MEMORY")) {
                 return getStorageModeHelpText();
             }
+            if (topic.contains("VERSION") || topic.contains("HISTORIAL")) {
+                return getVersionHelpText();
+            }
             return getHelpText();
         } else if (upper.equals("MENU CONNECTIONS") || upper.equals("CONNECTIONS MENU")) {
             return getConnectionsMenuDisplay();
@@ -1305,6 +1311,11 @@ public final class JettraStoreShellApp implements AutoCloseable {
             return handleRemoveConnection(trimmed);
         } else if (upper.equals("LIST CONNECTIONS") || upper.equals("LIST CONECTIONS")) {
             return handleListConnections();
+        }
+
+        // 3.5. Migración de PostgreSQL a JettraStore y Generador de Backend (RF-17)
+        if (upper.startsWith("MIGRATE") || upper.startsWith("POSTGRES MIGRATE") || upper.startsWith("PG MIGRATE")) {
+            return handleMigrate(trimmed);
         }
 
         // 4. Verificación de Seguridad y Autenticación para operaciones operativas
@@ -1485,6 +1496,21 @@ public final class JettraStoreShellApp implements AutoCloseable {
             return handleUpdate(trimmed);
         } else if (upper.startsWith("DELETE FROM ") || upper.startsWith("DELETE ") || upper.startsWith("REMOVE ")) {
             return handleDeleteRecord(trimmed);
+        } else if (upper.equals("VERSION") || upper.equals("VERSION --HELP") || upper.equals("VERSION -H")
+                || upper.equals("VERSION HELP") || upper.equals("VERSIONS --HELP") || upper.equals("VERSIONS -H")
+                || upper.equals("RESTORE VERSION --HELP") || upper.equals("RESTORE VERSION -H")) {
+            return getVersionHelpText();
+        } else if (upper.equals("VERSIONS") || upper.startsWith("VERSIONS ")
+                || upper.equals("SHOW VERSIONS") || upper.startsWith("SHOW VERSIONS ")
+                || upper.equals("VERSION HISTORY") || upper.startsWith("VERSION HISTORY ")) {
+            return handleVersionHistory(trimmed);
+        } else if (upper.equals("VERSION SHOW") || upper.startsWith("VERSION SHOW ")
+                || upper.equals("VERSION GET") || upper.startsWith("VERSION GET ")
+                || upper.equals("VERSION INSPECT") || upper.startsWith("VERSION INSPECT ")) {
+            return handleVersionShow(trimmed);
+        } else if (upper.equals("RESTORE VERSION") || upper.startsWith("RESTORE VERSION ")
+                || upper.equals("VERSION RESTORE") || upper.startsWith("VERSION RESTORE ")) {
+            return handleVersionRestore(trimmed);
         }
 
         // Paginación y Desplazamiento de Consultas (Primero, Anterior, Siguiente,
@@ -3742,6 +3768,14 @@ public final class JettraStoreShellApp implements AutoCloseable {
                 db.getIndexManager().onDocumentInsert(col, assignedId, data);
                 db.saveToDisk();
                 client.replicatePutDocument(resolveActiveDb(), col, assignedId, data);
+                Map<String, Object> persisted = db.getDocumentEngine(col).findById(assignedId);
+                client.getVersionManager().recordVersion(
+                        resolveActiveDb(), col, assignedId,
+                        VersionOperation.CREATE,
+                        persisted != null ? persisted : data,
+                        currentUser,
+                        "Inserción desde JettraStoreShell",
+                        null);
                 return String.format("[SUCCESS] Registro con _id '%s' (JettraId) insertado en el bucket '%s'.", assignedId, col);
             }
             int valIdx = after.toUpperCase().indexOf(" VALUES");
@@ -3772,6 +3806,14 @@ public final class JettraStoreShellApp implements AutoCloseable {
                 db.getIndexManager().onDocumentInsert(col, id, data);
                 db.saveToDisk();
                 client.replicatePutDocument(resolveActiveDb(), col, id, data);
+                Map<String, Object> persisted = db.getDocumentEngine(col).findById(id);
+                client.getVersionManager().recordVersion(
+                        resolveActiveDb(), col, id,
+                        VersionOperation.CREATE,
+                        persisted != null ? persisted : data,
+                        currentUser,
+                        "Inserción desde JettraStoreShell",
+                        null);
                 return String.format("[SUCCESS] Registro con _id '%s' (JettraId) insertado en el bucket '%s'.", id, col);
             }
         } catch (UnsupportedOperationException | IllegalStateException e) {
@@ -3862,12 +3904,20 @@ public final class JettraStoreShellApp implements AutoCloseable {
                 Map<String, Object> updates = parseJsonOrKeyValues(jsonPart);
 
                 if (id != null) {
-                    JettraDatabase db = client.getDatabase(currentDatabase);
+                    String activeDb = resolveActiveDb();
+                    JettraDatabase db = client.getDatabase(activeDb);
                     db.getDocumentEngine(col).update(id, updates);
                     db.saveToDisk();
                     Map<String, Object> full = db.getDocumentEngine(col).findById(id);
                     if (full != null) {
-                        client.replicatePutDocument(currentDatabase, col, id, full);
+                        client.replicatePutDocument(activeDb, col, id, full);
+                        client.getVersionManager().recordVersion(
+                                activeDb, col, id,
+                                VersionOperation.UPDATE,
+                                full,
+                                currentUser,
+                                "Actualización desde JettraStoreShell",
+                                null);
                     }
                     return String.format("[SUCCESS] Registro con _id '%s' actualizado en '%s'.", id, col);
                 }
@@ -3889,12 +3939,21 @@ public final class JettraStoreShellApp implements AutoCloseable {
                 String[] kv = whereClause.split("=");
                 if (kv.length == 2) {
                     String id = cleanQuotes(kv[1].trim());
-                    JettraDatabase db = client.getDatabase(currentDatabase);
+                    String activeDb = resolveActiveDb();
+                    JettraDatabase db = client.getDatabase(activeDb);
+                    Map<String, Object> beforeDelete = db.getDocumentEngine(col).findById(id);
                     boolean deleted = db.getDocumentEngine(col).delete(id);
                     db.getIndexManager().onDocumentDelete(col, id, null);
                     db.saveToDisk();
                     if (deleted) {
-                        client.replicateDeleteDocument(currentDatabase, col, id);
+                        client.replicateDeleteDocument(activeDb, col, id);
+                        client.getVersionManager().recordVersion(
+                                activeDb, col, id,
+                                VersionOperation.DELETE,
+                                beforeDelete != null ? beforeDelete : Collections.emptyMap(),
+                                currentUser,
+                                "Eliminación desde JettraStoreShell",
+                                null);
                     }
                     return deleted
                             ? String.format("[SUCCESS] Registro con _id '%s' eliminado de '%s'.", id, col)
@@ -3905,12 +3964,21 @@ public final class JettraStoreShellApp implements AutoCloseable {
                 if (parts.length >= 2) {
                     String col = cleanQuotes(parts[0]);
                     String id = cleanQuotes(parts[1]);
-                    JettraDatabase db = client.getDatabase(currentDatabase);
+                    String activeDb = resolveActiveDb();
+                    JettraDatabase db = client.getDatabase(activeDb);
+                    Map<String, Object> beforeDelete = db.getDocumentEngine(col).findById(id);
                     boolean deleted = db.getDocumentEngine(col).delete(id);
                     db.getIndexManager().onDocumentDelete(col, id, null);
                     db.saveToDisk();
                     if (deleted) {
-                        client.replicateDeleteDocument(currentDatabase, col, id);
+                        client.replicateDeleteDocument(activeDb, col, id);
+                        client.getVersionManager().recordVersion(
+                                activeDb, col, id,
+                                VersionOperation.DELETE,
+                                beforeDelete != null ? beforeDelete : Collections.emptyMap(),
+                                currentUser,
+                                "Eliminación desde JettraStoreShell",
+                                null);
                     }
                     return deleted
                             ? String.format("[SUCCESS] Registro con _id '%s' eliminado de '%s'.", id, col)
@@ -3922,6 +3990,155 @@ public final class JettraStoreShellApp implements AutoCloseable {
         } catch (Exception ignored) {
         }
         return "[ERROR] Formato inválido. Uso: DELETE <col> <id> o DELETE FROM <col> WHERE _id = '<id>'";
+    }
+
+    // --- 10.5. Historial de Versiones y Restauración de Registros (RF-18) ---
+    private long parseVersionNumberToken(String raw) {
+        if (raw == null || raw.isBlank()) return -1L;
+        String cleaned = cleanQuotes(raw.trim());
+        if (cleaned.startsWith("v") || cleaned.startsWith("V")) {
+            cleaned = cleaned.substring(1).trim();
+        }
+        try {
+            long val = Long.parseLong(cleaned);
+            return val > 0 ? val : -1L;
+        } catch (NumberFormatException e) {
+            return -1L;
+        }
+    }
+
+    private String handleVersionHistory(String command) {
+        String clean = command.replaceAll("(?i)^(SHOW\\s+VERSIONS|VERSION\\s+HISTORY|VERSIONS)\\s*", "").trim();
+        if (clean.isEmpty() || clean.equalsIgnoreCase("--help") || clean.equalsIgnoreCase("-h")) {
+            return getVersionHelpText();
+        }
+        String[] parts = clean.split("\\s+");
+        if (parts.length < 2) {
+            return "[ERROR] Parámetros insuficientes. Uso: VERSIONS <bucket> <id> (o 'versions --help').";
+        }
+        String bucket = cleanQuotes(parts[0]);
+        String id = cleanQuotes(parts[1]);
+        String dbName = resolveActiveDb();
+
+        List<RecordVersion> history = client.getVersionHistory(dbName, bucket, id);
+        if (history.isEmpty()) {
+            return String.format("[NOT FOUND] No existe historial de versiones para el registro '%s' en '%s.%s'.",
+                    id, dbName, bucket);
+        }
+
+        StringBuilder sb = new StringBuilder();
+        sb.append(String.format("=== HISTORIAL DE VERSIONES [%s.%s :: %s] (%d versiones) ===%n",
+                dbName, bucket, id, history.size()));
+        sb.append(String.format("  %-8s | %-10s | %-28s | %-12s | %s%n",
+                "VERSION", "OPERACIÓN", "TIMESTAMP (UTC)", "AUTOR", "DETALLE"));
+        sb.append("  -----------------------------------------------------------------------------------------------\n");
+        for (RecordVersion v : history) {
+            String detail = v.note();
+            if (v.restoredFromVersion() != null && (detail == null || !detail.contains("v" + v.restoredFromVersion()))) {
+                detail = (detail != null ? detail + " " : "") + "(desde v" + v.restoredFromVersion() + ")";
+            }
+            sb.append(String.format("  %-8s | %-10s | %-28s | %-12s | %s%n",
+                    "v" + v.versionNumber(),
+                    v.operation().name(),
+                    v.timestamp(),
+                    v.author(),
+                    detail != null ? detail : ""));
+        }
+        return sb.toString();
+    }
+
+    private String handleVersionShow(String command) {
+        String clean = command.replaceAll("(?i)^VERSION\\s+(SHOW|GET|INSPECT)\\s*", "").trim();
+        if (clean.isEmpty() || clean.equalsIgnoreCase("--help") || clean.equalsIgnoreCase("-h")) {
+            return getVersionHelpText();
+        }
+        String[] parts = clean.split("\\s+");
+        if (parts.length < 3) {
+            return "[ERROR] Parámetros insuficientes. Uso: VERSION SHOW <bucket> <id> <version> (ej. VERSION SHOW productos p1 v1).";
+        }
+        String bucket = cleanQuotes(parts[0]);
+        String id = cleanQuotes(parts[1]);
+        long vNum = parseVersionNumberToken(parts[2]);
+        if (vNum <= 0) {
+            return String.format("[ERROR] Número de versión inválido: '%s'. Debe ser un entero positivo (ej. 1 o v1).", parts[2]);
+        }
+        String dbName = resolveActiveDb();
+
+        Optional<RecordVersion> opt = client.getVersion(dbName, bucket, id, vNum);
+        if (opt.isEmpty()) {
+            return String.format("[NOT FOUND] No se encontró la versión v%d para el registro '%s' en '%s.%s'.",
+                    vNum, id, dbName, bucket);
+        }
+        RecordVersion v = opt.get();
+        StringBuilder sb = new StringBuilder();
+        sb.append(String.format("=== DETALLE DE VERSIÓN v%d [%s.%s :: %s] ===%n", v.versionNumber(), dbName, bucket, id));
+        sb.append(String.format("  Version ID   : %s%n", v.versionId()));
+        sb.append(String.format("  Operación    : %s%n", v.operation().name()));
+        sb.append(String.format("  Timestamp    : %s%n", v.timestamp()));
+        sb.append(String.format("  Autor        : %s%n", v.author()));
+        sb.append(String.format("  Nota         : %s%n", v.note()));
+        if (v.restoredFromVersion() != null) {
+            sb.append(String.format("  Origen       : Restaurado desde v%d%n", v.restoredFromVersion()));
+        }
+        sb.append("  Snapshot     :\n");
+        if (v.snapshot().isEmpty()) {
+            sb.append("    (vacío)\n");
+        } else {
+            for (Map.Entry<String, Object> e : v.snapshot().entrySet()) {
+                sb.append(String.format("    %-18s : %s%n", e.getKey(), e.getValue()));
+            }
+        }
+        return sb.toString();
+    }
+
+    private String handleVersionRestore(String command) {
+        String clean = command.replaceAll("(?i)^(RESTORE\\s+VERSION|VERSION\\s+RESTORE)\\s*", "").trim();
+        if (clean.isEmpty() || clean.equalsIgnoreCase("--help") || clean.equalsIgnoreCase("-h")) {
+            return getVersionHelpText();
+        }
+        String[] parts = clean.split("\\s+");
+        if (parts.length < 3) {
+            return "[ERROR] Parámetros insuficientes. Uso: RESTORE VERSION <bucket> <id> <version> (ej. RESTORE VERSION productos p1 1).";
+        }
+        String bucket = cleanQuotes(parts[0]);
+        String id = cleanQuotes(parts[1]);
+        long targetVersion = parseVersionNumberToken(parts[2]);
+        if (targetVersion <= 0) {
+            return String.format("[ERROR] Número de versión inválido: '%s'. Debe ser un entero positivo (ej. 1 o v1).", parts[2]);
+        }
+        String dbName = resolveActiveDb();
+
+        try {
+            RecordVersion restored = client.restoreVersion(dbName, bucket, id, targetVersion);
+            return String.format(
+                    "[SUCCESS] Registro '%s' en '%s.%s' restaurado desde la versión v%d -> nueva versión registrada: v%d (%s).%n"
+                            + "  Snapshot restaurado: %s",
+                    id, dbName, bucket, targetVersion, restored.versionNumber(), restored.operation().name(), restored.snapshot());
+        } catch (IllegalArgumentException | IllegalStateException e) {
+            return "[ERROR] " + e.getMessage();
+        } catch (Exception e) {
+            return "[ERROR] Error restaurando versión v" + targetVersion + " para '" + id + "': " + e.getMessage();
+        }
+    }
+
+    public String getVersionHelpText() {
+        return """
+                ==============================================================================================
+                             AYUDA DE COMANDOS: HISTORIAL DE VERSIONES Y RESTAURACIÓN (RF-18)
+                ==============================================================================================
+                  VERSIONS <bucket> <id>                    Lista el historial completo de versiones (v1, v2, ...).
+                  VERSION HISTORY <bucket> <id>             Alias de VERSIONS <bucket> <id>.
+                  SHOW VERSIONS <bucket> <id>               Alias de VERSIONS <bucket> <id>.
+                  VERSION SHOW <bucket> <id> <version>      Inspecciona metadatos y snapshot de una versión (ej. 1 o v1).
+                  RESTORE VERSION <bucket> <id> <version>   Restaura el registro a una versión previa creando una nueva versión RESTORE.
+                  VERSION RESTORE <bucket> <id> <version>   Alias de RESTORE VERSION.
+
+                  EJEMPLOS:
+                    VERSIONS productos p1
+                    VERSION SHOW productos p1 v1
+                    RESTORE VERSION productos p1 1
+                ==============================================================================================
+                """;
     }
 
     // --- 11. Motores Multimodelo ---
@@ -4414,6 +4631,113 @@ public final class JettraStoreShellApp implements AutoCloseable {
                     : "[ERROR] Falló la restauración del snapshot.";
         } catch (Exception e) {
             return "[ERROR] Error al restaurar respaldo: " + e.getMessage();
+        }
+    }
+
+    private String handleMigrate(String command) {
+        try {
+            String[] tokens = command.trim().split("\\s+");
+            PostgresConnectionConfig cfg = new PostgresConnectionConfig();
+            cfg.setDatabase("");
+
+            for (int i = 1; i < tokens.length; i++) {
+                String token = tokens[i].trim();
+                if (token.startsWith("--host=")) {
+                    cfg.setHost(token.substring("--host=".length()).trim());
+                } else if (token.startsWith("-h=")) {
+                    cfg.setHost(token.substring("-h=".length()).trim());
+                } else if (token.startsWith("--port=")) {
+                    cfg.setPort(Integer.parseInt(token.substring("--port=".length()).trim()));
+                } else if (token.startsWith("-p=")) {
+                    cfg.setPort(Integer.parseInt(token.substring("-p=".length()).trim()));
+                } else if (token.startsWith("--db=") || token.startsWith("--database=")) {
+                    String val = token.contains("=") ? token.substring(token.indexOf('=') + 1).trim() : "";
+                    cfg.setDatabase(val);
+                } else if (token.startsWith("--user=") || token.startsWith("-u=")) {
+                    String val = token.substring(token.indexOf('=') + 1).trim();
+                    cfg.setUser(val);
+                } else if (token.startsWith("--password=") || token.startsWith("--pass=") || token.startsWith("-pw=")) {
+                    String val = token.substring(token.indexOf('=') + 1).trim();
+                    cfg.setPassword(val);
+                } else if (token.startsWith("--schema=") || token.startsWith("-s=")) {
+                    String val = token.substring(token.indexOf('=') + 1).trim();
+                    cfg.setSchema(val);
+                } else if (token.startsWith("--target-db=") || token.startsWith("--target=")) {
+                    String val = token.substring(token.indexOf('=') + 1).trim();
+                    cfg.setTargetDatabase(val);
+                } else if (token.startsWith("--target-engine=") || token.startsWith("--engine=")) {
+                    String val = token.substring(token.indexOf('=') + 1).trim();
+                    cfg.setTargetEngine(val);
+                } else if (token.startsWith("--package=") || token.startsWith("--pkg=")) {
+                    String val = token.substring(token.indexOf('=') + 1).trim();
+                    cfg.setBackendPackageName(val);
+                } else if (token.startsWith("--output-zip=") || token.startsWith("--zip=")) {
+                    String val = token.substring(token.indexOf('=') + 1).trim();
+                    cfg.setOutputZipPath(val);
+                    cfg.setGenerateBackend(true);
+                } else if (token.equalsIgnoreCase("--generate-backend") || token.equalsIgnoreCase("-g")) {
+                    cfg.setGenerateBackend(true);
+                } else if (token.equalsIgnoreCase("--no-backend")) {
+                    cfg.setGenerateBackend(false);
+                } else if (token.equalsIgnoreCase("--dry-run") || token.equalsIgnoreCase("-d")) {
+                    cfg.setDryRun(true);
+                } else if (token.equalsIgnoreCase("--ssl")) {
+                    cfg.setSsl(true);
+                }
+            }
+
+            if (cfg.getDatabase() == null || cfg.getDatabase().isBlank()) {
+                return "[ERROR] Parámetro obligatorio faltante: --db=<nombre_base_de_datos_postgresql>";
+            }
+            if (!cfg.isDryRun() && (!authenticated || client == null)) {
+                return "[AUTH REQUIRED] Debe iniciar sesión en JettraStore con 'login <username> <password>' para realizar una migración en vivo (o añada '--dry-run' para simular).";
+            }
+            if (cfg.getTargetDatabase() == null || cfg.getTargetDatabase().isBlank()) {
+                cfg.setTargetDatabase(cfg.getDatabase());
+            }
+
+            JettraPostgresMigrator migrator = new JettraPostgresMigrator();
+            StringBuilder out = new StringBuilder();
+            out.append("==============================================================================================\n");
+            out.append("🐘 MIGRACIÓN POSTGRESQL A JETTRASTORE & GENERADOR DE BACKEND (RF-17)\n");
+            out.append("==============================================================================================\n");
+            out.append(String.format("Origen: PostgreSQL en %s:%d/%s (Esquema: %s, SSL: %s)\n",
+                    cfg.getHost(), cfg.getPort(), cfg.getDatabase(), cfg.getSchema(), cfg.isSsl()));
+            out.append(String.format("Destino: JettraStore BD '%s' (Motor: %s)\n",
+                    cfg.getTargetDatabase(), cfg.getTargetEngine()));
+            out.append(String.format("Modo: %s | Generar Backend: %s\n",
+                    cfg.isDryRun() ? "SIMULACIÓN (DRY-RUN)" : "MIGRACIÓN EN VIVO",
+                    cfg.isGenerateBackend() ? "SÍ (" + cfg.getBackendPackageName() + ")" : "NO"));
+            out.append("----------------------------------------------------------------------------------------------\n");
+
+            MigrationProgress prog = migrator.migrate(cfg, client, p -> {});
+
+            for (String log : prog.getLogs()) {
+                out.append("  ↳ ").append(log).append("\n");
+            }
+            if (!prog.getErrors().isEmpty()) {
+                out.append("\n⚠️ ADVERTENCIAS / ERRORES:\n");
+                for (String err : prog.getErrors()) {
+                    out.append("  [!] ").append(err).append("\n");
+                }
+            }
+            out.append("----------------------------------------------------------------------------------------------\n");
+            out.append(String.format("RESUMEN: %d tabla(s) migradas | %d registro(s) transferidos | Tiempo: %d ms\n",
+                    prog.getTablesMigrated(), prog.getRecordsMigrated(), prog.getElapsedMs()));
+            if (prog.getGeneratedZipBytes() != null) {
+                String zipDest = cfg.getOutputZipPath() != null ? cfg.getOutputZipPath() : "./" + cfg.getTargetDatabase() + "_backend.zip";
+                if (cfg.getOutputZipPath() == null) {
+                    try {
+                        java.nio.file.Files.write(java.nio.file.Path.of(zipDest), prog.getGeneratedZipBytes());
+                    } catch (Exception ignored) {}
+                }
+                out.append("📦 Proyecto backend empaquetado en: ").append(zipDest).append("\n");
+            }
+            out.append("==============================================================================================");
+            return out.toString();
+
+        } catch (Exception e) {
+            return "[ERROR] Falló el proceso de migración: " + e.getMessage();
         }
     }
 
@@ -5008,6 +5332,32 @@ public final class JettraStoreShellApp implements AutoCloseable {
                   history clear                             Borra el historial en memoria y en disco.
                   !<n> / !! / !<prefijo>                    Re-ejecuta un comando del historial.
                   complete <prefijo> / tab <prefijo>        Muestra sugerencias de autocompletado.
+
+                11. MIGRACIÓN POSTGRESQL Y GENERADOR BACKEND (RF-17):
+                  migrate --db=<base_datos> [opciones]     Migra esquema, tablas, índices y datos desde PostgreSQL
+                                                            preservando precisión decimal (BigDecimal) y fechas ISO-8601,
+                                                            y empaqueta un backend Java 25+ descargable en .zip.
+                  Opciones:
+                    --host=<h>                              Host PostgreSQL (por defecto: 127.0.0.1)
+                    --port=<p>                              Puerto PostgreSQL (por defecto: 5432)
+                    --db=<d>                                Nombre de la base de datos origen (obligatorio)
+                    --user=<u>                              Usuario (por defecto: postgres)
+                    --password=<pw>                         Contraseña del usuario
+                    --schema=<s>                            Esquema PostgreSQL (por defecto: public)
+                    --target-db=<tdb>                       Base de datos destino en JettraStore
+                    --target-engine=<eng>                   Motor destino: DOCUMENT (defecto) o JAVA_RECORD
+                    --package=<pkg>                         Paquete del backend (defecto: com.example.jettra.backend)
+                    --output-zip=<path>                     Ruta para guardar el .zip del proyecto backend
+                    --generate-backend                      Genera el proyecto backend completo en .zip
+                    --dry-run                               Simula la migración sin escribir en JettraStore
+                    --ssl                                   Conexión cifrada SSL hacia PostgreSQL
+
+                12. HISTORIAL DE VERSIONES Y RESTAURACIÓN DE REGISTROS (RF-18):
+                  versions <bucket> <id>                    Lista el historial completo de versiones de un registro.
+                  version history <bucket> <id>             Alias de versions <bucket> <id>.
+                  version show <bucket> <id> <v>            Inspecciona metadatos y snapshot de una versión puntual.
+                  restore version <bucket> <id> <v>         Restaura un registro a una versión previa creando nueva versión RESTORE.
+                  version --help / help versions            Muestra ayuda detallada de comandos de versionado.
                 ==============================================================================================
                 """;
     }

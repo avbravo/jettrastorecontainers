@@ -352,3 +352,76 @@ docker login
 docker push <usuario>/jettrastoreexplorer:1.0
 docker push <usuario>/jettrastoreexplorer:latest
 ```
+
+---
+
+## 15. Migrador de PostgreSQL a JettraStore y Generador de Proyecto Backend (`/migrator`) — RF-17
+
+El gestor web **JettraStore Explorer** integra en la ruta **`/migrator`** una herramienta visual completa para migrar bases de datos relacionales **PostgreSQL** hacia el ecosistema multimodelo **JettraStore**, preservando la fidelidad absoluta de tipos críticos y generando automáticamente un proyecto backend moderno en **Java 25+** empaquetado en formato `.zip`.
+
+### 1. Parámetros de Conexión y Opciones de Migración en `/migrator`
+En la vista **`/migrator`** (accesible desde el menú lateral en el grupo **🗄️ Catálogo y Motores** y en la barra de pestañas superiores):
+- **Servidor Host PostgreSQL:** Dirección IP o hostname del servidor PostgreSQL (por defecto `127.0.0.1`).
+- **Puerto:** Puerto TCP de PostgreSQL (por defecto `5432`).
+- **Base de Datos Origen:** Nombre de la base de datos PostgreSQL a introspeccionar.
+- **Esquema:** Esquema relacional a procesar (por defecto `public`).
+- **Usuario y Contraseña:** Credenciales de autenticación en PostgreSQL.
+- **Base de Datos Destino JettraStore:** Nombre de la base de datos a crear o poblar en el clúster JettraStore (por ejemplo `migrated_db`).
+- **Motor Destino JettraStore:** Motor de destino para los Buckets (`DOCUMENT` o `JAVA_RECORD`).
+- **Paquete Java Backend:** Paquete base para el código generado (por defecto `com.example.jettra.backend`).
+- **Opciones de Red y Artefacto:**
+  - `🔒 Conexión SSL`: Activa negociación TLS/SSL con el servidor PostgreSQL.
+  - `📦 Generar Proyecto Backend (.zip)`: Empaqueta la arquitectura backend completa en un archivo descargable.
+
+### 2. Flujo de Trabajo
+1. **🔌 Conectar y Listar BDs (Descubrimiento Dinámico de Bases de Datos y Esquemas):**
+   - El usuario introduce las credenciales (Host, Puerto, Usuario, Contraseña) y pulsa **"🔌 Conectar y Listar BDs"**.
+   - JettraStore Explorer se conecta a la instancia de PostgreSQL, consulta el catálogo del servidor (`pg_database`, `information_schema.schemata`) y obtiene la lista completa de todas las bases de datos disponibles y los esquemas del servidor.
+   - La interfaz actualiza reactivamente los selectores desplegables (**Base de Datos Origen** y **Esquema**) y despliega un panel visual con distintivos interactivos de las bases de datos detectadas.
+   - El usuario **selecciona la base de datos y esquema que desea migrar** directamente desde el menú desplegable interactivo. Al seleccionarla, el campo de base de datos destino en JettraStore se ajusta automáticamente con el nombre seleccionado.
+2. **🔍 Analizar Esquema (Introspección):**
+   - Conecta a la base de datos y esquema seleccionados mediante el driver JDBC oficial (`org.postgresql:postgresql`) y consulta el catálogo relacional (`DatabaseMetaData`, `information_schema`).
+   - Detecta tablas, claves primarias, columnas, restricciones de nulidad, secuencias e índices (`BTREE`, `NUMERIC`, `AUTO_INCREMENT`).
+   - Muestra tarjetas resumen con métricas globales (tablas, columnas, índices, registros estimados) y tablas desglosadas con su equivalente a **Java Record** y **Bucket JettraStore**.
+3. **🚀 Iniciar Migración Completa:**
+   - Asegura la creación de la base de datos destino en JettraStore mediante `JettraClient.createDatabase(targetDb)`.
+   - Crea cada **Bucket** con estructura definida (`JettraBucketSchema.StructureType.DEFINED`) y sus reglas de atributos (`AttributeRule`).
+   - Replica los índices detectados llamando a `createBucketIndex(...)` o `createAutoIncrementIndex(...)`.
+   - Lee datos por streaming (`ResultSet.TYPE_FORWARD_ONLY` con tamaño de lote configurable) y transfiere las filas conservando la integridad.
+   - Si está habilitado, empaqueta el backend en memoria y muestra el botón `📦 Descargar Proyecto Backend (.zip)`.
+4. **🧪 Simulación (Dry-Run):**
+   - Ejecuta la introspección y genera el proyecto backend sin insertar registros ni mutar el almacenamiento de JettraStore.
+
+### 3. Reglas de Mapeo y Fidelidad de Tipos Críticos
+Para evitar cualquier pérdida de información o distorsión durante la migración:
+- **Decimales de alta precisión (`NUMERIC`, `DECIMAL`):** Se extraen y manejan como **`java.math.BigDecimal`** usando representaciones de cadena exacta (`toPlainString()`). Queda estrictamente prohibida la conversión intermedia a `float` o `double` para evitar imprecisiones de coma flotante IEEE 754 en montos contables o financieros.
+- **Fechas y Marcas de Tiempo (`TIMESTAMP`, `TIMESTAMPTZ`, `DATE`):**
+  - `TIMESTAMPTZ` / `TIMESTAMP` se mapean a **`java.time.Instant`** o **`java.time.OffsetDateTime`**, serializados en formato estándar ISO-8601 con zona y microsegundos (`YYYY-MM-DDTHH:mm:ss.SSSSSSZ`).
+  - `DATE` se mapea a **`java.time.LocalDate`** en formato `YYYY-MM-DD`.
+  - `TIME` se mapea a **`java.time.LocalTime`** (`HH:mm:ss`).
+- **Identificadores y Claves Primarias (`JettraId`):**
+  - Si la fila no cuenta con un ID explícito, se asigna un **`JettraId`** canónico hexadecimal de 32 caracteres generado con el scope `database:bucket`.
+- **Autoincrementables (`SERIAL`, `BIGSERIAL`, `IDENTITY`):** Se mapean a tipos `Long` y se les asocia un índice **`AUTO_INCREMENT`** en el Bucket.
+- **Cadenas y Restricciones:** Se mapean a `String` y se generan anotaciones **`JettraRules`** (`@NotNull`, `@NotBlank`, `@Size(max = N)`).
+
+### 4. Estructura del Proyecto Backend Descargable (`.zip`)
+El archivo `.zip` generado (descargable desde `/api/migrator/download`) contiene un proyecto Maven completo y ejecutable:
+```text
+jettra-backend/
+├── pom.xml                                   # Configurado para Java 25+, JettraServer, JettraStoreDriver, JettraRules, JettraJWT
+├── README.md                                 # Guía de compilación, ejecución y catálogo de endpoints
+├── src/main/resources/
+│   └── application.properties                # Configuración de puerto (8080), host JettraStore y secreto JWT
+└── src/main/java/com/example/jettra/backend/
+    ├── App.java                              # Servidor JettraServer principal con Virtual Threads (Loom)
+    ├── model/
+    │   └── {Tabla}.java                      # Java 25 Records inmutables con anotaciones JettraRules y JettraId
+    ├── repository/
+    │   ├── JettraRepository.java             # Interfaz genérica CRUD
+    │   └── {Tabla}Repository.java            # Repositorios con JettraClient y validación JettraRulesEngine
+    ├── security/
+    │   └── SecurityConfig.java               # Filtro de autenticación y validación de tokens Bearer con JettraJWT
+    └── endpoint/
+        └── {Tabla}Endpoint.java              # Controladores REST (/api/{tabla}, GET, POST, PUT, DELETE)
+```
+

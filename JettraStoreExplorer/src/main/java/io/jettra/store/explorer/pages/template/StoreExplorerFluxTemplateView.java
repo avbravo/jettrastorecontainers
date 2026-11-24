@@ -281,7 +281,8 @@ public class StoreExplorerFluxTemplateView extends FluxView {
                 createClusterDependentNavLink("/databases", "🗄️ Bases de Datos y Motores", isActive("databases", "engines"), clusterHasOnlineNodes),
                 createClusterDependentNavLink("/examples", "📚 Bases de Ejemplo", isActive("examples"), clusterHasOnlineNodes),
                 createClusterDependentNavLink("/explorer", "📦 Explorador de Registros CRUD", isActive("explorer", "records"), clusterHasOnlineNodes),
-                createNavLink("/query", "💻 Consola SQL / JQL", isActive("query", "console"))
+                createNavLink("/query", "💻 Consola SQL / JQL", isActive("query", "console")),
+                createClusterDependentNavLink("/migrator", "🐘 Migrador PostgreSQL", isActive("migrator"), clusterHasOnlineNodes)
         );
         navCatalog.modifier(new Modifier().style("display: flex; flex-direction: column; gap: 0.28rem; margin-bottom: 1.4rem;"));
 
@@ -345,6 +346,7 @@ public class StoreExplorerFluxTemplateView extends FluxView {
         tabWidgets.add(createClusterDependentTabLink("/databases", "🗄️ Bases de Datos", isActive("databases", "engines"), clusterHasOnlineNodes));
         tabWidgets.add(createClusterDependentTabLink("/examples", "📚 Ejemplos", isActive("examples"), clusterHasOnlineNodes));
         tabWidgets.add(createClusterDependentTabLink("/explorer", "📦 Registros CRUD", isActive("explorer", "records"), clusterHasOnlineNodes));
+        tabWidgets.add(createClusterDependentTabLink("/migrator", "🐘 Migrador", isActive("migrator"), clusterHasOnlineNodes));
         tabWidgets.add(createTabLink("/query", "💻 Consola SQL", isActive("query")));
         tabWidgets.add(createTabLink("/connections", "🔌 Conexiones", isActive("connections")));
         tabWidgets.add(createTabLink("/users", "👥 Usuarios", isActive("users")));

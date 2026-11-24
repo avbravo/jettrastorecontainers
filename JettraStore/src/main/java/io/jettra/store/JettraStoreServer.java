@@ -716,6 +716,22 @@ public final class JettraStoreServer {
                 });
             } catch (Exception ignored) {}
         }
+        try {
+            Path storageDir = Path.of(config.getStoragePath());
+            Files.deleteIfExists(storageDir.resolve(name + "_meta.json"));
+            Files.deleteIfExists(storageDir.resolve(name + "_sstable" + config.getFileExtension()));
+            Files.deleteIfExists(storageDir.resolve(name + config.getFileExtension()));
+            Files.deleteIfExists(storageDir.resolve(name + "_sstable.jettra"));
+            Files.deleteIfExists(storageDir.resolve(name + ".jettra"));
+            Files.deleteIfExists(storageDir.resolve(name + "_wal.jettra"));
+            Files.deleteIfExists(storageDir.resolve(name + "_indexes.json"));
+            Files.deleteIfExists(storageDir.resolve(name + "_sequences.json"));
+            Files.deleteIfExists(storageDir.resolve(name + "_indexes.json.tmp"));
+            Files.deleteIfExists(storageDir.resolve(name + "_sequences.json.tmp"));
+            Files.deleteIfExists(storageDir.resolve(name + "_versions.json"));
+            Files.deleteIfExists(storageDir.resolve(name + "_versions.json.tmp"));
+            Files.deleteIfExists(storageDir.resolve(name + "_backup.snap"));
+        } catch (Exception ignored) {}
         if (broadcast && config.isClusterMultinodeActive() && config.getNodeRole() == ClusterNode.Role.PRIMARY) {
             JettraClusterReplicationClient client = getOrCreateReplicationClient();
             if (client != null) {

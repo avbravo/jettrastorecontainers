@@ -880,7 +880,7 @@ public class CrossEngineWorkflowDemo {
 
 ## 7. Paginación Segura y Streaming Lazy (`sqlPaged` y `LazyPagedCursor`)
 
-Para prevenir de forma absoluta el desbordamiento de memoria (`OutOfMemoryError: Java heap space`) ante consultas sobre colecciones con cientos de miles o millones de registros, `JettraStoreDriver` incorpora soporte nativo para **paginación acotada** y **cursores perezosos distribuidos**:
+Para prevenir de forma absoluta el desbordamiento de memoria (`OutOfMemoryError: Java heap space`) ante consultas sobre buckets con cientos de miles o millones de registros, `JettraStoreDriver` incorpora soporte nativo para **paginación acotada** y **cursores perezosos distribuidos**:
 
 ### 7.1 Consultas Paginadas con `sqlPaged`
 El método `sqlPaged` reescribe y acota dinámicamente cualquier consulta SQL, aplicando `LIMIT` y `OFFSET` calculados para procesar la página solicitada:
@@ -899,7 +899,7 @@ System.out.printf("Filas recuperadas en página: %d. Resumen: %s%n",
 ```
 
 ### 7.2 Procesamiento en Lotes con `LazyPagedCursor`
-Cuando una aplicación por lotes (*batch*) o un microservicio de exportación necesita recorrer una colección masiva (como 200,000 clientes o 1,000,000 facturas) sin acumular los datos en memoria:
+Cuando una aplicación por lotes (*batch*) o un microservicio de exportación necesita recorrer un bucket masivo (como 200,000 clientes o 1,000,000 facturas) sin acumular los datos en memoria:
 
 ```java
 var cursor = client.cursor("example_factura_db", "clientes", 100);
@@ -1102,7 +1102,7 @@ client.compactMemory("example_factura_db");
 
 ## 10. Directrices de Arquitectura y Buenas Prácticas
 
-1. **Evitar Consultas Abiertas sin Límite:** Siempre use `sqlPaged` o configure un `LIMIT` razonable al consultar colecciones de alta cardinalidad.
+1. **Evitar Consultas Abiertas sin Límite:** Siempre use `sqlPaged` o configure un `LIMIT` razonable al consultar buckets de alta cardinalidad.
 2. **Uso de Virtual Threads:** Ejecute las llamadas al driver en hilos virtuales creados con `Thread.ofVirtual().start(...)` para maximizar el throughput concurrente.
 3. **Liberación de Recursos:** Siempre utilice bloques `try-with-resources` sobre `JettraClient` para garantizar la liberación de arenas nativas Off-Heap de Project Panama.
 4. **Almacenamiento Híbrido Document + Off-Heap:** Use `JettraDocument` para esquemas de consulta y metadatos, y almacene adjuntos masivos (PDFs, firmas criptográficas, imágenes) a través de `client.putBinary(...)` delegando en `JettraMemory`.
@@ -1274,6 +1274,7 @@ public class IndexManagementDemo {
 | **Registros Tipados**| `getRecordsEngine(entity, Class<T>)` | Acceso directo a `RecordsEngine<T>`. |
 | **Referencias** | `createLazyRef(...)` / `createEagerRef(...)` | Creación de referencias cruzadas `JettraRef`. |
 | **Índices** | `createIndex(...)`, `listIndexes()`, `dropIndex(...)` | Gestión de índices secundarios en memoria. |
+| **Versiones (RF-18)** | `getVersionHistory(...)`, `getVersion(...)`, `restoreVersion(...)` | Consulta de instantáneas históricas inmutables y restauración de registros. |
 | **Administración** | `admin().backupDatabase(db, options)` | Disparo de hot backups con `BackupOptions`. |
 | **Restauración** | `admin().restoreDatabase(db, path)` | Restauración y sincronización en caliente. |
 | **Clúster Dinámico** | `registerDynamicPeer(...)`, `removeClusterPeer(...)` | Gestión de topología sin reinicio. |
@@ -1388,3 +1389,94 @@ String customId = client.insertDocumentReturningId("ventas_db", "Pedidos", "PED-
 // 3. Inserción estricta en bucket tipado / multimodelo
 String bucketId = client.insertBucketRecord("ventas_db", "DOCUMENT", "Pedidos", null, Map.of("estado", "PAGADO"));
 ```
+
+---
+
+## Historial de Versiones y Restauración de Registros en `JettraStoreDriver` (RF-18)
+
+`JettraStoreDriver` implementa control integral de historial de versiones con trazabilidad completa en el paquete `io.jettra.driver.version`. Cada mutación sobre un registro o documento genera automáticamente una instantánea inmutable numerada secuencialmente (`v1, v2, v3, ...`), permitiendo inspeccionar cualquier estado histórico y restaurar registros a versiones anteriores sin destruir el historial previo.
+
+### 1. Modelo de Datos y Componentes (`io.jettra.driver.version`)
+
+| Componente | Tipo | Descripción |
+| :--- | :--- | :--- |
+| **`VersionOperation`** | `enum` | Operaciones registradas en el historial: `CREATE`, `UPDATE`, `DELETE`, `RESTORE`. |
+| **`RecordVersion`** | `record` | Instantánea inmutable con `versionNumber`, `versionId` (`<recordId>@v<n>`), `databaseName`, `bucketName`, `recordId`, `operation`, `timestamp` (ISO-8601 UTC), `author`, `note`, `restoredFromVersion` y `snapshot` (mapa inmutable; `copySnapshot()` retorna copia mutable). |
+| **`JettraVersionManager`** | `class` | Gestor thread-safe con carga perezosa desde disco, escritura atómica (`<databaseName>_versions.json` vía archivo temporal `.tmp`) y purga por bucket o base de datos. |
+
+### 2. Registro Automático de Versiones en Operaciones CRUD
+
+Al utilizar los métodos de mutación en `JettraClient`, el versionado se dispara automáticamente:
+* **`CREATE`**: `insertDocument(...)`, `insertDocumentReturningId(...)`, `saveDocument(...)`, `insertBucketRecord(...)` y `upsertBucketRecord(...)` (cuando el ID es nuevo).
+* **`UPDATE`**: `updateDocument(db, bucket, id, updates)`, `insertDocument(...)` o `upsertBucketRecord(...)` sobre un ID existente.
+* **`DELETE`**: `deleteDocument(db, bucket, id)` y `deleteBucketRecord(db, engineType, bucket, id)` capturan el snapshot previo a la eliminación antes de borrar el registro activo.
+* **`RESTORE`**: `restoreVersion(db, bucket, id, targetVersionNumber)` restaura el contenido al almacenamiento activo, actualiza índices, persiste en disco, replica al clúster y crea una nueva versión `RESTORE` conservando `restoredFromVersion`.
+
+### 3. API Pública en `JettraClient`
+
+| Método | Retorno | Descripción |
+| :--- | :--- | :--- |
+| `updateDocument(db, bucket, id, updates)` | `Map<String, Object>` | Actualiza un documento existente, persiste/replica y registra versión `UPDATE` (retorna `null` si no existe). |
+| `getVersionHistory(db, bucket, recordId)` | `List<RecordVersion>` | Lista todas las versiones del registro en orden ascendente (`v1, v2, ...`). |
+| `getVersionHistory(bucket, recordId)` | `List<RecordVersion>` | Lista el historial usando la base de datos por defecto configurada en el cliente. |
+| `getVersion(db, bucket, recordId, versionNumber)` | `Optional<RecordVersion>` | Obtiene el detalle completo y snapshot de una versión puntual. |
+| `getVersion(bucket, recordId, versionNumber)` | `Optional<RecordVersion>` | Variante sobre la base de datos por defecto. |
+| `getLatestVersion(db, bucket, recordId)` | `Optional<RecordVersion>` | Retorna la última versión registrada para el elemento. |
+| `restoreVersion(db, bucket, recordId, targetVersion)` | `RecordVersion` | Restaura el registro a `targetVersion`, registrando una nueva versión `RESTORE`. Lanza `IllegalArgumentException` si el elemento o la versión no existen o si se intenta restaurar directamente una versión `DELETE`. |
+| `restoreVersion(bucket, recordId, targetVersion)` | `RecordVersion` | Variante de restauración sobre la base de datos por defecto. |
+| `getVersionManager()` | `JettraVersionManager` | Expone el gestor de versiones subyacente. |
+
+### 4. Ejemplo Paso a Paso en Java 25+
+
+```java
+import io.jettra.driver.JettraClient;
+import io.jettra.driver.version.RecordVersion;
+import io.jettra.driver.version.VersionOperation;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+
+try (JettraClient client = JettraClient.connect("127.0.0.1", 50001, "admin", "admin-jettra")) {
+    String db = "catalogo_db";
+    String bucket = "productos";
+    client.createDatabase(db);
+    client.createBucket(db, bucket, "DOCUMENT");
+
+    // 1. Inserción inicial -> registra automáticamente v1 (CREATE)
+    Map<String, Object> doc = new LinkedHashMap<>();
+    doc.put("nombre", "Teclado Mecánico");
+    doc.put("precio", 85);
+    String id = client.insertDocumentReturningId(db, bucket, "prod-01", doc);
+
+    // 2. Actualizaciones -> registran v2 y v3 (UPDATE)
+    client.updateDocument(db, bucket, id, Map.of("precio", 99));
+    client.updateDocument(db, bucket, id, Map.of("nombre", "Teclado Pro", "precio", 120));
+
+    // 3. Consultar historial completo
+    List<RecordVersion> historial = client.getVersionHistory(db, bucket, id);
+    for (RecordVersion v : historial) {
+        System.out.printf("v%d [%s] %s - %s -> %s%n",
+                v.versionNumber(), v.operation(), v.timestamp(), v.note(), v.snapshot());
+    }
+
+    // 4. Inspeccionar una versión puntual (v1)
+    Optional<RecordVersion> v1 = client.getVersion(db, bucket, id, 1L);
+    v1.ifPresent(v -> System.out.println("Snapshot v1: " + v.snapshot()));
+
+    // 5. Restaurar a v1 -> mantiene v1..v3 y crea v4 (RESTORE desde v1)
+    RecordVersion v4 = client.restoreVersion(db, bucket, id, 1L);
+    assert v4.operation() == VersionOperation.RESTORE;
+    assert v4.restoredFromVersion() == 1L;
+
+    // 6. Eliminación (v5 DELETE) y recuperación posterior desde v3 -> crea v6 (RESTORE)
+    client.deleteDocument(db, bucket, id);
+    RecordVersion v6 = client.restoreVersion(db, bucket, id, 3L);
+    System.out.println("Registro recuperado en v" + v6.versionNumber() + ": " + client.findBucketRecordById(db, bucket, id));
+
+    // 7. Limpieza automática (RF-16): elimina datos, índices, secuencias y <db>_versions.json
+    client.dropDatabase(db);
+}
+```
+
+> **Trazabilidad y Limpieza (RF-16):** Los archivos de historial (`<databaseName>_versions.json` y sus temporales `.tmp`) se eliminan automáticamente al invocar `dropDatabase(db)` desde `JettraClient`, `JettraDatabase` o `JettraStoreServer`, garantizando cero residuos en pruebas automatizadas.

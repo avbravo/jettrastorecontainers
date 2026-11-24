@@ -86,9 +86,12 @@ public final class JettraDatabase implements AutoCloseable {
         loadBucketsFromDisk();
 
         // 2. No cargar bases de datos de ejemplo automáticamente al ejecutar JettraStore
-        // (solo se instalan si se habilita explícitamente -Djettra.samples.autoload=true)
+        // (solo se instalan si se habilita explícitamente -Djettra.samples.autoload=true o JETTRA_SAMPLES_AUTOLOAD=true)
+        boolean autoload = (this.config != null && this.config.isSamplesAutoload())
+                || Boolean.getBoolean("jettra.samples.autoload")
+                || Boolean.parseBoolean(System.getenv("JETTRA_SAMPLES_AUTOLOAD"));
         if (!loaded && getAllBucketNames().isEmpty()
-                && Boolean.getBoolean("jettra.samples.autoload")
+                && autoload
                 && JettraStoreSamples.isSampleDatabase(databaseName)) {
             if (!isReadOnlyNode()) {
                 JettraStoreSamples.installSample(databaseName, this);
@@ -398,11 +401,14 @@ public final class JettraDatabase implements AutoCloseable {
 
     public static int getLightweightBucketCount(String databaseName, JettraStoreConfig config) {
         if (databaseName == null) return 0;
-        if (JettraStoreSamples.isSampleDatabase(databaseName)) {
-            return JettraStoreSamples.getSampleBucketCount(databaseName);
-        }
         Path metaFile = resolveMetaFile(databaseName, config);
         if (metaFile == null || !Files.exists(metaFile)) {
+            boolean autoload = (config != null && config.isSamplesAutoload())
+                    || Boolean.getBoolean("jettra.samples.autoload")
+                    || Boolean.parseBoolean(System.getenv("JETTRA_SAMPLES_AUTOLOAD"));
+            if (autoload && JettraStoreSamples.isSampleDatabase(databaseName)) {
+                return JettraStoreSamples.getSampleBucketCount(databaseName);
+            }
             return 0;
         }
 
@@ -1975,6 +1981,13 @@ public final class JettraDatabase implements AutoCloseable {
                 Files.deleteIfExists(dir.resolve(databaseName + "_sstable.jettra"));
                 Files.deleteIfExists(dir.resolve(databaseName + ".jettra"));
                 Files.deleteIfExists(dir.resolve(databaseName + "_wal.jettra"));
+                Files.deleteIfExists(dir.resolve(databaseName + "_indexes.json"));
+                Files.deleteIfExists(dir.resolve(databaseName + "_sequences.json"));
+                Files.deleteIfExists(dir.resolve(databaseName + "_indexes.json.tmp"));
+                Files.deleteIfExists(dir.resolve(databaseName + "_sequences.json.tmp"));
+                Files.deleteIfExists(dir.resolve(databaseName + "_versions.json"));
+                Files.deleteIfExists(dir.resolve(databaseName + "_versions.json.tmp"));
+                Files.deleteIfExists(dir.resolve(databaseName + "_backup.snap"));
             } catch (Exception ignored) {}
         }
     }

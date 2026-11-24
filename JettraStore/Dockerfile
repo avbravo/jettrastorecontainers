@@ -46,6 +46,7 @@ ENV JETTRA_NODE_ID=node-01 \
     JETTRA_REST_PORT=60001 \
     JETTRA_ADMIN_USERNAME=admin \
     JETTRA_ADMIN_PASSWORD=admin-jettra \
+    JETTRA_SAMPLES_AUTOLOAD=false \
     JAVA_TOOL_OPTIONS="-XX:+UseContainerSupport -XX:+UseG1GC -XX:+UseStringDeduplication -XX:CICompilerCount=2 -XX:+UnlockExperimentalVMOptions -XX:+UseCompactObjectHeaders -XX:MaxRAMPercentage=70.0 --enable-preview --enable-native-access=ALL-UNNAMED" \
     JAVA_OPTS="-Xms96m -Xmx384m -XX:MaxMetaspaceSize=192m -XX:MaxDirectMemorySize=192m"
 
@@ -66,6 +67,7 @@ ENTRYPOINT ["sh", "-c", "if [ \"$JETTRA_CRAC_RESTORE\" = \"true\" ] && [ -d \"$J
             -Djettra.storage.path=${JETTRA_STORAGE_PATH:-/jettra/data} \
             -Djettra.storage.mode=${JETTRA_STORAGE_MODE:-OFF_HEAP} \
             -Dcluster.multinode.active=${JETTRA_MULTINODE_ACTIVE:-on} \
+            -Djettra.samples.autoload=${JETTRA_SAMPLES_AUTOLOAD:-false} \
             -Dmicroprofile.config.file=/app/config/microprofile-config.properties \
             -Dcluster.config.path=${JETTRA_CLUSTER_CONFIG_PATH:-/app/config/cluster.config} \
             -jar /app/JettraStore.jar; \

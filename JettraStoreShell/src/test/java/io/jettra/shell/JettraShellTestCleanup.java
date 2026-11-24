@@ -73,9 +73,14 @@ public final class JettraShellTestCleanup {
         } catch (Exception ignored) {}
         cleanDirectory(Path.of("/jettra/data"));
         cleanDirectory(Path.of(System.getProperty("user.home"), "jettra", "data"));
+        cleanDirectory(Path.of(System.getProperty("user.home"), "jettra-storage-01", "data"));
+        cleanDirectory(Path.of(System.getProperty("user.home"), "jettra-storage-02", "data"));
+        cleanDirectory(Path.of(System.getProperty("user.home"), "jettra-storage-03", "data"));
+        cleanDirectory(Path.of(System.getProperty("user.home"), "jettra-storage-04", "data"));
         cleanDirectory(Path.of("jettra/data"));
         cleanDirectory(Path.of("./jettra/data"));
         cleanDirectory(Path.of("../jettra/data"));
+        cleanDirectory(Path.of("target/test-storage"));
     }
 
     public static void cleanDirectory(Path dir) {
@@ -83,13 +88,30 @@ public final class JettraShellTestCleanup {
         for (String db : KNOWN_TEST_DATABASES) {
             deleteDatabaseArtifacts(dir, db);
         }
-        // También eliminar cualquier base de datos con sufijo _test_db en el directorio
+        // También eliminar cualquier base de datos con sufijo o prefijo de prueba en el directorio
         try (var stream = Files.list(dir)) {
             stream.forEach(entry -> {
                 String fn = entry.getFileName().toString();
-                if (fn.endsWith("_test_db") || fn.endsWith("_test_db_meta.json")
-                        || fn.endsWith("_test_db.jettra") || fn.endsWith("_test_db_sstable.jettra")
-                        || fn.endsWith("_test_db_wal.jettra")) {
+                if (fn.startsWith("test_")
+                        || fn.contains("_test_db")
+                        || fn.startsWith("rf")
+                        || fn.startsWith("db_modals")
+                        || fn.startsWith("databs")
+                        || fn.startsWith("nods")
+                        || fn.startsWith("mydb")
+                        || fn.startsWith("driver_explorer_db")
+                        || fn.startsWith("billing_test")
+                        || fn.startsWith("examplese")
+                        || fn.startsWith("example_factura")
+                        || fn.startsWith("samples_")
+                        || fn.startsWith("idx_")
+                        || fn.startsWith("ref_")
+                        || fn.startsWith("shell_calc")
+                        || fn.startsWith("dist_")
+                        || fn.startsWith("ventas_")
+                        || fn.startsWith("inventario_")
+                        || fn.startsWith("gestacional")
+                        || fn.startsWith("default_")) {
                     deleteRecursively(entry);
                 }
             });
@@ -102,6 +124,10 @@ public final class JettraShellTestCleanup {
             Files.deleteIfExists(dir.resolve(db + "_sstable.jettra"));
             Files.deleteIfExists(dir.resolve(db + ".jettra"));
             Files.deleteIfExists(dir.resolve(db + "_wal.jettra"));
+            Files.deleteIfExists(dir.resolve(db + "_indexes.json"));
+            Files.deleteIfExists(dir.resolve(db + "_sequences.json"));
+            Files.deleteIfExists(dir.resolve(db + "_indexes.json.tmp"));
+            Files.deleteIfExists(dir.resolve(db + "_sequences.json.tmp"));
             Files.deleteIfExists(dir.resolve(db + "_backup.snap"));
             deleteRecursively(dir.resolve(db));
         } catch (Exception ignored) {}

@@ -49,6 +49,8 @@
    - [15.13 Fase 12: Analítica CLI y Cálculos Financieros (AGGREGATE, MATH, FINANCE)](#1513-fase-12-analítica-cli-y-cálculos-financieros-aggregate-math-finance)
    - [15.14 Fase 13: Verificación con DB STATS, Conteo Global y Snapshot de Respaldo](#1514-fase-13-verificación-con-db-stats-conteo-global-y-snapshot-de-respaldo)
 16. [Respaldos Físicos en Caliente y Restauración (Backup & Restore)](#16-respaldos-físicos-en-caliente-y-restauración-backup--restore)
+    - [16.5 Migración de PostgreSQL a JettraStore y Generación de Proyecto Backend (`migrate`) — RF-17](#165-migración-de-postgresql-a-jettrastore-y-generación-de-proyecto-backend-migrate--rf-17)
+    - [16.6 Historial de Versiones y Restauración de Registros (`versions`, `restore version`) — RF-18](#166-historial-de-versiones-y-restauración-de-registros-versions-restore-version--rf-18)
 17. [Gestión del Modo de Almacenamiento: `JVM-RAM`, `DISK-MEMORY` y `OFF-HEAP`](#17-gestión-del-modo-de-almacenamiento-jvm-ram-disk-memory-y-off-heap)
 18. [Módulo de Analítica, Cálculos Cuantitativos y Álgebra Vectorial CLI](#18-módulo-de-analítica-cálculos-cuantitativos-y-álgebra-vectorial-cli)
 19. [Historial Persistente, Expansión Bang y Autocompletado de Comandos CLI (TAB y Flechas ↑/↓)](#19-historial-persistente-expansión-bang-y-autocompletado-de-comandos-cli)
@@ -504,11 +506,11 @@ Las referencias cruzadas (`JettraRef`) conectan registros entre diferentes motor
 
 ### 9.1 Formato de Punteros Multimodelo:
 El formato canónico de un puntero es:
-`<motor>::<coleccion_o_tabla>#<id_objetivo>`
+`<motor>::<bucket_o_unidad>#<id_objetivo>`
 
 | Tipo | Ejemplo | Descripción |
 | :--- | :--- | :--- |
-| `document` | `document::customers#cust_101` | Puntero a un documento JSON en otra colección. |
+| `document` | `document::customers#cust_101` | Puntero a un documento JSON en otro bucket. |
 | `vector` | `vector::product_embeddings#emb_01` | Puntero a un embedding float[] en el motor vectorial. |
 | `graph` | `graph::catalog_graph#cat_hardware` | Puntero a un vértice y sus aristas adyacentes. |
 | `timeseries`| `timeseries::telemetry#1759160000` | Puntero a una métrica temporal. |
@@ -594,7 +596,7 @@ JettraStore incorpora un sistema de seguridad granular basado en roles globales 
   - `DEVELOPER`: Rol operativo estándar para desarrollo.
 - **Roles por Base de Datos**:
   - `DB_OWNER`: Control total sobre una base de datos específica (CRUD, DDL, Índices, Drop).
-  - `READ_WRITE`: Lectura, inserción, actualización y eliminación en las colecciones de esa base de datos.
+  - `READ_WRITE`: Lectura, inserción, actualización y eliminación en los buckets de esa base de datos.
   - `READ_ONLY`: Consultas de solo lectura (`SELECT`, `GET`, `FIND`, `JQL`).
 
 ### 11.2 Comandos de Seguridad:
@@ -641,7 +643,7 @@ DROP USER dev_user;
 ## 12. Exploración de Buckets/Units, Inspección de Registros y Conteo Multimodelo
 
 En la arquitectura multimodelo de `JettraStore`, cada motor organiza sus datos en unidades lógicas especializadas (**Buckets** o **Units**):
-- **DOCUMENT**: Buckets de documentos JSON estructurados (`DEFINED`) o sin estructura fija (`NONE`) (`Bucket`). Los comandos heredados de `COLLECTION` (`CREATE COLLECTION`, `SHOW COLLECTIONS`, `DROP COLLECTION`) fueron retirados y unificados en `BUCKET` (RF-12).
+- **DOCUMENT**: Buckets de documentos JSON estructurados (`DEFINED`) o sin estructura fija (`NONE`) (`Bucket`), administrados de forma unificada mediante comandos `BUCKET` (`CREATE BUCKET`, `SHOW BUCKETS`, `DROP BUCKET`).
 - **VECTOR**: Índices vectoriales de embeddings densos con métricas de coseno (`Vector Index [dim]`).
 - **GRAPH**: Redes de grafos de propiedades, vértices y aristas dirigidas (`Property Graph`).
 - **TIMESERIES**: Métricas y series temporales ordenadas cronológicamente (`Metric Series`).
@@ -865,7 +867,7 @@ SELECT _id, nombre, edad, habitacion, estado FROM pacientes WHERE edad > 40;
 -- Consulta declarativa JettraQL:
 JQL FROM pacientes WHERE estado = Estable;
 
--- Conteo de registros en la colección:
+-- Conteo de registros en el bucket:
 COUNT pacientes;
 
 -- Inspección interactiva de registros con diagnóstico:
@@ -886,7 +888,7 @@ GET pacientes pac_01;
 -- Eliminación mediante cláusula WHERE:
 DELETE FROM pacientes WHERE _id = 'pac_02';
 
--- Eliminación directa indicando colección e ID:
+-- Eliminación directa indicando bucket e ID:
 DELETE pacientes pac_01;
 
 -- Verificación de eliminación:
@@ -1563,9 +1565,9 @@ admin@jettra-cluster:primary> DB STATS
 admin@jettra-cluster:primary> BACKUP DATABASE hospital_db TO './data/jettra/hospital_db_snapshot.snap'
 [SUCCESS] Snapshot físico de 'hospital_db' generado exitosamente en './data/jettra/hospital_db_snapshot.snap'.
 
--- 2. Eliminar una unidad/motor que ya no es necesaria:
-admin@jettra-cluster:primary> DROP ENGINE farmacia_stock
-[SUCCESS] Unidad/Colección/Motor 'farmacia_stock' eliminado.
+-- 2. Eliminar un bucket que ya no es necesario:
+admin@jettra-cluster:primary> DROP BUCKET farmacia_stock
+[SUCCESS] Bucket 'farmacia_stock' eliminado.
 
 -- 3. Verificar que la unidad fue removida del registro de buckets:
 admin@jettra-cluster:primary> SHOW BUCKETS
@@ -1637,10 +1639,10 @@ A continuación aprovisionamos los buckets especializados para cada uno de los m
 -- 1. Unidades del Motor Documental
 admin@jettra-cluster:primary> CREATE BUCKET empresas TYPE DOCUMENT
 admin@jettra-cluster:primary> CREATE BUCKET clientes TYPE DOCUMENT
-admin@jettra-cluster:primary> CREATE COLLECTION productos
-admin@jettra-cluster:primary> CREATE COLLECTION tecnicos
-admin@jettra-cluster:primary> CREATE COLLECTION ordenes_compra
-admin@jettra-cluster:primary> CREATE COLLECTION facturas
+admin@jettra-cluster:primary> CREATE BUCKET productos TYPE DOCUMENT
+admin@jettra-cluster:primary> CREATE BUCKET tecnicos TYPE DOCUMENT
+admin@jettra-cluster:primary> CREATE BUCKET ordenes_compra TYPE DOCUMENT
+admin@jettra-cluster:primary> CREATE BUCKET facturas TYPE DOCUMENT
 
 -- 2. Unidades de Motores Especializados
 admin@jettra-cluster:primary> CREATE BUCKET cache_tecnicos_disponibles TYPE KEYVALUE
@@ -2113,6 +2115,52 @@ RESTORE DATABASE sample_enterprise_db FROM '/var/backups/enterprise_2026.snap';
 
 ---
 
+## 16.5 Migración de PostgreSQL a JettraStore y Generación de Proyecto Backend (`migrate`) — RF-17
+
+`JettraStoreShell` incorpora el comando nativo **`migrate`** para introspeccionar esquemas de **PostgreSQL**, replicar tablas e índices en **Buckets** de JettraStore, transferir datos preservando la precisión crítica de decimales (`BigDecimal`) y marcas de tiempo/fechas ISO-8601, y empaquetar un proyecto backend funcional en **Java 25+** dentro de un archivo `.zip`.
+
+### Sintaxis del Comando `migrate`
+```text
+migrate --db=<base_datos_origen> [opciones]
+```
+
+### Opciones y Parámetros
+- `--host=<ip_o_host>`: Host del servidor PostgreSQL (por defecto `127.0.0.1`).
+- `--port=<puerto>`: Puerto TCP de PostgreSQL (por defecto `5432`).
+- `--db=<nombre>` o `--database=<nombre>`: Nombre de la base de datos relacional de origen (**obligatorio**).
+- `--user=<usuario>`: Usuario de conexión PostgreSQL (por defecto `postgres`).
+- `--password=<clave>`: Contraseña del usuario PostgreSQL.
+- `--schema=<esquema>`: Esquema de tablas a migrar (por defecto `public`).
+- `--target-db=<nombre>`: Base de datos destino a crear o poblar en JettraStore (por defecto el nombre de la BD origen).
+- `--target-engine=<engine>`: Motor para los Buckets destino: `DOCUMENT` (predeterminado) o `JAVA_RECORD`.
+- `--package=<paquete>`: Paquete Java base para el proyecto generado (por defecto `com.example.jettra.backend`).
+- `--output-zip=<ruta>`: Ruta de destino para guardar el archivo `.zip` con el proyecto backend generado.
+- `--generate-backend`: Empaqueta el proyecto backend completo en `.zip` (activo por defecto).
+- `--dry-run`: Modo de simulación: realiza la introspección del esquema y genera el proyecto backend sin escribir datos en JettraStore.
+- `--ssl`: Habilita negociación cifrada TLS/SSL con PostgreSQL.
+
+### Ejemplos de Uso en Consola
+
+```text
+-- 1. Migración completa de la base de datos 'ventas_pg' hacia JettraStore:
+jettra-shell> migrate --host=192.168.1.100 --port=5432 --db=ventas_pg --user=postgres --password=secret --target-db=ventas_jettra --output-zip=./ventas_backend.zip
+
+-- 2. Simulación (Dry-Run) con generación de proyecto backend sin mutar JettraStore:
+jettra-shell> migrate --db=erp_production --schema=public --dry-run --package=com.empresa.erp --output-zip=./erp_backend.zip
+
+-- 3. Migración con motor JAVA_RECORD y SSL activado:
+jettra-shell> migrate --host=db.cloud.corp --port=5432 --db=facturacion --ssl --target-engine=JAVA_RECORD --target-db=facturas_db
+```
+
+### Reglas de Fidelidad de Datos
+- **Decimales (`NUMERIC`/`DECIMAL`):** Migrados directamente como `BigDecimal` con representación textual plana (`toPlainString()`), garantizando exactitud absoluta sin redondeos ni pérdidas flotantes.
+- **Fechas y Marcas de Tiempo:**
+  - `TIMESTAMP` / `TIMESTAMPTZ` ➔ `java.time.Instant` / `OffsetDateTime` en formato ISO-8601 (`YYYY-MM-DDTHH:mm:ss.SSSSSSZ`).
+  - `DATE` ➔ `java.time.LocalDate` en formato ISO-8601 (`YYYY-MM-DD`).
+- **Autoincrementables e Índices:** Las secuencias y columnas autoincrementables (`SERIAL`/`BIGSERIAL`) generan un índice **`AUTO_INCREMENT`** en el Bucket. Las columnas numéricas indexadas generan un índice **`NUMERIC`**, y el resto índices **`BTREE`** con soporte de unicidad.
+
+---
+
 ## 17. Gestión del Modo de Almacenamiento: `JVM-RAM`, `DISK-MEMORY` y `OFF-HEAP`
 
 `JettraStoreShell` permite consultar y conmutar en caliente el modo de almacenamiento entre la memoria RAM de la JVM, el motor de disco off-heap LSM `JettraMemory` y el motor de páginas ranuradas nativas `JettraStore-OffHeap`:
@@ -2250,7 +2298,7 @@ Al escribir un prefijo o comando parcial en el prompt y presionar la tecla **`[T
 1. **Coincidencia Única:** Si existe una única opción válida que coincida con el prefijo ingresado, el comando se autocompleta inmediatamente en la pantalla.
    * *Ejemplo:* Escribir `LOAD SAMPLE ex` y presionar `[TAB]` $\rightarrow$ autocompleta a `LOAD SAMPLE example_factura_db `.
    * *Ejemplo:* Escribir `STATU` y presionar `[TAB]` $\rightarrow$ autocompleta a `STATUS `.
-2. **Múltiples Coincidencias:** Si existen múltiples comandos o argumentos que coincidan, el shell despliega una lista organizada por grupos temáticos (*Bases de Datos*, *Colecciones y Buckets*, *CRUD*, *Índices*, *Cluster*, etc.) junto a una descripción funcional:
+2. **Múltiples Coincidencias:** Si existen múltiples comandos o argumentos que coincidan, el shell despliega una lista organizada por grupos temáticos (*Bases de Datos*, *Buckets y Unidades*, *CRUD*, *Índices*, *Cluster*, etc.) junto a una descripción funcional:
    ```text
    jettra-shell [admin@127.0.0.1:50001/default_db]> SH[TAB]
    === Bases de Datos ===
@@ -2258,10 +2306,9 @@ Al escribir un prefijo o comando parcial en el prompt y presionar la tecla **`[T
    SHOW SAMPLES         -- Muestra bases de datos de demostración predefinidas
    SHOW SAMPLE DATABASES
 
-   === Colecciones y Buckets ===
-   SHOW BUCKETS         -- Lista colecciones/buckets de la base de datos activa
-   SHOW COLLECTIONS     -- Lista colecciones o tablas de la base de datos activa
-   SHOW RECORDS         -- Muestra registros de una colección o bucket
+   === Buckets y Unidades ===
+   SHOW BUCKETS         -- Lista los buckets de la base de datos activa
+   SHOW RECORDS         -- Muestra registros de un bucket
    SHOW TABLES
    SHOW UNITS
 
@@ -2272,7 +2319,7 @@ Al escribir un prefijo o comando parcial en el prompt y presionar la tecla **`[T
    SHOW NODES           -- Lista la topología de nodos del clúster
    SHOW MULTINODE
    ```
-3. **Autocompletado Contextual:** Al ingresar un comando con subargumentos (`USE `, `DROP DATABASE `, `SHOW RECORDS `, `COUNT `, `CONNECT `), el motor sugiere dinámicamente los nombres de bases de datos, colecciones activas y perfiles guardados.
+3. **Autocompletado Contextual:** Al ingresar un comando con subargumentos (`USE `, `DROP DATABASE `, `SHOW RECORDS `, `COUNT `, `CONNECT `), el motor sugiere dinámicamente los nombres de bases de datos, buckets activos y perfiles guardados.
 
 * **Comandos equivalentes en línea:**
   ```bash
@@ -2509,7 +2556,7 @@ logout
   JQL VECTOR SIMILARITY <col> TO [...]  Búsqueda de vecinos más cercanos por similaridad coseno.
   JQL FETCH <col> <id> [RESOLVE REFS]   Recupera un registro resolviendo referencias JettraRef.
   SQL SELECT * FROM <col> [WHERE k = v] Consulta relacional con tabla formateada de columnas y filas.
-  SQL INSERT INTO <col> VALUES (id,..)  Inserta registro en la colección activa.
+  SQL INSERT INTO <col> VALUES (id,..)  Inserta registro en el bucket activo.
   SQL UPDATE <col> SET k = v WHERE ..   Actualiza campos de un registro.
   SQL DELETE FROM <col> WHERE _id = id  Elimina un registro mediante sintaxis SQL.
 
@@ -2536,6 +2583,15 @@ logout
   FINANCE PMT/FV/PV/CAGR/AMORTIZATION   Cálculos financieros corporativos (cuota, tasa, amortización).
   STATS SUMMARY/MEAN/MEDIAN/CORRELATION Estadísticas descriptivas y bivariadas.
   VECTOR COSINE/EUCLIDEAN/DOT/CROSS     Operaciones de álgebra lineal y similitud vectorial.
+
+9. HISTORIAL DE VERSIONES Y RESTAURACIÓN DE REGISTROS (RF-18):
+  VERSIONS <bucket> <id>                Lista el historial de versiones (v1, v2, ...) del registro.
+  VERSION HISTORY <bucket> <id>         Alias de VERSIONS.
+  SHOW VERSIONS <bucket> <id>           Alias de VERSIONS.
+  VERSION SHOW <bucket> <id> <version>  Inspecciona metadatos y snapshot de una versión puntual (1 o v1).
+  RESTORE VERSION <bucket> <id> <v>     Restaura el registro a una versión previa creando nueva versión RESTORE.
+  VERSION RESTORE <bucket> <id> <v>     Alias de RESTORE VERSION.
+  VERSION --help / HELP VERSIONS        Muestra ayuda detallada de comandos de versionado.
 ==============================================================================================
 ```
 
@@ -2632,9 +2688,9 @@ DROP BUCKET INDEX idx_pais_siglas
 
 ### Ejemplos de Comandos en Consola
 ```sql
--- 1. Inserción en colección sin ID (autogenera JettraId y lo muestra en consola)
+-- 1. Inserción en bucket sin ID (autogenera JettraId y lo muestra en consola)
 INSERT INTO Facturas JSON {"cliente":"ACME","total":1250.00}
--- Salida: [SUCCESS] Registro con _id '69231f2a...' (JettraId) insertado en la colección 'Facturas'.
+-- Salida: [SUCCESS] Registro con _id '69231f2a...' (JettraId) insertado en el bucket 'Facturas'.
 
 -- 2. Inserción con sintaxis VALUES sin ID (autogenera JettraId)
 INSERT INTO Facturas VALUES ('{"cliente":"Beta","total":890.00}')
@@ -2684,3 +2740,73 @@ docker login
 docker push <usuario>/jettrastoreshell:1.0
 docker push <usuario>/jettrastoreshell:latest
 ```
+
+---
+
+## 16.6 Historial de Versiones y Restauración de Registros (`versions`, `restore version`) — RF-18
+
+`JettraStoreShell` registra automáticamente el historial de versiones de cada documento/registro cuando se ejecutan operaciones `INSERT INTO`, `UPDATE` o `DELETE` (además de integrarse con `JettraVersionManager` en `JettraStoreDriver`). Cada cambio queda almacenado con su número secuencial (`v1, v2, ...`), operación (`CREATE`, `UPDATE`, `DELETE`, `RESTORE`), marca de tiempo UTC, usuario autenticado y snapshot completo.
+
+### 1. Referencia de Comandos y Sintaxis
+
+| Comando | Alias | Parámetros y Descripción |
+| :--- | :--- | :--- |
+| `VERSIONS <bucket> <id>` | `VERSION HISTORY <bucket> <id>`, `SHOW VERSIONS <bucket> <id>` | Lista en formato tabular todas las versiones registradas para `<id>` en `<bucket>` dentro de la base de datos activa. |
+| `VERSION SHOW <bucket> <id> <version>` | `VERSION GET`, `VERSION INSPECT` | Muestra los metadatos completos (`Version ID`, `Operación`, `Timestamp`, `Autor`, `Nota`, `Origen`) y el contenido del snapshot de `<version>` (admite `1` o `v1`). |
+| `RESTORE VERSION <bucket> <id> <version>` | `VERSION RESTORE <bucket> <id> <version>` | Restaura el registro en `<bucket>` al estado exacto de `<version>` (admite `1` o `v1`), generando una **nueva versión `RESTORE`** sin borrar ni sobrescribir el historial existente. |
+| `VERSION --help` | `VERSIONS --help`, `RESTORE VERSION --help`, `HELP VERSIONS` | Imprime la guía rápida y ejemplos de sintaxis de los comandos de versionado. |
+
+### 2. Flujo Práctico Paso a Paso en Consola
+
+```sql
+-- 1. Seleccionar base de datos y crear bucket
+jettra> CREATE DATABASE inventario_db
+jettra> USE inventario_db
+jettra> CREATE BUCKET productos TYPE DOCUMENT
+
+-- 2. Insertar registro inicial -> crea versión v1 (CREATE)
+jettra> INSERT INTO productos ID p1 JSON {"nombre":"Monitor","precio":300}
+[SUCCESS] Registro con _id 'p1' (JettraId) insertado en el bucket 'productos'.
+
+-- 3. Actualizar el registro -> crea versiones v2 y v3 (UPDATE)
+jettra> UPDATE productos SET {"precio":350} WHERE _id = 'p1'
+jettra> UPDATE productos SET {"precio":400} WHERE _id = 'p1'
+
+-- 4. Consultar el historial de versiones del registro
+jettra> VERSIONS productos p1
+=== HISTORIAL DE VERSIONES [inventario_db.productos :: p1] (3 versiones) ===
+  VERSION  | OPERACIÓN  | TIMESTAMP (UTC)              | AUTOR        | DETALLE
+  -----------------------------------------------------------------------------------------------
+  v1       | CREATE     | 2026-11-24T19:20:01.120Z     | admin        | Inserción desde JettraStoreShell
+  v2       | UPDATE     | 2026-11-24T19:20:05.412Z     | admin        | Actualización desde JettraStoreShell
+  v3       | UPDATE     | 2026-11-24T19:20:09.885Z     | admin        | Actualización desde JettraStoreShell
+
+-- 5. Inspeccionar el detalle y snapshot de la versión v1
+jettra> VERSION SHOW productos p1 v1
+=== DETALLE DE VERSIÓN v1 [inventario_db.productos :: p1] ===
+  Version ID   : p1@v1
+  Operación    : CREATE
+  Timestamp    : 2026-11-24T19:20:01.120Z
+  Autor        : admin
+  Nota         : Inserción desde JettraStoreShell
+  Snapshot     :
+    _id                : p1
+    nombre             : Monitor
+    precio             : 300
+
+-- 6. Restaurar el registro a la versión v1 -> crea v4 (RESTORE)
+jettra> RESTORE VERSION productos p1 1
+[SUCCESS] Registro 'p1' en 'inventario_db.productos' restaurado desde la versión v1 -> nueva versión registrada: v4 (RESTORE).
+  Snapshot restaurado: {_id=p1, nombre=Monitor, precio=300}
+
+-- 7. Verificar el estado activo actual y restaurar nuevamente a v2 -> crea v5 (RESTORE)
+jettra> GET productos p1
+jettra> RESTORE VERSION productos p1 v2
+[SUCCESS] Registro 'p1' en 'inventario_db.productos' restaurado desde la versión v2 -> nueva versión registrada: v5 (RESTORE).
+```
+
+### 3. Validaciones y Manejo de Errores
+* **Parámetros insuficientes:** Si faltan `<bucket>`, `<id>` o `<version>`, el shell responde con `[ERROR] Parámetros insuficientes. Uso: ...`.
+* **Versión inválida:** Si `<version>` no es un entero positivo o formato `v<n>`, responde `[ERROR] Número de versión inválido...`.
+* **Registro o versión inexistente:** `VERSIONS` y `VERSION SHOW` retornan `[NOT FOUND] ...` cuando no hay historial para el ID o la versión solicitada no existe; `RESTORE VERSION` retorna `[ERROR] La versión v<N> no existe...`.
+* **Restauración de `DELETE`:** Si se intenta restaurar directamente una versión cuya operación fue `DELETE`, el sistema rechaza la operación indicando que debe elegirse una versión previa con contenido (`CREATE`, `UPDATE` o `RESTORE`), permitiendo resucitar registros eliminados desde cualquiera de sus versiones anteriores.

@@ -95,3 +95,12 @@ mvn install -pl JettraStoreDriver,JettraStoreExampleSE
 # Ejecutar la aplicación contra el clúster definido en cluster.config (almacena en examplesedb)
 mvn exec:exec -pl JettraStoreExampleSE
 ```
+
+---
+
+## 6. Soporte Tolerante ante Registros Legacy e IDs No-Hexadecimales (RF-18)
+Al interactuar con volúmenes persistentes que contengan registros con identificadores personalizados o legacy (como `"pa-1"` en lugar de hashes de 32 caracteres hexadecimales de `JettraId`), los repositorios implementan una resolución segura:
+
+- **Búsqueda por Índice (`findBySiglas`):** Obtiene los IDs en crudo del índice secundario y resuelve el documento mediante `findByRawId(rawId)`, garantizando que el ID no se convierta a ciegas con `JettraId.fromHex(...)`.
+- **Mapeo a Registro (`toRecord`):** Valida `JettraId.isValidHex(idHex)`. Si el ID no cumple con los 32 caracteres hex, genera un `JettraId` determinista en memoria, evitando lanzar `IllegalArgumentException`.
+- **Compatibilidad Docker:** Permite ejecutar `JettraStoreExampleSEApp` sin bloqueos contra clústeres en contenedores Docker recién inicializados o con datos históricos.

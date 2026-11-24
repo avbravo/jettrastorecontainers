@@ -27,6 +27,7 @@ services:
       - JETTRA_GRPC_PORT=50001
       - JETTRA_ADMIN_USERNAME=admin
       - JETTRA_ADMIN_PASSWORD=admin-jettra
+      - JETTRA_SAMPLES_AUTOLOAD=false
       - JAVA_OPTS=-Xms96m -Xmx384m -XX:MaxMetaspaceSize=192m -XX:MaxDirectMemorySize=192m
     mem_limit: 640m
     mem_reservation: 128m

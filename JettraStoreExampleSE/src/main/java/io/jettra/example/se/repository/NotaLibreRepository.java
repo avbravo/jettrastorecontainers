@@ -43,7 +43,9 @@ public final class NotaLibreRepository implements JettraRepository<NotaLibre> {
         payload.put("jettraId", idHex);
 
         String storedId = client.insertBucketRecord(database, ENGINE, BUCKET, idHex, payload);
-        JettraId resolvedId = JettraId.fromHex(storedId);
+        JettraId resolvedId = (storedId != null && JettraId.isValidHex(storedId))
+                ? JettraId.fromHex(storedId)
+                : assignedId;
         return findById(resolvedId).orElseGet(() -> entity.withJettraId(resolvedId));
     }
 
@@ -61,13 +63,18 @@ public final class NotaLibreRepository implements JettraRepository<NotaLibre> {
         payload.put("jettraId", idHex);
 
         client.upsertBucketRecord(database, ENGINE, BUCKET, idHex, payload);
-        return findById(jettraId).orElseThrow();
+        return findById(jettraId).orElseGet(() -> entity.withJettraId(jettraId));
     }
 
     @Override
     public Optional<NotaLibre> findById(JettraId jettraId) {
         if (jettraId == null) return Optional.empty();
-        Map<String, Object> doc = client.findBucketRecordById(database, BUCKET, jettraId.toHexString());
+        return findByRawId(jettraId.toHexString());
+    }
+
+    public Optional<NotaLibre> findByRawId(String rawId) {
+        if (rawId == null || rawId.isBlank()) return Optional.empty();
+        Map<String, Object> doc = client.findBucketRecordById(database, BUCKET, rawId.trim());
         if (doc == null) return Optional.empty();
         return Optional.of(toRecord(doc));
     }
@@ -91,7 +98,15 @@ public final class NotaLibreRepository implements JettraRepository<NotaLibre> {
         String idHex = doc.get("jettraId") != null
                 ? String.valueOf(doc.get("jettraId"))
                 : (doc.get("_id") != null ? String.valueOf(doc.get("_id")) : null);
-        JettraId jid = (idHex != null && !idHex.isBlank()) ? JettraId.fromHex(idHex) : null;
+        JettraId jid;
+        if (idHex != null && !idHex.isBlank() && JettraId.isValidHex(idHex)) {
+            jid = JettraId.fromHex(idHex);
+        } else if (idHex != null && !idHex.isBlank()) {
+            // Soporte tolerante para registros legacy o IDs string personalizados
+            jid = JettraId.generate("examplesedb", BUCKET);
+        } else {
+            jid = null;
+        }
         Map<String, Object> copy = new LinkedHashMap<>(doc);
         copy.remove("_id");
         copy.remove("jettraId");

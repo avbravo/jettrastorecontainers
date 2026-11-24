@@ -20,6 +20,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Properties;
 
 public class JettraStoreExampleSETest {
@@ -177,6 +178,14 @@ public class JettraStoreExampleSETest {
                 JettraAssert.assertEquals(notaAutoId, nUpdated.jettraId(), "update(JettraId) en Bucket NONE debe conservar el JettraId");
                 JettraAssert.assertEquals("Aristides Actualizado", nUpdated.atributos().get("name"),
                         "Los atributos del Bucket NONE deben actualizarse correctamente");
+
+                // Verificación RF-18: Compatibilidad con registros legacy / custom string ID (ej: 'pa-1')
+                client.upsertBucketRecord(dbName, "JAVA_RECORD", "Pais", "pa-1", Map.of("jettraId", "pa-1", "name", "Panama Legacy", "siglas", "PAL"));
+                Optional<Pais> legacyPais = paisRepo.findBySiglas("PAL");
+                JettraAssert.assertTrue(legacyPais.isPresent(), "Debe recuperar Pais legacy por índice 'siglas' sin lanzar IllegalArgumentException");
+                JettraAssert.assertNotNull(legacyPais.get().jettraId(), "Pais legacy debe tener JettraId resuelto tolerante");
+                JettraAssert.assertEquals("Panama Legacy", legacyPais.get().name(), "Nombre de Pais legacy debe coincidir");
+                client.deleteBucketRecord(dbName, "JAVA_RECORD", "Pais", "pa-1");
             }
 
             // SESIÓN 2: Reabrir un JettraClient completamente nuevo para comprobar persistencia REAL en disco (examplesedb)

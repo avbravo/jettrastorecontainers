@@ -66,6 +66,10 @@ public final class JettraExplorerTestCleanup {
     private JettraExplorerTestCleanup() {}
 
     public static void cleanAll(JettraStorePlugin plugin) {
+        cleanAll(plugin, null);
+    }
+
+    public static void cleanAll(JettraStorePlugin plugin, Path tempStorageDir) {
         if (plugin != null) {
             try {
                 plugin.uninstallAllExampleDatabases();
@@ -75,12 +79,13 @@ public final class JettraExplorerTestCleanup {
                     plugin.deleteDatabase(db);
                 } catch (Exception ignored) {}
             }
-            // Eliminar también cualquier base remanente con sufijo _test_db en el catálogo
+            // Eliminar cualquier base remanente generada durante las pruebas
             try {
-                for (String db : plugin.getDatabaseNames()) {
-                    if (db.endsWith("_test_db")) {
+                List<String> remainingDbs = new ArrayList<>(plugin.getDatabaseNames());
+                for (String db : remainingDbs) {
+                    try {
                         plugin.deleteDatabase(db);
-                    }
+                    } catch (Exception ignored) {}
                 }
             } catch (Exception ignored) {}
             try {
@@ -89,6 +94,9 @@ public final class JettraExplorerTestCleanup {
         }
         cleanTestClusterNodes(plugin);
         cleanStorageDirectories();
+        if (tempStorageDir != null && Files.exists(tempStorageDir)) {
+            deleteRecursively(tempStorageDir);
+        }
     }
 
     public static void cleanTestClusterNodes(JettraStorePlugin plugin) {
@@ -137,9 +145,14 @@ public final class JettraExplorerTestCleanup {
         } catch (Exception ignored) {}
         cleanDirectory(Path.of("/jettra/data"));
         cleanDirectory(Path.of(System.getProperty("user.home"), "jettra", "data"));
+        cleanDirectory(Path.of(System.getProperty("user.home"), "jettra-storage-01", "data"));
+        cleanDirectory(Path.of(System.getProperty("user.home"), "jettra-storage-02", "data"));
+        cleanDirectory(Path.of(System.getProperty("user.home"), "jettra-storage-03", "data"));
+        cleanDirectory(Path.of(System.getProperty("user.home"), "jettra-storage-04", "data"));
         cleanDirectory(Path.of("jettra/data"));
         cleanDirectory(Path.of("./jettra/data"));
         cleanDirectory(Path.of("../jettra/data"));
+        cleanDirectory(Path.of("target/test-storage"));
     }
 
     public static void cleanDirectory(Path dir) {
@@ -150,9 +163,18 @@ public final class JettraExplorerTestCleanup {
         try (var stream = Files.list(dir)) {
             stream.forEach(entry -> {
                 String fn = entry.getFileName().toString();
-                if (fn.endsWith("_test_db") || fn.endsWith("_test_db_meta.json")
-                        || fn.endsWith("_test_db.jettra") || fn.endsWith("_test_db_sstable.jettra")
-                        || fn.endsWith("_test_db_wal.jettra")) {
+                if (fn.startsWith("test_")
+                        || fn.contains("_test_db")
+                        || fn.startsWith("rf")
+                        || fn.startsWith("db_modals")
+                        || fn.startsWith("databs")
+                        || fn.startsWith("nods")
+                        || fn.startsWith("mydb")
+                        || fn.startsWith("driver_explorer_db")
+                        || fn.startsWith("billing_test")
+                        || fn.startsWith("examplese")
+                        || fn.startsWith("example_factura")
+                        || fn.startsWith("samples_")) {
                     deleteRecursively(entry);
                 }
             });
@@ -165,6 +187,10 @@ public final class JettraExplorerTestCleanup {
             Files.deleteIfExists(dir.resolve(db + "_sstable.jettra"));
             Files.deleteIfExists(dir.resolve(db + ".jettra"));
             Files.deleteIfExists(dir.resolve(db + "_wal.jettra"));
+            Files.deleteIfExists(dir.resolve(db + "_indexes.json"));
+            Files.deleteIfExists(dir.resolve(db + "_sequences.json"));
+            Files.deleteIfExists(dir.resolve(db + "_indexes.json.tmp"));
+            Files.deleteIfExists(dir.resolve(db + "_sequences.json.tmp"));
             Files.deleteIfExists(dir.resolve(db + "_backup.snap"));
             deleteRecursively(dir.resolve(db));
         } catch (Exception ignored) {}

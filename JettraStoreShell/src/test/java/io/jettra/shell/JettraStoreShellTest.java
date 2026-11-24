@@ -1226,4 +1226,99 @@ public class JettraStoreShellTest {
             try { shell.executeCommand("DROP DATABASE " + dbName); } catch (Exception ignored) {}
         }
     }
+
+    @Test
+    @DisplayName("RF-17: Comando migrate registrado en help y ejecución con parámetros en JettraStoreShell")
+    public void testMigrateCommandInShell() {
+        JettraStoreShellApp shell = new JettraStoreShellApp(false);
+
+        // 1. Verificar comando en 'help'
+        String help = shell.executeCommand("help");
+        assertTrue(help.contains("MIGRACIÓN POSTGRESQL Y GENERADOR BACKEND (RF-17)"),
+                "help debe registrar la sección de migración RF-17");
+        assertTrue(help.contains("migrate --db=<base_datos> [opciones]"),
+                "help debe documentar la sintaxis del comando migrate");
+
+        // 2. Validación de parámetro obligatorio
+        String resNoDb = shell.executeCommand("migrate");
+        assertTrue(resNoDb.contains("[ERROR] Parámetro obligatorio faltante: --db="),
+                "Debe exigir el parámetro --db");
+
+        // 3. Ejecución en modo dry-run / simulación
+        String resDry = shell.executeCommand("migrate --host=127.0.0.1 --port=5432 --db=postgres --dry-run");
+        assertTrue(resDry.contains("MIGRACIÓN POSTGRESQL"),
+                "Debe mostrar el banner de migración");
+        assertTrue(resDry.contains("SIMULACIÓN (DRY-RUN)"),
+                "Debe indicar modo de simulación");
+    }
+
+    @Test
+    @DisplayName("RF-18: Comandos de historial de versiones, inspección y restauración en JettraStoreShell")
+    public void testVersionHistoryAndRestoreCommandsInShell() {
+        String dbName = "rf18_shell_ver_" + System.nanoTime();
+        try (JettraClient client = JettraClient.connect("127.0.0.1", 50001, "admin", "admin-jettra")) {
+            JettraStoreShellApp shell = new JettraStoreShellApp(client);
+            try {
+                // 1. Verificar ayuda de comandos de versiones
+                String help = shell.executeCommand("help");
+                assertTrue(help.contains("HISTORIAL DE VERSIONES Y RESTAURACIÓN DE REGISTROS (RF-18)"),
+                        "help debe documentar sección RF-18");
+                String helpVer = shell.executeCommand("help versions");
+                assertTrue(helpVer.contains("RESTORE VERSION"),
+                        "help versions debe incluir RESTORE VERSION");
+                String verFlagHelp = shell.executeCommand("version --help");
+                assertTrue(verFlagHelp.contains("VERSIONS <bucket> <id>"),
+                        "version --help debe mostrar la sintaxis");
+
+                // 2. Crear BD y mutar un registro para generar v1, v2, v3
+                assertTrue(shell.executeCommand("CREATE DATABASE " + dbName).contains("[SUCCESS]"));
+                shell.executeCommand("USE " + dbName);
+                assertTrue(shell.executeCommand("CREATE BUCKET productos TYPE DOCUMENT").contains("[SUCCESS]"));
+
+                assertTrue(shell.executeCommand("INSERT INTO productos ID p1 JSON {\"nombre\":\"Monitor\",\"precio\":300}")
+                        .contains("[SUCCESS]"));
+                assertTrue(shell.executeCommand("UPDATE productos SET {\"precio\":350} WHERE _id = 'p1'")
+                        .contains("[SUCCESS]"));
+                assertTrue(shell.executeCommand("UPDATE productos SET {\"precio\":400} WHERE _id = 'p1'")
+                        .contains("[SUCCESS]"));
+
+                // 3. Listar historial
+                String hist = shell.executeCommand("VERSIONS productos p1");
+                assertTrue(hist.contains("v1") && hist.contains("CREATE"), "Historial debe incluir v1 CREATE: " + hist);
+                assertTrue(hist.contains("v2") && hist.contains("UPDATE"), "Historial debe incluir v2 UPDATE: " + hist);
+                assertTrue(hist.contains("v3"), "Historial debe incluir v3: " + hist);
+
+                // 4. Inspeccionar versión puntual (aceptando v1 o 1)
+                String showV1 = shell.executeCommand("VERSION SHOW productos p1 v1");
+                assertTrue(showV1.contains("DETALLE DE VERSIÓN v1") && showV1.contains("300"),
+                        "VERSION SHOW debe mostrar el snapshot de v1: " + showV1);
+
+                // 5. Restaurar a v1 -> crea v4
+                String restore1 = shell.executeCommand("RESTORE VERSION productos p1 1");
+                assertTrue(restore1.contains("[SUCCESS]") && restore1.contains("v4") && restore1.contains("RESTORE"),
+                        "RESTORE VERSION debe confirmar nueva versión v4: " + restore1);
+                String afterRestore1 = shell.executeCommand("GET productos p1");
+                assertTrue(afterRestore1.contains("300"), "El registro activo debe tener el precio de v1 (300): " + afterRestore1);
+
+                // 6. Restauración consecutiva a v2 -> crea v5
+                String restore2 = shell.executeCommand("RESTORE VERSION productos p1 v2");
+                assertTrue(restore2.contains("[SUCCESS]") && restore2.contains("v5"),
+                        "Restauración consecutiva debe crear v5: " + restore2);
+                String afterRestore2 = shell.executeCommand("GET productos p1");
+                assertTrue(afterRestore2.contains("350"), "El registro activo debe tener el precio de v2 (350): " + afterRestore2);
+
+                // 7. Casos borde y validación de errores
+                assertTrue(shell.executeCommand("VERSIONS productos no_existe").contains("[NOT FOUND]"),
+                        "Registro sin historial debe retornar [NOT FOUND]");
+                assertTrue(shell.executeCommand("RESTORE VERSION productos p1 99").contains("[ERROR]"),
+                        "Versión inexistente debe retornar [ERROR]");
+                assertTrue(shell.executeCommand("RESTORE VERSION productos p1 abc").contains("[ERROR]"),
+                        "Número de versión inválido debe retornar [ERROR]");
+                assertTrue(shell.executeCommand("VERSION SHOW productos p1").contains("[ERROR]"),
+                        "Parámetros insuficientes deben retornar [ERROR]");
+            } finally {
+                try { shell.executeCommand("DROP DATABASE " + dbName); } catch (Exception ignored) {}
+            }
+        }
+    }
 }

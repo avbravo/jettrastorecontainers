@@ -34,6 +34,7 @@ public final class JettraStoreConfig {
     private final long jwtExpirationSeconds;
     private final String defaultAdminUsername;
     private final String defaultAdminPassword;
+    private final boolean samplesAutoload;
     private final int grpcPort;
     private final int restPort;
     private final boolean clusterMultinodeActive;
@@ -273,6 +274,10 @@ public final class JettraStoreConfig {
         this.jwtExpirationSeconds = Long.parseLong(props.getProperty("jettra.security.jwt.expiration.seconds", "86400"));
         this.defaultAdminUsername = getPropOrEnv(props, "jettra.security.default.admin.username", "JETTRA_ADMIN_USERNAME", "admin");
         this.defaultAdminPassword = getPropOrEnv(props, "jettra.security.default.admin.password", "JETTRA_ADMIN_PASSWORD", "admin-jettra");
+        this.samplesAutoload = Boolean.parseBoolean(getPropOrEnv(props,
+            new String[]{"jettra.samples.autoload", "jettra.samples.enabled"},
+            new String[]{"JETTRA_SAMPLES_AUTOLOAD", "JETTRA_SAMPLES_ENABLED"},
+            "false"));
 
         this.indexInitialCapacity = Integer.parseInt(props.getProperty("jettra.index.initial.capacity", "256"));
         this.indexMaxInMemoryKeys = Integer.parseInt(props.getProperty("jettra.index.max.inmemory.keys", "50000"));
@@ -429,6 +434,7 @@ public final class JettraStoreConfig {
 
     public boolean isClusterMultinodeActive() { return clusterMultinodeActive; }
     public String getClusterMultinodeActive() { return clusterMultinodeActive ? "on" : "off"; }
+    public boolean isSamplesAutoload() { return samplesAutoload; }
 
     public String getNodeId() { return nodeId; }
     public ClusterNode.Role getNodeRole() { return nodeRole; }

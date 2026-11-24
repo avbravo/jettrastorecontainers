@@ -1,6 +1,7 @@
 package io.jettra.meter;
 
 import io.jettra.test.annotation.AfterAll;
+import io.jettra.test.annotation.BeforeAll;
 import io.jettra.test.annotation.DisplayName;
 import io.jettra.test.annotation.NotRequiresRunningServer;
 import io.jettra.test.annotation.Test;
@@ -15,6 +16,7 @@ import static io.jettra.test.core.JettraAssert.*;
 @NotRequiresRunningServer
 public class JettraStoreMeterTest {
 
+    @BeforeAll
     @AfterAll
     public static void cleanupTestDatabases() {
         List<String> dbs = List.of(
@@ -29,11 +31,16 @@ public class JettraStoreMeterTest {
         List<Path> dirs = new java.util.ArrayList<>(List.of(
             Path.of("/jettra/data"),
             Path.of(System.getProperty("user.home"), "jettra", "data"),
+            Path.of(System.getProperty("user.home"), "jettra-storage-01", "data"),
+            Path.of(System.getProperty("user.home"), "jettra-storage-02", "data"),
+            Path.of(System.getProperty("user.home"), "jettra-storage-03", "data"),
+            Path.of(System.getProperty("user.home"), "jettra-storage-04", "data"),
             Path.of("jettra/data"),
             Path.of("./jettra/data"),
             Path.of("../jettra/data"),
             Path.of("./data/jettra"),
-            Path.of("data/jettra")
+            Path.of("data/jettra"),
+            Path.of("target/test-storage")
         ));
         try {
             io.jettra.store.core.JettraStoreConfig cfg = io.jettra.store.core.JettraStoreConfig.load();
@@ -50,6 +57,10 @@ public class JettraStoreMeterTest {
                     Files.deleteIfExists(dir.resolve(db + "_sstable.jettra"));
                     Files.deleteIfExists(dir.resolve(db + ".jettra"));
                     Files.deleteIfExists(dir.resolve(db + "_wal.jettra"));
+                    Files.deleteIfExists(dir.resolve(db + "_indexes.json"));
+                    Files.deleteIfExists(dir.resolve(db + "_sequences.json"));
+                    Files.deleteIfExists(dir.resolve(db + "_indexes.json.tmp"));
+                    Files.deleteIfExists(dir.resolve(db + "_sequences.json.tmp"));
                     Files.deleteIfExists(dir.resolve(db + "_backup.snap"));
                     Path sub = dir.resolve(db);
                     if (Files.exists(sub)) {
@@ -61,6 +72,34 @@ public class JettraStoreMeterTest {
                     }
                 } catch (Exception ignored) {}
             }
+            try (var stream = Files.list(dir)) {
+                stream.forEach(entry -> {
+                    String fn = entry.getFileName().toString();
+                    if (fn.startsWith("test_")
+                            || fn.contains("_test_db")
+                            || fn.startsWith("rf")
+                            || fn.startsWith("db_modals")
+                            || fn.startsWith("databs")
+                            || fn.startsWith("nods")
+                            || fn.startsWith("mydb")
+                            || fn.startsWith("driver_explorer_db")
+                            || fn.startsWith("billing_test")
+                            || fn.startsWith("examplese")
+                            || fn.startsWith("example_factura")
+                            || fn.startsWith("samples_")) {
+                        try {
+                            if (Files.isDirectory(entry)) {
+                                try (var walk = Files.walk(entry)) {
+                                    walk.sorted(Comparator.reverseOrder()).forEach(p -> {
+                                        try { Files.deleteIfExists(p); } catch (Exception ignored) {}
+                                    });
+                                }
+                            }
+                            Files.deleteIfExists(entry);
+                        } catch (Exception ignored) {}
+                    }
+                });
+            } catch (Exception ignored) {}
         }
     }
 

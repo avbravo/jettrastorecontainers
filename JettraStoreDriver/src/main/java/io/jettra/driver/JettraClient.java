@@ -6,6 +6,9 @@ import io.jettra.driver.query.JettraSqlCommand;
 import io.jettra.driver.query.JettraResultSet;
 import io.jettra.driver.query.JettraFluentQuery;
 import io.jettra.driver.query.JettraResults;
+import io.jettra.driver.version.JettraVersionManager;
+import io.jettra.driver.version.RecordVersion;
+import io.jettra.driver.version.VersionOperation;
 import io.jettra.store.cluster.ClusterNode;
 import io.jettra.store.cluster.ClusterNodeDistributionInfo;
 import io.jettra.store.cluster.DynamicRingEngine;
@@ -40,6 +43,7 @@ public final class JettraClient implements AutoCloseable {
     private final DynamicRingEngine ringEngine;
     private final List<JettraPoliceEventListener> policeListeners = new CopyOnWriteArrayList<>();
     private final Consumer<JettraPoliceNotification> policeNotificationListener;
+    private final JettraVersionManager versionManager = new JettraVersionManager();
 
     public JettraClient(JettraClientConfig config) {
         this.config = config;
@@ -262,6 +266,7 @@ public final class JettraClient implements AutoCloseable {
             ));
         }
         boolean inMemory = false;
+        versionManager.dropDatabaseHistory(name.trim());
         JettraDatabase db = databases.remove(name);
         if (db != null) {
             inMemory = true;
@@ -322,6 +327,12 @@ public final class JettraClient implements AutoCloseable {
                 deleted |= Files.deleteIfExists(p.resolve(name + cfg.getFileExtension()));
                 deleted |= Files.deleteIfExists(p.resolve(name + ".snap"));
                 deleted |= Files.deleteIfExists(p.resolve(name + "_backup.snap"));
+                deleted |= Files.deleteIfExists(p.resolve(name + "_indexes.json"));
+                deleted |= Files.deleteIfExists(p.resolve(name + "_sequences.json"));
+                deleted |= Files.deleteIfExists(p.resolve(name + "_indexes.json.tmp"));
+                deleted |= Files.deleteIfExists(p.resolve(name + "_sequences.json.tmp"));
+                deleted |= Files.deleteIfExists(p.resolve(name + "_versions.json"));
+                deleted |= Files.deleteIfExists(p.resolve(name + "_versions.json.tmp"));
 
             } catch (Exception ignored) {}
         }
@@ -1219,7 +1230,56 @@ public final class JettraClient implements AutoCloseable {
                 : (data != null && data.get("_id") != null && !String.valueOf(data.get("_id")).isBlank()
                         ? String.valueOf(data.get("_id")).trim()
                         : io.jettra.store.core.JettraId.generate(databaseName, bucketName).toHexString());
-        getDatabase(databaseName).getDocumentEngine(bucketName).insert(effectiveId, data);
+        var docEngine = getDatabase(databaseName).getDocumentEngine(bucketName);
+        boolean existed = docEngine.findById(effectiveId) != null;
+        docEngine.insert(effectiveId, data);
+        Map<String, Object> persisted = docEngine.findById(effectiveId);
+        versionManager.recordVersion(
+                databaseName, bucketName, effectiveId,
+                existed ? VersionOperation.UPDATE : VersionOperation.CREATE,
+                persisted != null ? persisted : data,
+                currentVersionAuthor(),
+                existed ? "Actualización de documento" : "Creación de documento",
+                null
+        );
+    }
+
+    /**
+     * Actualiza un documento existente en el bucket indicado, persiste en disco, replica al clúster
+     * y registra automáticamente una nueva versión {@link VersionOperation#UPDATE} (RF-18).
+     *
+     * @return El documento actualizado completo, o {@code null} si el documento no existe.
+     */
+    public Map<String, Object> updateDocument(String databaseName, String bucketName, String id, Map<String, Object> updates) {
+        if (databaseName == null || databaseName.isBlank()
+                || bucketName == null || bucketName.isBlank()
+                || id == null || id.isBlank()) {
+            return null;
+        }
+        String cleanId = id.trim();
+        JettraDatabase db = getDatabase(databaseName);
+        var docEngine = db.getDocumentEngine(bucketName.trim());
+        Map<String, Object> existing = docEngine.findById(cleanId);
+        if (existing == null) {
+            return null;
+        }
+        docEngine.update(cleanId, updates != null ? updates : Collections.emptyMap());
+        db.saveToDisk();
+        Map<String, Object> updated = docEngine.findById(cleanId);
+        if (updated != null) {
+            try {
+                replicatePutDocument(databaseName, bucketName.trim(), cleanId, updated);
+            } catch (Exception ignored) {}
+            versionManager.recordVersion(
+                    databaseName, bucketName.trim(), cleanId,
+                    VersionOperation.UPDATE,
+                    updated,
+                    currentVersionAuthor(),
+                    "Actualización de documento",
+                    null
+            );
+        }
+        return updated;
     }
 
     /**
@@ -1240,7 +1300,18 @@ public final class JettraClient implements AutoCloseable {
                 : (data != null && data.get("_id") != null && !String.valueOf(data.get("_id")).isBlank()
                         ? String.valueOf(data.get("_id")).trim()
                         : io.jettra.store.core.JettraId.generate(databaseName, bucketName).toHexString());
-        return getDatabase(databaseName).getDocumentEngine(bucketName).insertStrict(effectiveId, data);
+        var docEngine = getDatabase(databaseName).getDocumentEngine(bucketName);
+        String storedId = docEngine.insertStrict(effectiveId, data);
+        Map<String, Object> persisted = docEngine.findById(storedId);
+        versionManager.recordVersion(
+                databaseName, bucketName, storedId,
+                VersionOperation.CREATE,
+                persisted != null ? persisted : data,
+                currentVersionAuthor(),
+                "Creación de documento",
+                null
+        );
+        return storedId;
     }
 
     public void createBucket(String databaseName, String bucketName, String engineType) {
@@ -1255,15 +1326,50 @@ public final class JettraClient implements AutoCloseable {
     }
 
     public boolean dropBucket(String databaseName, String bucketName) {
-        return getDatabase(databaseName).dropBucket(bucketName);
+        boolean dropped = getDatabase(databaseName).dropBucket(bucketName);
+        if (dropped) {
+            versionManager.dropBucketHistory(databaseName, bucketName);
+        }
+        return dropped;
     }
 
     public boolean deleteDocument(String databaseName, String bucketName, String id) {
         var db = getDatabase(databaseName);
         if (db.getDocumentEngineNames().contains(bucketName)) {
-            return db.getDocumentEngine(bucketName).delete(id);
+            var docEngine = db.getDocumentEngine(bucketName);
+            Map<String, Object> beforeDelete = docEngine.findById(id);
+            boolean deleted = docEngine.delete(id);
+            if (deleted) {
+                versionManager.recordVersion(
+                        databaseName, bucketName, id,
+                        VersionOperation.DELETE,
+                        beforeDelete != null ? beforeDelete : Collections.emptyMap(),
+                        currentVersionAuthor(),
+                        "Eliminación de documento",
+                        null
+                );
+            }
+            return deleted;
         } else if (db.getKeyValueEngineNames().contains(bucketName)) {
-            return db.getKeyValueEngine(bucketName).remove(id);
+            var kvEngine = db.getKeyValueEngine(bucketName);
+            byte[] prevBytes = kvEngine.get(id);
+            boolean removed = kvEngine.remove(id);
+            if (removed) {
+                Map<String, Object> snap = new LinkedHashMap<>();
+                snap.put("_id", id);
+                if (prevBytes != null) {
+                    snap.put("value", new String(prevBytes, java.nio.charset.StandardCharsets.UTF_8));
+                }
+                versionManager.recordVersion(
+                        databaseName, bucketName, id,
+                        VersionOperation.DELETE,
+                        snap,
+                        currentVersionAuthor(),
+                        "Eliminación de clave-valor",
+                        null
+                );
+            }
+            return removed;
         }
         return false;
     }
@@ -1969,7 +2075,11 @@ public final class JettraClient implements AutoCloseable {
     }
 
     public boolean dropBucket(String databaseName, String engineType, String bucketName) {
-        return getDatabase(databaseName).dropBucket(engineType, bucketName);
+        boolean dropped = getDatabase(databaseName).dropBucket(engineType, bucketName);
+        if (dropped) {
+            versionManager.dropBucketHistory(databaseName, bucketName);
+        }
+        return dropped;
     }
 
     public io.jettra.store.core.JettraBucketSchema.ValidationResult validateBucketRecord(
@@ -1986,10 +2096,19 @@ public final class JettraClient implements AutoCloseable {
                         : io.jettra.store.core.JettraId.generate(databaseName, bucketName).toHexString());
         JettraDatabase db = getDatabase(databaseName);
         String storedId = db.insertBucketRecord(engineType, bucketName, effectiveId, record);
+        Map<String, Object> persisted = null;
         try {
-            Map<String, Object> persisted = db.getDocumentEngine(bucketName.trim()).findById(storedId);
+            persisted = db.getDocumentEngine(bucketName.trim()).findById(storedId);
             replicatePutDocument(databaseName, bucketName.trim(), storedId, persisted != null ? persisted : record);
         } catch (Exception ignored) {}
+        versionManager.recordVersion(
+                databaseName, bucketName.trim(), storedId,
+                VersionOperation.CREATE,
+                persisted != null ? persisted : record,
+                currentVersionAuthor(),
+                "Creación de registro en bucket",
+                null
+        );
         return storedId;
     }
 
@@ -2001,11 +2120,21 @@ public final class JettraClient implements AutoCloseable {
                         ? String.valueOf(record.get("_id")).trim()
                         : io.jettra.store.core.JettraId.generate(databaseName, bucketName).toHexString());
         JettraDatabase db = getDatabase(databaseName);
+        boolean existed = db.getDocumentEngine(bucketName.trim()).findById(effectiveId) != null;
         String storedId = db.upsertBucketRecord(engineType, bucketName, effectiveId, record);
+        Map<String, Object> persisted = null;
         try {
-            Map<String, Object> persisted = db.getDocumentEngine(bucketName.trim()).findById(storedId);
+            persisted = db.getDocumentEngine(bucketName.trim()).findById(storedId);
             replicatePutDocument(databaseName, bucketName.trim(), storedId, persisted != null ? persisted : record);
         } catch (Exception ignored) {}
+        versionManager.recordVersion(
+                databaseName, bucketName.trim(), storedId,
+                existed ? VersionOperation.UPDATE : VersionOperation.CREATE,
+                persisted != null ? persisted : record,
+                currentVersionAuthor(),
+                existed ? "Actualización de registro en bucket" : "Creación de registro en bucket",
+                null
+        );
         return storedId;
     }
 
@@ -2083,13 +2212,153 @@ public final class JettraClient implements AutoCloseable {
     }
 
     public boolean deleteBucketRecord(String databaseName, String engineType, String bucketName, String id) {
-        boolean deleted = getDatabase(databaseName).deleteBucketRecord(engineType, bucketName, id);
+        JettraDatabase db = getDatabase(databaseName);
+        Map<String, Object> beforeDelete = null;
+        try {
+            beforeDelete = db.getDocumentEngine(bucketName.trim()).findById(id);
+        } catch (Exception ignored) {}
+        boolean deleted = db.deleteBucketRecord(engineType, bucketName, id);
         if (deleted) {
             try {
                 replicateDeleteDocument(databaseName, bucketName.trim(), id);
             } catch (Exception ignored) {}
+            versionManager.recordVersion(
+                    databaseName, bucketName.trim(), id,
+                    VersionOperation.DELETE,
+                    beforeDelete != null ? beforeDelete : Collections.emptyMap(),
+                    currentVersionAuthor(),
+                    "Eliminación de registro en bucket",
+                    null
+            );
         }
         return deleted;
+    }
+
+    // =========================================================================
+    // HISTORIAL DE VERSIONES Y RESTAURACIÓN DE REGISTROS (RF-18)
+    // =========================================================================
+
+    private String currentVersionAuthor() {
+        return (config != null && config.getUsername() != null && !config.getUsername().isBlank())
+                ? config.getUsername().trim()
+                : "system";
+    }
+
+    public JettraVersionManager getVersionManager() {
+        return versionManager;
+    }
+
+    /**
+     * Lista todas las versiones históricas registradas para un elemento específico en orden ascendente (v1, v2, ...).
+     */
+    public List<RecordVersion> getVersionHistory(String databaseName, String bucketName, String recordId) {
+        return versionManager.getHistory(databaseName, bucketName, recordId);
+    }
+
+    /**
+     * Lista todas las versiones históricas de un registro en la base de datos por defecto.
+     */
+    public List<RecordVersion> getVersionHistory(String bucketName, String recordId) {
+        return getVersionHistory(getDefaultDatabase(), bucketName, recordId);
+    }
+
+    /**
+     * Obtiene el detalle completo de una versión puntual de un registro.
+     */
+    public Optional<RecordVersion> getVersion(String databaseName, String bucketName, String recordId, long versionNumber) {
+        return versionManager.getVersion(databaseName, bucketName, recordId, versionNumber);
+    }
+
+    /**
+     * Obtiene el detalle completo de una versión puntual en la base de datos por defecto.
+     */
+    public Optional<RecordVersion> getVersion(String bucketName, String recordId, long versionNumber) {
+        return getVersion(getDefaultDatabase(), bucketName, recordId, versionNumber);
+    }
+
+    /**
+     * Retorna la versión más reciente registrada para el elemento indicado.
+     */
+    public Optional<RecordVersion> getLatestVersion(String databaseName, String bucketName, String recordId) {
+        return versionManager.getLatestVersion(databaseName, bucketName, recordId);
+    }
+
+    /**
+     * Restaura un elemento/documento a una versión anterior seleccionada, persistiendo el estado restaurado
+     * en el almacenamiento activo y registrando la restauración como una nueva versión {@link VersionOperation#RESTORE}
+     * sin destruir ni sobreescribir la trazabilidad del historial (RF-18).
+     *
+     * @throws IllegalArgumentException si el elemento o la versión no existen, o si la versión objetivo es DELETE.
+     */
+    public RecordVersion restoreVersion(String databaseName, String bucketName, String recordId, long targetVersionNumber) {
+        if (databaseName == null || databaseName.isBlank()) {
+            throw new IllegalArgumentException("El nombre de la base de datos es obligatorio.");
+        }
+        if (bucketName == null || bucketName.isBlank()) {
+            throw new IllegalArgumentException("El nombre del bucket es obligatorio.");
+        }
+        if (recordId == null || recordId.isBlank()) {
+            throw new IllegalArgumentException("El identificador del registro (_id) es obligatorio.");
+        }
+        if (targetVersionNumber <= 0) {
+            throw new IllegalArgumentException("El número de versión objetivo debe ser un entero positivo (ej. 1, 2, ...).");
+        }
+
+        String cleanDb = databaseName.trim();
+        String cleanBucket = bucketName.trim();
+        String cleanId = recordId.trim();
+
+        List<RecordVersion> history = versionManager.getHistory(cleanDb, cleanBucket, cleanId);
+        if (history.isEmpty()) {
+            throw new IllegalArgumentException(String.format(
+                    "No existe historial de versiones para el registro '%s' en '%s.%s'.", cleanId, cleanDb, cleanBucket));
+        }
+
+        RecordVersion target = history.stream()
+                .filter(v -> v.versionNumber() == targetVersionNumber)
+                .findFirst()
+                .orElseThrow(() -> new IllegalArgumentException(String.format(
+                        "La versión v%d no existe para el registro '%s' en '%s.%s' (versiones disponibles: v1..v%d).",
+                        targetVersionNumber, cleanId, cleanDb, cleanBucket,
+                        history.get(history.size() - 1).versionNumber())));
+
+        if (target.operation() == VersionOperation.DELETE) {
+            throw new IllegalArgumentException(String.format(
+                    "La versión v%d corresponde a una operación DELETE. Seleccione una versión previa con contenido (CREATE, UPDATE o RESTORE).",
+                    targetVersionNumber));
+        }
+
+        Map<String, Object> restoredDoc = target.copySnapshot();
+        restoredDoc.put("_id", cleanId);
+
+        JettraDatabase db = getDatabase(cleanDb);
+        db.getDocumentEngine(cleanBucket).insert(cleanId, restoredDoc);
+        try {
+            db.getIndexManager().onDocumentInsert(cleanBucket, cleanId, restoredDoc);
+        } catch (Exception ignored) {}
+        db.saveToDisk();
+        try {
+            replicatePutDocument(cleanDb, cleanBucket, cleanId, restoredDoc);
+        } catch (Exception ignored) {}
+
+        Map<String, Object> persisted = db.getDocumentEngine(cleanBucket).findById(cleanId);
+        return versionManager.recordVersion(
+                cleanDb,
+                cleanBucket,
+                cleanId,
+                VersionOperation.RESTORE,
+                persisted != null ? persisted : restoredDoc,
+                currentVersionAuthor(),
+                "Restaurado desde versión v" + targetVersionNumber,
+                targetVersionNumber
+        );
+    }
+
+    /**
+     * Restaura un elemento a una versión anterior en la base de datos por defecto.
+     */
+    public RecordVersion restoreVersion(String bucketName, String recordId, long targetVersionNumber) {
+        return restoreVersion(getDefaultDatabase(), bucketName, recordId, targetVersionNumber);
     }
 
     public JettraIndexManager.IndexInfo createBucketIndex(

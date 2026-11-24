@@ -27,6 +27,7 @@ services:
       - JETTRA_GRPC_PORT=50001
       - JETTRA_ADMIN_USERNAME=admin
       - JETTRA_ADMIN_PASSWORD=admin-jettra
+      - JETTRA_SAMPLES_AUTOLOAD=false
       - JETTRA_CLUSTER_PEERS=node-02:jettra-node-02:50002:SECONDARY,node-03:jettra-node-03:50003:SECONDARY
       - JAVA_OPTS=-Xms96m -Xmx384m -XX:MaxMetaspaceSize=192m -XX:MaxDirectMemorySize=192m
     mem_limit: 640m
@@ -72,6 +73,7 @@ services:
       - JETTRA_GRPC_PORT=50002
       - JETTRA_ADMIN_USERNAME=admin
       - JETTRA_ADMIN_PASSWORD=admin-jettra
+      - JETTRA_SAMPLES_AUTOLOAD=false
       - JETTRA_CLUSTER_PEERS=node-01:jettra-node-01:50001:PRIMARY,node-03:jettra-node-03:50003:SECONDARY
       - JAVA_OPTS=-Xms96m -Xmx384m -XX:MaxMetaspaceSize=192m -XX:MaxDirectMemorySize=192m
     mem_limit: 640m
@@ -117,6 +119,7 @@ services:
       - JETTRA_GRPC_PORT=50003
       - JETTRA_ADMIN_USERNAME=admin
       - JETTRA_ADMIN_PASSWORD=admin-jettra
+      - JETTRA_SAMPLES_AUTOLOAD=false
       - JETTRA_CLUSTER_PEERS=node-01:jettra-node-01:50001:PRIMARY,node-02:jettra-node-02:50002:SECONDARY
       - JAVA_OPTS=-Xms96m -Xmx384m -XX:MaxMetaspaceSize=192m -XX:MaxDirectMemorySize=192m
     mem_limit: 640m

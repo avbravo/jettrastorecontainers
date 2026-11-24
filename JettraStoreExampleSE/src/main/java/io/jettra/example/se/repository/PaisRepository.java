@@ -71,7 +71,9 @@ public final class PaisRepository implements JettraRepository<Pais> {
         map.put("siglas", entity.siglas());
 
         String storedId = client.insertBucketRecord(database, ENGINE, BUCKET, idHex, map);
-        JettraId resolvedId = JettraId.fromHex(storedId);
+        JettraId resolvedId = (storedId != null && JettraId.isValidHex(storedId))
+                ? JettraId.fromHex(storedId)
+                : assignedId;
         return findById(resolvedId).orElseGet(() -> entity.withJettraId(resolvedId));
     }
 
@@ -81,6 +83,9 @@ public final class PaisRepository implements JettraRepository<Pais> {
         validateWithJettraRules(entity);
         String idHex = jettraId.toHexString();
         Optional<Pais> existing = findById(jettraId);
+        if (existing.isEmpty() && entity.siglas() != null) {
+            existing = findBySiglas(entity.siglas());
+        }
         if (existing.isEmpty()) {
             throw new NoSuchElementException("No existe Pais con JettraId=" + idHex);
         }
@@ -97,20 +102,29 @@ public final class PaisRepository implements JettraRepository<Pais> {
         map.put("siglas", entity.siglas());
 
         client.upsertBucketRecord(database, ENGINE, BUCKET, idHex, map);
-        return findById(jettraId).orElseThrow();
+        return findById(jettraId).orElseGet(() -> entity.withJettraId(jettraId));
     }
 
     @Override
     public Optional<Pais> findById(JettraId jettraId) {
         if (jettraId == null) return Optional.empty();
-        Map<String, Object> doc = client.findBucketRecordById(database, BUCKET, jettraId.toHexString());
+        return findByRawId(jettraId.toHexString());
+    }
+
+    public Optional<Pais> findByRawId(String rawId) {
+        if (rawId == null || rawId.isBlank()) return Optional.empty();
+        Map<String, Object> doc = client.findBucketRecordById(database, BUCKET, rawId.trim());
         return doc != null ? Optional.of(toRecord(doc)) : Optional.empty();
     }
 
     public Optional<Pais> findBySiglas(String siglas) {
         Set<String> ids = client.findIdsByBucketIndex(database, BUCKET, "siglas", siglas);
         if (ids.isEmpty()) return Optional.empty();
-        return findById(JettraId.fromHex(ids.iterator().next()));
+        for (String id : ids) {
+            Optional<Pais> p = findByRawId(id);
+            if (p.isPresent()) return p;
+        }
+        return Optional.empty();
     }
 
     @Override
@@ -132,7 +146,15 @@ public final class PaisRepository implements JettraRepository<Pais> {
         String idHex = doc.get("jettraId") != null
                 ? String.valueOf(doc.get("jettraId"))
                 : (doc.get("_id") != null ? String.valueOf(doc.get("_id")) : null);
-        JettraId jid = (idHex != null && !idHex.isBlank()) ? JettraId.fromHex(idHex) : null;
+        JettraId jid;
+        if (idHex != null && !idHex.isBlank() && JettraId.isValidHex(idHex)) {
+            jid = JettraId.fromHex(idHex);
+        } else if (idHex != null && !idHex.isBlank()) {
+            // Soporte tolerante para registros legacy o identificadores personalizados no-hex (ej. 'pa-1')
+            jid = JettraId.generate("examplesedb", BUCKET);
+        } else {
+            jid = null;
+        }
         Long codigo = doc.get("codigo") instanceof Number n ? n.longValue() : null;
         String name = doc.get("name") != null ? String.valueOf(doc.get("name")) : "";
         String siglas = doc.get("siglas") != null ? String.valueOf(doc.get("siglas")) : "";

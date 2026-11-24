@@ -17,11 +17,14 @@ import io.jettra.store.explorer.pages.backup.BackupFluxView;
 import io.jettra.store.explorer.pages.cluster.ClusterConfigFluxView;
 import io.jettra.store.explorer.pages.cluster.ClusterFluxView;
 import io.jettra.store.explorer.pages.connections.ConnectionManagerFluxView;
+import io.jettra.driver.JettraClient;
+import io.jettra.driver.migrator.*;
 import io.jettra.store.explorer.pages.databases.DatabasesFluxView;
 import io.jettra.store.explorer.pages.examples.ExamplesFluxView;
 import io.jettra.store.explorer.pages.explorer.RecordExplorerFluxView;
 import io.jettra.store.explorer.pages.login.LoginFluxView;
 import io.jettra.store.explorer.pages.map.TransferMapFluxView;
+import io.jettra.store.explorer.pages.migrator.MigratorFluxView;
 import io.jettra.store.explorer.pages.police.PoliceMonitorFluxView;
 import io.jettra.store.explorer.pages.query.QueryConsoleFluxView;
 import io.jettra.store.explorer.pages.security.UserManagerFluxView;
@@ -250,6 +253,12 @@ public class App {
         // 6. Consola Interactiva JettraSQL / JQL / Shell (/query)
         server.get("/query", (req, resp) -> handleQueryGet(req, resp, server));
         server.post("/query", (req, resp) -> handleQueryPost(req, resp, server));
+
+        // 7. Migrador PostgreSQL a JettraStore y Generador Backend (/migrator) (RF-17)
+        server.get("/migrator", (req, resp) -> handleMigratorGet(req, resp, server));
+        server.post("/migrator", (req, resp) -> handleMigratorPost(req, resp, server));
+        server.get("/api/migrator/download", (req, resp) -> handleMigratorDownloadGet(req, resp, server));
+        server.get("/api/migrator/download-zip", (req, resp) -> handleMigratorDownloadGet(req, resp, server));
 
         // 7. Gestor de Conexiones (/connections)
         server.get("/connections", (req, resp) -> handleConnectionsGet(req, resp, server));
@@ -1629,6 +1638,156 @@ public class App {
 
     public static int getActiveSessionCount() {
         return ACTIVE_SESSIONS.size();
+    }
+
+    // --- Migrador PostgreSQL a JettraStore y Generador Backend (RF-17) ---
+    private static volatile PostgresConnectionConfig lastMigratorConfig = new PostgresConnectionConfig();
+    private static volatile List<String> lastDiscoveredDatabases = new ArrayList<>();
+    private static volatile List<String> lastDiscoveredSchemas = new ArrayList<>();
+    private static volatile PostgresIntrospectionResult lastIntrospectionResult;
+    private static volatile MigrationProgress lastMigrationProgress;
+    private static volatile byte[] lastMigratorZipBytes;
+
+    private static void handleMigratorGet(HttpRequest req, HttpResponse resp, JettraServer server) {
+        if (!requireAuth(req, resp)) return;
+        String user = getLoggedUser(req);
+        String flash = req.getQueryParam("msg");
+        boolean isError = "true".equalsIgnoreCase(req.getQueryParam("error"));
+        boolean canDownload = lastMigratorZipBytes != null && lastMigratorZipBytes.length > 0;
+
+        Widget view = new MigratorFluxView(
+                lastMigratorConfig,
+                lastDiscoveredDatabases,
+                lastDiscoveredSchemas,
+                lastIntrospectionResult,
+                lastMigrationProgress,
+                flash,
+                isError,
+                canDownload
+        );
+        renderTemplate(resp, server, user, "Migrador PostgreSQL - JettraStore Explorer", "migrator", view);
+    }
+
+    private static void handleMigratorPost(HttpRequest req, HttpResponse resp, JettraServer server) {
+        if (!requireAuth(req, resp)) return;
+        Map<String, String> form = parseFormBody(req.getBodyAsString());
+        String action = form.getOrDefault("action", "analyze").trim();
+
+        PostgresConnectionConfig cfg = new PostgresConnectionConfig();
+        cfg.setHost(form.getOrDefault("host", "127.0.0.1"));
+        try {
+            cfg.setPort(Integer.parseInt(form.getOrDefault("port", "5432").trim()));
+        } catch (Exception ignored) {}
+        cfg.setDatabase(form.getOrDefault("database", "postgres"));
+        cfg.setUser(form.getOrDefault("user", "postgres"));
+        cfg.setPassword(form.getOrDefault("password", ""));
+        cfg.setSchema(form.getOrDefault("schema", "public"));
+        String targetDb = form.getOrDefault("targetDatabase", "");
+        if (targetDb.isBlank() || "migrated_db".equals(targetDb)) {
+            targetDb = cfg.getDatabase();
+        }
+        cfg.setTargetDatabase(targetDb);
+        cfg.setTargetEngine(form.getOrDefault("targetEngine", "DOCUMENT"));
+        cfg.setBackendPackageName(form.getOrDefault("backendPackageName", "com.example.jettra.backend"));
+        cfg.setSsl("true".equalsIgnoreCase(form.get("ssl")) || "on".equalsIgnoreCase(form.get("ssl")));
+        cfg.setGenerateBackend(!"false".equalsIgnoreCase(form.get("generateBackend")));
+        lastMigratorConfig = cfg;
+
+        JettraPostgresMigrator migrator = new JettraPostgresMigrator();
+
+        if ("connect".equalsIgnoreCase(action) || "discover".equalsIgnoreCase(action) || "load_dbs".equalsIgnoreCase(action)) {
+            try {
+                List<String> dbs = migrator.listDatabases(cfg);
+                lastDiscoveredDatabases = dbs;
+                if (!dbs.isEmpty() && (cfg.getDatabase() == null || cfg.getDatabase().isBlank() || !dbs.contains(cfg.getDatabase()))) {
+                    cfg.setDatabase(dbs.get(0));
+                }
+                List<String> schemas = migrator.listSchemas(cfg);
+                lastDiscoveredSchemas = schemas;
+                if (!schemas.isEmpty() && (cfg.getSchema() == null || cfg.getSchema().isBlank() || !schemas.contains(cfg.getSchema()))) {
+                    cfg.setSchema(schemas.contains("public") ? "public" : schemas.get(0));
+                }
+                lastMigratorConfig = cfg;
+                redirect(resp, "/migrator?msg=" + java.net.URLEncoder.encode(
+                        "Conexión exitosa a PostgreSQL: " + dbs.size() + " base(s) de datos y " + schemas.size() + " esquema(s) disponibles.",
+                        StandardCharsets.UTF_8));
+            } catch (Exception ex) {
+                redirect(resp, "/migrator?error=true&msg=" + java.net.URLEncoder.encode(
+                        "Error al conectar con PostgreSQL (" + cfg.getHost() + ":" + cfg.getPort() + "): " + ex.getMessage(),
+                        StandardCharsets.UTF_8));
+            }
+        } else if ("analyze".equalsIgnoreCase(action)) {
+            try {
+                // Actualizar o descubrir esquemas y bases si aún no se habían cargado
+                if (lastDiscoveredDatabases.isEmpty()) {
+                    try { lastDiscoveredDatabases = migrator.listDatabases(cfg); } catch (Exception ignored) {}
+                }
+                try {
+                    lastDiscoveredSchemas = migrator.listSchemas(cfg);
+                } catch (Exception ignored) {}
+
+                lastIntrospectionResult = migrator.introspect(cfg);
+                if (lastIntrospectionResult.getAvailableDatabases() != null && !lastIntrospectionResult.getAvailableDatabases().isEmpty()) {
+                    lastDiscoveredDatabases = lastIntrospectionResult.getAvailableDatabases();
+                }
+                if (lastIntrospectionResult.getAvailableSchemas() != null && !lastIntrospectionResult.getAvailableSchemas().isEmpty()) {
+                    lastDiscoveredSchemas = lastIntrospectionResult.getAvailableSchemas();
+                }
+                lastMigrationProgress = null;
+                if (lastIntrospectionResult.isSuccess()) {
+                    redirect(resp, "/migrator?msg=" + java.net.URLEncoder.encode("Análisis completado para base '" + cfg.getDatabase() + "' (esquema '" + cfg.getSchema() + "'): " + lastIntrospectionResult.getTables().size() + " tablas detectadas.", StandardCharsets.UTF_8));
+                } else {
+                    redirect(resp, "/migrator?error=true&msg=" + java.net.URLEncoder.encode("Error al analizar esquema: " + lastIntrospectionResult.getErrorMessage(), StandardCharsets.UTF_8));
+                }
+            } catch (Exception ex) {
+                redirect(resp, "/migrator?error=true&msg=" + java.net.URLEncoder.encode("Error al conectar a PostgreSQL: " + ex.getMessage(), StandardCharsets.UTF_8));
+            }
+        } else if ("migrate".equalsIgnoreCase(action) || "dry-run".equalsIgnoreCase(action)) {
+            boolean isDry = "dry-run".equalsIgnoreCase(action);
+            cfg.setDryRun(isDry);
+            try {
+                JettraStorePlugin plugin = JettraStorePlugin.getInstance();
+                JettraClient client = plugin != null ? plugin.getDriverClient() : null;
+                MigrationProgress prog = migrator.migrate(cfg, client, null);
+                lastMigrationProgress = prog;
+                if (prog.getGeneratedZipBytes() != null) {
+                    lastMigratorZipBytes = prog.getGeneratedZipBytes();
+                }
+                if (prog.isHasErrors()) {
+                    redirect(resp, "/migrator?error=true&msg=" + java.net.URLEncoder.encode("Migración finalizada con advertencias o errores. Revise la consola.", StandardCharsets.UTF_8));
+                } else {
+                    String msg = isDry ? "Simulación completada con éxito. Proyecto backend generado." : "Migración completada con éxito. Buckets e Índices replicados en JettraStore.";
+                    redirect(resp, "/migrator?msg=" + java.net.URLEncoder.encode(msg, StandardCharsets.UTF_8));
+                }
+            } catch (Exception ex) {
+                redirect(resp, "/migrator?error=true&msg=" + java.net.URLEncoder.encode("Fallo en la ejecución de la migración: " + ex.getMessage(), StandardCharsets.UTF_8));
+            }
+        } else {
+            redirect(resp, "/migrator");
+        }
+    }
+
+    private static void handleMigratorDownloadGet(HttpRequest req, HttpResponse resp, JettraServer server) {
+        if (!requireAuth(req, resp)) return;
+        if (lastMigratorZipBytes == null || lastMigratorZipBytes.length == 0) {
+            if (lastIntrospectionResult != null && lastIntrospectionResult.isSuccess()) {
+                try {
+                    lastMigratorZipBytes = new JettraBackendProjectGenerator().generateZip(lastIntrospectionResult, lastMigratorConfig);
+                } catch (Exception ignored) {}
+            }
+        }
+
+        if (lastMigratorZipBytes == null || lastMigratorZipBytes.length == 0) {
+            resp.status(HttpStatus.NOT_FOUND);
+            resp.contentType("text/plain; charset=UTF-8");
+            resp.body("No hay proyecto backend generado disponible para descargar. Ejecute primero el análisis o la migración.");
+            return;
+        }
+
+        resp.contentType("application/zip");
+        resp.header("Content-Disposition", "attachment; filename=\"jettra-backend.zip\"");
+        resp.header("Cache-Control", "no-cache, no-store, must-revalidate");
+        resp.body(lastMigratorZipBytes);
     }
 
     // --- Utilidades de Plantilla y HTTP ---
