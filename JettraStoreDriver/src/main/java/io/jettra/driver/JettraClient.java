@@ -1936,7 +1936,11 @@ public final class JettraClient implements AutoCloseable {
             String bucketName,
             io.jettra.store.core.JettraBucketSchema.StructureType structureType,
             List<io.jettra.store.core.JettraBucketSchema.AttributeRule> attributes) {
-        return getDatabase(databaseName).createBucket(engineType, bucketName, structureType, attributes);
+        var meta = getDatabase(databaseName).createBucket(engineType, bucketName, structureType, attributes);
+        try {
+            replicateCreateEngine(databaseName, bucketName, engineType);
+        } catch (Exception ignored) {}
+        return meta;
     }
 
     public io.jettra.store.core.JettraBucketSchema.BucketMetadata createBucket(
@@ -1980,7 +1984,13 @@ public final class JettraClient implements AutoCloseable {
                 : (record != null && record.get("_id") != null && !String.valueOf(record.get("_id")).isBlank()
                         ? String.valueOf(record.get("_id")).trim()
                         : io.jettra.store.core.JettraId.generate(databaseName, bucketName).toHexString());
-        return getDatabase(databaseName).insertBucketRecord(engineType, bucketName, effectiveId, record);
+        JettraDatabase db = getDatabase(databaseName);
+        String storedId = db.insertBucketRecord(engineType, bucketName, effectiveId, record);
+        try {
+            Map<String, Object> persisted = db.getDocumentEngine(bucketName.trim()).findById(storedId);
+            replicatePutDocument(databaseName, bucketName.trim(), storedId, persisted != null ? persisted : record);
+        } catch (Exception ignored) {}
+        return storedId;
     }
 
     public String upsertBucketRecord(
@@ -1990,11 +2000,96 @@ public final class JettraClient implements AutoCloseable {
                 : (record != null && record.get("_id") != null && !String.valueOf(record.get("_id")).isBlank()
                         ? String.valueOf(record.get("_id")).trim()
                         : io.jettra.store.core.JettraId.generate(databaseName, bucketName).toHexString());
-        return getDatabase(databaseName).upsertBucketRecord(engineType, bucketName, effectiveId, record);
+        JettraDatabase db = getDatabase(databaseName);
+        String storedId = db.upsertBucketRecord(engineType, bucketName, effectiveId, record);
+        try {
+            Map<String, Object> persisted = db.getDocumentEngine(bucketName.trim()).findById(storedId);
+            replicatePutDocument(databaseName, bucketName.trim(), storedId, persisted != null ? persisted : record);
+        } catch (Exception ignored) {}
+        return storedId;
+    }
+
+    /**
+     * Sincroniza la instantánea completa ({@code <dbName>_meta.json}: Buckets, esquemas DEFINED/NONE,
+     * índices, secuencias y registros con JettraId) directamente desde el nodo PRIMARY especificado
+     * vía trama Raft {@code TYPE_SYNC_DATA_REQ}, refrescando el caché local del cliente.
+     */
+    public boolean syncDatabaseFromPrimary(String host, int port, String databaseName) {
+        if (databaseName == null || databaseName.isBlank()) return false;
+        String cleanDb = databaseName.trim();
+        if (io.jettra.store.JettraStoreServer.getActiveInstance() != null) {
+            return io.jettra.store.JettraStoreServer.getActiveInstance().getOrCreateDatabase(cleanDb) != null;
+        }
+        if (host != null && !host.isBlank() && port > 0) {
+            var req = io.jettra.store.cluster.JettraRaftFrame.syncDataReq(1L, "jettra-driver", cleanDb);
+            var resp = sendClusterFrame(host, port, req, 1200, 3000);
+            if (resp != null && resp.frameType() == io.jettra.store.cluster.JettraRaftFrame.TYPE_SYNC_DATA_RESP
+                    && resp.payload() != null && resp.payload().length > 0) {
+                try {
+                    JettraStoreConfig scfg = JettraStoreConfig.load();
+                    Path metaFile = io.jettra.store.core.JettraDatabase.resolveMetaFile(cleanDb, scfg);
+                    if (metaFile != null) {
+                        if (metaFile.getParent() != null) {
+                            Files.createDirectories(metaFile.getParent());
+                        }
+                        boolean shouldApplyRemote = !Files.exists(metaFile);
+                        if (!shouldApplyRemote) {
+                            String remoteText = new String(resp.payload(), java.nio.charset.StandardCharsets.UTF_8);
+                            boolean remoteHasData = remoteText.contains("\"buckets\"") && !remoteText.contains("\"buckets\":{}");
+                            boolean remoteHasDocs = remoteText.contains("\"documents\"") && !remoteText.contains("\"documents\":{}");
+                            long localSize = Files.size(metaFile);
+                            shouldApplyRemote = (remoteHasData || remoteHasDocs) && resp.payload().length >= localSize;
+                        }
+                        if (shouldApplyRemote) {
+                            Path tmp = metaFile.resolveSibling(metaFile.getFileName() + ".tmp");
+                            Files.write(tmp, resp.payload());
+                            try {
+                                Files.move(tmp, metaFile, java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+                                        java.nio.file.StandardCopyOption.ATOMIC_MOVE);
+                            } catch (Exception atomicEx) {
+                                Files.move(tmp, metaFile, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                            }
+                            databases.remove(cleanDb);
+                            return true;
+                        }
+                    }
+                } catch (Exception e) {
+                    System.err.println("[JettraStoreDriver] Error aplicando snapshot remoto de '" + cleanDb + "': " + e.getMessage());
+                }
+            }
+        }
+        // Refrescar caché local desde disco si existe el archivo de metadatos
+        JettraStoreConfig scfg = JettraStoreConfig.load();
+        Path localMeta = io.jettra.store.core.JettraDatabase.resolveMetaFile(cleanDb, scfg);
+        if (localMeta != null && Files.exists(localMeta)) {
+            databases.remove(cleanDb);
+            return true;
+        }
+        return false;
+    }
+
+    public Map<String, Object> findBucketRecordById(String databaseName, String bucketName, String id) {
+        if (databaseName == null || bucketName == null || id == null || id.isBlank()) return null;
+        return getDatabase(databaseName).getDocumentEngine(bucketName.trim()).findById(id.trim());
+    }
+
+    public List<Map<String, Object>> findAllBucketRecords(String databaseName, String bucketName) {
+        if (databaseName == null || bucketName == null) return List.of();
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (Map<String, Object> doc : getDatabase(databaseName).getDocumentEngine(bucketName.trim())) {
+            out.add(doc);
+        }
+        return out;
     }
 
     public boolean deleteBucketRecord(String databaseName, String engineType, String bucketName, String id) {
-        return getDatabase(databaseName).deleteBucketRecord(engineType, bucketName, id);
+        boolean deleted = getDatabase(databaseName).deleteBucketRecord(engineType, bucketName, id);
+        if (deleted) {
+            try {
+                replicateDeleteDocument(databaseName, bucketName.trim(), id);
+            } catch (Exception ignored) {}
+        }
+        return deleted;
     }
 
     public JettraIndexManager.IndexInfo createBucketIndex(

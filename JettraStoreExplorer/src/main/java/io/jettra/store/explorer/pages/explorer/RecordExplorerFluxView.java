@@ -124,9 +124,13 @@ public class RecordExplorerFluxView extends FluxView {
     public Widget build() {
         JettraStorePlugin plugin = JettraStorePlugin.getInstance();
         List<String> dbs = plugin.getDatabaseNames();
-        String currentDb = (activeDb != null && plugin.getDatabasesCatalog().containsKey(activeDb))
+        String currentDb = (activeDb != null && !activeDb.isBlank() && plugin.getDatabasesCatalog().containsKey(activeDb))
                 ? activeDb
-                : (dbs.isEmpty() ? "example_factura_db" : dbs.get(0));
+                : (activeDb != null && !activeDb.isBlank() ? activeDb.trim()
+                        : (dbs.isEmpty() ? "example_factura_db" : dbs.get(0)));
+
+        // Sincronizar Buckets, esquemas, índices y registros reales desde JettraStoreDriver / PRIMARY
+        plugin.syncDatabaseContentsFromDriver(currentDb);
 
         List<EngineBucketInfo> buckets = plugin.getBuckets(currentDb);
         String rawBucket = activeBucket;
@@ -142,8 +146,11 @@ public class RecordExplorerFluxView extends FluxView {
         int currentPage = pageResult.page();
         boolean isStreamed = pageResult.streamed();
 
-        // 1. Notificación Flash si existe (errores de validación en rojo, éxitos en cian)
-        Widget flashWidget = FluxUi.flashBanner(message);
+        // 1. Notificación Flash si existe (errores de validación o sincronización en rojo, éxitos en cian)
+        String effectiveMessage = (message != null && !message.isBlank())
+                ? message
+                : plugin.getLastExplorerSyncError();
+        Widget flashWidget = FluxUi.flashBanner(effectiveMessage);
 
         // 2. Navegación jerárquica en Árbol enfocada únicamente en la base de datos activa (Database -> Engine -> Bucket)
         Widget treeNav = buildHierarchyTree(plugin, currentDb, currentBucket);

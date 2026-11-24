@@ -302,3 +302,22 @@ En todo el ecosistema **JettraStore** (`JettraStore`, `JettraStoreDriver`, `Jett
 
 - En **`/database`**, el grupo **`⚙️ DOCUMENT`** dentro de **Motores de Almacenamiento y Buckets** permite crear (`➕ Añadir Bucket en DOCUMENT`), editar (`✏️ Editar`), eliminar (`🗑️ Remover`) e indexar (`⚡ Administrar Índices`) únicamente **Buckets** (`NONE` o `DEFINED`).
 - En **`/explorer`**, el **Tree Explorador Jerárquico** (`Database -> Engine -> Bucket`), la cabecera **`📦 Bucket Seleccionado`**, el modal de **`📐 Estructura del Bucket`** y el modal de **`⚡ Índices del Bucket`** operan uniformemente sobre **Buckets** para `DOCUMENT` y el resto de motores.
+
+---
+
+## 8. Sincronización en Vivo de `/explorer` con `examplesedb` (`JettraStoreExampleSE`) — RF-14
+
+Cuando una aplicación cliente como **`JettraStoreExampleSE`** crea la base de datos `examplesedb` con sus **Buckets** (`Pais` en `JAVA_RECORD`, `Producto` y `NotasLibres` en `DOCUMENT`), esquemas (`DEFINED`/`NONE`), índices (`AUTO_INCREMENT`, `BTREE`, `NUMERIC`) y registros con **`JettraId`**, la vista `/explorer` de **`JettraStoreExplorer`** los carga en vivo mediante **`JettraStoreDriver`**:
+
+1. **Flujo de consulta en `/explorer`:**
+   - `RecordExplorerFluxView` invoca `plugin.syncDatabaseContentsFromDriver(currentDb)`.
+   - `JettraStorePlugin` solicita a `JettraClient.syncDatabaseFromPrimary(host, port, currentDb)` la instantánea más reciente (`TYPE_SYNC_DATA_REQ` → `<dbName>_meta.json`) desde el nodo `PRIMARY` (con respaldo en disco local si se comparte directorio de almacenamiento).
+   - A partir de `JettraStoreDriver`, carga:
+     - **Buckets reales:** `client.listBuckets(dbName)` y `client.getDocumentEngineNames(dbName)`.
+     - **Esquemas (`DEFINED`/`NONE`):** `BucketMetadata.structureType()` y `BucketMetadata.attributes()`.
+     - **Índices por Bucket:** `client.listIndexes(dbName)` filtrados por nombre de Bucket.
+     - **Registros y `JettraId`:** `client.findAllBucketRecords(dbName, bucketName)`, mostrando el `JettraId` en la columna `ID`, resumen de campos, versión y fecha de mutación en la `DataTable`.
+2. **Diagnóstico si `JettraStoreShell` muestra datos y `/explorer` no:**
+   - Verifique en `/cluster` que el nodo `PRIMARY` esté **ACTIVE** y apuntando al mismo puerto gRPC (`50001`) usado por `JettraStoreExampleSE` y `JettraStoreShell`.
+   - Revise el banner flash de `/explorer` (los errores de sincronización del driver ya no se silencian y se registran en consola con prefijo `[JettraStoreExplorer]`).
+   - Reinicie `JettraStoreExplorer` si se recompiló `JettraStoreDriver` o `JettraStoreExplorer`.

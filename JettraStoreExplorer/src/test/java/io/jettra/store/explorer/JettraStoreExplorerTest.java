@@ -1962,7 +1962,7 @@ public class JettraStoreExplorerTest {
     @DisplayName("47. RF-03: Árbol jerárquico mejorado, validación estricta UNIQUE/AUTO_INCREMENT y detección de índices numéricos/autoincrementables")
     public void testRf03HierarchyTreeStrictValidationAndNumericAutoIncrementIndexes() throws Exception {
         JettraStorePlugin plugin = JettraStorePlugin.getInstance();
-        String dbName = "rf03_explorer_test_db";
+        String dbName = "rf03_explorer_test_db_" + System.currentTimeMillis();
         try {
             plugin.createDatabase(dbName, "NotasLibres", "DOCUMENT", "Base de pruebas RF-03");
             // 1. Bucket NONE: debe permitir flujo flexible, inferir campos numéricos de registros y ofrecer 'Añadir Estructura' en el árbol
@@ -2655,6 +2655,72 @@ public class JettraStoreExplorerTest {
             JettraAssert.assertTrue(idxRes.body().contains("Índices del Bucket 'FacturasRF12' (" + dbName + " / DOCUMENT)"),
                     "El modal de índices debe titularse como Bucket en DOCUMENT");
         } finally {
+            plugin.deleteDatabase(dbName);
+        }
+    }
+
+    @Test
+    @DisplayName("RF-14: /explorer sincroniza Buckets, esquemas, índices y registros con JettraId de examplesedb vía JettraStoreDriver")
+    public void testExplorerSyncsExamplesedbBucketsIndexesAndRecordsFromDriver() {
+        JettraStorePlugin plugin = JettraStorePlugin.getInstance();
+        String dbName = "examplesedb_rf14_" + System.currentTimeMillis();
+        io.jettra.driver.JettraClient driver = plugin.getDriverClient();
+        try {
+            // 1. Simular ejecución de JettraStoreExampleSE creando Buckets (DEFINED y NONE), índices y registros con JettraId
+            driver.createDatabase(dbName);
+            driver.createBucket(dbName, "JAVA_RECORD", "Pais",
+                    io.jettra.store.core.JettraBucketSchema.StructureType.DEFINED,
+                    java.util.List.of(
+                            new io.jettra.store.core.JettraBucketSchema.AttributeRule("jettraId", "String", "NOT_NULL", "JettraId"),
+                            new io.jettra.store.core.JettraBucketSchema.AttributeRule("codigo", "Long", "AUTO_INCREMENT", "Código"),
+                            new io.jettra.store.core.JettraBucketSchema.AttributeRule("name", "String", "NOT_NULL", "Nombre"),
+                            new io.jettra.store.core.JettraBucketSchema.AttributeRule("siglas", "String", "NOT_NULL", "Siglas")
+                    ));
+            driver.createAutoIncrementIndex(dbName, "Pais", "idx_rf14_pais_codigo", "codigo");
+            driver.createBucketIndex(dbName, "Pais", "idx_rf14_pais_siglas", "siglas", "BTREE", true);
+
+            driver.createBucket(dbName, "DOCUMENT", "NotasLibres",
+                    io.jettra.store.core.JettraBucketSchema.StructureType.NONE, java.util.List.of());
+
+            String paJettraId = io.jettra.store.core.JettraId.generate(dbName, "Pais").toHexString();
+            java.util.Map<String, Object> paDoc = new java.util.LinkedHashMap<>();
+            paDoc.put("jettraId", paJettraId);
+            paDoc.put("name", "República de Panamá");
+            paDoc.put("siglas", "PA");
+            driver.insertBucketRecord(dbName, "JAVA_RECORD", "Pais", paJettraId, paDoc);
+
+            String notaJettraId = io.jettra.store.core.JettraId.generate(dbName, "NotasLibres").toHexString();
+            java.util.Map<String, Object> notaDoc = new java.util.LinkedHashMap<>();
+            notaDoc.put("jettraId", notaJettraId);
+            notaDoc.put("autor", "Aristides");
+            driver.insertBucketRecord(dbName, "DOCUMENT", "NotasLibres", notaJettraId, notaDoc);
+
+            // 2. Renderizar /explorer en JettraStoreExplorer y verificar Buckets, registros con JettraId, esquema e índices
+            io.jettra.server.flux.FluxRenderer renderer = new io.jettra.server.flux.FluxRenderer();
+            String recordsHtml = renderer.render(
+                    new io.jettra.store.explorer.pages.explorer.RecordExplorerFluxView(
+                            dbName, "Pais", "records", "", null, null, null, false, false, false, false, null, 1, 10).build(),
+                    "RF14 Records");
+            JettraAssert.assertTrue(recordsHtml.contains("Pais") && recordsHtml.contains("NotasLibres"),
+                    "El árbol de /explorer debe mostrar los Buckets reales creados en " + dbName);
+            JettraAssert.assertTrue(recordsHtml.contains(paJettraId) && recordsHtml.contains("República de Panamá"),
+                    "La DataTable de /explorer debe mostrar el JettraId y los datos persistidos en Pais");
+
+            String schemaHtml = renderer.render(
+                    new io.jettra.store.explorer.pages.explorer.RecordExplorerFluxView(
+                            dbName, "Pais", "schema", "", null, null, null, false, false, false, false, null, 1, 10).build(),
+                    "RF14 Schema");
+            JettraAssert.assertTrue(schemaHtml.contains("DEFINED") && schemaHtml.contains("siglas") && schemaHtml.contains("AUTO_INCREMENT"),
+                    "La vista de estructura debe reflejar el esquema DEFINED creado desde JettraStoreDriver");
+
+            String indexesHtml = renderer.render(
+                    new io.jettra.store.explorer.pages.explorer.RecordExplorerFluxView(
+                            dbName, "Pais", "indexes", "", null, null, null, false, false, false, false, null, 1, 10).build(),
+                    "RF14 Indexes");
+            JettraAssert.assertTrue(indexesHtml.contains("idx_rf14_pais_codigo") && indexesHtml.contains("idx_rf14_pais_siglas"),
+                    "La vista de índices debe reflejar los índices reales creados en el Bucket Pais");
+        } finally {
+            driver.dropDatabase(dbName);
             plugin.deleteDatabase(dbName);
         }
     }

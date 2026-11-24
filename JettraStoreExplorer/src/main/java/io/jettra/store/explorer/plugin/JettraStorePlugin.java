@@ -2457,6 +2457,211 @@ public class JettraStorePlugin {
         targetCatalog.put("system_metadata_db", metaBuckets);
     }
 
+    private volatile String lastExplorerSyncError;
+
+    public String getLastExplorerSyncError() {
+        return lastExplorerSyncError;
+    }
+
+    /**
+     * Sincroniza los Buckets reales, esquemas (DEFINED/NONE), índices y registros (con JettraId)
+     * de la base de datos indicada directamente desde {@code JettraStoreDriver} / nodo {@code PRIMARY},
+     * garantizando consistencia exacta entre {@code JettraStoreShell} y {@code JettraStoreExplorer (/explorer)}.
+     */
+    public synchronized boolean syncDatabaseContentsFromDriver(String dbName) {
+        this.lastExplorerSyncError = null;
+        if (dbName == null || dbName.isBlank()) {
+            return false;
+        }
+        String cleanDb = dbName.trim();
+        try {
+            io.jettra.driver.JettraClient client = getDriverClient();
+            ServerNodeInfo primary = getPrimaryNode();
+            if (primary != null && primary.isActive() && primary.getHost() != null && primary.getPort() > 0) {
+                client.syncDatabaseFromPrimary(primary.getHost(), primary.getPort(), cleanDb);
+            } else {
+                client.syncDatabaseFromPrimary(null, 0, cleanDb);
+            }
+
+            List<io.jettra.store.core.JettraBucketSchema.BucketMetadata> bucketMetas = client.listBuckets(cleanDb);
+            Set<String> docBucketNames = client.getDocumentEngineNames(cleanDb);
+            List<io.jettra.store.engine.index.JettraIndexManager.IndexInfo> allIndexes = client.listIndexes(cleanDb);
+
+            // Mapear todos los buckets reales descubiertos (desde BucketMetadata + motores reales)
+            Map<String, io.jettra.store.core.JettraBucketSchema.BucketMetadata> discoveredMeta = new LinkedHashMap<>();
+            if (bucketMetas != null) {
+                for (var bm : bucketMetas) {
+                    if (bm != null && bm.bucketName() != null && !bm.bucketName().isBlank()) {
+                        discoveredMeta.put(bm.bucketName().trim().toLowerCase(Locale.ROOT), bm);
+                    }
+                }
+            }
+            if (docBucketNames != null) {
+                for (String bName : docBucketNames) {
+                    if (bName == null || bName.isBlank()) continue;
+                    String key = bName.trim().toLowerCase(Locale.ROOT);
+                    discoveredMeta.putIfAbsent(key, new io.jettra.store.core.JettraBucketSchema.BucketMetadata(
+                            cleanDb, "DOCUMENT", bName.trim(),
+                            io.jettra.store.core.JettraBucketSchema.StructureType.NONE, List.of(), 0L));
+                }
+            }
+
+            if (discoveredMeta.isEmpty()) {
+                return false;
+            }
+
+            List<EngineBucketInfo> existingList = databasesCatalog.getOrDefault(cleanDb, Collections.emptyList());
+            Map<String, EngineBucketInfo> existingByName = new LinkedHashMap<>();
+            for (EngineBucketInfo eb : existingList) {
+                existingByName.put(eb.getBucketName().trim().toLowerCase(Locale.ROOT), eb);
+            }
+
+            List<EngineBucketInfo> syncedBuckets = new ArrayList<>();
+            java.time.format.DateTimeFormatter fmt = java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+            String nowTs = java.time.LocalDateTime.now().format(fmt);
+
+            for (var bm : discoveredMeta.values()) {
+                String bName = bm.bucketName().trim();
+                String key = bName.toLowerCase(Locale.ROOT);
+                EngineBucketInfo prev = existingByName.get(key);
+                String engType = (bm.engineType() != null && !bm.engineType().isBlank())
+                        ? bm.engineType().trim().toUpperCase(Locale.ROOT)
+                        : "DOCUMENT";
+                String structType = bm.structureType() != null ? bm.structureType().name() : "NONE";
+
+                Map<String, EngineRecordInfo> prevRecordsById = new LinkedHashMap<>();
+                if (prev != null) {
+                    for (EngineRecordInfo pr : prev.getSampleRecords()) {
+                        if (pr != null && pr.getId() != null) {
+                            prevRecordsById.put(pr.getId().trim().toLowerCase(Locale.ROOT), pr);
+                        }
+                    }
+                }
+
+                List<Map<String, Object>> rawRecords = client.findAllBucketRecords(cleanDb, bName);
+                long totalBytes = 0L;
+                List<EngineRecordInfo> recordInfos = new ArrayList<>();
+                for (Map<String, Object> doc : rawRecords) {
+                    if (doc == null) continue;
+                    String recId = doc.get("jettraId") != null && !String.valueOf(doc.get("jettraId")).isBlank()
+                            ? String.valueOf(doc.get("jettraId")).trim()
+                            : (doc.get("_id") != null ? String.valueOf(doc.get("_id")).trim() : "");
+                    if (recId.isBlank()) continue;
+
+                    EngineRecordInfo existingRec = prevRecordsById.get(recId.toLowerCase(Locale.ROOT));
+                    String detailsJson;
+                    try {
+                        detailsJson = mapper.writerWithDefaultPrettyPrinter().writeValueAsString(doc);
+                    } catch (Exception jsonEx) {
+                        detailsJson = doc.toString();
+                    }
+                    totalBytes += detailsJson.getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
+
+                    String summary = (existingRec != null && existingRec.getSummary() != null && !existingRec.getSummary().isBlank())
+                            ? existingRec.getSummary()
+                            : buildRecordSummary(doc, recId);
+                    long version = doc.get("_version") instanceof Number vn ? Math.max(1L, vn.longValue()) : 1L;
+                    if (existingRec != null && existingRec.getVersion() > version) {
+                        version = existingRec.getVersion();
+                    }
+                    String ts = doc.get("_updatedAt") != null
+                            ? String.valueOf(doc.get("_updatedAt"))
+                            : (doc.get("timestamp") != null ? String.valueOf(doc.get("timestamp")) : nowTs);
+
+                    recordInfos.add(new EngineRecordInfo(recId, engType, bName, summary, detailsJson, ts, version));
+                }
+
+                Set<String> syncedRecordIds = new HashSet<>();
+                for (EngineRecordInfo ri : recordInfos) {
+                    syncedRecordIds.add(ri.getId().trim().toLowerCase(Locale.ROOT));
+                }
+                if (prev != null && !prev.getSampleRecords().isEmpty()) {
+                    for (EngineRecordInfo prevRec : prev.getSampleRecords()) {
+                        if (prevRec != null && prevRec.getId() != null
+                                && syncedRecordIds.add(prevRec.getId().trim().toLowerCase(Locale.ROOT))) {
+                            recordInfos.add(prevRec);
+                        }
+                    }
+                    if (totalBytes == 0L) {
+                        totalBytes = prev.getTotalBytes();
+                    }
+                }
+
+                EngineBucketInfo bucketInfo = new EngineBucketInfo(
+                        cleanDb, bName, engType,
+                        Math.max(recordInfos.size(), prev != null && rawRecords.isEmpty() ? prev.getTotalObjects() : recordInfos.size()),
+                        totalBytes,
+                        "Bucket persistido en " + cleanDb + " [" + engType + " • " + structType + "]");
+                bucketInfo.setStructureType(structType);
+                if (bm.attributes() != null && !bm.attributes().isEmpty()) {
+                    bucketInfo.setAttributes(bm.attributes());
+                } else if (prev != null && !prev.getAttributes().isEmpty() && "DEFINED".equalsIgnoreCase(prev.getStructureType())) {
+                    bucketInfo.setStructureType("DEFINED");
+                    bucketInfo.setAttributes(prev.getAttributes());
+                }
+                bucketInfo.getSampleRecords().addAll(recordInfos);
+
+                // Sincronizar índices reales asociados a este Bucket (fusionando índices existentes sin duplicar)
+                Set<String> seenIdx = new HashSet<>();
+                if (allIndexes != null) {
+                    for (var idx : allIndexes) {
+                        if (idx != null && idx.bucket() != null && idx.bucket().equalsIgnoreCase(bName)) {
+                            if (seenIdx.add(idx.name().trim().toLowerCase(Locale.ROOT))) {
+                                bucketInfo.getIndexes().add(new EngineIndexInfo(
+                                        idx.name(), idx.field(), idx.type(), idx.unique(), "READY"));
+                            }
+                        }
+                    }
+                }
+                if (prev != null) {
+                    for (EngineIndexInfo prevIdx : prev.getIndexes()) {
+                        if (prevIdx != null && prevIdx.getName() != null
+                                && seenIdx.add(prevIdx.getName().trim().toLowerCase(Locale.ROOT))) {
+                            bucketInfo.getIndexes().add(prevIdx);
+                        }
+                    }
+                }
+                syncedBuckets.add(bucketInfo);
+            }
+
+            // Conservar cualquier bucket ya registrado en el catálogo UI que no haya sido devuelto por el driver
+            for (EngineBucketInfo existing : existingList) {
+                String k = existing.getBucketName().trim().toLowerCase(Locale.ROOT);
+                if (!discoveredMeta.containsKey(k)) {
+                    syncedBuckets.add(existing);
+                }
+            }
+
+            databasesCatalog.put(cleanDb, syncedBuckets);
+            return true;
+        } catch (Exception ex) {
+            this.lastExplorerSyncError = "Error sincronizando la base de datos '" + cleanDb
+                    + "' desde JettraStoreDriver: " + ex.getMessage();
+            System.err.println("[JettraStoreExplorer] " + this.lastExplorerSyncError);
+            return false;
+        }
+    }
+
+    private static String buildRecordSummary(Map<String, Object> doc, String fallbackId) {
+        List<String> parts = new ArrayList<>();
+        for (Map.Entry<String, Object> entry : doc.entrySet()) {
+            String k = entry.getKey();
+            if ("_id".equals(k) || "jettraId".equals(k) || "_version".equals(k) || "_updatedAt".equals(k)) {
+                continue;
+            }
+            Object v = entry.getValue();
+            if (v != null) {
+                String valStr = String.valueOf(v);
+                if (valStr.length() > 40) {
+                    valStr = valStr.substring(0, 37) + "...";
+                }
+                parts.add(k + "=" + valStr);
+                if (parts.size() >= 4) break;
+            }
+        }
+        return parts.isEmpty() ? ("JettraId: " + fallbackId) : String.join(" • ", parts);
+    }
+
     public Map<String, List<EngineBucketInfo>> getDatabasesCatalog() {
         syncDatabasesFromPrimary(false);
         return databasesCatalog;
@@ -2564,6 +2769,10 @@ public class JettraStorePlugin {
         if (dbName == null || dbName.isBlank() || "system_metadata_db".equalsIgnoreCase(dbName))
             return false;
         boolean removed = databasesCatalog.remove(dbName.trim()) != null;
+        try {
+            getDriverClient().dropDatabase(dbName.trim());
+        } catch (Exception ignored) {
+        }
         if (removed) {
             sendFrameToPrimaryNode(
                     io.jettra.store.cluster.JettraRaftFrame.dropDatabase(1L, 0L, "jettra-explorer", dbName.trim()));

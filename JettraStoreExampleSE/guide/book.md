@@ -1,11 +1,12 @@
-# Guía Completa de `JettraStoreExampleSE` (Java 25+ & `JettraStoreDriver`)
+# Guía Completa de `JettraStoreExampleSE` (Java 25+, Buckets, `JettraId` & `JettraStoreDriver`)
 
 ## 1. Descripción General
-**JettraStoreExampleSE** es el proyecto Java SE 25 de referencia para construir aplicaciones cliente sobre un clúster **JettraStore** utilizando:
-- **`JettraStoreDriver`** (`JettraClient`) para conexión autenticada, lectura de `cluster.config` desde el nodo `PRIMARY`, gestión de bases de datos, buckets, índices y operaciones zero-downtime.
-- **`JettraRules`** (`@NotBlank`, `@Size`, `@Positive`, `JettraRulesEngine.validate(...)`) para validación declarativa de entidades.
-- **Java `record`** inmutables (`Pais`, `Producto`, `NotaLibre`) y **Patrón Repository** (`JettraRepository<T, ID>`).
-- **`JettraTest`** para pruebas automatizadas de extremo a extremo y pruebas de resiliencia del clúster.
+**JettraStoreExampleSE** es el proyecto Java SE 25 de referencia para construir aplicaciones cliente con **persistencia real** sobre un clúster **JettraStore** (`examplesedb`), alineado con el modelo unificado de **Buckets** y **`JettraId`**:
+- **`JettraStoreDriver`** (`JettraClient`) para conexión autenticada al clúster (`cluster.config`), lectura de topología desde `PRIMARY`, creación/gestión de **Buckets** (`DEFINED` y `NONE`), persistencia en disco y replicación activa hacia los nodos del clúster.
+- **`JettraId`** (`io.jettra.store.core.JettraId`) como identificador único primario explícito en todos los modelos de dominio (`Pais`, `Producto`, `NotaLibre`) y en todas las operaciones CRUD (`save`, `findById`, `update`, `deleteById`).
+- **`JettraRules`** (`@NotBlank`, `@Size`, `@Positive`, `JettraRulesEngine.validate(...)`) para validación declarativa de entidades antes de persistir.
+- **Java `record`** inmutables y **Patrón Repository** (`JettraRepository<T>`) operando exclusivamente sobre **Buckets** (sin referencias obsoletas a `COLLECTION`).
+- **`JettraTest`** para pruebas automatizadas de persistencia real tras reconexión, `JettraId`, índices por Bucket y resiliencia del clúster.
 
 ---
 
@@ -28,62 +29,69 @@ cluster.node.3.ip=127.0.0.1
 cluster.node.3.grpc.port=50003
 cluster.node.3.rest.port=60003
 ```
+`JettraStoreExampleSEApp.buildClusterConfig()` carga automáticamente todos los nodos definidos en `cluster.config` (priorizando el `PRIMARY`) y recupera la versión vigente del clúster con `client.readPrimaryClusterConfig()`.
 
 ---
 
-## 3. Flujo Completo en `examplesedb`
+## 3. Modelos Java `record` con `JettraId` y Modelo de `Bucket`
 
-1. **Conexión y obtención de `cluster.config` del PRIMARY:**
-   ```java
-   JettraClientConfig config = JettraClientConfig.builder()
-           .addClusterNode("127.0.0.1", 50001)
-           .credentials("admin", "admin-jettra")
-           .role("admin")
-           .defaultDatabase("examplesedb")
-           .build();
-   try (JettraClient client = JettraClient.connect(config)) {
-       String primaryClusterConfig = client.readPrimaryClusterConfig();
-   }
-   ```
-2. **Creación de buckets estructurados (`DEFINED`) y sin estructura (`NONE`):**
-   - `PaisRepository`: engine `JAVA_RECORD`, bucket `Pais` (`DEFINED`), índice `AUTO_INCREMENT` en `codigo` e índice `BTREE UNIQUE` en `siglas`.
-   - `ProductoRepository`: engine `DOCUMENT`, bucket `Producto` (`DEFINED`), índice `AUTO_INCREMENT` en `sku` e índice `NUMERIC` en `precio` con consultas por rango `findByPrecioRange(min, max)`.
-   - `NotaLibreRepository`: engine `DOCUMENT`, bucket `NotasLibres` (`NONE`, esquema libre).
-3. **Validación con `JettraRules` + Java `record`:**
-   ```java
-   paisRepo.save("pa-1", new Pais(null, "Panama", "PA")); // autogenera codigo=1
-   prodRepo.save("prod-1", new Producto(null, "Teclado Mecánico", "Periféricos", 79.99));
-   List<Producto> ofertas = prodRepo.findByPrecioRange(20.0, 100.0);
-   ```
+Todos los modelos incluyen explícitamente su **`JettraId`** y cada repositorio lo almacena y recupera junto con los atributos del registro:
 
----
+1. **Bucket estructurado (`DEFINED`) `JAVA_RECORD::Pais` (`PaisRepository`):**
+   - Campos: `jettraId` (`JettraId`), `codigo` (`AUTO_INCREMENT`), `name` (`@NotBlank`), `siglas` (`@NotBlank`, `@Size(2..3)`).
+   - Índices del Bucket: `idx_pais_codigo` (`AUTO_INCREMENT`) e `idx_pais_siglas` (`BTREE UNIQUE`).
+2. **Bucket estructurado (`DEFINED`) `DOCUMENT::Producto` (`ProductoRepository`):**
+   - Campos: `jettraId` (`JettraId`), `sku` (`AUTO_INCREMENT`), `nombre` (`@NotBlank`), `categoria` (`@NotBlank`), `precio` (`@Positive`).
+   - Índices del Bucket: `idx_producto_sku` (`AUTO_INCREMENT`) e `idx_producto_precio` (`NUMERIC`, con consultas por rango `findByPrecioRange(min, max)`).
+3. **Bucket sin estructura (`NONE`) `DOCUMENT::NotasLibres` (`NotaLibreRepository`):**
+   - Campos: `jettraId` (`JettraId`) + `Map<String, Object> atributos` flexibles.
 
-## 4. Guía Paso a Paso de Pruebas de Resiliencia del Clúster
+### Ejemplo CRUD real con `JettraId` sobre `examplesedb`
+```java
+try (JettraClient client = JettraClient.connect(JettraStoreExampleSEApp.buildClusterConfig())) {
+    client.createDatabase("examplesedb");
 
-1. **Detener un nodo secundario y verificar continuidad:**
-   ```java
-   var stop = client.stopClusterNode("node-03");
-   // node-01 (PRIMARY) y node-02 (SECONDARY) permanecen operativos (quórum 2/3)
-   ```
-2. **Reiniciar un nodo y verificar reincorporación y sincronización:**
-   ```java
-   var start = client.startClusterNode("node-03");
-   // node-03 se sincroniza automáticamente con node-01 sin detener el clúster
-   ```
-3. **Remover un nodo detenido (regla estricta):**
-   ```java
-   // Si node-03 sigue activo, removeStoppedClusterNode("node-03") lanza IllegalStateException.
-   client.stopClusterNode("node-03");
-   client.removeStoppedClusterNode("node-03");
-   ```
+    PaisRepository paisRepo = new PaisRepository(client, "examplesedb");
+    paisRepo.initBucketAndIndexes();
+
+    // 1. Insertar (autogenera JettraId y codigo AUTO_INCREMENT=1)
+    Pais panama = paisRepo.save(new Pais(null, "Panama", "PA"));
+    JettraId idPanama = panama.jettraId();
+
+    // 2. Consultar por JettraId y por índice BTREE
+    Pais encontrado = paisRepo.findById(idPanama).orElseThrow();
+    Pais porSiglas = paisRepo.findBySiglas("PA").orElseThrow();
+
+    // 3. Actualizar por JettraId (conserva JettraId y codigo)
+    Pais actualizado = paisRepo.update(
+            idPanama,
+            new Pais(idPanama, panama.codigo(), "República de Panamá", "PA"));
+
+    // 4. Eliminar por JettraId
+    ProductoRepository prodRepo = new ProductoRepository(client, "examplesedb");
+    prodRepo.initBucketAndIndexes();
+    Producto temp = prodRepo.save(new Producto(null, "Cable Temporal", "Accesorios", 9.99));
+    boolean eliminado = prodRepo.deleteById(temp.jettraId());
+}
+```
 
 ---
 
-## 5. Compilación, Pruebas y Ejecución
+## 4. Resiliencia del Clúster (3 nodos reales)
+```java
+// 1. No se permite remover un nodo activo (lanza IllegalStateException)
+client.stopClusterNode("node-03");
+client.removeStoppedClusterNode("node-03");
+// node-01 (PRIMARY) y node-02 (SECONDARY) permanecen operativos sin interrupción
+```
+
+---
+
+## 5. Compilación, Pruebas (`JettraTest`) y Ejecución
 ```bash
-# Compilar y ejecutar pruebas JettraTest (incluye resiliencia con 3 nodos reales)
-mvn install -pl JettraStoreExampleSE
+# Instalar JettraStoreDriver actualizado y compilar/probar JettraStoreExampleSE
+mvn install -pl JettraStoreDriver,JettraStoreExampleSE
 
-# Ejecutar la aplicación contra un clúster local activo en 127.0.0.1:50001
+# Ejecutar la aplicación contra el clúster definido en cluster.config (almacena en examplesedb)
 mvn exec:exec -pl JettraStoreExampleSE
 ```
