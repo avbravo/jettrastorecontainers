@@ -1,0 +1,55 @@
+# ==============================================================================
+# JettraStore - Docker Compose Single-Node Standalone (Bajo Consumo RAM/CPU)
+# ==============================================================================
+services:
+  jettra-node-01:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    pull_policy: build
+    image: ${DOCKER_REPO_PREFIX:-}jettrastore:1.0
+    container_name: jettra-single-node-01
+    hostname: jettra-node-01
+    restart: unless-stopped
+    ports:
+      - "${JETTRA_NODE1_REST_PORT:-60001}:60001"
+      - "${JETTRA_NODE1_GRPC_PORT:-50001}:50001"
+    environment:
+      - JETTRA_NODE_ID=node-01
+      - JETTRA_NODE_ROLE=PRIMARY
+      - JETTRA_NODE_IP=jettra-node-01
+      - JETTRA_STORAGE_PATH=/jettra/data
+      - JETTRA_STORAGE_MODE=${JETTRA_STORAGE_MODE:-OFF_HEAP}
+      - JETTRA_MULTINODE_ACTIVE=off
+      - JETTRA_REST_PORT=60001
+      - JETTRA_GRPC_PORT=50001
+      - JETTRA_ADMIN_USERNAME=admin
+      - JETTRA_ADMIN_PASSWORD=admin-jettra
+      - JAVA_OPTS=-Xms96m -Xmx384m -XX:MaxMetaspaceSize=192m -XX:MaxDirectMemorySize=192m
+    mem_limit: 640m
+    mem_reservation: 128m
+    cpus: 1.0
+    volumes:
+      - jettra_single_data_node01:/jettra/data
+      - jettra_single_checkpoint_node01:/jettra/checkpoint
+    networks:
+      - jettra-single-net
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:60001/api/v1/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 8s
+
+volumes:
+  jettra_single_data_node01:
+    name: jettra_single_data_node01
+    driver: local
+  jettra_single_checkpoint_node01:
+    name: jettra_single_checkpoint_node01
+    driver: local
+
+networks:
+  jettra-single-net:
+    name: jettra-single-net
+    driver: bridge

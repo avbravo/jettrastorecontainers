@@ -1,48 +1,53 @@
 # ==============================================================================
-# JettraStoreExplorer Web Console (Java 25+ JettraFlux & JettraServer)
+# JettraStoreExplorer Web Console (Java 25+ JettraFlux, JettraServer & Driver)
+# Multi-stage Alpaquita/musl build optimizado para bajo consumo de RAM y CPU
 # ==============================================================================
+FROM bellsoft/liberica-runtime-container:jre-25-stream-musl AS packager
+WORKDIR /staging
+COPY target/JettraStoreExplorer-*.jar /staging/
+COPY src/main/resources/META-INF/microprofile-config.properties /staging/config/microprofile-config.properties
+COPY start.sh /staging/start.sh
+RUN rm -f /staging/original-JettraStoreExplorer-*.jar && \
+    if [ -f /staging/JettraStoreExplorer-*-uber.jar ]; then \
+        mv /staging/JettraStoreExplorer-*-uber.jar /staging/JettraStoreExplorer.jar && rm -f /staging/JettraStoreExplorer-*.jar; \
+    elif [ -f /staging/JettraStoreExplorer-*.jar ]; then \
+        mv /staging/JettraStoreExplorer-*.jar /staging/JettraStoreExplorer.jar; \
+    fi && \
+    chmod +x /staging/start.sh
+
 FROM bellsoft/liberica-runtime-container:jre-25-stream-musl
 LABEL maintainer="Jettra Ecosystem <dev@jettra.io>"
-LABEL description="JettraStoreExplorer - Consola Web de Administración Multimodelo para JettraStore"
+LABEL description="JettraStoreExplorer - Consola Web Multimodelo de bajo consumo para JettraStore"
 
-# Instalar utilidades básicas para healthcheck (compatible con Alpine/musl y Debian/glibc)
 RUN if command -v apk > /dev/null; then \
-        apk add --no-cache curl ca-certificates tzdata && rm -rf /var/cache/apk/*; \
+        apk add --no-cache curl ca-certificates tzdata && rm -rf /var/cache/apk/* /tmp/*; \
     elif command -v apt-get > /dev/null; then \
-        apt-get update && apt-get install -y --no-install-recommends curl ca-certificates tzdata && rm -rf /var/lib/apt/lists/*; \
+        apt-get update && apt-get install -y --no-install-recommends curl ca-certificates tzdata && rm -rf /var/lib/apt/lists/* /tmp/*; \
     fi
 
 WORKDIR /app
 
-# Crear directorios de configuración y persistencia de sesión/nodos
 RUN mkdir -p /app/config /app/memory && \
     chown -R 1000:1000 /app
 
-# Copiar JAR ejecutable, microprofile-config.properties y script de inicio
-COPY target/JettraStoreExplorer-*.jar /app/
-COPY src/main/resources/META-INF/microprofile-config.properties /app/config/microprofile-config.properties
-COPY start.sh /app/start.sh
+COPY --from=packager --chown=1000:1000 /staging/JettraStoreExplorer.jar /app/JettraStoreExplorer.jar
+COPY --from=packager --chown=1000:1000 /staging/config/microprofile-config.properties /app/config/microprofile-config.properties
+COPY --from=packager --chown=1000:1000 /staging/start.sh /app/start.sh
 
-RUN rm -f /app/original-JettraStoreExplorer-*.jar && \
-    if [ -f /app/JettraStoreExplorer-*-uber.jar ]; then \
-        mv /app/JettraStoreExplorer-*-uber.jar /app/JettraStoreExplorer.jar && rm -f /app/JettraStoreExplorer-*.jar; \
-    elif [ -f /app/JettraStoreExplorer-*.jar ]; then \
-        mv /app/JettraStoreExplorer-*.jar /app/JettraStoreExplorer.jar; \
-    fi && \
-    chmod +x /app/start.sh && \
-    chown -R 1000:1000 /app
-
-# Variables de entorno predeterminadas
 ENV SERVER_HOST=0.0.0.0 \
     SERVER_PORT=8085 \
     STORAGE_MODE=OFF_HEAP \
+    JETTRA_DOCKER_COMPOSE=true \
     MICROPROFILE_CONFIG_FILE=/app/config/microprofile-config.properties \
-    JAVA_OPTS="-Xms128m -Xmx512m -XX:MaxMetaspaceSize=256m -XX:MaxDirectMemorySize=192m -XX:+UseContainerSupport -XX:+UseG1GC -XX:+UseStringDeduplication -XX:CICompilerCount=2 -XX:+UnlockExperimentalVMOptions -XX:+UseCompactObjectHeaders --enable-preview --enable-native-access=ALL-UNNAMED"
+    JAVA_TOOL_OPTIONS="-XX:+UseContainerSupport -XX:+UseG1GC -XX:+UseStringDeduplication -XX:CICompilerCount=2 -XX:+UnlockExperimentalVMOptions -XX:+UseCompactObjectHeaders -XX:MaxRAMPercentage=70.0 --enable-preview --enable-native-access=ALL-UNNAMED" \
+    JAVA_OPTS="-Xms96m -Xmx384m -XX:MaxMetaspaceSize=192m -XX:MaxDirectMemorySize=128m"
 
 EXPOSE 8085
 
+VOLUME ["/app/memory", "/app/config"]
+
 HEALTHCHECK --interval=10s --timeout=5s --start-period=8s --retries=3 \
-    CMD curl -f http://localhost:${SERVER_PORT}/health || exit 1
+    CMD curl -fsS http://localhost:${SERVER_PORT}/health || exit 1
 
 USER 1000:1000
 

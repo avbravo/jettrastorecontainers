@@ -2646,3 +2646,41 @@ INSERT INTO Facturas ID FAC-2026-001 JSON {"cliente":"Gamma","total":300.00}
 INSERT BUCKET Productos {"nombre":"Teclado","precio":45.50}
 INSERT BUCKET Productos ID PROD-001 {"nombre":"Mouse","precio":25.00}
 ```
+
+---
+
+## Despliegue Optimizado en Docker y Docker Compose (RF-15: Bajo Consumo RAM/CPU y Operación en Clúster Raft)
+
+### 1. Dockerfile Multi-Etapa de Bajo Consumo (`JettraStoreShell/Dockerfile`)
+- Build multi-etapa sobre `bellsoft/liberica-runtime-container:jre-25-stream-musl` con usuario no root (`1000:1000`).
+- Footprint acotado: `mem_limit: 320m`, `cpus: 0.5`, `JAVA_OPTS="-Xms48m -Xmx192m -XX:MaxMetaspaceSize=128m -XX:MaxDirectMemorySize=96m"` y `JAVA_TOOL_OPTIONS` con G1GC, String Deduplication y Compact Object Headers.
+- Volumen persistente `/home/jettra/.jettra` para historial de comandos y perfiles de conexión.
+
+### 2. Operación contra 1 Nodo y 3 Nodos Raft
+```bash
+# Despliegue 1 nodo (JettraStore + Shell + Explorer)
+docker compose -f docker-compose-single-node.yml up -d
+docker attach jettra-single-shell
+
+# Despliegue 3 nodos Raft (JettraStore x3 + Shell + Explorer)
+docker compose up -d
+docker exec -it jettra-shell java -jar /app/JettraStoreShell.jar
+```
+
+### 3. Verificación de Failover Raft desde `JettraStoreShell`
+```text
+jettra> login admin admin-jettra
+jettra> show nodes
+# Confirma 1 PRIMARY (LEADER) y 2 SECONDARY (FOLLOWER)
+# Tras ejecutar `docker stop jettra-node-01`:
+jettra> show nodes
+# Confirma la promoción automática de un SECONDARY a PRIMARY y continuidad de consultas
+```
+
+### 4. Construcción y Publicación en Docker Hub
+```bash
+docker build -t <usuario>/jettrastoreshell:1.0 -t <usuario>/jettrastoreshell:latest ./JettraStoreShell
+docker login
+docker push <usuario>/jettrastoreshell:1.0
+docker push <usuario>/jettrastoreshell:latest
+```

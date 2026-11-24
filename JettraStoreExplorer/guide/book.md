@@ -321,3 +321,34 @@ Cuando una aplicación cliente como **`JettraStoreExampleSE`** crea la base de d
    - Verifique en `/cluster` que el nodo `PRIMARY` esté **ACTIVE** y apuntando al mismo puerto gRPC (`50001`) usado por `JettraStoreExampleSE` y `JettraStoreShell`.
    - Revise el banner flash de `/explorer` (los errores de sincronización del driver ya no se silencian y se registran en consola con prefijo `[JettraStoreExplorer]`).
    - Reinicie `JettraStoreExplorer` si se recompiló `JettraStoreDriver` o `JettraStoreExplorer`.
+
+---
+
+## 9. Despliegue Optimizado en Docker y Docker Compose (RF-15: Bajo Consumo RAM/CPU y Monitoreo Raft)
+
+### 1. Dockerfile Multi-Etapa de Bajo Consumo (`JettraStoreExplorer/Dockerfile`)
+- Build multi-etapa sobre `bellsoft/liberica-runtime-container:jre-25-stream-musl` con usuario no root (`1000:1000`).
+- Footprint acotado: `mem_limit: 512m`, `cpus: 1.0`, `JAVA_OPTS="-Xms96m -Xmx384m -XX:MaxMetaspaceSize=192m -XX:MaxDirectMemorySize=128m"` y `JAVA_TOOL_OPTIONS` con `-XX:+UseContainerSupport -XX:+UseG1GC -XX:+UseStringDeduplication -XX:+UseCompactObjectHeaders`.
+- Volúmenes persistentes `/app/memory` y configuración del clúster `/jettra/config/cluster.config`.
+
+### 2. Despliegue 1 Nodo y 3 Nodos Raft
+```bash
+# 1 Nodo (JettraStore + Shell + Explorer en http://localhost:8085)
+docker compose -f docker-compose-single-node.yml up -d
+
+# 3 Nodos Raft (JettraStore x3 + Shell + Explorer en http://localhost:8085)
+docker compose up -d
+```
+
+### 3. Monitoreo en Vivo de Consenso Raft y Failover en `/cluster` y `/explorer`
+- Abrir `http://localhost:8085/cluster` (credenciales por defecto `admin` / `admin123`): verifica en tiempo real **1 `PRIMARY` (`LEADER`)** y **2 `SECONDARY` (`FOLLOWER`)**.
+- Al detener `jettra-node-01` (`docker stop jettra-node-01`), `/cluster` y `/map` detectan la desconexión de `node-01` y reflejan automáticamente el nuevo `PRIMARY` promovido, manteniendo el acceso de lectura/escritura en `/explorer`.
+- Al reiniciar `jettra-node-01` (`docker start jettra-node-01`), el nodo se reincorpora al quórum como `ACTIVE` conservando su volumen de almacenamiento persistente.
+
+### 4. Construcción y Publicación en Docker Hub
+```bash
+docker build -t <usuario>/jettrastoreexplorer:1.0 -t <usuario>/jettrastoreexplorer:latest ./JettraStoreExplorer
+docker login
+docker push <usuario>/jettrastoreexplorer:1.0
+docker push <usuario>/jettrastoreexplorer:latest
+```

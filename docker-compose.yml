@@ -1,238 +1,202 @@
+# ==============================================================================
+# JettraStore Ecosystem - Docker Compose Multi-Nodo (3 Nodos Raft + Shell + Explorer)
+# Optimizado para bajo consumo de RAM/CPU y storage persistente independiente por nodo
+# ==============================================================================
 services:
   jettra-node-01:
     build:
       context: ./JettraStore
       dockerfile: Dockerfile
     pull_policy: build
-    image: jettrastore:1.0
+    image: ${DOCKER_REPO_PREFIX:-}jettrastore:1.0
     container_name: jettra-node-01
     hostname: jettra-node-01
     restart: unless-stopped
-    cap_add:
-      - CHECKPOINT_RESTORE
-      - SYS_PTRACE
-    security_opt:
-      - seccomp:unconfined
     ports:
-      - "60001:60001"
-      - "50001:50001"
+      - "${JETTRA_NODE1_REST_PORT:-60001}:60001"
+      - "${JETTRA_NODE1_GRPC_PORT:-50001}:50001"
     environment:
       - JETTRA_NODE_ID=node-01
       - JETTRA_NODE_ROLE=PRIMARY
+      - JETTRA_NODE_IP=jettra-node-01
       - JETTRA_STORAGE_PATH=/jettra/data
       - JETTRA_STORAGE_MODE=${JETTRA_STORAGE_MODE:-OFF_HEAP}
-      - JETTRA_CRAC_CHECKPOINT_PATH=/jettra/checkpoint
-      - JETTRA_CRAC_RESTORE=${JETTRA_CRAC_RESTORE:-false}
+      - JETTRA_MULTINODE_ACTIVE=on
+      - JETTRA_CLUSTER_CONFIG_PATH=/jettra/config/cluster.config
       - JETTRA_REST_PORT=60001
       - JETTRA_GRPC_PORT=50001
       - JETTRA_ADMIN_USERNAME=admin
       - JETTRA_ADMIN_PASSWORD=admin-jettra
       - JETTRA_CLUSTER_PEERS=node-02:jettra-node-02:50002:SECONDARY,node-03:jettra-node-03:50003:SECONDARY
-      - JAVA_OPTS=--enable-preview --enable-native-access=ALL-UNNAMED -XX:+UnlockExperimentalVMOptions -XX:+UseCompactObjectHeaders -XX:+UseContainerSupport -XX:+UseZGC -Xms512m -Xmx2g -Djettra.storage.mode=${JETTRA_STORAGE_MODE:-OFF_HEAP}
-    mem_limit: 3g
-    mem_reservation: 512m
+      - JAVA_OPTS=-Xms96m -Xmx384m -XX:MaxMetaspaceSize=192m -XX:MaxDirectMemorySize=192m
+    mem_limit: 640m
+    mem_reservation: 128m
+    cpus: 1.0
     volumes:
       - jettra_data_node01:/jettra/data
       - jettra_checkpoint_node01:/jettra/checkpoint
+      - ./docker/cluster-3nodes.config:/jettra/config/cluster.config:ro
     networks:
       - jettra-cluster-net
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:60001/api/v1/health || exit 1"]
+      test: ["CMD-SHELL", "curl -fsS http://localhost:60001/api/v1/health || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 3
-      start_period: 5s
+      start_period: 8s
 
   jettra-node-02:
     build:
       context: ./JettraStore
       dockerfile: Dockerfile
     pull_policy: build
-    image: jettrastore:1.0
+    image: ${DOCKER_REPO_PREFIX:-}jettrastore:1.0
     container_name: jettra-node-02
     hostname: jettra-node-02
     restart: unless-stopped
-    cap_add:
-      - CHECKPOINT_RESTORE
-      - SYS_PTRACE
-    security_opt:
-      - seccomp:unconfined
     depends_on:
       jettra-node-01:
         condition: service_healthy
     ports:
-      - "60002:60002"
-      - "50002:50002"
+      - "${JETTRA_NODE2_REST_PORT:-60002}:60002"
+      - "${JETTRA_NODE2_GRPC_PORT:-50002}:50002"
     environment:
       - JETTRA_NODE_ID=node-02
       - JETTRA_NODE_ROLE=SECONDARY
+      - JETTRA_NODE_IP=jettra-node-02
       - JETTRA_STORAGE_PATH=/jettra/data
       - JETTRA_STORAGE_MODE=${JETTRA_STORAGE_MODE:-OFF_HEAP}
-      - JETTRA_CRAC_CHECKPOINT_PATH=/jettra/checkpoint
-      - JETTRA_CRAC_RESTORE=${JETTRA_CRAC_RESTORE:-false}
+      - JETTRA_MULTINODE_ACTIVE=on
+      - JETTRA_CLUSTER_CONFIG_PATH=/jettra/config/cluster.config
       - JETTRA_REST_PORT=60002
       - JETTRA_GRPC_PORT=50002
       - JETTRA_ADMIN_USERNAME=admin
       - JETTRA_ADMIN_PASSWORD=admin-jettra
       - JETTRA_CLUSTER_PEERS=node-01:jettra-node-01:50001:PRIMARY,node-03:jettra-node-03:50003:SECONDARY
-      - JAVA_OPTS=--enable-preview --enable-native-access=ALL-UNNAMED -XX:+UnlockExperimentalVMOptions -XX:+UseCompactObjectHeaders -XX:+UseContainerSupport -XX:+UseZGC -Xms512m -Xmx2g -Djettra.storage.mode=${JETTRA_STORAGE_MODE:-OFF_HEAP}
-    mem_limit: 3g
-    mem_reservation: 512m
+      - JAVA_OPTS=-Xms96m -Xmx384m -XX:MaxMetaspaceSize=192m -XX:MaxDirectMemorySize=192m
+    mem_limit: 640m
+    mem_reservation: 128m
+    cpus: 1.0
     volumes:
       - jettra_data_node02:/jettra/data
       - jettra_checkpoint_node02:/jettra/checkpoint
+      - ./docker/cluster-3nodes.config:/jettra/config/cluster.config:ro
     networks:
       - jettra-cluster-net
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:60002/api/v1/health || exit 1"]
+      test: ["CMD-SHELL", "curl -fsS http://localhost:60002/api/v1/health || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 3
-      start_period: 5s
+      start_period: 8s
 
   jettra-node-03:
     build:
       context: ./JettraStore
       dockerfile: Dockerfile
     pull_policy: build
-    image: jettrastore:1.0
+    image: ${DOCKER_REPO_PREFIX:-}jettrastore:1.0
     container_name: jettra-node-03
     hostname: jettra-node-03
     restart: unless-stopped
-    cap_add:
-      - CHECKPOINT_RESTORE
-      - SYS_PTRACE
-    security_opt:
-      - seccomp:unconfined
     depends_on:
       jettra-node-01:
         condition: service_healthy
     ports:
-      - "60003:60003"
-      - "50003:50003"
+      - "${JETTRA_NODE3_REST_PORT:-60003}:60003"
+      - "${JETTRA_NODE3_GRPC_PORT:-50003}:50003"
     environment:
       - JETTRA_NODE_ID=node-03
       - JETTRA_NODE_ROLE=SECONDARY
+      - JETTRA_NODE_IP=jettra-node-03
       - JETTRA_STORAGE_PATH=/jettra/data
       - JETTRA_STORAGE_MODE=${JETTRA_STORAGE_MODE:-OFF_HEAP}
-      - JETTRA_CRAC_CHECKPOINT_PATH=/jettra/checkpoint
-      - JETTRA_CRAC_RESTORE=${JETTRA_CRAC_RESTORE:-false}
+      - JETTRA_MULTINODE_ACTIVE=on
+      - JETTRA_CLUSTER_CONFIG_PATH=/jettra/config/cluster.config
       - JETTRA_REST_PORT=60003
       - JETTRA_GRPC_PORT=50003
       - JETTRA_ADMIN_USERNAME=admin
       - JETTRA_ADMIN_PASSWORD=admin-jettra
       - JETTRA_CLUSTER_PEERS=node-01:jettra-node-01:50001:PRIMARY,node-02:jettra-node-02:50002:SECONDARY
-      - JAVA_OPTS=--enable-preview --enable-native-access=ALL-UNNAMED -XX:+UnlockExperimentalVMOptions -XX:+UseCompactObjectHeaders -XX:+UseContainerSupport -XX:+UseZGC -Xms512m -Xmx2g -Djettra.storage.mode=${JETTRA_STORAGE_MODE:-OFF_HEAP}
-    mem_limit: 3g
-    mem_reservation: 512m
+      - JAVA_OPTS=-Xms96m -Xmx384m -XX:MaxMetaspaceSize=192m -XX:MaxDirectMemorySize=192m
+    mem_limit: 640m
+    mem_reservation: 128m
+    cpus: 1.0
     volumes:
       - jettra_data_node03:/jettra/data
       - jettra_checkpoint_node03:/jettra/checkpoint
+      - ./docker/cluster-3nodes.config:/jettra/config/cluster.config:ro
     networks:
       - jettra-cluster-net
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:60003/api/v1/health || exit 1"]
+      test: ["CMD-SHELL", "curl -fsS http://localhost:60003/api/v1/health || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 3
-      start_period: 5s
+      start_period: 8s
 
-  # ==============================================================================
-  # HERRAMIENTAS ADICIONALES (CLI INTERACTIVO Y MONITOR VISUAL 3D)
-  # ==============================================================================
   jettra-shell:
     build:
       context: ./JettraStoreShell
       dockerfile: Dockerfile
     pull_policy: build
-    image: jettrastoreshell:1.0
+    image: ${DOCKER_REPO_PREFIX:-}jettrastoreshell:1.0
     container_name: jettra-shell
     stdin_open: true
     tty: true
-    mem_limit: 512m
-    mem_reservation: 64m
     depends_on:
       jettra-node-01:
         condition: service_healthy
     environment:
       - JETTRA_HOST=jettra-node-01
       - JETTRA_PORT=50001
-      - JAVA_OPTS=-Xms64m -Xmx512m -XX:+UseG1GC -XX:+UnlockExperimentalVMOptions -XX:+UseCompactObjectHeaders --enable-preview --enable-native-access=ALL-UNNAMED
+      - MICROPROFILE_CONFIG_FILE=/app/config/microprofile-config.properties
+      - JAVA_OPTS=-Xms48m -Xmx192m -XX:MaxMetaspaceSize=128m -XX:MaxDirectMemorySize=96m -Dcluster.config.path=/jettra/config/cluster.config -Dcluster.nodes=node-01:jettra-node-01:50001,node-02:jettra-node-02:50002,node-03:jettra-node-03:50003
+    mem_limit: 320m
+    mem_reservation: 48m
+    cpus: 0.5
     volumes:
       - jettra_shell_data:/home/jettra/.jettra
+      - ./docker/cluster-3nodes.config:/jettra/config/cluster.config:ro
     networks:
       - jettra-cluster-net
-    profiles: ["tools", "shell", "all"]
-
-  jettra-police-3d:
-    build:
-      context: ./JettraStorePolice3D
-      dockerfile: Dockerfile
-    pull_policy: build
-    image: jettrastorepolice3d:1.0
-    container_name: jettra-police-3d
-    restart: unless-stopped
-    mem_limit: 768m
-    mem_reservation: 128m
-    depends_on:
-      jettra-node-01:
-        condition: service_healthy
-    environment:
-      - DISPLAY=${DISPLAY:-:0}
-      - HEADLESS=false
-      - JETTRA_DOCKER_COMPOSE=false
-      - JAVA_OPTS=-Xms128m -Xmx512m -XX:+UseG1GC -XX:SoftRefLRUPolicyMSPerMB=0 -XX:+UnlockExperimentalVMOptions -XX:+UseCompactObjectHeaders --enable-preview --enable-native-access=ALL-UNNAMED -Djettra.config.path=/app/config/jettra.config
-    volumes:
-      - /tmp/.X11-unix:/tmp/.X11-unix
-      - ./JettraStorePolice3D/config/jettra.config:/app/config/jettra.config:ro
-    networks:
-      - jettra-cluster-net
-    profiles: ["tools", "police", "all"]
 
   jettrastore-explorer:
     build:
       context: ./JettraStoreExplorer
       dockerfile: Dockerfile
     pull_policy: build
-    image: jettrastoreexplorer:1.0
+    image: ${DOCKER_REPO_PREFIX:-}jettrastoreexplorer:1.0
     container_name: jettrastore-explorer
     restart: unless-stopped
     depends_on:
       jettra-node-01:
         condition: service_healthy
     ports:
-      - "8085:8085"
+      - "${JETTRA_EXPLORER_PORT:-8085}:8085"
     environment:
       - SERVER_HOST=0.0.0.0
       - SERVER_PORT=8085
       - STORAGE_MODE=${JETTRA_STORAGE_MODE:-OFF_HEAP}
+      - JETTRA_DOCKER_COMPOSE=true
       - MICROPROFILE_CONFIG_FILE=/app/config/microprofile-config.properties
-      - JAVA_OPTS=-Xms256m -Xmx1g -XX:+UseContainerSupport -XX:+UseZGC -XX:+UnlockExperimentalVMOptions -XX:+UseCompactObjectHeaders --enable-preview --enable-native-access=ALL-UNNAMED -Dcluster.nodes=node-01:jettra-node-01:50001,node-02:jettra-node-02:50002,node-03:jettra-node-03:50003
-    mem_limit: 1536m
-    mem_reservation: 256m
+      - JAVA_OPTS=-Xms96m -Xmx384m -XX:MaxMetaspaceSize=192m -XX:MaxDirectMemorySize=128m -Dcluster.config.path=/jettra/config/cluster.config -Dcluster.nodes=node-01:jettra-node-01:50001,node-02:jettra-node-02:50002,node-03:jettra-node-03:50003
+    mem_limit: 512m
+    mem_reservation: 128m
+    cpus: 1.0
     volumes:
-      - jettra_explorer_config:/app/config
       - jettra_explorer_memory:/app/memory
+      - ./docker/cluster-3nodes.config:/jettra/config/cluster.config:ro
     networks:
       - jettra-cluster-net
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:8085/health || exit 1"]
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8085/health || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 3
       start_period: 8s
-    profiles: ["tools", "explorer", "all"]
 
 volumes:
-  jettra_explorer_config:
-    name: jettra_explorer_config
-    driver: local
-  jettra_explorer_memory:
-    name: jettra_explorer_memory
-    driver: local
-  jettra_shell_data:
-    name: jettra_shell_data
-    driver: local
   jettra_data_node01:
     name: jettra_data_node01
     driver: local
@@ -250,6 +214,12 @@ volumes:
     driver: local
   jettra_checkpoint_node03:
     name: jettra_checkpoint_node03
+    driver: local
+  jettra_shell_data:
+    name: jettra_shell_data
+    driver: local
+  jettra_explorer_memory:
+    name: jettra_explorer_memory
     driver: local
 
 networks:

@@ -3402,3 +3402,60 @@ INSERT BUCKET NotasLibres ID NOTA-01 {"contenido":"Nota con ID manual"}
 DROP BUCKET INDEX idx_prod_precio
 DROP BUCKET NotasLibres ENGINE DOCUMENT
 ```
+
+---
+
+## Despliegue Optimizado en Docker y Docker Compose (RF-15: Bajo Consumo RAM/CPU, 1 Nodo y 3 Nodos Raft)
+
+### 1. Dockerfile Multi-Etapa de Bajo Consumo (`JettraStore/Dockerfile`)
+- Imagen base: `bellsoft/liberica-runtime-container:jre-25-stream-musl` (Alpaquita Linux / musl) en build **multi-stage** (`packager` → `runtime`), eliminando cachés y artefactos intermedios.
+- Flags JVM Java 25+ para bajo footprint:
+  - `JAVA_TOOL_OPTIONS="-XX:+UseContainerSupport -XX:+UseG1GC -XX:+UseStringDeduplication -XX:CICompilerCount=2 -XX:+UnlockExperimentalVMOptions -XX:+UseCompactObjectHeaders -XX:MaxRAMPercentage=70.0 --enable-preview --enable-native-access=ALL-UNNAMED"`
+  - `JAVA_OPTS="-Xms96m -Xmx384m -XX:MaxMetaspaceSize=192m -XX:MaxDirectMemorySize=192m"`
+- Persistencia permanente independiente por contenedor montada en `/jettra/data` y `/jettra/checkpoint`.
+
+### 2. Despliegue de 1 Nodo (`docker-compose-single-node.yml`)
+```bash
+# Desde la raíz del workspace (1 nodo JettraStore + Shell + Explorer)
+docker compose -f docker-compose-single-node.yml up -d
+
+# Solo JettraStore 1 nodo standalone
+docker compose -f JettraStore/docker-compose-single-node.yml up -d
+```
+
+### 3. Despliegue Multi-Nodo de 3 Nodos Raft (`docker-compose.yml`)
+Cada nodo (`jettra-node-01`, `jettra-node-02`, `jettra-node-03`) cuenta con:
+- Límite de recursos: `mem_limit: 640m`, `mem_reservation: 128m`, `cpus: 1.0`.
+- Volumen dedicado independiente: `jettra_data_node01`, `jettra_data_node02`, `jettra_data_node03`.
+- Topología de red interna `jettra-cluster-net` configurada mediante `docker/cluster-3nodes.config`.
+
+```bash
+# Levantar 3 nodos JettraStore + JettraStoreShell + JettraStoreExplorer
+docker compose up -d
+
+# Verificar salud, roles Raft (1 PRIMARY + 2 SECONDARY) y consumo real de RAM
+docker compose ps
+docker stats --no-stream jettra-node-01 jettra-node-02 jettra-node-03 jettrastore-explorer
+curl -s http://localhost:60001/api/v1/cluster/status
+```
+
+### 4. Verificación de Consenso Raft y Failover (`PRIMARY` → `SECONDARY`)
+```bash
+# 1. Detener el contenedor PRIMARY (node-01)
+docker stop jettra-node-01
+
+# 2. Confirmar que un SECONDARY (node-02 o node-03) asumió el rol PRIMARY sin pérdida de datos
+curl -s http://localhost:60002/api/v1/cluster/status
+curl -s http://localhost:60003/api/v1/cluster/status
+
+# 3. Reiniciar node-01 y confirmar reincorporación limpia al quórum con su volumen persistente intacto
+docker start jettra-node-01
+```
+
+### 5. Construcción y Publicación en Docker Hub
+```bash
+docker build -t <usuario>/jettrastore:1.0 -t <usuario>/jettrastore:latest ./JettraStore
+docker login
+docker push <usuario>/jettrastore:1.0
+docker push <usuario>/jettrastore:latest
+```

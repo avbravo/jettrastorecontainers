@@ -1,78 +1,72 @@
 # ==============================================================================
 # JettraStore Distributed Multi-Model Database (Java 25+ Panama FFM & Raft)
-# Compatible con CRaC / CRIU para arranque instantáneo en caliente (< 20 ms)
+# Multi-stage Alpaquita/musl build optimizado para bajo consumo de RAM y CPU
 # ==============================================================================
+FROM bellsoft/liberica-runtime-container:jre-25-stream-musl AS packager
+WORKDIR /staging
+COPY target/JettraStore-*.jar /staging/
+COPY src/main/resources/META-INF/microprofile-config.properties /staging/config/microprofile-config.properties
+COPY src/main/resources/cluster.config /staging/config/cluster.config
+RUN rm -f /staging/original-JettraStore-*.jar && \
+    if [ -f /staging/JettraStore-*-uber.jar ]; then \
+        mv /staging/JettraStore-*-uber.jar /staging/JettraStore.jar && rm -f /staging/JettraStore-*.jar; \
+    elif [ -f /staging/JettraStore-*.jar ]; then \
+        mv /staging/JettraStore-*.jar /staging/JettraStore.jar; \
+    fi && \
+    cp /staging/config/cluster.config /staging/config/jettra.config
+
 FROM bellsoft/liberica-runtime-container:jre-25-stream-musl
 LABEL maintainer="Jettra Ecosystem <dev@jettra.io>"
-LABEL description="JettraStore - Motor de Base de Datos Multimodelo Distribuido en Java 25+ con CRaC y Off-Heap FFM"
+LABEL description="JettraStore - Motor de Base de Datos Multimodelo Distribuido en Java 25+ (Bajo Consumo RAM/CPU)"
 
-# Instalar curl para healthchecks y utilidades del sistema (compatible con Alpine/musl y Debian/glibc)
 RUN if command -v apk > /dev/null; then \
-        apk add --no-cache curl ca-certificates tzdata && rm -rf /var/cache/apk/*; \
+        apk add --no-cache curl ca-certificates tzdata && rm -rf /var/cache/apk/* /tmp/*; \
     elif command -v apt-get > /dev/null; then \
-        apt-get update && apt-get install -y --no-install-recommends curl ca-certificates tzdata && rm -rf /var/lib/apt/lists/*; \
+        apt-get update && apt-get install -y --no-install-recommends curl ca-certificates tzdata && rm -rf /var/lib/apt/lists/* /tmp/*; \
     fi
 
 WORKDIR /app
 
-# Crear directorio de datos persistentes, punto de checkpoint CRaC y permisos
-RUN mkdir -p /jettra/data /jettra/config /jettra/checkpoint && \
+RUN mkdir -p /jettra/data /jettra/config /jettra/checkpoint /app/config && \
     chown -R 1000:1000 /jettra /app
 
-# Copiar JAR autónomo optimizado y archivos de configuración base
-COPY target/JettraStore-*.jar /app/
-COPY src/main/resources/META-INF/microprofile-config.properties /app/config/microprofile-config.properties
-COPY src/main/resources/cluster.config /app/config/cluster.config
+COPY --from=packager --chown=1000:1000 /staging/JettraStore.jar /app/JettraStore.jar
+COPY --from=packager --chown=1000:1000 /staging/config/ /app/config/
 
-# Garantizar compatibilidad y el archivo /app/JettraStore.jar sin duplicar capas pesadas en la imagen
-RUN cp /app/config/cluster.config /app/config/jettra.config && \
-    if [ -f /app/JettraStore-*-uber.jar ]; then \
-        mv /app/JettraStore-*-uber.jar /app/JettraStore.jar && rm -f /app/JettraStore-*.jar; \
-    elif [ -f /app/JettraStore-*.jar ]; then \
-        mv /app/JettraStore-*.jar /app/JettraStore.jar; \
-    fi
-
-# Variables de entorno predeterminadas para nodo autónomo o clúster
-# Configuración optimizada para bajo consumo de RAM en contenedores:
-# -XX:+UseContainerSupport respeta los cgroups y límites de memoria del contenedor Docker.
-# -XX:+UseG1GC + -XX:+UseStringDeduplication reduce drásticamente el consumo de Heap y RSS.
-# -XX:+UseCompactObjectHeaders (Java 25 Lilliput) reduce la sobrecarga de encabezados de objetos a 64 bits.
-# -Xms128m -Xmx512m -XX:MaxMetaspaceSize=256m -XX:MaxDirectMemorySize=256m acota la RAM por nodo.
+# Flags Java 25+ optimizados para bajo footprint de RAM/CPU en contenedores
 ENV JETTRA_NODE_ID=node-01 \
     JETTRA_NODE_ROLE=PRIMARY \
+    JETTRA_NODE_IP=0.0.0.0 \
     JETTRA_STORAGE_PATH=/jettra/data \
     JETTRA_STORAGE_MODE=OFF_HEAP \
+    JETTRA_MULTINODE_ACTIVE=on \
     JETTRA_CRAC_CHECKPOINT_PATH=/jettra/checkpoint \
     JETTRA_CRAC_RESTORE=false \
     JETTRA_GRPC_PORT=50001 \
     JETTRA_REST_PORT=60001 \
     JETTRA_ADMIN_USERNAME=admin \
     JETTRA_ADMIN_PASSWORD=admin-jettra \
-    JAVA_OPTS="--enable-preview --enable-native-access=ALL-UNNAMED -XX:+UnlockExperimentalVMOptions -XX:+UseCompactObjectHeaders -XX:+UseContainerSupport -XX:+UseG1GC -XX:+UseStringDeduplication -XX:CICompilerCount=2 -Xms128m -Xmx512m -XX:MaxMetaspaceSize=256m -XX:MaxDirectMemorySize=256m"
+    JAVA_TOOL_OPTIONS="-XX:+UseContainerSupport -XX:+UseG1GC -XX:+UseStringDeduplication -XX:CICompilerCount=2 -XX:+UnlockExperimentalVMOptions -XX:+UseCompactObjectHeaders -XX:MaxRAMPercentage=70.0 --enable-preview --enable-native-access=ALL-UNNAMED" \
+    JAVA_OPTS="-Xms96m -Xmx384m -XX:MaxMetaspaceSize=192m -XX:MaxDirectMemorySize=192m"
 
-# Exponer puertos: REST HTTP (60001) y Puerto de Clúster / gRPC (50001)
 EXPOSE 60001 50001
 
-# Volúmenes para almacenamiento persistente y snapshots de memoria CRaC
 VOLUME ["/jettra/data", "/jettra/checkpoint"]
 
-# Verificación de salud periódica mediante endpoint REST
-HEALTHCHECK --interval=10s --timeout=5s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:${JETTRA_REST_PORT}/api/v1/health || exit 1
+HEALTHCHECK --interval=10s --timeout=5s --start-period=8s --retries=3 \
+    CMD curl -fsS http://localhost:${JETTRA_REST_PORT}/api/v1/health || exit 1
 
-# Usuario no root seguro
 USER 1000:1000
 
-# Inicio del servidor autónomo JettraStore
-# Si JETTRA_CRAC_RESTORE=true y existen checkpoints en /jettra/checkpoint, restaura instantáneamente con CRaC
 ENTRYPOINT ["sh", "-c", "if [ \"$JETTRA_CRAC_RESTORE\" = \"true\" ] && [ -d \"$JETTRA_CRAC_CHECKPOINT_PATH\" ] && [ \"$(ls -A $JETTRA_CRAC_CHECKPOINT_PATH 2>/dev/null)\" ]; then \
-        echo '[CRaC] Restaurando JettraStore instantáneamente desde checkpoint CRIU en '$JETTRA_CRAC_CHECKPOINT_PATH'...'; \
+        echo '[CRaC] Restaurando JettraStore desde checkpoint CRIU en '$JETTRA_CRAC_CHECKPOINT_PATH'...'; \
         exec java -XX:CRaCRestoreFrom=$JETTRA_CRAC_CHECKPOINT_PATH; \
     else \
         exec java $JAVA_OPTS \
             -Djettra.storage.path=${JETTRA_STORAGE_PATH:-/jettra/data} \
             -Djettra.storage.mode=${JETTRA_STORAGE_MODE:-OFF_HEAP} \
+            -Dcluster.multinode.active=${JETTRA_MULTINODE_ACTIVE:-on} \
             -Dmicroprofile.config.file=/app/config/microprofile-config.properties \
-            -Dcluster.config.path=/app/config/cluster.config \
+            -Dcluster.config.path=${JETTRA_CLUSTER_CONFIG_PATH:-/app/config/cluster.config} \
             -jar /app/JettraStore.jar; \
     fi"]
