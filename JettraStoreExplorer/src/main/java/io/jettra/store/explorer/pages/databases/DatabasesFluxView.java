@@ -60,29 +60,38 @@ public class DatabasesFluxView extends FluxView {
     private final boolean showAddBucketDialog;
     private final String editBucketName;
     private final String addBucketEngine;
+    private final String confirmDeleteDb;
     private final boolean isAdmin;
     private final String message;
 
     public DatabasesFluxView(String selectedDb, String message) {
-        this(selectedDb, null, null, null, null, false, false, null, null, true, message);
+        this(selectedDb, null, null, null, null, false, false, null, null, null, true, message);
     }
 
     public DatabasesFluxView(String selectedDb, String manageUsersDb, boolean isAdmin, String message) {
-        this(selectedDb, manageUsersDb, null, null, null, false, false, null, null, isAdmin, message);
+        this(selectedDb, manageUsersDb, null, null, null, false, false, null, null, null, isAdmin, message);
     }
 
     public DatabasesFluxView(String selectedDb, String manageUsersDb, boolean manageEngines, boolean isAdmin, String message) {
-        this(selectedDb, manageUsersDb, null, null, null, manageEngines, false, null, null, isAdmin, message);
+        this(selectedDb, manageUsersDb, null, null, null, manageEngines, false, null, null, null, isAdmin, message);
     }
 
     public DatabasesFluxView(String selectedDb, String manageUsersDb, String manageIndexesDb, String manageIndexesBucket,
                              boolean manageEngines, boolean isAdmin, String message) {
-        this(selectedDb, manageUsersDb, manageIndexesDb, manageIndexesBucket, null, manageEngines, false, null, null, isAdmin, message);
+        this(selectedDb, manageUsersDb, manageIndexesDb, manageIndexesBucket, null, manageEngines, false, null, null, null, isAdmin, message);
     }
 
     public DatabasesFluxView(String selectedDb, String manageUsersDb, String manageIndexesDb, String manageIndexesBucket,
                              String editIndexName, boolean manageEngines, boolean showAddBucketDialog,
                              String editBucketName, String addBucketEngine, boolean isAdmin, String message) {
+        this(selectedDb, manageUsersDb, manageIndexesDb, manageIndexesBucket, editIndexName, manageEngines,
+                showAddBucketDialog, editBucketName, addBucketEngine, null, isAdmin, message);
+    }
+
+    public DatabasesFluxView(String selectedDb, String manageUsersDb, String manageIndexesDb, String manageIndexesBucket,
+                             String editIndexName, boolean manageEngines, boolean showAddBucketDialog,
+                             String editBucketName, String addBucketEngine, String confirmDeleteDb,
+                             boolean isAdmin, String message) {
         this.selectedDb = selectedDb;
         this.manageUsersDb = manageUsersDb;
         this.manageIndexesDb = manageIndexesDb;
@@ -92,6 +101,7 @@ public class DatabasesFluxView extends FluxView {
         this.showAddBucketDialog = showAddBucketDialog;
         this.editBucketName = editBucketName;
         this.addBucketEngine = addBucketEngine;
+        this.confirmDeleteDb = confirmDeleteDb;
         this.isAdmin = isAdmin;
         this.message = message;
     }
@@ -177,6 +187,17 @@ public class DatabasesFluxView extends FluxView {
             indexesSection = indexesModal;
         }
 
+        // 7. Diálogo Modal JettraFlux de Confirmación para Eliminar Base de Datos (sin window.confirm)
+        Widget deleteDbConfirmModal = null;
+        if (confirmDeleteDb != null && !confirmDeleteDb.isBlank()
+                && catalog.containsKey(confirmDeleteDb)
+                && !"system_metadata_db".equalsIgnoreCase(confirmDeleteDb)) {
+            Modal deleteModal = Modal.of(buildDeleteDatabaseConfirmDialog(confirmDeleteDb, currentDb)).open(true);
+            deleteModal.id("deleteDatabaseModal");
+            deleteModal.modifier(new Modifier().style("z-index: 1250;"));
+            deleteDbConfirmModal = deleteModal;
+        }
+
         List<Widget> rootChildren = new java.util.ArrayList<>();
         if (flashWidget != null) rootChildren.add(flashWidget);
         rootChildren.add(kpiGrid);
@@ -186,6 +207,7 @@ public class DatabasesFluxView extends FluxView {
         if (enginesSection != null) rootChildren.add(enginesSection);
         if (bucketFormOverlayModal != null) rootChildren.add(bucketFormOverlayModal);
         if (indexesSection != null) rootChildren.add(indexesSection);
+        if (deleteDbConfirmModal != null) rootChildren.add(deleteDbConfirmModal);
 
         return Div.of(rootChildren.toArray(new Widget[0]));
     }
@@ -272,9 +294,12 @@ public class DatabasesFluxView extends FluxView {
             }
             actionsList.add(FluxUi.linkButton("/explorer?db=" + db, "📦 Ver Registros", "app-btn-primary", "margin-right:6px;"));
             if (!"system_metadata_db".equalsIgnoreCase(db)) {
-                Widget delLink = FluxUi.linkButton("/databases?action=delete_db&db=" + db, "🗑️", "app-btn-danger", null);
+                String deleteDialogUrl = (currentDb != null && !currentDb.isBlank())
+                        ? "/databases?db=" + currentDb + "&confirm_delete_db=" + db
+                        : "/databases?confirm_delete_db=" + db;
+                Widget delLink = FluxUi.linkButton(deleteDialogUrl, "🗑️", "app-btn-danger", null);
                 delLink.modifier(new Modifier().cssClass("app-btn-danger")
-                        .attribute("onclick", "return confirm('¿Seguro de eliminar la base de datos " + db + "?');"));
+                        .attribute("title", "Eliminar base de datos " + db));
                 actionsList.add(delLink);
             }
             Widget actionsCell = Div.of(actionsList.toArray(new Widget[0]));
@@ -288,6 +313,47 @@ public class DatabasesFluxView extends FluxView {
         Div card = Div.of(header, datatable);
         card.modifier(new Modifier().cssClass("ui-card").style("margin-bottom: 2rem;"));
         return card;
+    }
+
+    private Widget buildDeleteDatabaseConfirmDialog(String targetDb, String currentDb) {
+        Header header = Header.of(3, "⚠️ Confirmar Eliminación de Base de Datos");
+        header.modifier(new Modifier().style("font-size: 1.15rem; color: #f87171; margin: 0 0 0.75rem 0;"));
+
+        Paragraph prompt = Paragraph.of("¿Seguro de eliminar la base de datos?");
+        prompt.modifier(new Modifier().style("font-size: 0.98rem; color: var(--text-main); margin: 0 0 0.75rem 0; font-weight: 600;"));
+
+        Div detailsBox = Div.of(
+                Div.of(
+                        FluxUi.coloredSpan("Base de datos seleccionada: ", "color: var(--text-muted); font-size: 0.88rem;"),
+                        FluxUi.pillBadge(targetDb, "#ef4444")
+                ).modifier(new Modifier().style("display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.45rem;")),
+                Paragraph.of("Esta acción eliminará permanentemente la base de datos junto con sus motores, buckets, índices y registros.")
+                        .modifier(new Modifier().style("margin: 0; font-size: 0.82rem; color: var(--text-muted);"))
+        );
+        detailsBox.modifier(new Modifier().style(
+                "background: rgba(239, 68, 68, 0.08); border: 1px solid rgba(239, 68, 68, 0.35); "
+                        + "border-radius: 8px; padding: 0.85rem 1rem; margin-bottom: 1.2rem;"));
+
+        String cancelUrl = (currentDb != null && !currentDb.isBlank() && !currentDb.equalsIgnoreCase(targetDb))
+                ? "/databases?db=" + currentDb
+                : "/databases";
+
+        Widget cancelBtn = FluxUi.linkButton(cancelUrl, "Cancelar", "app-btn-secondary",
+                "height: 38px; display: inline-flex; align-items: center; padding: 0 1rem;");
+
+        Form confirmForm = Form.of(
+                FluxUi.hidden("action", "delete_db"),
+                FluxUi.hidden("db", targetDb),
+                FluxUi.submitButton("Confirmar", "app-btn-danger", "height: 38px; padding: 0 1.15rem; font-weight: 700;")
+        ).action("/databases").method("POST");
+        confirmForm.modifier(new Modifier().style("display: inline-flex; margin: 0;"));
+
+        Div actionsRow = Div.of(cancelBtn, confirmForm);
+        actionsRow.modifier(new Modifier().style("display: flex; justify-content: flex-end; gap: 0.65rem; align-items: center;"));
+
+        Div container = Div.of(header, prompt, detailsBox, actionsRow);
+        container.modifier(new Modifier().style("min-width: 380px; max-width: 520px; padding: 0.35rem;"));
+        return container;
     }
 
     private Widget buildDatabaseUsersSection(JettraStorePlugin plugin, String targetDb) {

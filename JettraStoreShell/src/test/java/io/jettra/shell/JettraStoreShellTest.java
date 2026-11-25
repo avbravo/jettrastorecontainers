@@ -19,11 +19,14 @@ public class JettraStoreShellTest {
     private static Path tempTestClusterConfig;
     private static String prevStoragePathProp;
     private static String prevClusterConfigProp;
+    private static String prevHealthTimeoutProp;
 
     @BeforeAll
     public static void setupTempTestStorage() throws IOException {
         prevStoragePathProp = System.getProperty("jettra.storage.path");
         prevClusterConfigProp = System.getProperty("cluster.config.path");
+        prevHealthTimeoutProp = System.getProperty("cluster.healthcheck.timeout.ms");
+        JettraShellTestCleanup.cleanStorageDirectories();
         tempTestStorageDir = Files.createTempDirectory("jettra_shell_test_storage_");
         tempTestClusterConfig = tempTestStorageDir.resolve("cluster-test_db.config");
         Files.writeString(tempTestClusterConfig,
@@ -47,20 +50,31 @@ public class JettraStoreShellTest {
                 java.nio.charset.StandardCharsets.UTF_8);
         System.setProperty("jettra.storage.path", tempTestStorageDir.toAbsolutePath().toString());
         System.setProperty("cluster.config.path", tempTestClusterConfig.toAbsolutePath().toString());
+        System.setProperty("cluster.healthcheck.timeout.ms", "60");
     }
 
     @AfterEach
     public void cleanupAfterEachTest() {
-        JettraShellTestCleanup.cleanStorageDirectories();
+        JettraShellTestCleanup.cleanDirectory(tempTestStorageDir);
     }
 
     @AfterAll
     public static void cleanupAfterAllTests() {
         JettraShellTestCleanup.cleanStorageDirectories();
+        if (prevStoragePathProp == null) {
+            System.clearProperty("jettra.storage.path");
+        } else {
+            System.setProperty("jettra.storage.path", prevStoragePathProp);
+        }
         if (prevClusterConfigProp == null) {
             System.clearProperty("cluster.config.path");
         } else {
             System.setProperty("cluster.config.path", prevClusterConfigProp);
+        }
+        if (prevHealthTimeoutProp == null) {
+            System.clearProperty("cluster.healthcheck.timeout.ms");
+        } else {
+            System.setProperty("cluster.healthcheck.timeout.ms", prevHealthTimeoutProp);
         }
     }
 
@@ -151,8 +165,8 @@ public class JettraStoreShellTest {
         assertTrue(nodes.contains("FOLLOWER") || nodes.contains("DISCONNECTED"));
         assertTrue(nodes.contains("SECONDARY"));
 
-        // 3. Administración de nodos (ADD, STOP, START, REMOVE)
-        String addNode = shell.executeCommand("ADD NODE node-04 192.168.1.104 50001 SECONDARY");
+        // 3. Administración de nodos (ADD, STOP, START, REMOVE) usando puerto loopback cerrado (evita 22s de SYN timeout)
+        String addNode = shell.executeCommand("ADD NODE node-04 127.0.0.1 58104 SECONDARY");
         assertTrue(addNode.contains("[SUCCESS]"));
 
         String stopNode = shell.executeCommand("STOP NODE node-04");

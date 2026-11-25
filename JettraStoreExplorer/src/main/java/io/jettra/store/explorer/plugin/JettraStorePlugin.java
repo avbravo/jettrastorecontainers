@@ -244,7 +244,7 @@ public class JettraStorePlugin {
                 props.getProperty("cluster.healthcheck.timeout.ms", "1000"));
         try {
             int t = Integer.parseInt(timeoutStr.trim());
-            this.healthCheckTimeoutMs = Math.max(200, Math.min(5000, t));
+            this.healthCheckTimeoutMs = Math.max(50, Math.min(5000, t));
         } catch (Exception ignored) {
             this.healthCheckTimeoutMs = 1000;
         }
@@ -1687,7 +1687,9 @@ public class JettraStorePlugin {
 
         if (primary != null && primary.getHost() != null && !primary.getHost().isBlank() && primary.getPort() > 0) {
             try {
-                var remoteCfg = getDriverClient().readPrimaryClusterConfigFrom(primary.getHost(), primary.getPort(), 1200, 1500);
+                int rpcConnectMs = Math.min(1200, Math.max(50, this.healthCheckTimeoutMs));
+                int rpcReadMs = Math.min(1500, Math.max(80, this.healthCheckTimeoutMs));
+                var remoteCfg = getDriverClient().readPrimaryClusterConfigFrom(primary.getHost(), primary.getPort(), rpcConnectMs, rpcReadMs);
                 if (remoteCfg != null && remoteCfg.content() != null && !remoteCfg.content().isBlank()) {
                     content = remoteCfg.content();
                     fromRemote = true;
@@ -2015,8 +2017,10 @@ public class JettraStorePlugin {
         try {
             io.jettra.store.cluster.JettraRaftFrame req = io.jettra.store.cluster.JettraRaftFrame.syncCatalogReq(1L,
                     "jettra-explorer");
+            int rpcConnectMs = Math.min(800, Math.max(50, this.healthCheckTimeoutMs));
+            int rpcReadMs = Math.min(1500, Math.max(80, this.healthCheckTimeoutMs));
             io.jettra.store.cluster.JettraRaftFrame resp = getDriverClient().sendClusterFrame(
-                    primary.getHost(), primary.getPort(), req, 800, 1500);
+                    primary.getHost(), primary.getPort(), req, rpcConnectMs, rpcReadMs);
             if (resp != null
                     && resp.frameType() == io.jettra.store.cluster.JettraRaftFrame.TYPE_SYNC_CATALOG_RESP) {
                 String csv = resp.payload() != null
@@ -2172,7 +2176,9 @@ public class JettraStorePlugin {
             return;
         }
         try {
-            getDriverClient().sendClusterFrame(primary.getHost(), primary.getPort(), frame, 1200, 2000);
+            int rpcConnectMs = Math.min(1200, Math.max(50, this.healthCheckTimeoutMs));
+            int rpcReadMs = Math.min(2000, Math.max(80, this.healthCheckTimeoutMs));
+            getDriverClient().sendClusterFrame(primary.getHost(), primary.getPort(), frame, rpcConnectMs, rpcReadMs);
         } catch (Exception ignored) {
         }
     }

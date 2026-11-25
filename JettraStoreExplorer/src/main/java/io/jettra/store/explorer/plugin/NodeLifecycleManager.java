@@ -240,11 +240,12 @@ public final class NodeLifecycleManager {
                 Optional<String> containerOpt = dockerController.findContainer(node);
                 if (containerOpt.isPresent()) {
                     String containerName = containerOpt.get();
-                    if (!isTcpPortOpen(node.getHost(), node.getPort(), 180) && dockerController.startContainer(containerName)) {
+                    if (!isTcpPortOpen(node.getHost(), node.getPort(), 120) && dockerController.startContainer(containerName)) {
                         mechanism = "DOCKER_START[" + containerName + "]";
-                        long deadline = System.currentTimeMillis() + 1500;
-                        while (System.currentTimeMillis() < deadline && !isTcpPortOpen(node.getHost(), node.getPort(), 150)) {
-                            try { Thread.sleep(100); } catch (InterruptedException ie) {
+                        long waitMs = Math.max(50L, Long.getLong("jettra.node.shutdown.wait.ms", 1500L));
+                        long deadline = System.currentTimeMillis() + waitMs;
+                        while (System.currentTimeMillis() < deadline && !isTcpPortOpen(node.getHost(), node.getPort(), 80)) {
+                            try { Thread.sleep(20); } catch (InterruptedException ie) {
                                 Thread.currentThread().interrupt();
                                 break;
                             }
@@ -401,7 +402,7 @@ public final class NodeLifecycleManager {
                 return true;
             }
             try {
-                Thread.sleep(50);
+                Thread.sleep(20);
             } catch (InterruptedException ie) {
                 Thread.currentThread().interrupt();
                 break;

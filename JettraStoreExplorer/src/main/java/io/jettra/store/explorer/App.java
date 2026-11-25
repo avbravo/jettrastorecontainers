@@ -605,6 +605,7 @@ public class App {
         }
 
         String db = req.getQueryParam("db");
+        String confirmDeleteDb = req.getQueryParam("confirm_delete_db");
         String manageUsersDb = req.getQueryParam("manage_users_db");
         String manageIndexesDb = req.getQueryParam("manage_indexes_db");
         String indexBucket = req.getQueryParam("index_bucket");
@@ -652,7 +653,7 @@ public class App {
         }
 
         Widget content = new DatabasesFluxView(db, manageUsersDb, manageIndexesDb, indexBucket, editIndex,
-                manageEngines, showAddBucketDialog, editBucket, addBucketEngine, isAdmin, messageText);
+                manageEngines, showAddBucketDialog, editBucket, addBucketEngine, confirmDeleteDb, isAdmin, messageText);
         renderTemplate(resp, server, getLoggedUser(req), "Catálogo de Bases de Datos & Motores", "databases", content);
     }
 
@@ -675,6 +676,13 @@ public class App {
                 plugin.createDatabase(dbName, description);
             }
             redirect(resp, "/databases?db=" + dbName + "&msg=db_created");
+            return;
+        } else if ("delete_db".equalsIgnoreCase(action)) {
+            String db = form.get("db");
+            if (db != null && !db.isBlank() && !"system_metadata_db".equalsIgnoreCase(db)) {
+                plugin.deleteDatabase(db);
+            }
+            redirect(resp, "/databases?msg=db_deleted");
             return;
         } else if ("add_bucket".equalsIgnoreCase(action)) {
             String db = form.get("db");

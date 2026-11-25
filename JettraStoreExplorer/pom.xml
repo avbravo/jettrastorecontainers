@@ -22,6 +22,7 @@
         <jettra.store.version>1.0-SNAPSHOT</jettra.store.version>
         <jackson.version>2.18.2</jackson.version>
         <skipTests>false</skipTests>
+        <jettra.test></jettra.test>
     </properties>
 
     <dependencyManagement>
@@ -281,7 +282,13 @@
                                 <argument>-XX:MaxMetaspaceSize=256m</argument>
                                 <argument>-XX:MaxDirectMemorySize=256m</argument>
                                 <argument>-XX:+UseG1GC</argument>
-                                <argument>-XX:CICompilerCount=2</argument>
+                                <argument>-XX:TieredStopAtLevel=1</argument>
+                                <argument>-XX:+UnlockExperimentalVMOptions</argument>
+                                <argument>-XX:+UseCompactObjectHeaders</argument>
+                                <argument>-Dcluster.healthcheck.timeout.ms=60</argument>
+                                <argument>-Djettra.node.shutdown.wait.ms=150</argument>
+                                <argument>-Djdk.httpclient.keepalive.timeout=0</argument>
+                                <argument>-Djettra.test=${jettra.test}</argument>
                                 <argument>--enable-preview</argument>
                                 <argument>--enable-native-access=ALL-UNNAMED</argument>
                                 <argument>-classpath</argument>

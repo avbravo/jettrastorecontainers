@@ -75,7 +75,7 @@ public class JettraStoreExplorerTest {
                                                         + "storage.path=" + testStoragePath + "\n"
                                                         + "app.title=JettraStore Explorer\n"
                                                         + "cluster.multinode.active=on\n"
-                                                        + "cluster.healthcheck.timeout.ms=200\n"
+                                                        + "cluster.healthcheck.timeout.ms=60\n"
                                                         + "cluster.nodes=node-01:127.0.0.1:59001,node-02:127.0.0.1:59002,node-03:127.0.0.1:59003\n",
                                         java.nio.charset.StandardCharsets.UTF_8);
                         tempTestClusterConfig = targetDir.resolve("cluster-test_db.config");
@@ -111,9 +111,9 @@ public class JettraStoreExplorerTest {
                 } catch (Exception ignored) {
                 }
 
-                // Reducir latencias de comprobación de clúster a loopback local (0.05 ms vs
-                // 1000 ms por timeout TCP)
-                System.setProperty("cluster.healthcheck.timeout.ms", "200");
+                // Reducir latencias de comprobación de clúster a loopback local (60 ms vs 1000 ms)
+                System.setProperty("cluster.healthcheck.timeout.ms", "60");
+                System.setProperty("jettra.node.shutdown.wait.ms", "150");
                 System.setProperty("cluster.heartbeat.interval.ms", "60000");
 
                 Runtime.getRuntime().addShutdownHook(new Thread(() -> {
@@ -2354,11 +2354,11 @@ public class JettraStoreExplorerTest {
                                 plugin.getServerNodes());
                 try {
                         var n1 = new io.jettra.store.core.JettraConfigValidator.ClusterNodeInfo("node-01", "PRIMARY",
-                                        "127.0.0.1", 50001, 60001, "./data/node-01");
+                                        "127.0.0.1", 59001, 69001, "./data/node-01");
                         var n2 = new io.jettra.store.core.JettraConfigValidator.ClusterNodeInfo("node-02", "SECONDARY",
-                                        "127.0.0.1", 50002, 60002, "./data/node-02");
+                                        "127.0.0.1", 59002, 69002, "./data/node-02");
                         var n4 = new io.jettra.store.core.JettraConfigValidator.ClusterNodeInfo("node-04", "SECONDARY",
-                                        "127.0.0.1", 50004, 60004, "./data/node-04");
+                                        "127.0.0.1", 59004, 69004, "./data/node-04");
 
                         // 1. Simular que Shell agregó node-04 en PRIMARY
                         plugin.applyAuthoritativeClusterNodes(java.util.List.of(n1, n2, n4), null);
@@ -3424,4 +3424,63 @@ public class JettraStoreExplorerTest {
         JettraAssert.assertTrue(renderedView.contains("ventas_schema"), "Debe renderizar el esquema 'ventas_schema'");
         JettraAssert.assertTrue(renderedView.contains("Bases en PostgreSQL"), "Debe renderizar el panel informativo de bases de datos");
     }
+
+        @Test
+        @DisplayName("RF-21: Diálogo modal JettraFlux de confirmación al eliminar base de datos (sin window.confirm)")
+        public void testRf21DeleteDatabaseJettraFluxConfirmationModal() throws Exception {
+                ensureSharedServer();
+                JettraStorePlugin plugin = JettraStorePlugin.getInstance();
+                String tempDb = "rf21_delete_modal_test_db";
+                plugin.createDatabase(tempDb, "ItemsRF21", "DOCUMENT", "BD temporal para prueba RF-21");
+                try {
+                        // 1. La vista /databases no debe usar window.confirm nativo para eliminar BD
+                        HttpResponse<String> listRes = get("/databases?db=" + tempDb);
+                        JettraAssert.assertEquals(200, listRes.statusCode(),
+                                        "GET /databases debe responder HTTP 200");
+                        String listBody = listRes.body();
+                        JettraAssert.assertTrue(listBody.contains("confirm_delete_db=" + tempDb),
+                                        "El botón eliminar debe abrir el diálogo modal JettraFlux mediante confirm_delete_db");
+                        JettraAssert.assertFalse(listBody.contains("return confirm('¿Seguro de eliminar la base de datos"),
+                                        "No debe utilizar window.confirm nativo para eliminar la base de datos");
+
+                        // 2. Abrir diálogo modal de confirmación JettraFlux
+                        HttpResponse<String> modalRes = get("/databases?db=" + tempDb + "&confirm_delete_db=" + tempDb);
+                        JettraAssert.assertEquals(200, modalRes.statusCode(),
+                                        "GET /databases?confirm_delete_db debe responder HTTP 200");
+                        String modalBody = modalRes.body();
+                        JettraAssert.assertTrue(modalBody.contains("id=\"deleteDatabaseModal\""),
+                                        "Debe renderizar el componente Modal de JettraFlux con id deleteDatabaseModal");
+                        JettraAssert.assertTrue(modalBody.contains("espresso-modal-overlay"),
+                                        "Debe usar el widget Modal nativo de JettraFlux");
+                        JettraAssert.assertTrue(modalBody.contains("¿Seguro de eliminar la base de datos?"),
+                                        "Debe mostrar explícitamente el mensaje de confirmación requerido");
+                        JettraAssert.assertTrue(modalBody.contains(tempDb),
+                                        "Debe indicar el nombre de la base de datos seleccionada");
+                        JettraAssert.assertTrue(modalBody.contains("Confirmar") && modalBody.contains("Cancelar"),
+                                        "Debe incluir las acciones Confirmar y Cancelar");
+
+                        // 3. Cancelar cierra el modal sin eliminar la BD
+                        HttpResponse<String> cancelRes = get("/databases");
+                        JettraAssert.assertEquals(200, cancelRes.statusCode(), "Cancelar debe volver a /databases");
+                        JettraAssert.assertFalse(cancelRes.body().contains("id=\"deleteDatabaseModal\""),
+                                        "Al cancelar el diálogo modal debe permanecer cerrado");
+                        JettraAssert.assertTrue(plugin.getDatabaseNames().contains(tempDb),
+                                        "Cancelar no debe eliminar la base de datos");
+
+                        // 4. Confirmar ejecuta la eliminación y actualiza el catálogo
+                        HttpResponse<String> confirmRes = postForm("/databases",
+                                        "action=delete_db&db=" + tempDb);
+                        JettraAssert.assertEquals(302, confirmRes.statusCode(),
+                                        "Confirmar eliminación vía POST /databases debe redirigir 302");
+                        JettraAssert.assertTrue(
+                                        confirmRes.headers().firstValue("Location").orElse("").contains("msg=db_deleted"),
+                                        "Debe redirigir confirmando eliminación de la base de datos");
+                        JettraAssert.assertFalse(plugin.getDatabaseNames().contains(tempDb),
+                                        "La base de datos debe quedar eliminada tras confirmar en el modal JettraFlux");
+                } finally {
+                        if (plugin.getDatabaseNames().contains(tempDb)) {
+                                plugin.deleteDatabase(tempDb);
+                        }
+                }
+        }
 }

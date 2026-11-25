@@ -12,7 +12,6 @@
         <module>JettraStoreDriver</module>
         <module>JettraStoreShell</module>
         <module>JettraStoreExplorer</module>
-        <module>JettraStoreMeter</module>
         <module>JettraStoreExampleSE</module>
     </modules>
     <properties>
