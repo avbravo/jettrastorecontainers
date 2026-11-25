@@ -1,0 +1,57 @@
+# ==============================================================================
+# JettraStore - Docker Compose desde Docker Hub (avbravo/jettrastore:1.0-SNAPSHOT)
+# Autónomo y portable: funciona en cualquier equipo sin requerir archivos locales
+# del repositorio. Usa microprofile-config.properties y cluster.config embebidos
+# en la imagen y configura el nodo mediante variables de entorno y volúmenes.
+# ==============================================================================
+services:
+  jettrastore:
+    image: ${JETTRA_DOCKER_IMAGE:-avbravo/jettrastore:1.0-SNAPSHOT}
+    pull_policy: always
+    container_name: ${JETTRA_CONTAINER_NAME:-jettrastore}
+    hostname: ${JETTRA_NODE_IP:-jettra-node-01}
+    restart: unless-stopped
+    ports:
+      - "${JETTRA_GRPC_PORT:-50001}:50001"
+      - "${JETTRA_REST_PORT:-60001}:60001"
+    environment:
+      - JETTRA_NODE_ID=${JETTRA_NODE_ID:-node-01}
+      - JETTRA_NODE_ROLE=${JETTRA_NODE_ROLE:-PRIMARY}
+      - JETTRA_NODE_IP=${JETTRA_NODE_IP:-jettra-node-01}
+      - JETTRA_STORAGE_PATH=/jettra/data
+      - JETTRA_STORAGE_MODE=${JETTRA_STORAGE_MODE:-OFF_HEAP}
+      - JETTRA_MULTINODE_ACTIVE=${JETTRA_MULTINODE_ACTIVE:-off}
+      - JETTRA_CLUSTER_CONFIG_PATH=/app/config/cluster.config
+      - JETTRA_GRPC_PORT=50001
+      - JETTRA_REST_PORT=60001
+      - JETTRA_ADMIN_USERNAME=${JETTRA_ADMIN_USERNAME:-admin}
+      - JETTRA_ADMIN_PASSWORD=${JETTRA_ADMIN_PASSWORD:-admin-jettra}
+      - JETTRA_SAMPLES_AUTOLOAD=${JETTRA_SAMPLES_AUTOLOAD:-false}
+      - JAVA_OPTS=${JAVA_OPTS:--Xms96m -Xmx384m -XX:MaxMetaspaceSize=192m -XX:MaxDirectMemorySize=192m}
+    mem_limit: 640m
+    mem_reservation: 128m
+    cpus: 1.0
+    volumes:
+      - jettrastore_hub_data:/jettra/data
+      - jettrastore_hub_checkpoint:/jettra/checkpoint
+    networks:
+      - jettra-hub-net
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:60001/api/v1/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 8s
+
+volumes:
+  jettrastore_hub_data:
+    name: jettrastore_hub_data
+    driver: local
+  jettrastore_hub_checkpoint:
+    name: jettrastore_hub_checkpoint
+    driver: local
+
+networks:
+  jettra-hub-net:
+    name: jettra-hub-net
+    driver: bridge

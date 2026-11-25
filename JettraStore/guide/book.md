@@ -3508,3 +3508,143 @@ El ecosistema JettraStore integra capacidades de migración fluida desde motores
   - `DATE` se conserva como `LocalDate` (`YYYY-MM-DD`).
 - **Identificadores `JettraId`:** Cada registro transferido conserva o recibe un `JettraId` canónico hexadecimal de 32 caracteres vinculado al contexto de la base de datos y Bucket destino.
 
+---
+
+## Despliegue desde Docker Hub (`avbravo/jettrastore:1.0-SNAPSHOT`)
+
+Esta sección describe cómo descargar, configurar y ejecutar **JettraStore** directamente utilizando la imagen oficial publicada en **Docker Hub**, tanto mediante `docker run` como con **Docker Compose** (`docker-compose-hub.yml`).
+
+### 1. Descarga de la Imagen
+
+```bash
+docker pull avbravo/jettrastore:1.0-SNAPSHOT
+```
+
+### 2. Ejecución Directa con `docker run` (Autónoma con la Configuración Embebida)
+
+La imagen `avbravo/jettrastore:1.0-SNAPSHOT` **ya incluye embebidos** en `/app/config/microprofile-config.properties` y `/app/config/cluster.config` dentro del contenedor, por lo que puedes ejecutarla en cualquier equipo sin necesitar los archivos del repositorio fuente. El contenedor expone los puertos **`50001`** (transporte binario Raft/gRPC) y **`60001`** (API REST y healthcheck `/api/v1/health`) bajo el usuario **`1000:1000`**:
+
+```bash
+docker run -d \
+  --name jettrastore \
+  --hostname jettra-node-01 \
+  -p 50001:50001 \
+  -p 60001:60001 \
+  -e JETTRA_NODE_ID=node-01 \
+  -e JETTRA_NODE_ROLE=PRIMARY \
+  -e JETTRA_NODE_IP=jettra-node-01 \
+  -e JETTRA_STORAGE_PATH=/jettra/data \
+  -e JETTRA_STORAGE_MODE=OFF_HEAP \
+  -e JETTRA_MULTINODE_ACTIVE=off \
+  -e JETTRA_CLUSTER_CONFIG_PATH=/app/config/cluster.config \
+  -e JETTRA_GRPC_PORT=50001 \
+  -e JETTRA_REST_PORT=60001 \
+  -e JETTRA_ADMIN_USERNAME=admin \
+  -e JETTRA_ADMIN_PASSWORD=admin-jettra \
+  -e JETTRA_SAMPLES_AUTOLOAD=false \
+  -v jettrastore_data:/jettra/data \
+  -v jettrastore_checkpoint:/jettra/checkpoint \
+  avbravo/jettrastore:1.0-SNAPSHOT
+```
+
+> [!NOTE]
+> **Consideraciones clave de configuración y portabilidad:**
+> * **Sin dependencias de archivos locales del repositorio:** `microprofile-config.properties` y `cluster.config` ya vienen empaquetados dentro de la imagen en `/app/config/`. Toda la parametrización del nodo (ID, rol, puertos, almacenamiento, modo multinodo, credenciales y flags JVM) se realiza mediante variables de entorno en `docker run` o `docker-compose-hub.yml`, permitiendo desplegar en cualquier servidor copiando únicamente el archivo YAML.
+> * **Sobrescritura opcional de archivos:** Si en un despliegue avanzado deseas reemplazar `/app/config/microprofile-config.properties` o `/app/config/cluster.config` con archivos propios del host, verifica primero que **existan como archivos regulares** antes de ejecutar Docker; si montas una ruta inexistente con `-v`, Docker creará un directorio vacío en el host y lanzará `not a directory: Are you trying to mount a directory onto a file`.
+> * **Precedencia de propiedades (`JettraStoreConfig`):** Las propiedades `-D` del `ENTRYPOINT` (`JETTRA_STORAGE_PATH`, `JETTRA_STORAGE_MODE`, `JETTRA_MULTINODE_ACTIVE`, `JETTRA_SAMPLES_AUTOLOAD`) y las variables `JETTRA_*` / `JAVA_OPTS` tienen prioridad sobre `microprofile-config.properties`. Para ejecutar 1 nodo autónomo, mantén `JETTRA_MULTINODE_ACTIVE=off`.
+> * **Permisos de volúmenes:** Al usar volúmenes nombrados (`jettrastore_data:/jettra/data`), Docker gestiona los permisos automáticamente. Si utilizas un directorio local del host (*bind mount*), asigna propiedad al UID `1000:1000` (`sudo chown -R 1000:1000 /ruta/local/data`).
+
+### 3. Despliegue Orquestado y Portable con `docker-compose-hub.yml`
+
+El archivo `JettraStore/docker-compose-hub.yml` es totalmente autónomo: descarga la imagen desde Docker Hub, configura el nodo por variables de entorno usando la configuración interna de la imagen y monta volúmenes persistentes para datos y checkpoints sin depender de archivos externos en el host:
+
+```yaml
+# ==============================================================================
+# JettraStore - Docker Compose desde Docker Hub (avbravo/jettrastore:1.0-SNAPSHOT)
+# Autónomo y portable: funciona en cualquier equipo sin requerir archivos locales
+# del repositorio. Usa microprofile-config.properties y cluster.config embebidos
+# en la imagen y configura el nodo mediante variables de entorno y volúmenes.
+# ==============================================================================
+services:
+  jettrastore:
+    image: ${JETTRA_DOCKER_IMAGE:-avbravo/jettrastore:1.0-SNAPSHOT}
+    pull_policy: always
+    container_name: ${JETTRA_CONTAINER_NAME:-jettrastore}
+    hostname: ${JETTRA_NODE_IP:-jettra-node-01}
+    restart: unless-stopped
+    ports:
+      - "${JETTRA_GRPC_PORT:-50001}:50001"
+      - "${JETTRA_REST_PORT:-60001}:60001"
+    environment:
+      - JETTRA_NODE_ID=${JETTRA_NODE_ID:-node-01}
+      - JETTRA_NODE_ROLE=${JETTRA_NODE_ROLE:-PRIMARY}
+      - JETTRA_NODE_IP=${JETTRA_NODE_IP:-jettra-node-01}
+      - JETTRA_STORAGE_PATH=/jettra/data
+      - JETTRA_STORAGE_MODE=${JETTRA_STORAGE_MODE:-OFF_HEAP}
+      - JETTRA_MULTINODE_ACTIVE=${JETTRA_MULTINODE_ACTIVE:-off}
+      - JETTRA_CLUSTER_CONFIG_PATH=/app/config/cluster.config
+      - JETTRA_GRPC_PORT=50001
+      - JETTRA_REST_PORT=60001
+      - JETTRA_ADMIN_USERNAME=${JETTRA_ADMIN_USERNAME:-admin}
+      - JETTRA_ADMIN_PASSWORD=${JETTRA_ADMIN_PASSWORD:-admin-jettra}
+      - JETTRA_SAMPLES_AUTOLOAD=${JETTRA_SAMPLES_AUTOLOAD:-false}
+      - JAVA_OPTS=${JAVA_OPTS:--Xms96m -Xmx384m -XX:MaxMetaspaceSize=192m -XX:MaxDirectMemorySize=192m}
+    mem_limit: 640m
+    mem_reservation: 128m
+    cpus: 1.0
+    volumes:
+      - jettrastore_hub_data:/jettra/data
+      - jettrastore_hub_checkpoint:/jettra/checkpoint
+    networks:
+      - jettra-hub-net
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:60001/api/v1/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 8s
+
+volumes:
+  jettrastore_hub_data:
+    name: jettrastore_hub_data
+    driver: local
+  jettrastore_hub_checkpoint:
+    name: jettrastore_hub_checkpoint
+    driver: local
+
+networks:
+  jettra-hub-net:
+    name: jettra-hub-net
+    driver: bridge
+
+```
+
+### 4. Ciclo de Ejecución y Verificación con Docker Compose
+
+Después de descargar la imagen con `pull`, inicia y verifica el servicio con los siguientes comandos:
+
+```bash
+# 1. Descargar la imagen desde Docker Hub
+docker compose -f docker-compose-hub.yml pull
+
+# 2. Iniciar el contenedor en segundo plano (usando la imagen descargada)
+docker compose -f docker-compose-hub.yml up -d
+# (Opcional: si ya ejecutaste pull y no deseas consultar Docker Hub de nuevo, añade --pull never)
+# docker compose -f docker-compose-hub.yml up -d --pull never
+
+# 3. Verificar estado del contenedor y healthcheck
+docker compose -f docker-compose-hub.yml ps
+curl -fsS http://localhost:60001/api/v1/health
+
+# 4. Consultar logs en tiempo real
+docker compose -f docker-compose-hub.yml logs -f jettrastore
+```
+
+#### Operación y Limpieza
+```bash
+# Detener el servicio conservando los volúmenes persistentes
+docker compose -f docker-compose-hub.yml down
+
+# Detener el servicio y eliminar también los volúmenes de datos (destruye datos almacenados)
+docker compose -f docker-compose-hub.yml down -v
+```
