@@ -169,7 +169,7 @@ public final class JettraStoreServer {
                 this.transportServer = new JettraClusterTransportServer(config.getGrpcPort(), this);
                 this.transportServer.start();
             } catch (Exception e) {
-                System.err.printf("[JettraStoreServer] Aviso: No se pudo iniciar transporte Raft en puerto %d: %s%n",
+                System.err.printf("[JettraStoreServer] ⚠️ Conflicto o error al enlazar transporte Raft en puerto %d: %s. Detenga el proceso que lo ocupa o configure JETTRA_GRPC_PORT con otro puerto.%n",
                     config.getGrpcPort(), e.getMessage());
             }
 
@@ -637,6 +637,28 @@ public final class JettraStoreServer {
 
     public static JettraStoreServer getActiveInstance() {
         return activeInstance;
+    }
+
+    /**
+     * Comprueba mediante {@code ServerSocket} con {@code SO_REUSEADDR} y cierre inmediato
+     * si un puerto TCP está libre en la interfaz indicada.
+     */
+    public static boolean isTcpPortAvailable(String host, int port) {
+        if (port < 1 || port > 65535) {
+            return false;
+        }
+        String cleanHost = (host == null) ? "" : host.trim();
+        boolean wildcard = cleanHost.isEmpty() || "0.0.0.0".equals(cleanHost) || "::".equals(cleanHost) || "*".equals(cleanHost);
+        try (java.net.ServerSocket ss = new java.net.ServerSocket()) {
+            ss.setReuseAddress(true);
+            java.net.InetSocketAddress addr = wildcard
+                    ? new java.net.InetSocketAddress(port)
+                    : new java.net.InetSocketAddress(java.net.InetAddress.getByName(cleanHost), port);
+            ss.bind(addr, 1);
+            return true;
+        } catch (IOException e) {
+            return false;
+        }
     }
 
     public boolean isRunning() {

@@ -425,3 +425,32 @@ jettra-backend/
         └── {Tabla}Endpoint.java              # Controladores REST (/api/{tabla}, GET, POST, PUT, DELETE)
 ```
 
+---
+
+## 16. Validación Previa de Disponibilidad de Puerto al Iniciar (`RF-27`)
+
+Antes de inicializar `JettraStorePlugin`, las rutas **JettraFlux** o el servidor HTTP **JettraServer**, `App` verifica de forma temprana si el puerto TCP configurado en la interfaz de red seleccionada se encuentra disponible.
+
+### 1. Precedencia de Configuración del Puerto y Host
+El punto de arranque (`App.resolveStartupConfig(args)`) resuelve el host y el puerto en el siguiente orden de prioridad:
+1. **Argumentos de línea de comandos:** `--server.port=<puerto>`, `--port=<puerto>`, `-port=<puerto>`, `-p <puerto>`, `--port <puerto>` y `--server.host=<host>`.
+2. **Propiedades del sistema JVM y variables de entorno:** `-Dserver.port=...` / `-Dport=...` / `PORT` y `-Dserver.host=...` / `-Dhost=...` / `SERVER_HOST`.
+3. **Archivo `microprofile-config.properties`:** `server.port` (por defecto `8085`) y `server.host` (por defecto `127.0.0.1`).
+
+### 2. Mecanismo de Comprobación Segura (`ServerSocket` + `SO_REUSEADDR`)
+* `App.isPortAvailable(host, port)` abre un `ServerSocket` de sonda dentro de un bloque `try-with-resources`, habilita `setReuseAddress(true)` para evitar falsos bloqueos tras reinicios rápidos y ejecuta `bind(...)` sobre la interfaz configurada (`0.0.0.0` / `*` o IP específica).
+* El socket de prueba se cierra inmediatamente al salir del bloque `try-with-resources` antes de ceder el puerto a `JettraServer`.
+
+### 3. Manejo Controlado de Conflictos de Puerto
+Si el puerto ya está ocupado por otra instancia de `JettraStoreExplorer` u otro proceso del sistema:
+* **En arranque CLI (`App.main`):** La aplicación aborta el inicio de manera controlada con código de salida `1` (`System.exit(1)`), evitando excepciones genéricas (`BindException`) y mostrando en consola:
+  ```text
+  ⚠️ Error: El puerto 8085 ya está en uso en la interfaz '127.0.0.1'. Detenga el proceso que lo ocupa o configure un puerto diferente para iniciar JettraStoreExplorer.
+  ```
+* **En arranque programático (`App.startApplication`):** Se lanza `App.PortAlreadyInUseException` antes de crear el servidor web o modificar sesiones activas.
+* **Solución rápida:** Detener la instancia previa que ocupa el puerto o iniciar indicando un puerto libre:
+  ```bash
+  java -jar target/JettraStoreExplorer-1.0.0-SNAPSHOT.jar --server.port=8090
+  ```
+
+

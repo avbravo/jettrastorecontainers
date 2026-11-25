@@ -17,12 +17,29 @@ public class JettraStoreShellTest {
 
     private static Path tempTestStorageDir;
     private static Path tempTestClusterConfig;
+    private static io.jettra.store.JettraStoreServer sharedTestServer;
     private static String prevStoragePathProp;
     private static String prevClusterConfigProp;
     private static String prevHealthTimeoutProp;
 
+    private static void startSharedTestNodeServer() throws Exception {
+        java.util.Properties props = new java.util.Properties();
+        props.setProperty("cluster.node.id", "node-01");
+        props.setProperty("cluster.node.role", "PRIMARY");
+        props.setProperty("jettra.network.host", "127.0.0.1");
+        props.setProperty("jettra.network.grpc.port", "59201");
+        props.setProperty("jettra.network.rest.port", "64201");
+        props.setProperty("jettra.storage.path", tempTestStorageDir.toAbsolutePath().toString());
+        props.setProperty("jettra.storage.mode", "JVM_RAM");
+        props.setProperty("cluster.multinode.active", "off");
+        props.setProperty("jettrapolice.active", "false");
+        io.jettra.store.core.JettraStoreConfig cfg = new io.jettra.store.core.JettraStoreConfig(props);
+        sharedTestServer = new io.jettra.store.JettraStoreServer(cfg);
+        sharedTestServer.start();
+    }
+
     @BeforeAll
-    public static void setupTempTestStorage() throws IOException {
+    public static void setupTempTestStorage() throws Exception {
         prevStoragePathProp = System.getProperty("jettra.storage.path");
         prevClusterConfigProp = System.getProperty("cluster.config.path");
         prevHealthTimeoutProp = System.getProperty("cluster.healthcheck.timeout.ms");
@@ -36,21 +53,22 @@ public class JettraStoreShellTest {
                         + "cluster.node.1.role = PRIMARY\n"
                         + "cluster.node.1.ip = 127.0.0.1\n"
                         + "cluster.node.1.grpc.port = 59201\n"
-                        + "cluster.node.1.rest.port = 69201\n"
+                        + "cluster.node.1.rest.port = 64201\n"
                         + "cluster.node.2.id = node-02\n"
                         + "cluster.node.2.role = SECONDARY\n"
                         + "cluster.node.2.ip = 127.0.0.1\n"
                         + "cluster.node.2.grpc.port = 59202\n"
-                        + "cluster.node.2.rest.port = 69202\n"
+                        + "cluster.node.2.rest.port = 64202\n"
                         + "cluster.node.3.id = node-03\n"
                         + "cluster.node.3.role = SECONDARY\n"
                         + "cluster.node.3.ip = 127.0.0.1\n"
                         + "cluster.node.3.grpc.port = 59203\n"
-                        + "cluster.node.3.rest.port = 69203\n",
+                        + "cluster.node.3.rest.port = 64203\n",
                 java.nio.charset.StandardCharsets.UTF_8);
         System.setProperty("jettra.storage.path", tempTestStorageDir.toAbsolutePath().toString());
         System.setProperty("cluster.config.path", tempTestClusterConfig.toAbsolutePath().toString());
         System.setProperty("cluster.healthcheck.timeout.ms", "60");
+        startSharedTestNodeServer();
     }
 
     @AfterEach
@@ -60,6 +78,13 @@ public class JettraStoreShellTest {
 
     @AfterAll
     public static void cleanupAfterAllTests() {
+        if (sharedTestServer != null) {
+            try {
+                sharedTestServer.stop();
+            } catch (Exception ignored) {
+            }
+            sharedTestServer = null;
+        }
         JettraShellTestCleanup.cleanStorageDirectories();
         if (prevStoragePathProp == null) {
             System.clearProperty("jettra.storage.path");
@@ -156,14 +181,17 @@ public class JettraStoreShellTest {
         assertTrue(status.contains("DISCO (ALMACENAMIENTO)"));
         assertTrue(status.contains("Panama FFM"));
 
-        // 2. Mostrar nodos del clúster con show nodes
+        // 2. Mostrar nodos del clúster con show nodes (todos inactivos en 58101..58103)
         String nodes = shell.executeCommand("show nodes");
         assertTrue(nodes.contains("node-01"));
         assertTrue(nodes.contains("node-02"));
         assertTrue(nodes.contains("node-03"));
-        assertTrue(nodes.contains("LEADER") || nodes.contains("DISCONNECTED"));
-        assertTrue(nodes.contains("FOLLOWER") || nodes.contains("DISCONNECTED"));
-        assertTrue(nodes.contains("SECONDARY"));
+        assertTrue(nodes.contains("DISCONNECTED"));
+        assertTrue(nodes.contains("STOPPED"));
+        assertTrue(nodes.contains("UNKNOWN"));
+        assertFalse(nodes.contains("RUNNING"));
+        assertFalse(nodes.contains("LEADER"));
+        assertFalse(nodes.contains("FOLLOWER"));
 
         // 3. Administración de nodos (ADD, STOP, START, REMOVE) usando puerto loopback cerrado (evita 22s de SYN timeout)
         String addNode = shell.executeCommand("ADD NODE node-04 127.0.0.1 58104 SECONDARY");
@@ -1153,6 +1181,13 @@ public class JettraStoreShellTest {
         } finally {
             primaryServer.stop();
             JettraShellTestCleanup.deleteRecursively(tempStorage);
+            if (sharedTestServer != null) {
+                try {
+                    sharedTestServer.stop();
+                } catch (Exception ignored) {
+                }
+                startSharedTestNodeServer();
+            }
         }
     }
 

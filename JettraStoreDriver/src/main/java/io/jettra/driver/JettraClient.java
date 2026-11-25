@@ -557,10 +557,18 @@ public final class JettraClient implements AutoCloseable {
         try (var replClient = new io.jettra.store.cluster.JettraClusterReplicationClient(localId, peers)) {
             return replClient.getClusterDistributionInfo(localIp, localPort, localRole, localDbs);
         } catch (Exception e) {
+            io.jettra.store.JettraStoreServer active = io.jettra.store.JettraStoreServer.getActiveInstance();
+            boolean localUp = (active != null && active.isRunning())
+                    || probeJettraNode(localIp, localPort, deriveRestPortForNode(localPort), 250).alive();
             List<ClusterNodeDistributionInfo> fallback = new ArrayList<>();
-            fallback.add(new ClusterNodeDistributionInfo(localId, localIp, localPort, localRole, "RUNNING", localDbs.size(), localDbs));
+            fallback.add(new ClusterNodeDistributionInfo(
+                    localId, localIp, localPort,
+                    localUp ? localRole : "UNKNOWN",
+                    localUp ? "RUNNING" : "OFFLINE",
+                    localUp ? localDbs.size() : 0,
+                    localUp ? localDbs : List.of()));
             for (var p : peers) {
-                fallback.add(new ClusterNodeDistributionInfo(p.getId(), p.getIp(), p.getPort(), p.getRole().name(), "UNKNOWN", 0, List.of()));
+                fallback.add(new ClusterNodeDistributionInfo(p.getId(), p.getIp(), p.getPort(), "UNKNOWN", "OFFLINE", 0, List.of()));
             }
             return fallback;
         }
@@ -1726,19 +1734,217 @@ public final class JettraClient implements AutoCloseable {
         }
     }
 
-    public boolean isNodeRunning(String host, int grpcPort, int restPort) {
-        if (host == null || host.isBlank()) return false;
-        if (grpcPort > 0 && isTcpPortOpen(host.trim(), grpcPort, 300)) return true;
-        return restPort > 0 && isTcpPortOpen(host.trim(), restPort, 300);
+    private static final java.net.http.HttpClient PROBE_HTTP_CLIENT = java.net.http.HttpClient.newBuilder()
+            .connectTimeout(java.time.Duration.ofMillis(250))
+            .build();
+
+    public record NodeProbeResult(boolean alive, String reportedNodeId, String reportedRole) {}
+
+    private static boolean isWildcardOrInvalidHost(String host) {
+        if (host == null || host.isBlank()) return true;
+        String h = host.trim();
+        return "0.0.0.0".equals(h) || "::".equals(h) || "[::]".equals(h) || "*".equals(h);
     }
 
-    private boolean isTcpPortOpen(String host, int port, int timeoutMs) {
-        try (java.net.Socket s = new java.net.Socket()) {
-            s.connect(new java.net.InetSocketAddress(host, port), timeoutMs);
-            return true;
-        } catch (Exception e) {
-            return false;
+    private static int deriveRestPortStatic(int grpcPort) {
+        if (grpcPort >= 50001 && grpcPort <= 50999) return 60000 + (grpcPort - 50000);
+        if (grpcPort >= 9091 && grpcPort <= 9999) return 8080 + (grpcPort - 9090);
+        if (grpcPort <= 0) return -1;
+        return (grpcPort + 1000 <= 65535) ? (grpcPort + 1000) : Math.max(1024, grpcPort - 1000);
+    }
+
+    private static String extractJsonStringField(String json, String fieldName) {
+        if (json == null || fieldName == null) return "";
+        String key = "\"" + fieldName + "\":\"";
+        int idx = json.indexOf(key);
+        if (idx < 0) return "";
+        int start = idx + key.length();
+        int end = json.indexOf('"', start);
+        return (end > start) ? json.substring(start, end).trim() : "";
+    }
+
+    /**
+     * Sondea un nodo verificando identidad real de JettraStore:
+     * 1) REST GET /api/v1/health con status=UP y campo node_id; o
+     * 2) Handshake binario Raft TYPE_HEARTBEAT -> TYPE_HEARTBEAT_ACK en el puerto gRPC.
+     * De este modo, puertos abiertos por otros procesos o sockets residuales no generan falsos positivos.
+     */
+    public static NodeProbeResult probeJettraNode(String host, int grpcPort, int restPort, int timeoutMs) {
+        if (isWildcardOrInvalidHost(host)) {
+            return new NodeProbeResult(false, "", "");
         }
+        String cleanHost = host.trim();
+        int boundedTimeout = Math.max(100, Math.min(timeoutMs, 1500));
+        int effectiveRest = restPort > 0 ? restPort : deriveRestPortStatic(grpcPort);
+
+        if (effectiveRest > 0) {
+            try {
+                java.net.http.HttpRequest req = java.net.http.HttpRequest.newBuilder()
+                        .uri(java.net.URI.create("http://" + cleanHost + ":" + effectiveRest + "/api/v1/health"))
+                        .timeout(java.time.Duration.ofMillis(boundedTimeout))
+                        .GET()
+                        .build();
+                java.net.http.HttpResponse<String> resp = PROBE_HTTP_CLIENT.send(
+                        req, java.net.http.HttpResponse.BodyHandlers.ofString());
+                if (resp.statusCode() == 200) {
+                    String body = resp.body();
+                    if (body != null && body.contains("\"status\":\"UP\"") && body.contains("\"node_id\"")) {
+                        String nodeId = extractJsonStringField(body, "node_id");
+                        String role = extractJsonStringField(body, "role").toUpperCase(Locale.ROOT);
+                        if (!"PRIMARY".equals(role) && !"SECONDARY".equals(role)) {
+                            role = "";
+                        }
+                        return new NodeProbeResult(true, nodeId, role);
+                    }
+                }
+            } catch (Exception ignored) {
+            }
+        }
+
+        if (grpcPort > 0) {
+            try (java.net.Socket s = new java.net.Socket()) {
+                s.connect(new java.net.InetSocketAddress(cleanHost, grpcPort), boundedTimeout);
+                s.setSoTimeout(boundedTimeout);
+                var bos = new java.io.BufferedOutputStream(s.getOutputStream());
+                var bis = new java.io.BufferedInputStream(s.getInputStream());
+                io.jettra.store.cluster.JettraClusterProtocol.writeFrame(
+                        bos, io.jettra.store.cluster.JettraRaftFrame.heartbeat(0L, "jettra-probe"));
+                bos.flush();
+                var ack = io.jettra.store.cluster.JettraClusterProtocol.readFrame(bis);
+                if (ack != null && ack.frameType() == io.jettra.store.cluster.JettraRaftFrame.TYPE_HEARTBEAT_ACK) {
+                    String ackNodeId = ack.senderNodeId() != null ? ack.senderNodeId().trim() : "";
+                    return new NodeProbeResult(true, ackNodeId, "");
+                }
+            } catch (Exception ignored) {
+            }
+        }
+        return new NodeProbeResult(false, "", "");
+    }
+
+    public boolean isNodeRunning(String host, int grpcPort, int restPort) {
+        return probeJettraNode(host, grpcPort, restPort, 300).alive();
+    }
+
+    private record ClusterProbeTarget(String host, int grpcPort, int restPort) {}
+
+    private void addClusterProbeEndpoint(Map<String, ClusterProbeTarget> targets, String endpoint) {
+        if (endpoint == null || endpoint.isBlank()) return;
+        String clean = endpoint.trim();
+        int colon = clean.lastIndexOf(':');
+        if (colon <= 0) return;
+        String host = clean.substring(0, colon).trim();
+        int port;
+        try {
+            port = Integer.parseInt(clean.substring(colon + 1).trim());
+        } catch (Exception e) {
+            return;
+        }
+        if (!host.isBlank() && port > 0) {
+            targets.putIfAbsent(host.toLowerCase(Locale.ROOT) + ":" + port,
+                    new ClusterProbeTarget(host, port, deriveRestPortForNode(port)));
+        }
+    }
+
+    /**
+     * Verifica en tiempo real si existe al menos un nodo activo (ONLINE) en el clúster,
+     * inspeccionando la instancia embebida activa y la conectividad TCP/REST de los nodos configurados.
+     */
+    public boolean hasAnyActiveClusterNode(String currentHost, int currentPort, Collection<String> additionalEndpoints) {
+        io.jettra.store.JettraStoreServer active = io.jettra.store.JettraStoreServer.getActiveInstance();
+        if (active != null && active.isRunning()) {
+            return true;
+        }
+        return countActiveClusterNodes(currentHost, currentPort, additionalEndpoints) > 0;
+    }
+
+    /**
+     * Cuenta en tiempo real cuántos nodos del clúster se encuentran activos (ONLINE).
+     */
+    public int countActiveClusterNodes(String currentHost, int currentPort, Collection<String> additionalEndpoints) {
+        return findActiveClusterEndpoints(currentHost, currentPort, additionalEndpoints).size();
+    }
+
+    /**
+     * Devuelve los endpoints activos (ONLINE) detectados en tiempo real.
+     */
+    public List<String> findActiveClusterEndpoints(String currentHost, int currentPort, Collection<String> additionalEndpoints) {
+        Map<String, ClusterProbeTarget> targets = new LinkedHashMap<>();
+
+        if (currentHost != null && !currentHost.isBlank() && currentPort > 0) {
+            String h = currentHost.trim();
+            targets.put(h.toLowerCase(Locale.ROOT) + ":" + currentPort,
+                    new ClusterProbeTarget(h, currentPort, deriveRestPortForNode(currentPort)));
+        }
+
+        if (config != null && config.getClusterEndpoints() != null) {
+            for (String ep : config.getClusterEndpoints()) {
+                addClusterProbeEndpoint(targets, ep);
+            }
+        }
+
+        if (additionalEndpoints != null) {
+            for (String ep : additionalEndpoints) {
+                addClusterProbeEndpoint(targets, ep);
+            }
+        }
+
+        if (ringEngine != null) {
+            for (ClusterNode peer : ringEngine.getPeers()) {
+                if (peer.getStatus() == ClusterNode.NodeStatus.STOPPED
+                        || peer.getStatus() == ClusterNode.NodeStatus.OFFLINE) {
+                    continue;
+                }
+                if (peer.getIp() != null && !peer.getIp().isBlank() && peer.getPort() > 0) {
+                    String h = peer.getIp().trim();
+                    targets.putIfAbsent(h.toLowerCase(Locale.ROOT) + ":" + peer.getPort(),
+                            new ClusterProbeTarget(h, peer.getPort(), deriveRestPortForNode(peer.getPort())));
+                }
+            }
+        }
+
+        try {
+            java.nio.file.Path clusterFile = io.jettra.store.core.JettraConfigValidator.locateClusterConfigFile();
+            if (clusterFile != null && java.nio.file.Files.exists(clusterFile)) {
+                Properties props = io.jettra.store.core.JettraConfigValidator.loadProperties(
+                        clusterFile, "/cluster.config", "/jettra.config");
+                for (var cn : io.jettra.store.core.JettraConfigValidator.parseClusterNodes(props)) {
+                    if (cn.ip() != null && !cn.ip().isBlank() && cn.grpcPort() > 0) {
+                        String h = cn.ip().trim();
+                        int rp = cn.restPort() > 0 ? cn.restPort() : deriveRestPortForNode(cn.grpcPort());
+                        targets.put(h.toLowerCase(Locale.ROOT) + ":" + cn.grpcPort(),
+                                new ClusterProbeTarget(h, cn.grpcPort(), rp));
+                    }
+                }
+            }
+        } catch (Exception ignored) {}
+
+        if (targets.isEmpty()) {
+            io.jettra.store.JettraStoreServer active = io.jettra.store.JettraStoreServer.getActiveInstance();
+            return (active != null && active.isRunning()) ? List.of("embedded:active") : List.of();
+        }
+
+        List<String> online = Collections.synchronizedList(new ArrayList<>());
+        List<java.util.concurrent.CompletableFuture<Void>> probes = new ArrayList<>(targets.size());
+        for (ClusterProbeTarget target : targets.values()) {
+            probes.add(java.util.concurrent.CompletableFuture.runAsync(() -> {
+                if (probeJettraNode(target.host(), target.grpcPort(), target.restPort(), 250).alive()) {
+                    online.add(target.host() + ":" + target.grpcPort());
+                }
+            }));
+        }
+        try {
+            java.util.concurrent.CompletableFuture.allOf(
+                    probes.toArray(new java.util.concurrent.CompletableFuture[0]))
+                    .get(400, java.util.concurrent.TimeUnit.MILLISECONDS);
+        } catch (Exception ignored) {}
+
+        if (online.isEmpty()) {
+            io.jettra.store.JettraStoreServer active = io.jettra.store.JettraStoreServer.getActiveInstance();
+            if (active != null && active.isRunning()) {
+                return List.of("embedded:active");
+            }
+        }
+        return online;
     }
 
     /**

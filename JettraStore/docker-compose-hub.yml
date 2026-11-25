@@ -1,29 +1,43 @@
 # ==============================================================================
 # JettraStore - Docker Compose desde Docker Hub (avbravo/jettrastore:1.0-SNAPSHOT)
 # Autónomo y portable: funciona en cualquier equipo sin requerir archivos locales
-# del repositorio. Usa microprofile-config.properties y cluster.config embebidos
-# en la imagen y configura el nodo mediante variables de entorno y volúmenes.
+# del repositorio. Garantiza persistencia permanente en disco mediante volúmenes
+# independientes del ciclo de vida del contenedor y de la imagen Docker.
+#
+# Mapeo flexible de puertos para evitar colisiones en el host y habilitar
+# múltiples nodos/instancias:
+#   - JETTRA_HOST_GRPC_PORT (fallback JETTRA_GRPC_PORT, default 50001): puerto del host
+#   - JETTRA_CONTAINER_GRPC_PORT (default 50001): puerto gRPC/Raft interno del contenedor
+#   - JETTRA_HOST_REST_PORT (fallback JETTRA_REST_PORT, default 60001): puerto del host
+#   - JETTRA_CONTAINER_REST_PORT (default 60001): puerto REST/Health interno del contenedor
 # ==============================================================================
 services:
   jettrastore:
     image: ${JETTRA_DOCKER_IMAGE:-avbravo/jettrastore:1.0-SNAPSHOT}
-    pull_policy: always
+    pull_policy: ${JETTRA_PULL_POLICY:-if_not_present}
     container_name: ${JETTRA_CONTAINER_NAME:-jettrastore}
     hostname: ${JETTRA_NODE_IP:-jettra-node-01}
     restart: unless-stopped
+    stop_grace_period: 30s
+    expose:
+      - "${JETTRA_CONTAINER_GRPC_PORT:-50001}"
+      - "${JETTRA_CONTAINER_REST_PORT:-60001}"
     ports:
-      - "${JETTRA_GRPC_PORT:-50001}:50001"
-      - "${JETTRA_REST_PORT:-60001}:60001"
+      - "${JETTRA_HOST_BIND:-0.0.0.0}:${JETTRA_HOST_GRPC_PORT:-${JETTRA_GRPC_PORT:-50001}}:${JETTRA_CONTAINER_GRPC_PORT:-50001}"
+      - "${JETTRA_HOST_BIND:-0.0.0.0}:${JETTRA_HOST_REST_PORT:-${JETTRA_REST_PORT:-60001}}:${JETTRA_CONTAINER_REST_PORT:-60001}"
     environment:
       - JETTRA_NODE_ID=${JETTRA_NODE_ID:-node-01}
       - JETTRA_NODE_ROLE=${JETTRA_NODE_ROLE:-PRIMARY}
       - JETTRA_NODE_IP=${JETTRA_NODE_IP:-jettra-node-01}
       - JETTRA_STORAGE_PATH=/jettra/data
+      - JETTRA_INDEX_STORAGE_PATH=/jettra/data/indexes
       - JETTRA_STORAGE_MODE=${JETTRA_STORAGE_MODE:-OFF_HEAP}
       - JETTRA_MULTINODE_ACTIVE=${JETTRA_MULTINODE_ACTIVE:-off}
+      - JETTRA_CLUSTER_MULTINODE_ACTIVE=${JETTRA_MULTINODE_ACTIVE:-off}
+      - JETTRA_CLUSTER_PEERS=${JETTRA_CLUSTER_PEERS:-}
       - JETTRA_CLUSTER_CONFIG_PATH=/app/config/cluster.config
-      - JETTRA_GRPC_PORT=50001
-      - JETTRA_REST_PORT=60001
+      - JETTRA_GRPC_PORT=${JETTRA_CONTAINER_GRPC_PORT:-50001}
+      - JETTRA_REST_PORT=${JETTRA_CONTAINER_REST_PORT:-60001}
       - JETTRA_ADMIN_USERNAME=${JETTRA_ADMIN_USERNAME:-admin}
       - JETTRA_ADMIN_PASSWORD=${JETTRA_ADMIN_PASSWORD:-admin-jettra}
       - JETTRA_SAMPLES_AUTOLOAD=${JETTRA_SAMPLES_AUTOLOAD:-false}
@@ -32,12 +46,15 @@ services:
     mem_reservation: 128m
     cpus: 1.0
     volumes:
-      - jettrastore_hub_data:/jettra/data
-      - jettrastore_hub_checkpoint:/jettra/checkpoint
+      # Persistencia permanente en disco (sobrevive a `docker compose down` y `docker rmi`):
+      # Por defecto usa el volumen nombrado Docker; puede apuntar a una carpeta física del host
+      # exportando JETTRA_DATA_VOLUME=/ruta/en/disco (asegurando permisos UID 1000:1000).
+      - ${JETTRA_DATA_VOLUME:-jettrastore_hub_data}:/jettra/data
+      - ${JETTRA_CHECKPOINT_VOLUME:-jettrastore_hub_checkpoint}:/jettra/checkpoint
     networks:
       - jettra-hub-net
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://localhost:60001/api/v1/health || exit 1"]
+      test: ["CMD-SHELL", "curl -fsS http://localhost:${JETTRA_CONTAINER_REST_PORT:-60001}/api/v1/health || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -45,13 +62,13 @@ services:
 
 volumes:
   jettrastore_hub_data:
-    name: jettrastore_hub_data
+    name: ${JETTRA_DATA_VOLUME_NAME:-jettrastore_hub_data}
     driver: local
   jettrastore_hub_checkpoint:
-    name: jettrastore_hub_checkpoint
+    name: ${JETTRA_CHECKPOINT_VOLUME_NAME:-jettrastore_hub_checkpoint}
     driver: local
 
 networks:
   jettra-hub-net:
-    name: jettra-hub-net
+    name: ${JETTRA_NETWORK_NAME:-jettra-hub-net}
     driver: bridge

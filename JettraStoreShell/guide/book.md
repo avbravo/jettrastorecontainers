@@ -2810,3 +2810,35 @@ jettra> RESTORE VERSION productos p1 v2
 * **Versión inválida:** Si `<version>` no es un entero positivo o formato `v<n>`, responde `[ERROR] Número de versión inválido...`.
 * **Registro o versión inexistente:** `VERSIONS` y `VERSION SHOW` retornan `[NOT FOUND] ...` cuando no hay historial para el ID o la versión solicitada no existe; `RESTORE VERSION` retorna `[ERROR] La versión v<N> no existe...`.
 * **Restauración de `DELETE`:** Si se intenta restaurar directamente una versión cuya operación fue `DELETE`, el sistema rechaza la operación indicando que debe elegirse una versión previa con contenido (`CREATE`, `UPDATE` o `RESTORE`), permitiendo resucitar registros eliminados desde cualquiera de sus versiones anteriores.
+
+---
+
+## Validación de Nodos Activos Antes de Operaciones de Base de Datos (`RF-28`)
+
+Para prevenir operaciones inconsistentes o bloqueos de red cuando el clúster se encuentra completamente detenido, **JettraStoreShell** verifica en tiempo real mediante **JettraStoreDriver** (`JettraClient.hasAnyActiveClusterNode(...)`) si existe al menos **1 nodo activo (`ONLINE`)** antes de despachar cualquier comando relacionado con bases de datos.
+
+### 1. Comportamiento y Mensaje de Validación
+* **Con `0` nodos activos (`OFFLINE` / `STOPPED`):** Cualquier comando operativo de base de datos se rechaza de inmediato (sin provocar excepciones no controladas ni timeouts largos) con el mensaje:
+  ```text
+  ⚠️ Error: No hay ningún nodo activo en el clúster. Inicie o conecte al menos un nodo antes de ejecutar operaciones de base de datos.
+  ```
+* **Con `>= 1` nodo activo (`ONLINE`):** Todas las operaciones sobre bases de datos se ejecutan normalmente. Si el último nodo activo se detiene durante la sesión, el siguiente comando de base de datos vuelve a quedar bloqueado automáticamente.
+
+### 2. Comandos Bloqueados sin Nodos Activos vs. Comandos Permitidos
+
+| Categoría | Comandos | Estado con `0` nodos activos |
+| :--- | :--- | :--- |
+| **Bases de datos, motores y buckets** | `SHOW DATABASES`, `CREATE DATABASE`, `DROP DATABASE`, `USE`, `DB STATS`, `CREATE BUCKET`, `SHOW BUCKETS`, `DESCRIBE BUCKET`, `DROP BUCKET`, `SHOW TABLES`, `COUNT`, `SHOW RECORDS` | **Bloqueado** |
+| **Índices, consultas, CRUD y versionado** | `CREATE INDEX`, `CREATE BUCKET INDEX`, `DROP INDEX`, `SHOW INDEXES`, `INSERT`, `GET`, `FIND`, `UPDATE`, `DELETE`, `SELECT`, `JQL`, `SQL`, `VECTOR`, `GRAPH`, `TS`, `KV`, `VERSIONS`, `RESTORE VERSION`, `INSTALL SAMPLES`, `BACKUP DATABASE`, `RESTORE DATABASE`, `SHOW USERS`, `CREATE USER`, `GRANT`, `REVOKE` | **Bloqueado** |
+| **Locales, diagnóstico y gestión de nodos** | `help`, `?`, `menu`, `clear`, `exit`, `quit`, `history`, `connect`, `login`, `logout`, `save/remove/list connection`, `show nodes`, `status`, `start node`, `stop node`, `add node`, `remove node`, `multinode`, `show cluster config`, `cluster live`, `storage_mode`, `lazy reference`, `version --help`, `migrate --dry-run` | **Permitido** |
+
+### 3. Flujo Recomendado ante Bloqueo
+```text
+jettra-shell [admin@127.0.0.1:50001/no-db]> SHOW DATABASES
+⚠️ Error: No hay ningún nodo activo en el clúster. Inicie o conecte al menos un nodo antes de ejecutar operaciones de base de datos.
+
+jettra-shell [admin@127.0.0.1:50001/no-db]> show nodes
+jettra-shell [admin@127.0.0.1:50001/no-db]> start node node-01
+jettra-shell [admin@127.0.0.1:50001/no-db]> SHOW DATABASES
+```
+

@@ -109,6 +109,18 @@ public final class JettraStoreShellApp implements AutoCloseable {
         this.currentRole = "SUPER_ADMIN";
         this.currentHost = "127.0.0.1";
         this.currentPort = 50001;
+        if (this.client != null && this.client.getConfig() != null
+                && !this.client.getConfig().getClusterEndpoints().isEmpty()) {
+            String ep = this.client.getConfig().getClusterEndpoints().get(0).trim();
+            int colon = ep.lastIndexOf(':');
+            if (colon > 0) {
+                this.currentHost = ep.substring(0, colon).trim();
+                try {
+                    this.currentPort = Integer.parseInt(ep.substring(colon + 1).trim());
+                } catch (Exception ignored) {
+                }
+            }
+        }
         if (this.client != null) {
             registerSentinelListener();
             registerClusterConfigSyncListener();
@@ -118,13 +130,18 @@ public final class JettraStoreShellApp implements AutoCloseable {
     private final java.util.concurrent.atomic.AtomicBoolean clusterConfigSyncInProgress = new java.util.concurrent.atomic.AtomicBoolean(
             false);
     private volatile boolean clusterEventListenerRegistered = false;
+    private volatile boolean closed = false;
+    private final String initialClusterConfigPathProp = System.getProperty("cluster.config.path");
+    private volatile java.util.function.Consumer<io.jettra.store.cluster.ClusterLiveEvent> clusterEventListener;
 
     private void registerClusterConfigSyncListener() {
-        if (clusterEventListenerRegistered)
+        if (clusterEventListenerRegistered || closed)
             return;
         clusterEventListenerRegistered = true;
         try {
-            io.jettra.store.cluster.JettraClusterEventBus.getInstance().subscribe(event -> {
+            java.util.function.Consumer<io.jettra.store.cluster.ClusterLiveEvent> listener = event -> {
+                if (closed || !authenticated || client == null)
+                    return;
                 if (event == null || event.type() == null)
                     return;
                 String t = event.type();
@@ -136,7 +153,9 @@ public final class JettraStoreShellApp implements AutoCloseable {
                     Thread.ofVirtual().name("jettra-shell-cluster-cfg-sync")
                             .start(this::syncLocalClusterConfigFromPrimary);
                 }
-            });
+            };
+            this.clusterEventListener = listener;
+            io.jettra.store.cluster.JettraClusterEventBus.getInstance().subscribe(listener);
         } catch (Throwable ignored) {
         }
     }
@@ -148,6 +167,13 @@ public final class JettraStoreShellApp implements AutoCloseable {
      * sincronizado el clúster.
      */
     public boolean syncLocalClusterConfigFromPrimary() {
+        if (closed || !authenticated || client == null) {
+            return false;
+        }
+        String currentClusterProp = System.getProperty("cluster.config.path");
+        if (!Objects.equals(initialClusterConfigPathProp, currentClusterProp)) {
+            return false;
+        }
         if (!clusterConfigSyncInProgress.compareAndSet(false, true)) {
             return false;
         }
@@ -226,10 +252,6 @@ public final class JettraStoreShellApp implements AutoCloseable {
     private static final Path HISTORY_FILE = CONFIG_DIR.resolve("history.log");
     private static final Path JLINE_HISTORY_FILE = CONFIG_DIR.resolve(".jline_history");
     private final List<String> commandHistory = new CopyOnWriteArrayList<>();
-    private final java.net.http.HttpClient sharedHealthHttpClient = java.net.http.HttpClient.newBuilder()
-            .version(java.net.http.HttpClient.Version.HTTP_1_1)
-            .connectTimeout(java.time.Duration.ofMillis(120))
-            .build();
     private volatile org.jline.reader.LineReader activeLineReader;
 
     public void setActiveLineReader(org.jline.reader.LineReader activeLineReader) {
@@ -1240,6 +1262,156 @@ public final class JettraStoreShellApp implements AutoCloseable {
         return sb.toString();
     }
 
+    public static final String NO_ACTIVE_NODES_ERROR =
+            "⚠️ Error: No hay ningún nodo activo en el clúster. Inicie o conecte al menos un nodo antes de ejecutar operaciones de base de datos.";
+
+    /**
+     * Verifica en tiempo real mediante {@link JettraClient} si existe al menos un nodo activo (ONLINE)
+     * en el clúster antes de despachar comandos sobre bases de datos.
+     */
+    public boolean hasActiveClusterNode() {
+        return getActiveClusterNodeCount() > 0;
+    }
+
+    /**
+     * Devuelve el número de nodos activos (ONLINE) detectados en tiempo real.
+     */
+    public int getActiveClusterNodeCount() {
+        if (client == null) {
+            return 0;
+        }
+        List<String> extraEndpoints = new ArrayList<>();
+        synchronized (savedConnections) {
+            for (SavedConnection sc : savedConnections.values()) {
+                if (sc.host() != null && !sc.host().isBlank() && sc.port() > 0) {
+                    extraEndpoints.add(sc.host().trim() + ":" + sc.port());
+                }
+            }
+        }
+        return client.countActiveClusterNodes(currentHost, currentPort, extraEndpoints);
+    }
+
+    /**
+     * Determina si el comando normalizado en mayúsculas opera sobre bases de datos,
+     * motores, buckets, estructuras, índices, registros, consultas, respaldos o usuarios/permisos,
+     * quedando bloqueado cuando no existen nodos activos en el clúster (RF-28).
+     */
+    static boolean isDatabaseOperationCommand(String upper) {
+        if (upper == null || upper.isBlank()) {
+            return false;
+        }
+        // Ayuda específica de versionado permanece habilitada sin nodos activos
+        if (upper.equals("VERSION") || upper.equals("VERSION --HELP") || upper.equals("VERSION -H")
+                || upper.equals("VERSION HELP") || upper.equals("VERSIONS --HELP") || upper.equals("VERSIONS -H")
+                || upper.equals("RESTORE VERSION --HELP") || upper.equals("RESTORE VERSION -H")) {
+            return false;
+        }
+        // Comandos administrativos de nodos y perfiles de conexión se mantienen habilitados
+        if (upper.startsWith("REMOVE NODE ") || upper.startsWith("REMOVE CONNECTION ")) {
+            return false;
+        }
+
+        // Control de bases de datos y distribución
+        if (upper.equals("SHOW DATABASES") || upper.equals("SHOW DBS")
+                || upper.equals("LIST DATABASES") || upper.equals("LIST DBS")
+                || upper.equals("SHOW SAMPLES") || upper.equals("SHOW SAMPLE DBS")
+                || upper.equals("SHOW SAMPLE DATABASES") || upper.equals("SHOW DBS SAMPLES")
+                || upper.startsWith("CREATE DATABASE ") || upper.startsWith("CREATE DB ")
+                || upper.startsWith("DROP DATABASE ") || upper.startsWith("DROP DB ")
+                || upper.startsWith("USE ")
+                || upper.equals("DB STATS") || upper.equals("DB INFO") || upper.equals("STATS")
+                || upper.startsWith("CLUSTER-DISTRIBUTED") || upper.startsWith("CLUSTER_DISTRIBUTED")
+                || upper.equals("8")) {
+            return true;
+        }
+
+        // Motores, buckets, estructuras y registros
+        if (upper.equals("SHOW BUCKETS") || upper.equals("SHOW BUCKET")
+                || upper.equals("SHOW UNIT") || upper.equals("SHOW UNITS")
+                || upper.startsWith("SHOW BUCKETS ") || upper.startsWith("SHOW BUCKET ")
+                || upper.startsWith("SHOW UNIT ") || upper.startsWith("SHOW UNITS ")
+                || upper.equals("SHOW TABLES")
+                || upper.equals("SHOW RECORDS") || upper.startsWith("SHOW RECORDS ")
+                || upper.equals("COUNT") || upper.startsWith("COUNT ") || upper.equals("COUNT *")
+                || upper.equals("COUNT ALL")
+                || upper.equals("SHOW COLLECTIONS") || upper.startsWith("SHOW COLLECTIONS ")
+                || upper.equals("CREATE COLLECTION") || upper.startsWith("CREATE COLLECTION ")
+                || upper.equals("DROP COLLECTION") || upper.startsWith("DROP COLLECTION ")
+                || upper.startsWith("CREATE ENGINE ") || upper.startsWith("CREATE BUCKET ") || upper.startsWith("CREATE UNIT ")
+                || upper.startsWith("DROP ENGINE ") || upper.startsWith("DROP BUCKET ") || upper.startsWith("DROP UNIT ")
+                || upper.startsWith("DESCRIBE BUCKET ") || upper.startsWith("SHOW BUCKET SCHEMA ")
+                || upper.startsWith("INSERT BUCKET ")) {
+            return true;
+        }
+
+        // Índices
+        if (upper.startsWith("CREATE BUCKET INDEX ") || upper.startsWith("SHOW BUCKET INDEXES ")
+                || upper.startsWith("DROP BUCKET INDEX ") || upper.startsWith("FIND NUMERIC ")
+                || upper.startsWith("CREATE INDEX ") || upper.startsWith("DROP INDEX ")
+                || (upper.startsWith("ALTER INDEX ") && upper.contains("REBUILD"))
+                || upper.startsWith("REINDEX ")
+                || upper.equals("SHOW INDEXES") || upper.startsWith("SHOW INDEXES ON ")
+                || upper.equals("LIST INDEXES")) {
+            return true;
+        }
+
+        // Usuarios y privilegios RBAC de bases de datos
+        if (upper.equals("SHOW USERS") || upper.equals("LIST USERS")
+                || upper.startsWith("CREATE USER ") || upper.startsWith("DROP USER ")
+                || upper.startsWith("ALTER USER ") || upper.startsWith("GRANT ")
+                || upper.startsWith("REVOKE ") || upper.startsWith("SHOW GRANTS FOR ")) {
+            return true;
+        }
+
+        // Referencias, CRUD de registros y versionado (RF-18)
+        if (upper.startsWith("INSERT REF ") || upper.startsWith("RESOLVE REF ") || upper.startsWith("SHOW REFS ")
+                || upper.startsWith("INSERT INTO ") || upper.startsWith("GET ")
+                || upper.startsWith("FIND ONE ") || upper.startsWith("FIND BY ID ")
+                || upper.startsWith("FIND ALL ") || upper.startsWith("SCAN ")
+                || upper.startsWith("UPDATE ") || upper.startsWith("DELETE FROM ")
+                || upper.startsWith("DELETE ") || upper.startsWith("REMOVE ")
+                || upper.equals("VERSIONS") || upper.startsWith("VERSIONS ")
+                || upper.equals("SHOW VERSIONS") || upper.startsWith("SHOW VERSIONS ")
+                || upper.equals("VERSION HISTORY") || upper.startsWith("VERSION HISTORY ")
+                || upper.equals("VERSION SHOW") || upper.startsWith("VERSION SHOW ")
+                || upper.equals("VERSION GET") || upper.startsWith("VERSION GET ")
+                || upper.equals("VERSION INSPECT") || upper.startsWith("VERSION INSPECT ")
+                || upper.equals("RESTORE VERSION") || upper.startsWith("RESTORE VERSION ")
+                || upper.equals("VERSION RESTORE") || upper.startsWith("VERSION RESTORE ")) {
+            return true;
+        }
+
+        // Consultas políglotas (JQL/SQL), motores multimodelo, muestras y backup/restore
+        if (upper.startsWith("JQL ") || upper.startsWith("JETTRAQL ") || upper.startsWith("FROM ")
+                || upper.startsWith("MATCH ") || upper.startsWith("VECTOR SIMILARITY ")
+                || upper.startsWith("VECTOR MATCH ") || upper.startsWith("FETCH ")
+                || upper.startsWith("SQL ") || upper.startsWith("JETTRASQL ") || upper.startsWith("SELECT ")
+                || upper.startsWith("AGGREGATE ")
+                || upper.startsWith("VECTOR INDEX ") || upper.startsWith("VECTOR SEARCH ")
+                || upper.startsWith("VECTOR ")
+                || upper.startsWith("GRAPH ADD VERTEX ") || upper.startsWith("GRAPH ADD EDGE ")
+                || upper.startsWith("GRAPH GET EDGES ") || upper.startsWith("GRAPH EDGES ")
+                || upper.startsWith("TS RECORD ") || upper.startsWith("TS RANGE ") || upper.startsWith("TS QUERY ")
+                || upper.startsWith("KV PUT ") || upper.startsWith("KV GET ")
+                || upper.equals("INSTALL SAMPLES FACTURA") || upper.equals("INSTALL SAMPLE FACTURA")
+                || upper.equals("LOAD SAMPLE EXAMPLE_FACTURA_DB") || upper.equals("INSTALL SAMPLE EXAMPLE_FACTURA_DB")
+                || upper.equals("LOAD SAMPLE FACTURA") || upper.equals("INSTALL FACTURA")
+                || upper.equals("INSTALL SAMPLES HOSPITAL") || upper.equals("INSTALL SAMPLE HOSPITAL")
+                || upper.equals("LOAD SAMPLE SAMPLES_HOSTIPAL_DB") || upper.equals("LOAD SAMPLE SAMPLES_HOSPITAL_DB")
+                || upper.equals("INSTALL SAMPLE SAMPLES_HOSTIPAL_DB") || upper.equals("INSTALL SAMPLE SAMPLES_HOSPITAL_DB")
+                || upper.equals("LOAD SAMPLE HOSPITAL") || upper.equals("INSTALL HOSPITAL")
+                || upper.equals("INSTALL SAMPLES AMBIENTAL") || upper.equals("INSTALL SAMPLE AMBIENTAL")
+                || upper.equals("LOAD SAMPLE SAMPLES_AMBIENTAL_DB") || upper.equals("LOAD SAMPLE SAMPLES_ENVIRONMENTAL_DB")
+                || upper.equals("INSTALL SAMPLE SAMPLES_AMBIENTAL_DB") || upper.equals("INSTALL SAMPLE SAMPLES_ENVIRONMENTAL_DB")
+                || upper.equals("LOAD SAMPLE AMBIENTAL") || upper.equals("INSTALL AMBIENTAL")
+                || upper.startsWith("INSTALL SAMPLES") || upper.equals("1")
+                || upper.startsWith("BACKUP DATABASE") || upper.startsWith("RESTORE DATABASE")) {
+            return true;
+        }
+
+        return false;
+    }
+
     public String executeCommand(String command) {
         if (command == null || command.isBlank()) {
             return "";
@@ -1293,6 +1465,17 @@ public final class JettraStoreShellApp implements AutoCloseable {
             return getConnectionsMenuDisplay();
         } else if (upper.equals("MENU")) {
             return getInteractiveMenu();
+        } else if (upper.equals("CLEAR") || upper.equals("CLS")) {
+            if (activeLineReader != null) {
+                try {
+                    activeLineReader.getTerminal().puts(org.jline.utils.InfoCmp.Capability.clear_screen);
+                    activeLineReader.getTerminal().flush();
+                } catch (Exception ignored) {
+                }
+            }
+            return "[CLEAR] Consola limpiada.";
+        } else if (upper.equals("EXIT") || upper.equals("QUIT")) {
+            return "Saliendo de JettraStore Shell...";
         }
 
         // 2. Conexión, Autenticación y Cierre de Sesión
@@ -1321,6 +1504,11 @@ public final class JettraStoreShellApp implements AutoCloseable {
         // 4. Verificación de Seguridad y Autenticación para operaciones operativas
         if (!authenticated || client == null) {
             return "[AUTH REQUIRED] Debe iniciar sesión con 'login <username> <password>' antes de interactuar con bases de datos o telemetría.";
+        }
+
+        // 4.5. Verificación en tiempo real de nodos activos en el clúster (RF-28)
+        if (isDatabaseOperationCommand(upper) && !hasActiveClusterNode()) {
+            return NO_ACTIVE_NODES_ERROR;
         }
 
         // 5. Telemetría de Recursos (status) y Topología (show nodes / multinode)
@@ -1802,15 +1990,8 @@ public final class JettraStoreShellApp implements AutoCloseable {
     }
 
     // --- 4. Administración de Nodos del Clúster ---
-    private static boolean isNodeReachable(String host, int port, int timeoutMs) {
-        if (host == null || host.isBlank() || port <= 0)
-            return false;
-        try (Socket socket = new Socket()) {
-            socket.connect(new InetSocketAddress(host, port), Math.min(timeoutMs, 100));
-            return true;
-        } catch (Exception ignored) {
-            return false;
-        }
+    private static boolean isNodeReachable(String host, int grpcPort, int restPort, int timeoutMs) {
+        return JettraClient.probeJettraNode(host, grpcPort, restPort, timeoutMs).alive();
     }
 
     private static int deriveSafeRestPort(int grpcPort, int fallbackIdx) {
@@ -1964,44 +2145,24 @@ public final class JettraStoreShellApp implements AutoCloseable {
         }
         Map<String, LiveStatus> liveStates = new ConcurrentHashMap<>();
 
-        // Consultar concurrentemente la salud en tiempo real de cada nodo
+        // Consultar concurrentemente la salud e identidad real de cada nodo JettraStore
         List<CompletableFuture<Void>> futures = new ArrayList<>();
         for (TargetNode node : topology.values()) {
             futures.add(CompletableFuture.runAsync(() -> {
-                boolean reachable = isNodeReachable(node.ip(), node.grpcPort(), 200)
-                        || isNodeReachable(node.ip(), node.restPort(), 200);
-                if (!reachable) {
-                    liveStates.put(node.id(), new LiveStatus(false, "SECONDARY", "DISCONNECTED", 0));
+                JettraClient.NodeProbeResult probe = JettraClient.probeJettraNode(
+                        node.ip(), node.grpcPort(), node.restPort(), 250);
+                boolean identityMatches = probe.reportedNodeId().isBlank()
+                        || "node-local".equalsIgnoreCase(probe.reportedNodeId())
+                        || probe.reportedNodeId().equalsIgnoreCase(node.id());
+                if (!probe.alive() || !identityMatches) {
+                    liveStates.put(node.id(), new LiveStatus(false, "UNKNOWN", "DISCONNECTED", 0));
                     return;
                 }
-
-                // Sondear /api/v1/health del nodo vía REST
-                int p = node.restPort() > 0 ? node.restPort() : 8080;
-                boolean polled = false;
-                try {
-                    java.net.http.HttpRequest req = java.net.http.HttpRequest.newBuilder()
-                            .uri(java.net.URI.create(String.format("http://%s:%d/api/v1/health", node.ip(), p)))
-                            .timeout(java.time.Duration.ofMillis(250))
-                            .GET()
-                            .build();
-                    java.net.http.HttpResponse<String> resp = sharedHealthHttpClient.send(req,
-                            java.net.http.HttpResponse.BodyHandlers.ofString());
-                    if (resp.statusCode() == 200) {
-                        String body = resp.body();
-                        String role = body.contains("\"role\":\"PRIMARY\"") ? "PRIMARY" : "SECONDARY";
-                        String raft = "PRIMARY".equals(role) ? "LEADER" : "FOLLOWER";
-                        liveStates.put(node.id(), new LiveStatus(true, role, raft, 0));
-                        polled = true;
-                    }
-                } catch (Exception ignored) {
-                }
-
-                if (!polled) {
-                    // Si el puerto gRPC o Socket respondió pero REST falló
-                    boolean isConfigPrimary = "PRIMARY".equalsIgnoreCase(node.configuredRole());
-                    liveStates.put(node.id(), new LiveStatus(true, isConfigPrimary ? "PRIMARY" : "SECONDARY",
-                            isConfigPrimary ? "LEADER" : "FOLLOWER", 0));
-                }
+                String role = !probe.reportedRole().isBlank()
+                        ? probe.reportedRole()
+                        : ("PRIMARY".equalsIgnoreCase(node.configuredRole()) ? "PRIMARY" : "SECONDARY");
+                String raft = "PRIMARY".equals(role) ? "LEADER" : "FOLLOWER";
+                liveStates.put(node.id(), new LiveStatus(true, role, raft, 0));
             }));
         }
 
@@ -2064,10 +2225,11 @@ public final class JettraStoreShellApp implements AutoCloseable {
         // Renderizar la tabla de topología en tiempo real
         int activeNodes = 0;
         for (TargetNode node : topology.values()) {
-            LiveStatus ls = liveStates.getOrDefault(node.id(), new LiveStatus(false, "SECONDARY", "DISCONNECTED", 0));
+            LiveStatus ls = liveStates.getOrDefault(node.id(), new LiveStatus(false, "UNKNOWN", "DISCONNECTED", 0));
             String status = ls.isUp() ? "RUNNING" : "STOPPED";
             String role = ls.role();
             String raft = ls.raftState();
+            String offloadCol = ls.isUp() ? String.valueOf(ls.offloadBytes()) : "N/A";
             if (ls.isUp()) {
                 activeNodes++;
             }
@@ -2083,8 +2245,8 @@ public final class JettraStoreShellApp implements AutoCloseable {
                     peer.stop();
             }
 
-            sb.append(String.format("| %-8s | %-20s | %-5d | %-9s | %-12s | %-8s | %-12d |\n",
-                    node.id(), node.ip(), node.grpcPort(), role, raft, status, ls.offloadBytes()));
+            sb.append(String.format("| %-8s | %-20s | %-5d | %-9s | %-12s | %-8s | %-12s |\n",
+                    node.id(), node.ip(), node.grpcPort(), role, raft, status, offloadCol));
         }
 
         sb.append("+----------+----------------------+-------+-----------+--------------+----------+--------------+\n");
@@ -2109,6 +2271,9 @@ public final class JettraStoreShellApp implements AutoCloseable {
 
         sb.append(String.format("Total: %d nodo(s) registrados en el anillo dinámico. Quórum: %s.\n",
                 totalNodes, quorumStr));
+        if (activeNodes == 0) {
+            sb.append("[WARNING] Ningún nodo activo responde (STOPPED / UNREACHABLE). Los comandos de base de datos permanecerán bloqueados.\n");
+        }
         return sb.toString();
     }
 
@@ -2279,8 +2444,7 @@ public final class JettraStoreShellApp implements AutoCloseable {
             }
         }
         if (targetHost != null && !targetHost.isBlank()
-                && (isNodeReachable(targetHost, targetGrpc, 250)
-                        || (targetRest > 0 && isNodeReachable(targetHost, targetRest, 250)))) {
+                && isNodeReachable(targetHost, targetGrpc, targetRest, 250)) {
             return String.format(
                     "[ERROR] No se puede remover el nodo '%s' (%s:%d) porque actualmente está en ejecución (RUNNING / ACTIVO).%n"
                             +
@@ -4692,6 +4856,9 @@ public final class JettraStoreShellApp implements AutoCloseable {
             if (!cfg.isDryRun() && (!authenticated || client == null)) {
                 return "[AUTH REQUIRED] Debe iniciar sesión en JettraStore con 'login <username> <password>' para realizar una migración en vivo (o añada '--dry-run' para simular).";
             }
+            if (!cfg.isDryRun() && !hasActiveClusterNode()) {
+                return NO_ACTIVE_NODES_ERROR;
+            }
             if (cfg.getTargetDatabase() == null || cfg.getTargetDatabase().isBlank()) {
                 cfg.setTargetDatabase(cfg.getDatabase());
             }
@@ -5977,6 +6144,14 @@ public final class JettraStoreShellApp implements AutoCloseable {
 
     @Override
     public void close() {
+        this.closed = true;
+        if (this.clusterEventListener != null) {
+            try {
+                io.jettra.store.cluster.JettraClusterEventBus.getInstance().unsubscribe(this.clusterEventListener);
+            } catch (Exception ignored) {
+            }
+            this.clusterEventListener = null;
+        }
         if (this.client != null) {
             try {
                 this.client.close();

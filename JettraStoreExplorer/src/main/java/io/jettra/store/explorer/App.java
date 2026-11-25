@@ -34,8 +34,14 @@ import io.jettra.store.explorer.plugin.JettraStorePlugin;
 import io.jettra.store.explorer.plugin.NodeLifecycleManager;
 
 import java.io.IOException;
+import java.net.InetAddress;
+import java.net.InetSocketAddress;
+import java.net.ServerSocket;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -57,7 +63,129 @@ public class App {
     private static volatile String serverBootId = UUID.randomUUID().toString();
     private static final AtomicBoolean SHUTDOWN_HOOK_REGISTERED = new AtomicBoolean(false);
 
-    public static void main(String[] args) {
+    /**
+     * Excepción lanzada cuando el puerto configurado para JettraStoreExplorer ya está ocupado.
+     */
+    public static final class PortAlreadyInUseException extends RuntimeException {
+        private final String host;
+        private final int port;
+
+        public PortAlreadyInUseException(String host, int port) {
+            super(buildPortInUseMessage(host, port));
+            this.host = host;
+            this.port = port;
+        }
+
+        public String getHost() {
+            return host;
+        }
+
+        public int getPort() {
+            return port;
+        }
+    }
+
+    public static String buildPortInUseMessage(String host, int port) {
+        String iface = (host != null && !host.isBlank()) ? " en la interfaz '" + host.trim() + "'" : "";
+        return String.format(
+                "⚠️ Error: El puerto %d ya está en uso%s. Detenga el proceso que lo ocupa o configure un puerto diferente para iniciar JettraStoreExplorer.",
+                port, iface);
+    }
+
+    /**
+     * Verifica de forma no bloqueante si un puerto TCP está libre en la interfaz indicada.
+     * Utiliza {@code SO_REUSEADDR} y {@code try-with-resources} para liberar el socket inmediatamente
+     * antes de que {@link JettraServer} realice el bind definitivo.
+     */
+    public static boolean isPortAvailable(String host, int port) {
+        if (port < 1 || port > 65535) {
+            return false;
+        }
+        String normalizedHost = (host == null) ? "" : host.trim();
+        boolean wildcard = normalizedHost.isEmpty()
+                || "0.0.0.0".equals(normalizedHost)
+                || "::".equals(normalizedHost)
+                || "*".equals(normalizedHost);
+        try (ServerSocket probeSocket = new ServerSocket()) {
+            probeSocket.setReuseAddress(true);
+            InetSocketAddress bindAddress = wildcard
+                    ? new InetSocketAddress(port)
+                    : new InetSocketAddress(InetAddress.getByName(normalizedHost), port);
+            probeSocket.bind(bindAddress, 1);
+            return true;
+        } catch (IOException e) {
+            return false;
+        }
+    }
+
+    /**
+     * Valida que el puerto esté disponible antes de inicializar recursos o servidores web;
+     * en caso contrario lanza {@link PortAlreadyInUseException}.
+     */
+    public static void ensurePortAvailable(String host, int port) {
+        if (port < 1 || port > 65535) {
+            throw new IllegalArgumentException("⚠️ Error: Puerto inválido para JettraStoreExplorer: " + port);
+        }
+        if (!isPortAvailable(host, port)) {
+            throw new PortAlreadyInUseException(host, port);
+        }
+    }
+
+    private static Properties loadLightExplorerProperties() {
+        Properties props = new Properties();
+        try (var is = App.class.getResourceAsStream("/META-INF/microprofile-config.properties")) {
+            if (is != null) {
+                Properties p = new Properties();
+                p.load(is);
+                if ("JettraStore Explorer".equals(p.getProperty("app.title")) || p.containsKey("server.port")) {
+                    props.putAll(p);
+                }
+            }
+        } catch (Exception ignored) {
+        }
+        try (var is = App.class.getResourceAsStream("/microprofile-config.properties")) {
+            if (is != null) {
+                Properties p = new Properties();
+                p.load(is);
+                if ("JettraStore Explorer".equals(p.getProperty("app.title")) || p.containsKey("server.port")) {
+                    props.putAll(p);
+                }
+            }
+        } catch (Exception ignored) {
+        }
+        List<String> localCandidates = new ArrayList<>(List.of(
+                "src/main/resources/META-INF/microprofile-config.properties",
+                "src/main/resources/microprofile-config.properties",
+                "./microprofile-config.properties",
+                "./META-INF/microprofile-config.properties",
+                "./config/microprofile-config.properties"));
+        String explicitMpFile = System.getProperty("jettra.explorer.config.file",
+                System.getProperty("microprofile.config.file"));
+        if (explicitMpFile != null && !explicitMpFile.isBlank()) {
+            localCandidates.add(explicitMpFile.trim());
+        }
+        for (String localFile : localCandidates) {
+            Path fp = Paths.get(localFile);
+            if (Files.exists(fp)) {
+                try (var is = Files.newInputStream(fp)) {
+                    Properties p = new Properties();
+                    p.load(is);
+                    if ("JettraStore Explorer".equals(p.getProperty("app.title")) || p.containsKey("cluster.nodes")
+                            || p.containsKey("server.port")) {
+                        props.putAll(p);
+                    }
+                } catch (Exception ignored) {
+                }
+            }
+        }
+        return props;
+    }
+
+    /**
+     * Resuelve la configuración efectiva de inicio (host, puerto, contextPath y modo) sin
+     * inicializar el servidor ni los monitores del clúster.
+     */
+    public static ServerConfig resolveStartupConfig(String[] args) {
         ServerConfig config = ServerConfig.load();
 
         boolean portOverridden = false;
@@ -120,17 +248,28 @@ public class App {
             }
         }
 
-        // Leer host, puerto y contextpath definidos en microprofile-config.properties
-        // si no fueron sobreescritos por CLI/System props
-        JettraStorePlugin plugin = JettraStorePlugin.getInstance();
+        Properties mpProps = loadLightExplorerProperties();
         if (!hostOverridden || config.getHost() == null || "0.0.0.0".equals(config.getHost())) {
-            config.setHost(plugin.getServerHost());
+            String mpHost = mpProps.getProperty("server.host", "127.0.0.1").trim();
+            if (!mpHost.isBlank()) {
+                config.setHost(mpHost);
+            }
         }
         if (!portOverridden) {
-            config.setPort(plugin.getServerPort());
+            String mpPort = mpProps.getProperty("server.port", "8085").trim();
+            try {
+                config.setPort(Integer.parseInt(mpPort));
+            } catch (Exception ignored) {
+                config.setPort(8085);
+            }
         }
         if (!contextPathOverridden || config.getContextPath() == null || "/".equals(config.getContextPath())) {
-            config.setContextPath(plugin.getServerContextPath());
+            String mpCp = mpProps.getProperty("server.contextpath",
+                    mpProps.getProperty("server.context-path", "/")).trim();
+            if (!mpCp.startsWith("/")) {
+                mpCp = "/" + mpCp;
+            }
+            config.setContextPath(mpCp);
         }
 
         String storageProp = System.getProperty("storage.mode");
@@ -142,7 +281,29 @@ public class App {
             config.setStorageMode(StorageMode.fromString(storageProp.trim()));
         }
 
-        JettraServer server = startApplication(config);
+        return config;
+    }
+
+    public static void main(String[] args) {
+        ServerConfig config = resolveStartupConfig(args);
+
+        // Verificación temprana del puerto antes de inicializar JettraStorePlugin y JettraServer
+        try {
+            ensurePortAvailable(config.getHost(), config.getPort());
+        } catch (PortAlreadyInUseException | IllegalArgumentException ex) {
+            System.err.println(ex.getMessage());
+            System.exit(1);
+            return;
+        }
+
+        JettraServer server;
+        try {
+            server = startApplication(config);
+        } catch (PortAlreadyInUseException | IllegalArgumentException ex) {
+            System.err.println(ex.getMessage());
+            System.exit(1);
+            return;
+        }
 
         try {
             System.out.println("[JettraStore Explorer] Escuchando en http://" + config.getHost() + ":"
@@ -163,13 +324,9 @@ public class App {
     }
 
     public static JettraServer startApplication(ServerConfig config) {
-        // Todo arranque de JettraStoreExplorer inicia sin sesiones previas y exige
-        // autenticación en /login
-        closeAllSessions();
-
-        JettraStorePlugin plugin = JettraStorePlugin.getInstance();
+        Properties mpProps = loadLightExplorerProperties();
         if (config.getHost() == null || "0.0.0.0".equals(config.getHost())) {
-            config.setHost(plugin.getServerHost());
+            config.setHost(mpProps.getProperty("server.host", "127.0.0.1").trim());
         }
         // Si no se sobreescribió por argumento del sistema o el puerto proviene de
         // defaults upstream (8080 o 8082),
@@ -178,12 +335,27 @@ public class App {
         String sysPort = System.getProperty("server.port", System.getProperty("port", System.getenv("PORT")));
         if (sysPort == null || sysPort.isBlank()) {
             if (config.getPort() == 8080 || config.getPort() == 8082) {
-                config.setPort(plugin.getServerPort());
+                try {
+                    config.setPort(Integer.parseInt(mpProps.getProperty("server.port", "8085").trim()));
+                } catch (Exception ignored) {
+                    config.setPort(8085);
+                }
             }
         }
         if (config.getContextPath() == null || "/".equals(config.getContextPath())) {
-            config.setContextPath(plugin.getServerContextPath());
+            String cp = mpProps.getProperty("server.contextpath",
+                    mpProps.getProperty("server.context-path", "/")).trim();
+            config.setContextPath(cp.startsWith("/") ? cp : "/" + cp);
         }
+
+        // Validación temprana antes de cerrar sesiones o levantar JettraServer/JettraStorePlugin
+        ensurePortAvailable(config.getHost(), config.getPort());
+
+        // Todo arranque de JettraStoreExplorer inicia sin sesiones previas y exige
+        // autenticación en /login
+        closeAllSessions();
+
+        JettraStorePlugin plugin = JettraStorePlugin.getInstance();
 
         JettraServer server = JettraServer.create(config);
         serverInstance = server;
@@ -290,6 +462,9 @@ public class App {
             plugin.setExplorerServerEndpoint(config.getHost(), config.getPort());
             plugin.refreshAllNodeStatuses(true);
         } catch (IOException e) {
+            if (e instanceof java.net.BindException) {
+                throw new PortAlreadyInUseException(config.getHost(), config.getPort());
+            }
             throw new RuntimeException("Error iniciando JettraServer para JettraStore Explorer: " + e.getMessage(), e);
         }
 
