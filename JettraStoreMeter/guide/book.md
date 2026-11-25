@@ -218,3 +218,36 @@ Para garantizar que ninguna prueba contamine el clúster o degrade el almacenami
 | **Latencia Percentil 95 (p95)** | $< 10.0\text{ ms}$ | **$0.016 - 0.332\text{ ms}$** | **$0.015 - 0.351\text{ ms}$** |
 | **Escalabilidad a 500 Usuarios** | Sin bloqueos de hilos | **Superado (Virtual Threads)** | **Superado (Virtual Threads)** |
 | **Limpieza Física de Almacenamiento** | $100\%$ purgado | **Verificado por Teardown** | **Verificado por Teardown** |
+
+---
+
+## 9. Suite de Tolerancia y Pruebas de Estrés en Contenedor Aislado (`RF-20`)
+
+Para validar límites de capacidad sin impactar datos de desarrollo ni producción, `JettraStoreMeter` incluye el contenedor aislado **`jettrastoretestcontainer`** (`Dockerfile`, `docker-compose-testcontainer.yml`) y la suite parametrizada **`io.jettra.meter.JettraToleranceSuite`**.
+
+### 9.1 Ejecución en Contenedor Aislado (`jettrastoretestcontainer`)
+
+```bash
+cd JettraStoreMeter
+mkdir -p reports && chmod 777 reports
+docker compose -f docker-compose-testcontainer.yml up --build --abort-on-container-exit --exit-code-from jettrastoretestcontainer
+docker compose -f docker-compose-testcontainer.yml down -v
+```
+
+### 9.2 Parámetros Soportados por `JettraToleranceSuite`
+
+- `--host=<host>` / `--port=<grpcPort>` / `--rest-port=<restPort>`
+- `--db=<baseDbName>`
+- `--volumes=10000,100000,1000000,1500000,25000000,35000000,50000000`
+- `--users=1,10,20,50,75,100,1000,2000,5000,10000,150000,1000000,2300000`
+- `--max-scenario-sec=25` / `--max-mem-pct=82`
+- `--report=/reports/TOLERANCE_REPORT_RF20.md`
+
+### 9.3 Resumen de Límites Observados (`reports/TOLERANCE_REPORT_RF20.md`)
+
+- **Volumen de registros (contenedor de pruebas con 1,536 MB de heap):**
+  - **Zona estable (`STABLE`):** hasta **1,500,000 registros** (`0` errores, hasta `815,660 ops/s`, latencia p95 `0.007–6.110 ms`, healthcheck `UP`).
+  - **Límite observado (`LIMIT_REACHED`):** en **25M, 35M y 50M registros** se activa la guarda de memoria (`>= 82%` heap) tras `~1.4M–1.6M` registros en un único contenedor; estos volúmenes requieren particionamiento/sharding por buckets o ampliación de RAM/almacenamiento `OFF_HEAP`/`DISK_MEMORY`.
+- **Concurrencia de usuarios (Java 25 Virtual Threads):**
+  - **Zona estable continua (`STABLE`):** de **1 a 5,000 usuarios simultáneos** (`0` errores, p95 `0.238–10.670 ms`, hasta `243,902 ops/s`).
+  - **Inicio de degradación de latencia (`DEGRADED`):** a partir de **10,000 usuarios** (`p95 = 55.374 ms`), manteniéndose con `0` errores y DB `UP` incluso en oleadas escalonadas de **150K, 1M y 2.3M usuarios** (`240K–403K ops/s`).

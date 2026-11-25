@@ -1,0 +1,67 @@
+# ==============================================================================
+# RF-20: Entorno aislado jettrastoretestcontainer + JettraStore objetivo
+# Red privada y volúmenes efímeros dedicados (cero impacto en producción)
+# ==============================================================================
+services:
+  jettra-stress-target:
+    image: jettrastore:1.0
+    container_name: jettra-stress-target
+    hostname: jettra-stress-target
+    environment:
+      - JETTRA_NODE_ID=stress-node-01
+      - JETTRA_NODE_ROLE=PRIMARY
+      - JETTRA_NODE_IP=jettra-stress-target
+      - JETTRA_STORAGE_PATH=/jettra/data
+      - JETTRA_STORAGE_MODE=OFF_HEAP
+      - JETTRA_MULTINODE_ACTIVE=off
+      - JETTRA_REST_PORT=60001
+      - JETTRA_GRPC_PORT=50001
+      - JETTRA_ADMIN_USERNAME=admin
+      - JETTRA_ADMIN_PASSWORD=admin-jettra
+      - JAVA_OPTS=-Xms128m -Xmx512m -XX:MaxMetaspaceSize=192m -XX:MaxDirectMemorySize=256m
+    mem_limit: 768m
+    mem_reservation: 128m
+    cpus: 2.0
+    volumes:
+      - jettra_stress_target_data:/jettra/data
+    networks:
+      - jettra-stress-net
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:60001/api/v1/health || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+  jettrastoretestcontainer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    pull_policy: build
+    image: jettrastoretestcontainer:1.0
+    container_name: jettrastoretestcontainer
+    depends_on:
+      jettra-stress-target:
+        condition: service_healthy
+    environment:
+      - JETTRA_HOST=jettra-stress-target
+      - JETTRA_PORT=50001
+      - JETTRA_REST_PORT=60001
+      - JAVA_OPTS=-Xms256m -Xmx1536m -XX:MaxMetaspaceSize=256m -XX:MaxDirectMemorySize=256m -Djettra.storage.path=/tmp/jettra-meter-data
+    mem_limit: 2g
+    mem_reservation: 256m
+    cpus: 4.0
+    volumes:
+      - ./reports:/reports
+    networks:
+      - jettra-stress-net
+
+volumes:
+  jettra_stress_target_data:
+    name: jettra_stress_target_data
+    driver: local
+
+networks:
+  jettra-stress-net:
+    name: jettra-stress-net
+    driver: bridge

@@ -282,4 +282,27 @@ public class JettraStoreMeterTest {
         assertTrue(result.totalOperations() > 500, "Debe procesar operaciones masivas con 500 usuarios concurrentes");
         assertTrue(result.opsPerSecond() > 200.0);
     }
+
+    @Test
+    @DisplayName("RF-20: JettraToleranceSuite ejecuta escenarios parametrizados de volumen y concurrencia y genera reporte Markdown")
+    public void testToleranceSuiteParameterizedExecutionAndReport() {
+        JettraToleranceSuite suite = new JettraToleranceSuite("127.0.0.1", 9091, 0, "rf20_unit_db", 10, 85.0);
+        var vol = suite.runVolumeScenario(500L);
+        var conc = suite.runConcurrencyScenario(10);
+
+        assertEquals(500L, vol.completedOps());
+        assertEquals(0L, vol.failedOps());
+        assertEquals("STABLE", vol.status());
+
+        assertTrue(conc.completedOps() >= 10L);
+        assertEquals(0L, conc.failedOps());
+        assertEquals("STABLE", conc.status());
+
+        String md = suite.generateMarkdownReport(List.of(vol), List.of(conc));
+        assertTrue(md.contains("# Reporte de Tolerancia y Pruebas de Estrés — JettraStore (`RF-20`)"));
+        assertTrue(md.contains("## 1. Resultados por Volumen de Registros"));
+        assertTrue(md.contains("## 2. Resultados por Concurrencia de Usuarios (Virtual Threads)"));
+        assertTrue(md.contains("## 3. Análisis de Tolerancia y Límites Observados"));
+        assertTrue(md.contains("## 4. Conclusiones Técnicas y Recomendaciones de Soporte"));
+    }
 }
