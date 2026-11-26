@@ -206,10 +206,19 @@ public class JettraStorePlugin {
         this.loadedConfigProps.putAll(props);
 
         // 1. Host y puerto del servidor web JettraStoreExplorer
-        String h = System.getProperty("server.host", System.getenv("SERVER_HOST"));
-        if (h == null || h.isBlank())
-            h = props.getProperty("server.host", "127.0.0.1");
-        this.serverHost = h.trim();
+        String h = io.jettra.store.explorer.App.firstNonBlank(
+                System.getProperty("server.host"),
+                System.getProperty("server.bindAddress"),
+                System.getProperty("bindAddress"),
+                System.getProperty("host"),
+                System.getenv("SERVER_HOST"),
+                System.getenv("JETTRA_EXPLORER_HOST"),
+                System.getenv("BIND_ADDRESS"),
+                props.getProperty("server.host"),
+                props.getProperty("server.bindAddress"),
+                props.getProperty("bindAddress"),
+                "0.0.0.0");
+        this.serverHost = "*".equals(h) ? "0.0.0.0" : h;
 
         String p = System.getProperty("server.port", System.getenv("PORT"));
         if (p == null || p.isBlank())

@@ -10,7 +10,7 @@ La conexión inicial al clúster de **JettraStore** se configura mediante la pro
 
 ```properties
 # JettraStore Explorer Configuration (Eclipse MicroProfile Config 3.1)
-server.host=127.0.0.1
+server.host=0.0.0.0
 server.port=8085
 server.contextpath=/
 storage.mode=OFF_HEAP
@@ -433,9 +433,9 @@ Antes de inicializar `JettraStorePlugin`, las rutas **JettraFlux** o el servidor
 
 ### 1. Precedencia de Configuración del Puerto y Host
 El punto de arranque (`App.resolveStartupConfig(args)`) resuelve el host y el puerto en el siguiente orden de prioridad:
-1. **Argumentos de línea de comandos:** `--server.port=<puerto>`, `--port=<puerto>`, `-port=<puerto>`, `-p <puerto>`, `--port <puerto>` y `--server.host=<host>`.
-2. **Propiedades del sistema JVM y variables de entorno:** `-Dserver.port=...` / `-Dport=...` / `PORT` y `-Dserver.host=...` / `-Dhost=...` / `SERVER_HOST`.
-3. **Archivo `microprofile-config.properties`:** `server.port` (por defecto `8085`) y `server.host` (por defecto `127.0.0.1`).
+1. **Argumentos de línea de comandos:** `--server.port=<puerto>`, `--port=<puerto>`, `-port=<puerto>`, `-p <puerto>`, `--port <puerto>` y `--server.host=<host>` / `--host=<host>` / `--bindAddress=<host>`.
+2. **Propiedades del sistema JVM y variables de entorno:** `-Dserver.port=...` / `-Dport=...` / `PORT` y `-Dserver.host=...` / `-DbindAddress=...` / `-Dhost=...` / `SERVER_HOST` / `JETTRA_EXPLORER_HOST`.
+3. **Archivo `microprofile-config.properties`:** `server.port` (por defecto `8085`) y `server.host` (por defecto `0.0.0.0`, permitiendo acceso remoto y LAN).
 
 ### 2. Mecanismo de Comprobación Segura (`ServerSocket` + `SO_REUSEADDR`)
 * `App.isPortAvailable(host, port)` abre un `ServerSocket` de sonda dentro de un bloque `try-with-resources`, habilita `setReuseAddress(true)` para evitar falsos bloqueos tras reinicios rápidos y ejecuta `bind(...)` sobre la interfaz configurada (`0.0.0.0` / `*` o IP específica).

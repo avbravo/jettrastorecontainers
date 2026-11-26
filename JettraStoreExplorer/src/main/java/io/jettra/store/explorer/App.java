@@ -181,6 +181,34 @@ public class App {
         return props;
     }
 
+    public static String firstNonBlank(String... candidates) {
+        if (candidates == null) {
+            return null;
+        }
+        for (String c : candidates) {
+            if (c != null && !c.isBlank()) {
+                return c.trim();
+            }
+        }
+        return null;
+    }
+
+    private static String normalizeBindHost(String host) {
+        if (host == null || host.isBlank() || "*".equals(host.trim())) {
+            return "0.0.0.0";
+        }
+        return host.trim();
+    }
+
+    private static String resolveDefaultHost(Properties mpProps) {
+        String mpHost = firstNonBlank(
+                mpProps.getProperty("server.host"),
+                mpProps.getProperty("server.bindAddress"),
+                mpProps.getProperty("bindAddress"),
+                "0.0.0.0");
+        return normalizeBindHost(mpHost);
+    }
+
     /**
      * Resuelve la configuración efectiva de inicio (host, puerto, contextPath y modo) sin
      * inicializar el servidor ni los monitores del clúster.
@@ -192,23 +220,36 @@ public class App {
         boolean hostOverridden = false;
         boolean contextPathOverridden = false;
 
-        String sysPort = System.getProperty("server.port", System.getProperty("port", System.getenv("PORT")));
-        if (sysPort != null && !sysPort.isBlank()) {
+        String sysPort = firstNonBlank(
+                System.getProperty("server.port"),
+                System.getProperty("port"),
+                System.getenv("SERVER_PORT"),
+                System.getenv("PORT"));
+        if (sysPort != null) {
             try {
-                config.setPort(Integer.parseInt(sysPort.trim()));
+                config.setPort(Integer.parseInt(sysPort));
                 portOverridden = true;
             } catch (Exception ignored) {
             }
         }
-        String sysHost = System.getProperty("server.host", System.getProperty("host", System.getenv("SERVER_HOST")));
-        if (sysHost != null && !sysHost.isBlank()) {
-            config.setHost(sysHost.trim());
+        String sysHost = firstNonBlank(
+                System.getProperty("server.host"),
+                System.getProperty("server.bindAddress"),
+                System.getProperty("bindAddress"),
+                System.getProperty("host"),
+                System.getenv("SERVER_HOST"),
+                System.getenv("JETTRA_EXPLORER_HOST"),
+                System.getenv("BIND_ADDRESS"));
+        if (sysHost != null) {
+            config.setHost(normalizeBindHost(sysHost));
             hostOverridden = true;
         }
-        String sysCp = System.getProperty("server.contextpath",
-                System.getProperty("server.context-path", System.getenv("SERVER_CONTEXT_PATH")));
-        if (sysCp != null && !sysCp.isBlank()) {
-            config.setContextPath(sysCp.trim());
+        String sysCp = firstNonBlank(
+                System.getProperty("server.contextpath"),
+                System.getProperty("server.context-path"),
+                System.getenv("SERVER_CONTEXT_PATH"));
+        if (sysCp != null) {
+            config.setContextPath(sysCp);
             contextPathOverridden = true;
         }
 
@@ -233,8 +274,12 @@ public class App {
                         portOverridden = true;
                     } catch (Exception ignored) {
                     }
-                } else if (arg.startsWith("--server.host=")) {
-                    config.setHost(arg.substring("--server.host=".length()).trim());
+                } else if (arg.startsWith("--server.host=")
+                        || arg.startsWith("--host=")
+                        || arg.startsWith("--bindAddress=")
+                        || arg.startsWith("--server.bindAddress=")
+                        || arg.startsWith("--server.bind-address=")) {
+                    config.setHost(normalizeBindHost(arg.substring(arg.indexOf('=') + 1)));
                     hostOverridden = true;
                 } else if (arg.startsWith("--server.contextpath=")) {
                     config.setContextPath(arg.substring("--server.contextpath=".length()).trim());
@@ -249,11 +294,8 @@ public class App {
         }
 
         Properties mpProps = loadLightExplorerProperties();
-        if (!hostOverridden || config.getHost() == null || "0.0.0.0".equals(config.getHost())) {
-            String mpHost = mpProps.getProperty("server.host", "127.0.0.1").trim();
-            if (!mpHost.isBlank()) {
-                config.setHost(mpHost);
-            }
+        if (!hostOverridden || config.getHost() == null || config.getHost().isBlank()) {
+            config.setHost(resolveDefaultHost(mpProps));
         }
         if (!portOverridden) {
             String mpPort = mpProps.getProperty("server.port", "8085").trim();
@@ -271,6 +313,7 @@ public class App {
             }
             config.setContextPath(mpCp);
         }
+        config.setCorsEnabled(true);
 
         String storageProp = System.getProperty("storage.mode");
         if (storageProp == null || storageProp.isBlank())
@@ -317,7 +360,7 @@ public class App {
     }
 
     public static JettraServer startApplication(int port, StorageMode mode) {
-        ServerConfig config = ServerConfig.load()
+        ServerConfig config = resolveStartupConfig(null)
                 .setPort(port)
                 .setStorageMode(mode);
         return startApplication(config);
@@ -325,8 +368,10 @@ public class App {
 
     public static JettraServer startApplication(ServerConfig config) {
         Properties mpProps = loadLightExplorerProperties();
-        if (config.getHost() == null || "0.0.0.0".equals(config.getHost())) {
-            config.setHost(mpProps.getProperty("server.host", "127.0.0.1").trim());
+        if (config.getHost() == null || config.getHost().isBlank()) {
+            config.setHost(resolveDefaultHost(mpProps));
+        } else {
+            config.setHost(normalizeBindHost(config.getHost()));
         }
         // Si no se sobreescribió por argumento del sistema o el puerto proviene de
         // defaults upstream (8080 o 8082),
@@ -347,6 +392,7 @@ public class App {
                     mpProps.getProperty("server.context-path", "/")).trim();
             config.setContextPath(cp.startsWith("/") ? cp : "/" + cp);
         }
+        config.setCorsEnabled(true);
 
         // Validación temprana antes de cerrar sesiones o levantar JettraServer/JettraStorePlugin
         ensurePortAvailable(config.getHost(), config.getPort());
