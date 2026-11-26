@@ -124,7 +124,31 @@ public final class JettraStoreShellApp implements AutoCloseable {
         if (this.client != null) {
             registerSentinelListener();
             registerClusterConfigSyncListener();
+            syncLocalClusterConfigFromPrimary();
+            startClusterStatusSyncWorker();
         }
+    }
+
+    private void startClusterStatusSyncWorker() {
+        if (closed || !statusSyncWorkerStarted.compareAndSet(false, true)) {
+            return;
+        }
+        this.statusSyncWorkerThread = Thread.ofVirtual()
+                .name("jettra-shell-status-sync")
+                .start(() -> {
+                    while (!closed) {
+                        try {
+                            Thread.sleep(statusSyncIntervalMs);
+                            if (!closed && (authenticated || client != null)) {
+                                syncLocalClusterConfigFromPrimary();
+                            }
+                        } catch (InterruptedException ie) {
+                            Thread.currentThread().interrupt();
+                            break;
+                        } catch (Throwable ignored) {
+                        }
+                    }
+                });
     }
 
     private final java.util.concurrent.atomic.AtomicBoolean clusterConfigSyncInProgress = new java.util.concurrent.atomic.AtomicBoolean(
@@ -133,6 +157,11 @@ public final class JettraStoreShellApp implements AutoCloseable {
     private volatile boolean closed = false;
     private final String initialClusterConfigPathProp = System.getProperty("cluster.config.path");
     private volatile java.util.function.Consumer<io.jettra.store.cluster.ClusterLiveEvent> clusterEventListener;
+    private volatile io.jettra.driver.config.JettraConnectionConfigManager.ConnectionState activeClusterConnectionState;
+    private volatile io.jettra.driver.JettraClient.PrimaryClusterStatusSnapshot latestPrimaryClusterStatus;
+    private final java.util.concurrent.atomic.AtomicBoolean statusSyncWorkerStarted = new java.util.concurrent.atomic.AtomicBoolean(false);
+    private volatile Thread statusSyncWorkerThread;
+    private final long statusSyncIntervalMs = Math.max(400L, Long.getLong("jettra.shell.status.sync.ms", 1500L));
 
     private void registerClusterConfigSyncListener() {
         if (clusterEventListenerRegistered || closed)
@@ -178,15 +207,20 @@ public final class JettraStoreShellApp implements AutoCloseable {
             return false;
         }
         try {
-            List<String> candidates = new ArrayList<>();
-            if (client != null && client.getConfig() != null && !client.getConfig().getClusterEndpoints().isEmpty()) {
-                for (String ep : client.getConfig().getClusterEndpoints()) {
-                    if (ep != null && !ep.isBlank() && !candidates.contains(ep.trim())) {
-                        candidates.add(ep.trim());
+            List<String> candidates = collectStatusQuerySeeds();
+            var primarySnap = JettraClient.fetchPrimaryClusterStatus(candidates, 400, 700);
+            if (primarySnap != null && primarySnap.rawContent() != null && !primarySnap.rawContent().isBlank()) {
+                this.latestPrimaryClusterStatus = primarySnap;
+                byte[] cfgBytes = primarySnap.rawContent().getBytes(StandardCharsets.UTF_8);
+                if (JettraConfigValidator.validateClusterConfigIntegrity(cfgBytes).isValid()) {
+                    try {
+                        Path localStateFile = JettraConfigValidator.resolveClusterStateFile();
+                        JettraConfigValidator.writeClusterConfigAtomically(localStateFile, cfgBytes);
+                    } catch (IOException ignored) {
                     }
                 }
-            } else if (currentHost != null && !currentHost.isBlank() && currentPort > 0) {
-                candidates.add(currentHost.trim() + ":" + currentPort);
+                applyPrimaryStatusSnapshotToClient(primarySnap);
+                return true;
             }
             for (String ep : candidates) {
                 String[] parts = ep.split(":");
@@ -206,17 +240,14 @@ public final class JettraStoreShellApp implements AutoCloseable {
                     if (remoteCfg != null && remoteCfg.rawBytes() != null && remoteCfg.rawBytes().length > 0) {
                         byte[] cfgBytes = remoteCfg.rawBytes();
                         if (JettraConfigValidator.validateClusterConfigIntegrity(cfgBytes).isValid()) {
-                            Path localFile = JettraConfigValidator.locateClusterConfigFile();
-                            if (localFile == null) {
-                                localFile = Path.of(JettraConfigValidator.DEFAULT_CLUSTER_CONFIG_PATH);
-                            }
-                            JettraConfigValidator.writeClusterConfigAtomically(localFile, cfgBytes);
+                            Path localStateFile = JettraConfigValidator.resolveClusterStateFile();
+                            JettraConfigValidator.writeClusterConfigAtomically(localStateFile, cfgBytes);
                             Properties props = new Properties();
                             try (var bais = new java.io.ByteArrayInputStream(cfgBytes)) {
                                 props.load(bais);
                             }
                             List<JettraConfigValidator.ClusterNodeInfo> parsed = JettraConfigValidator
-                                    .parseClusterNodes(props);
+                                    .parseExplicitClusterNodes(props);
                             if (!parsed.isEmpty() && client.getRingEngine() != null) {
                                 Set<String> liveIds = new HashSet<>();
                                 for (var cn : parsed) {
@@ -244,6 +275,83 @@ public final class JettraStoreShellApp implements AutoCloseable {
             return false;
         } finally {
             clusterConfigSyncInProgress.set(false);
+        }
+    }
+
+    private List<String> collectStatusQuerySeeds() {
+        List<String> candidates = new ArrayList<>();
+        boolean hasExplicitClientEndpoints = client != null && client.getConfig() != null
+                && !client.getConfig().getClusterEndpoints().isEmpty();
+        if (hasExplicitClientEndpoints) {
+            for (String ep : client.getConfig().getClusterEndpoints()) {
+                if (ep != null && !ep.isBlank() && !candidates.contains(ep.trim())) {
+                    candidates.add(ep.trim());
+                }
+            }
+        }
+        if (currentHost != null && !currentHost.isBlank() && currentPort > 0) {
+            String hp = currentHost.trim() + ":" + currentPort;
+            if (!candidates.contains(hp)) {
+                candidates.add(hp);
+            }
+        }
+        if (!hasExplicitClientEndpoints && this.activeClusterConnectionState != null
+                && this.activeClusterConnectionState.endpoints() != null) {
+            for (var ep : this.activeClusterConnectionState.endpoints()) {
+                String hp = ep.toHostPort();
+                if (!candidates.contains(hp)) {
+                    candidates.add(hp);
+                }
+            }
+        }
+        if (!hasExplicitClientEndpoints) {
+            synchronized (savedConnections) {
+                for (SavedConnection sc : savedConnections.values()) {
+                    String hp = sc.host() + ":" + sc.port();
+                    if (!candidates.contains(hp)) {
+                        candidates.add(hp);
+                    }
+                }
+            }
+        }
+        return candidates;
+    }
+
+    private void applyPrimaryStatusSnapshotToClient(JettraClient.PrimaryClusterStatusSnapshot snap) {
+        if (snap == null || snap.nodes() == null || snap.nodes().isEmpty()) {
+            return;
+        }
+        if (client != null && client.getRingEngine() != null) {
+            Set<String> liveIds = new HashSet<>();
+            for (var cn : snap.nodes()) {
+                if (cn.id() == null || cn.id().isBlank()) continue;
+                liveIds.add(cn.id().toLowerCase(Locale.ROOT));
+                ClusterNode.Role r = "PRIMARY".equalsIgnoreCase(cn.role())
+                        ? ClusterNode.Role.PRIMARY
+                        : ClusterNode.Role.SECONDARY;
+                ClusterNode peer = client.getRingEngine().getPeer(cn.id());
+                if (peer == null) {
+                    peer = new ClusterNode(cn.id(), cn.ip(), cn.grpcPort(), r);
+                    client.getRingEngine().registerPeer(peer);
+                } else {
+                    peer.setRole(r);
+                }
+                String st = snap.statuses() != null ? snap.statuses().get(cn.id().toLowerCase(Locale.ROOT)) : null;
+                if ("STOPPED".equalsIgnoreCase(st)) {
+                    peer.stop();
+                } else {
+                    peer.start();
+                }
+            }
+            for (ClusterNode existing : new ArrayList<>(client.getRingEngine().getPeers())) {
+                if (!liveIds.contains(existing.getId().toLowerCase(Locale.ROOT))) {
+                    client.getRingEngine().removePeer(existing.getId());
+                }
+            }
+        }
+        if (snap.primaryHost() != null && !snap.primaryHost().isBlank() && snap.primaryGrpcPort() > 0) {
+            this.currentHost = snap.primaryHost().trim();
+            this.currentPort = snap.primaryGrpcPort();
         }
     }
 
@@ -276,6 +384,14 @@ public final class JettraStoreShellApp implements AutoCloseable {
             this.currentPort = def.port();
         }
         loadHistory();
+    }
+
+    public io.jettra.driver.config.JettraConnectionConfigManager.ConnectionState getActiveClusterConnectionState() {
+        return this.activeClusterConnectionState;
+    }
+
+    public JettraClient.PrimaryClusterStatusSnapshot getLatestPrimaryClusterStatus() {
+        return this.latestPrimaryClusterStatus;
     }
 
     private boolean loadInitialConnectionsFromMicroprofileConfig() {
@@ -360,45 +476,27 @@ public final class JettraStoreShellApp implements AutoCloseable {
             }
         }
 
-        String nodesConfig = System.getProperty("cluster.nodes",
-                props.getProperty("cluster.nodes", System.getenv("CLUSTER_NODES")));
-        String defaultNodeName = System.getProperty("cluster.default.node",
-                props.getProperty("cluster.default.node",
-                        props.getProperty("cluster.node.default", System.getenv("CLUSTER_DEFAULT_NODE"))));
+        var connState = io.jettra.driver.config.JettraConnectionConfigManager.loadInitialConnection(props);
+        this.activeClusterConnectionState = connState;
 
         String defaultUser = props.getProperty("jettra.security.default.admin.username",
-                props.getProperty("jettra.admin.username", "admin"));
+                props.getProperty("jettra.admin.username",
+                        connState != null && connState.username() != null ? connState.username() : "admin"));
 
-        if (nodesConfig != null && !nodesConfig.isBlank()) {
+        // Carga desde conecction.config o cluster.ip.nodes en microprofile-config.properties
+        if (connState != null && connState.endpoints() != null && !connState.endpoints().isEmpty()) {
             savedConnections.clear();
             defaultConnectionName = null;
-            boolean loadedAny = false;
-            for (String entry : nodesConfig.split(",")) {
-                String[] parts = entry.trim().split(":");
-                if (parts.length >= 3) {
-                    String id = parts[0].trim();
-                    String host = parts[1].trim();
-                    int port = 50001;
-                    try {
-                        port = Integer.parseInt(parts[2].trim());
-                    } catch (Exception ignored) {
-                    }
-                    String user = (parts.length >= 4 && !parts[3].trim().isBlank()) ? parts[3].trim() : defaultUser;
-                    if (!id.isBlank() && !host.isBlank() && port > 0) {
-                        savedConnections.put(id, new SavedConnection(id, host, port, user));
-                        if (defaultNodeName != null && defaultNodeName.equalsIgnoreCase(id)) {
-                            defaultConnectionName = id;
-                        } else if (defaultConnectionName == null && (!loadedAny || "node-01".equalsIgnoreCase(id))) {
-                            defaultConnectionName = id;
-                        }
-                        loadedAny = true;
-                    }
+            int idx = 1;
+            for (var ep : connState.endpoints()) {
+                String id = String.format("node-%02d", idx);
+                savedConnections.put(id, new SavedConnection(id, ep.host(), ep.port(), defaultUser));
+                if (defaultConnectionName == null) {
+                    defaultConnectionName = id;
                 }
+                idx++;
             }
-            if (defaultConnectionName == null && !savedConnections.isEmpty()) {
-                defaultConnectionName = savedConnections.keySet().iterator().next();
-            }
-            return loadedAny;
+            return true;
         }
 
         // Fallback a propiedades directas de conexión (jettra.host, jettra.port /
@@ -424,67 +522,6 @@ public final class JettraStoreShellApp implements AutoCloseable {
         }
 
         return false;
-    }
-
-    public String getClusterNodesPropertyValue() {
-        StringBuilder sb = new StringBuilder();
-        int i = 0;
-        for (SavedConnection sc : savedConnections.values()) {
-            if (i++ > 0)
-                sb.append(",");
-            sb.append(sc.name()).append(":").append(sc.host()).append(":").append(sc.port());
-        }
-        return sb.toString();
-    }
-
-    public void persistClusterNodesToMicroprofileConfig() {
-        String clusterNodesValue = getClusterNodesPropertyValue();
-        if (clusterNodesValue.isBlank())
-            return;
-
-        List<Path> targets = new ArrayList<>();
-        String explicitFile = System.getProperty("jettra.shell.config.file",
-                System.getProperty("microprofile.config.file"));
-        if (explicitFile != null && !explicitFile.isBlank()) {
-            targets.add(Path.of(explicitFile.trim()));
-        } else {
-            for (String candidate : new String[] {
-                    "src/main/resources/META-INF/microprofile-config.properties",
-                    "target/classes/META-INF/microprofile-config.properties",
-                    "./microprofile-config.properties",
-                    "./config/microprofile-config.properties"
-            }) {
-                Path p = Path.of(candidate);
-                if (Files.exists(p)) {
-                    targets.add(p);
-                }
-            }
-        }
-
-        for (Path target : targets) {
-            try {
-                if (target.getParent() != null && !Files.exists(target.getParent())) {
-                    Files.createDirectories(target.getParent());
-                }
-                List<String> lines = Files.exists(target)
-                        ? new ArrayList<>(Files.readAllLines(target, StandardCharsets.UTF_8))
-                        : new ArrayList<>();
-                boolean replaced = false;
-                for (int i = 0; i < lines.size(); i++) {
-                    String trimmed = lines.get(i).trim();
-                    if (trimmed.startsWith("cluster.nodes=") || trimmed.startsWith("cluster.nodes =")) {
-                        lines.set(i, "cluster.nodes=" + clusterNodesValue);
-                        replaced = true;
-                        break;
-                    }
-                }
-                if (!replaced) {
-                    lines.add("cluster.nodes=" + clusterNodesValue);
-                }
-                Files.write(target, lines, StandardCharsets.UTF_8);
-            } catch (Exception ignored) {
-            }
-        }
     }
 
     private void loadInitialConnectionsFromJettraConfig() {
@@ -676,6 +713,7 @@ public final class JettraStoreShellApp implements AutoCloseable {
                 "MENU CONNECTIONS", "STATUS",
                 "HISTORY", "HISTORY CLEAR", "HISTORY SEARCH ", "COMPLETE ", "TAB ", "EXIT", "QUIT",
                 // Conexión & Autenticación
+                "/connections", "CONNECTIONS", "SET CONNECTION ", "EDIT CONNECTION ",
                 "CONNECT ", "LOGIN ", "LOGOUT", "SAVE CONNECTION ", "REMOVE CONNECTION ", "LIST CONNECTIONS",
                 // Bases de Datos
                 "SHOW DATABASES", "SHOW SAMPLES", "SHOW SAMPLE DATABASES", "CREATE DATABASE ", "DROP DATABASE ", "USE ",
@@ -1479,6 +1517,12 @@ public final class JettraStoreShellApp implements AutoCloseable {
         }
 
         // 2. Conexión, Autenticación y Cierre de Sesión
+        if (upper.equals("/CONNECTIONS") || upper.startsWith("/CONNECTIONS ")
+                || upper.equals("CONNECTIONS") || upper.startsWith("CONNECTIONS ")
+                || upper.startsWith("SET CONNECTION ") || upper.startsWith("EDIT CONNECTION ")
+                || upper.startsWith("SAVE CLUSTER CONNECTION ")) {
+            return handleConnectionsCommand(trimmed);
+        }
         if (upper.startsWith("CONNECT ")) {
             return handleConnect(trimmed);
         } else if (upper.startsWith("LOGIN ")) {
@@ -1537,9 +1581,11 @@ public final class JettraStoreShellApp implements AutoCloseable {
             return handleStartNode(trimmed);
         } else if (upper.startsWith("STOP NODE ")) {
             return handleStopNode(trimmed);
-        } else if (upper.equals("SHOW CLUSTER CONFIG") || upper.equals("CLUSTER CONFIG")) {
+        } else if (upper.equals("SHOW CLUSTER CONFIG") || upper.equals("CLUSTER CONFIG")
+                || upper.equals("SHOW CLUSTER STATE") || upper.equals("CLUSTER STATE")) {
             return handleShowClusterConfig();
-        } else if (upper.equals("SYNC CLUSTER CONFIG") || upper.equals("CLUSTER SYNC CONFIG")) {
+        } else if (upper.equals("SYNC CLUSTER CONFIG") || upper.equals("CLUSTER SYNC CONFIG")
+                || upper.equals("SYNC CLUSTER STATE") || upper.equals("CLUSTER SYNC STATE")) {
             return handleSyncClusterConfig();
         } else if (upper.startsWith("CREATE BUCKET INDEX ")) {
             return handleCreateBucketIndexCommand(trimmed);
@@ -1789,17 +1835,33 @@ public final class JettraStoreShellApp implements AutoCloseable {
                 + "'. Escriba 'help' o 'menu' para ver los comandos disponibles.";
     }
 
+    private volatile String currentPassword;
+
     // --- 1. Conexión y Autenticación ---
     public boolean connectAndLogin(String host, int port, String user, String pass) {
         try {
-            this.currentHost = host;
-            this.currentPort = port;
-            this.client = JettraClient.connect(host, port, user, pass);
+            String targetHost = (host != null && !host.isBlank()) ? host.trim() : "127.0.0.1";
+            int targetPort = port > 0 ? port : 50001;
+            var primarySnap = JettraClient.fetchPrimaryClusterStatus(
+                    List.of(targetHost + ":" + targetPort), 500, 900);
+            if (primarySnap != null) {
+                this.latestPrimaryClusterStatus = primarySnap;
+                if (primarySnap.primaryHost() != null && !primarySnap.primaryHost().isBlank()
+                        && primarySnap.primaryGrpcPort() > 0) {
+                    targetHost = primarySnap.primaryHost().trim();
+                    targetPort = primarySnap.primaryGrpcPort();
+                }
+            }
+            this.currentHost = targetHost;
+            this.currentPort = targetPort;
+            this.client = JettraClient.connect(targetHost, targetPort, user, pass);
             this.authenticated = true;
             this.currentUser = user;
+            this.currentPassword = pass;
             registerSentinelListener();
             registerClusterConfigSyncListener();
             syncLocalClusterConfigFromPrimary();
+            startClusterStatusSyncWorker();
             var claims = client.getSecurityManager().validateToken(client.getSessionToken());
             this.currentRole = claims.role();
             return true;
@@ -1811,24 +1873,201 @@ public final class JettraStoreShellApp implements AutoCloseable {
         }
     }
 
+    private String handleConnectionsCommand(String command) {
+        String trimmed = command.trim();
+        String rest = trimmed.replaceFirst("(?i)^(/connections|connections|set\\s+connection|edit\\s+connection|save\\s+cluster\\s+connection)\\s*", "").trim();
+        var curState = getActiveClusterConnectionState();
+        if (curState == null) {
+            curState = io.jettra.driver.config.JettraConnectionConfigManager.loadInitialConnection(null);
+            this.activeClusterConnectionState = curState;
+        }
+
+        if (rest.isEmpty() || "show".equalsIgnoreCase(rest) || "status".equalsIgnoreCase(rest)) {
+            var snap = JettraClient.fetchPrimaryClusterStatus(collectStatusQuerySeeds(), 500, 900);
+            if (snap != null) {
+                this.latestPrimaryClusterStatus = snap;
+                applyPrimaryStatusSnapshotToClient(snap);
+            }
+            StringBuilder sb = new StringBuilder();
+            sb.append("==============================================================================================\n");
+            sb.append("              GESTIÓN DE CONEXIÓN AL CLÚSTER (cluster.ip.nodes / conecction.config)\n");
+            sb.append("==============================================================================================\n");
+            sb.append("Origen cargado      : ")
+              .append(curState.loadedFromConnectionFile() ? "conecction.config" : "microprofile-config.properties (cluster.ip.nodes)")
+              .append("\n");
+            sb.append("Archivo local/vol.  : ").append(curState.connectionFile()).append("\n");
+            sb.append("cluster.ip.nodes    : ").append(curState.clusterIpNodes()).append("\n");
+            sb.append("Conexión activa     : ").append(currentHost).append(":").append(currentPort)
+              .append(authenticated ? (" (autenticado como " + currentUser + ")") : " (sin login)")
+              .append("\n");
+            if (this.latestPrimaryClusterStatus != null) {
+                var s = this.latestPrimaryClusterStatus;
+                sb.append("PRIMARY resuelto    : ").append(s.primaryNodeId()).append(" @ ")
+                  .append(s.primaryHost()).append(":").append(s.primaryGrpcPort())
+                  .append(" (REST ").append(s.primaryRestPort()).append(") | cluster-state.config v")
+                  .append(s.stateVersion()).append("\n");
+                sb.append("Nodos en clúster    : ").append(s.nodes().size()).append("\n");
+                for (var n : s.nodes()) {
+                    String st = s.statuses() != null
+                            ? s.statuses().getOrDefault(n.id().toLowerCase(Locale.ROOT), "RUNNING")
+                            : "RUNNING";
+                    sb.append(String.format("  - %-10s | %-9s | %-18s:%-5d (REST %-5d) | %s%n",
+                            n.id(), n.role(), n.ip(), n.grpcPort(), n.restPort(), st));
+                }
+            } else {
+                sb.append("PRIMARY resuelto    : (ninguno alcanzable por el momento)\n");
+            }
+            sb.append("Uso para editar/guardar: /connections <host:port[,host2:port2]> [usuario] [--no-save]\n");
+            return sb.toString();
+        }
+
+        boolean persist = true;
+        if (rest.toLowerCase(Locale.ROOT).contains("--no-save")) {
+            persist = false;
+            rest = rest.replaceAll("(?i)--no-save", "").trim();
+        } else if (rest.toLowerCase(Locale.ROOT).contains("--save")) {
+            rest = rest.replaceAll("(?i)--save", "").trim();
+        }
+        String[] tokens = rest.split("\\s+");
+        String rawAddresses = tokens[0].trim();
+        String user = tokens.length > 1 ? tokens[1].trim() : (authenticated ? currentUser : curState.username());
+
+        String normalized;
+        List<io.jettra.driver.config.JettraConnectionConfigManager.Endpoint> parsedEndpoints;
+        try {
+            normalized = io.jettra.driver.config.JettraConnectionConfigManager.normalizeAndValidateClusterIpNodes(rawAddresses);
+            parsedEndpoints = io.jettra.driver.config.JettraConnectionConfigManager.parseEndpointsStrict(normalized);
+        } catch (IllegalArgumentException ex) {
+            return "[ERROR] Dirección inválida: " + ex.getMessage();
+        }
+
+        io.jettra.driver.config.JettraConnectionConfigManager.ConnectionState updatedState;
+        if (persist) {
+            try {
+                updatedState = io.jettra.driver.config.JettraConnectionConfigManager.saveConnectionAtomically(normalized, user);
+            } catch (IOException ex) {
+                return "[ERROR] No se pudo escribir conecction.config de forma atómica: " + ex.getMessage();
+            }
+        } else {
+            updatedState = new io.jettra.driver.config.JettraConnectionConfigManager.ConnectionState(
+                    normalized, List.copyOf(parsedEndpoints), user, curState.loadedFromConnectionFile(), curState.connectionFile());
+        }
+        this.activeClusterConnectionState = updatedState;
+
+        savedConnections.clear();
+        int idx = 1;
+        for (var ep : parsedEndpoints) {
+            savedConnections.put(String.format("node-%02d", idx++), new SavedConnection(ep.host() + ":" + ep.port(), ep.host(), ep.port(), user));
+        }
+
+        List<String> seeds = new ArrayList<>();
+        for (var ep : parsedEndpoints) {
+            seeds.add(ep.toHostPort());
+        }
+        var snap = JettraClient.fetchPrimaryClusterStatus(seeds, 500, 1000);
+        if (snap != null) {
+            this.latestPrimaryClusterStatus = snap;
+        }
+
+        String targetHost = snap != null && snap.primaryHost() != null && !snap.primaryHost().isBlank()
+                ? snap.primaryHost().trim()
+                : parsedEndpoints.get(0).host();
+        int targetPort = snap != null && snap.primaryGrpcPort() > 0
+                ? snap.primaryGrpcPort()
+                : parsedEndpoints.get(0).port();
+
+        this.currentHost = targetHost;
+        this.currentPort = targetPort;
+
+        if (authenticated && this.currentPassword != null && !this.currentPassword.isBlank()) {
+            try {
+                if (this.client != null) {
+                    try { this.client.close(); } catch (Exception ignored) {}
+                }
+                this.client = JettraClient.connect(targetHost, targetPort, user, this.currentPassword);
+                this.currentUser = user;
+                registerSentinelListener();
+                registerClusterConfigSyncListener();
+                startClusterStatusSyncWorker();
+            } catch (Exception ignored) {
+            }
+        }
+        if (snap != null) {
+            applyPrimaryStatusSnapshotToClient(snap);
+            syncLocalClusterConfigFromPrimary();
+        }
+
+        if (snap != null) {
+            return String.format("[SUCCESS] Conexión %s: %s -> PRIMARY '%s' (%s:%d), cluster-state.config v%d (%d nodos).",
+                    persist ? "guardada en conecction.config" : "aplicada",
+                    normalized, snap.primaryNodeId(), targetHost, targetPort, snap.stateVersion(), snap.nodes().size());
+        }
+        return String.format("[SUCCESS] Conexión %s (%s). Nodo aún no alcanzable; se sincronizará automáticamente al conectarse.",
+                persist ? "guardada en conecction.config" : "actualizada", normalized);
+    }
+
     private String handleConnect(String command) {
         String clean = command.substring(8).trim();
+        boolean saveFlag = false;
+        if (clean.toLowerCase(Locale.ROOT).contains("--save")) {
+            saveFlag = true;
+            clean = clean.replaceAll("(?i)--save", "").trim();
+        }
         if (savedConnections.containsKey(clean)) {
             SavedConnection sc = savedConnections.get(clean);
             this.currentHost = sc.host();
             this.currentPort = sc.port();
+            if (saveFlag) {
+                try {
+                    this.activeClusterConnectionState =
+                            io.jettra.driver.config.JettraConnectionConfigManager.saveConnectionAtomically(
+                                    currentHost + ":" + currentPort, sc.user());
+                } catch (Exception ignored) {}
+            }
             return String.format(
                     "[CONNECTED] Servidor configurado a '%s:%d' desde perfil '%s'. Inicie sesión con: login %s <password>",
                     currentHost, currentPort, sc.name(), sc.user());
         }
 
         String[] parts = clean.split("\\s+");
+        if (parts.length == 1 && parts[0].contains(":")) {
+            try {
+                String normalized = io.jettra.driver.config.JettraConnectionConfigManager
+                        .normalizeAndValidateClusterIpNodes(parts[0]);
+                var eps = io.jettra.driver.config.JettraConnectionConfigManager.parseEndpointsStrict(normalized);
+                this.currentHost = eps.get(0).host();
+                this.currentPort = eps.get(0).port();
+                var snap = JettraClient.fetchPrimaryClusterStatus(List.of(normalized), 400, 700);
+                if (snap != null && snap.primaryHost() != null && !snap.primaryHost().isBlank() && snap.primaryGrpcPort() > 0) {
+                    this.latestPrimaryClusterStatus = snap;
+                    this.currentHost = snap.primaryHost();
+                    this.currentPort = snap.primaryGrpcPort();
+                }
+                if (saveFlag) {
+                    this.activeClusterConnectionState =
+                            io.jettra.driver.config.JettraConnectionConfigManager.saveConnectionAtomically(
+                                    normalized, currentUser != null && !"anonymous".equals(currentUser) ? currentUser : "admin");
+                }
+                return String.format(
+                        "[CONNECTED] Servidor JettraStore configurado a %s:%d (%s). Proceda con 'login <username> <password>'.",
+                        currentHost, currentPort, saveFlag ? "guardado en conecction.config" : "en vivo");
+            } catch (Exception ex) {
+                return "[ERROR] Dirección inválida: " + ex.getMessage();
+            }
+        }
         if (parts.length >= 2) {
             this.currentHost = parts[0].trim();
             try {
                 this.currentPort = Integer.parseInt(parts[1].trim());
             } catch (Exception e) {
                 return "[ERROR] Puerto numérico inválido: " + parts[1];
+            }
+            if (saveFlag) {
+                try {
+                    this.activeClusterConnectionState =
+                            io.jettra.driver.config.JettraConnectionConfigManager.saveConnectionAtomically(
+                                    currentHost + ":" + currentPort, currentUser != null && !"anonymous".equals(currentUser) ? currentUser : "admin");
+                } catch (Exception ignored) {}
             }
             return String.format(
                     "[CONNECTED] Servidor JettraStore configurado a %s:%d. Proceda con 'login <username> <password>'.",
@@ -1838,7 +2077,7 @@ public final class JettraStoreShellApp implements AutoCloseable {
             return String.format("[CONNECTED] Host configurado a %s:%d. Proceda con 'login <username> <password>'.",
                     currentHost, currentPort);
         }
-        return "[ERROR] Uso: connect <host> <puerto> o connect <nombre-conexion>";
+        return "[ERROR] Uso: connect <host> <puerto> | connect <host:port> [--save] | connect <nombre-conexion>";
     }
 
     private String handleLogin(String command) {
@@ -1888,7 +2127,6 @@ public final class JettraStoreShellApp implements AutoCloseable {
 
         savedConnections.put(name, new SavedConnection(name, host, port, user));
         persistSavedConnections();
-        persistClusterNodesToMicroprofileConfig();
         return String.format("[SUCCESS] Conexión '%s' guardada (%s:%d, usuario: %s).", name, host, port, user);
     }
 
@@ -1899,7 +2137,6 @@ public final class JettraStoreShellApp implements AutoCloseable {
         SavedConnection removed = savedConnections.remove(name);
         if (removed != null) {
             persistSavedConnections();
-            persistClusterNodesToMicroprofileConfig();
             return String.format("[SUCCESS] Conexión guardada '%s' eliminada correctamente.", name);
         } else {
             return String.format("[WARN] No existe una conexión guardada con el nombre '%s'.", name);
@@ -2010,24 +2247,15 @@ public final class JettraStoreShellApp implements AutoCloseable {
      * los cambios realizados desde JettraStoreExplorer u otros clientes.
      */
     private List<JettraConfigValidator.ClusterNodeInfo> fetchLivePrimaryClusterNodes() {
-        List<String> candidates = new ArrayList<>();
-        if (client != null && client.getConfig() != null && !client.getConfig().getClusterEndpoints().isEmpty()) {
-            for (String ep : client.getConfig().getClusterEndpoints()) {
-                if (ep != null && !ep.isBlank() && !candidates.contains(ep.trim())) {
-                    candidates.add(ep.trim());
-                }
+        List<String> candidates = collectStatusQuerySeeds();
+        try {
+            var primarySnap = JettraClient.fetchPrimaryClusterStatus(candidates, 350, 600);
+            if (primarySnap != null && primarySnap.nodes() != null && !primarySnap.nodes().isEmpty()) {
+                this.latestPrimaryClusterStatus = primarySnap;
+                return primarySnap.nodes();
             }
-        } else {
-            if (currentHost != null && !currentHost.isBlank() && currentPort > 0) {
-                candidates.add(currentHost.trim() + ":" + currentPort);
-            }
-            for (SavedConnection sc : savedConnections.values()) {
-                String ep = sc.host() + ":" + sc.port();
-                if (!candidates.contains(ep))
-                    candidates.add(ep);
-            }
+        } catch (Exception ignored) {
         }
-
         for (String ep : candidates) {
             String[] parts = ep.split(":");
             if (parts.length < 2)
@@ -2097,18 +2325,13 @@ public final class JettraStoreShellApp implements AutoCloseable {
                 }
             }
         } else {
-            // 1. Fallback local: cargar topología desde cluster.config / jettra.config si
-            // el PRIMARY no respondió
+            // 1. Fallback local: cargar topología desde cluster-state.config o cluster.config opcional
             try {
-                Path clusterPath = JettraConfigValidator.locateClusterConfigFile();
-                if (clusterPath == null || !Files.exists(clusterPath)) {
-                    clusterPath = JettraConfigValidator.locateJettraConfigFile();
-                }
+                Path clusterPath = JettraConfigValidator.locateActiveClusterStateOrSeedFile();
                 if (clusterPath != null && Files.exists(clusterPath)) {
-                    Properties clusterProps = JettraConfigValidator.loadProperties(clusterPath, "/cluster.config",
-                            "/jettra.config");
+                    Properties clusterProps = JettraConfigValidator.loadProperties(clusterPath);
                     List<JettraConfigValidator.ClusterNodeInfo> nodes = JettraConfigValidator
-                            .parseClusterNodes(clusterProps);
+                            .parseExplicitClusterNodes(clusterProps);
                     int idx = 1;
                     for (JettraConfigValidator.ClusterNodeInfo n : nodes) {
                         String host = (n.ip() != null && !n.ip().isBlank()) ? n.ip() : "127.0.0.1";
@@ -2340,12 +2563,13 @@ public final class JettraStoreShellApp implements AutoCloseable {
         client.getRingEngine().registerPeer(newNode);
         savedConnections.put(id, new SavedConnection(id, host, port, authenticated ? currentUser : "admin"));
         persistSavedConnections();
-        persistClusterNodesToMicroprofileConfig();
 
-        // Registrar dinámicamente en cluster.config local
+        // Registrar dinámicamente en cluster-state.config local (sin alterar cluster.config estático)
         try {
-            JettraConfigValidator.registerDynamicNodeInClusterConfig(
-                    id, role.name(), host, port, restPort, "~/jettra/data");
+            Path stateFile = JettraConfigValidator.resolveClusterStateFile();
+            JettraConfigValidator.seedOrLoadClusterState(stateFile, JettraConfigValidator.locateOptionalClusterSeedFile());
+            JettraConfigValidator.upsertNodeInStateFile(
+                    stateFile, id, role.name(), host, port, restPort, "RUNNING", "jettra-shell");
         } catch (IllegalArgumentException dupEx) {
             return "[ERROR] No se puede agregar el nodo '" + id + "': " + dupEx.getMessage();
         } catch (Exception ignored) {
@@ -2366,12 +2590,11 @@ public final class JettraStoreShellApp implements AutoCloseable {
 
     private List<JettraConfigValidator.ClusterNodeInfo> collectCurrentClusterNodesForValidation() {
         Map<String, JettraConfigValidator.ClusterNodeInfo> merged = new LinkedHashMap<>();
-        Path clusterConfigFile = JettraConfigValidator.locateClusterConfigFile();
-        if (clusterConfigFile != null && Files.exists(clusterConfigFile)) {
+        Path stateOrSeed = JettraConfigValidator.locateActiveClusterStateOrSeedFile();
+        if (stateOrSeed != null && Files.exists(stateOrSeed)) {
             try {
-                Properties props = JettraConfigValidator.loadProperties(clusterConfigFile, "/cluster.config",
-                        "/jettra.config");
-                for (JettraConfigValidator.ClusterNodeInfo cn : JettraConfigValidator.parseClusterNodes(props)) {
+                Properties props = JettraConfigValidator.loadProperties(stateOrSeed);
+                for (JettraConfigValidator.ClusterNodeInfo cn : JettraConfigValidator.parseExplicitClusterNodes(props)) {
                     if (cn.id() != null && !cn.id().isBlank()) {
                         merged.put(cn.id().toLowerCase(), cn);
                     }
@@ -2465,7 +2688,6 @@ public final class JettraStoreShellApp implements AutoCloseable {
         }
         if (removedFromRing || removedFromSaved) {
             persistSavedConnections();
-            persistClusterNodesToMicroprofileConfig();
         }
 
         // Remover de cluster.config local (limpiando todas las entradas del nodo y
@@ -2739,9 +2961,11 @@ public final class JettraStoreShellApp implements AutoCloseable {
             int restPort, boolean isRemoval) {
         Map<String, ShellClusterNode> clusterTopology = new LinkedHashMap<>();
 
-        // 1. Cargar nodos existentes: priorizar topología viva del PRIMARY, fallback a
-        // cluster.config local
-        Path clusterConfigFile = JettraConfigValidator.locateClusterConfigFile();
+        // 1. Cargar nodos existentes: priorizar estado vivo del PRIMARY, fallback a
+        // cluster-state.config o cluster.config opcional local
+        Path stateFile = JettraConfigValidator.resolveClusterStateFile();
+        JettraConfigValidator.seedOrLoadClusterState(stateFile, JettraConfigValidator.locateOptionalClusterSeedFile());
+        Path stateOrSeed = Files.exists(stateFile) ? stateFile : JettraConfigValidator.locateOptionalClusterSeedFile();
         List<JettraConfigValidator.ClusterNodeInfo> livePrimary = fetchLivePrimaryClusterNodes();
         if (!livePrimary.isEmpty()) {
             int idx = 1;
@@ -2755,11 +2979,10 @@ public final class JettraStoreShellApp implements AutoCloseable {
                 clusterTopology.put(cn.id().toLowerCase(), new ShellClusterNode(cn.id(), r, h, gp, rp));
                 idx++;
             }
-        } else if (clusterConfigFile != null && Files.exists(clusterConfigFile)) {
+        } else if (stateOrSeed != null && Files.exists(stateOrSeed)) {
             try {
-                Properties props = JettraConfigValidator.loadProperties(clusterConfigFile, "/cluster.config",
-                        "/jettra.config");
-                List<JettraConfigValidator.ClusterNodeInfo> parsed = JettraConfigValidator.parseClusterNodes(props);
+                Properties props = JettraConfigValidator.loadProperties(stateOrSeed);
+                List<JettraConfigValidator.ClusterNodeInfo> parsed = JettraConfigValidator.parseExplicitClusterNodes(props);
                 int idx = 1;
                 for (JettraConfigValidator.ClusterNodeInfo cn : parsed) {
                     if (cn.id() == null || cn.id().isBlank())
@@ -2827,23 +3050,21 @@ public final class JettraStoreShellApp implements AutoCloseable {
                     n.id(), normRole, ip, n.grpcPort(), rp, "~/jettra/data", String.valueOf(idx)));
             idx++;
         }
-        Properties baseProps = (clusterConfigFile != null && Files.exists(clusterConfigFile))
-                ? JettraConfigValidator.loadProperties(clusterConfigFile, "/cluster.config", "/jettra.config")
+        Properties baseProps = (stateOrSeed != null && Files.exists(stateOrSeed))
+                ? JettraConfigValidator.loadProperties(stateOrSeed)
                 : new Properties();
         byte[] cfgBytes = JettraConfigValidator.buildCanonicalClusterConfigBytes(canonicalNodes, baseProps);
 
         JettraConfigValidator.ValidationResult integrity = JettraConfigValidator
                 .validateClusterConfigIntegrity(cfgBytes);
         if (!integrity.isValid()) {
-            return "[ERROR] Integridad de cluster.config fallida. Distribución abortada: " + integrity.getSummary();
+            return "[ERROR] Integridad de cluster-state.config fallida. Distribución abortada: " + integrity.getSummary();
         }
 
-        // Guardar atómicamente en el archivo local cluster.config si existe
-        if (clusterConfigFile != null) {
-            try {
-                JettraConfigValidator.writeClusterConfigAtomically(clusterConfigFile, cfgBytes);
-            } catch (Exception ignored) {
-            }
+        // Guardar atómicamente (tmp + fsync + ATOMIC_MOVE) en cluster-state.config sin alterar cluster.config estático
+        try {
+            JettraConfigValidator.writeClusterConfigAtomically(stateFile, cfgBytes);
+        } catch (Exception ignored) {
         }
 
         // 5. Replicar a todos los nodos del quórum ordenados: PRIMARY primero, luego
@@ -2853,7 +3074,7 @@ public final class JettraStoreShellApp implements AutoCloseable {
 
         StringBuilder report = new StringBuilder();
         report.append(
-                "[CLUSTER REPLICATION] Sincronizando cluster.config en todos los nodos (PRIMARY -> SECONDARY):\n");
+                "[CLUSTER REPLICATION] Sincronizando cluster-state.config en todos los nodos (PRIMARY -> SECONDARY):\n");
 
         for (ShellClusterNode target : targets) {
             boolean isPrim = isPrimaryRole(target.role());
@@ -2863,7 +3084,7 @@ public final class JettraStoreShellApp implements AutoCloseable {
 
             boolean ok = client != null && client.distributeClusterConfigToNode(target.host(), target.grpcPort(), cfgBytes);
             if (ok) {
-                report.append(String.format("  ✓ [%s] %s (%s:%d): cluster.config replicado exitosamente (vía JettraStoreDriver).%n",
+                report.append(String.format("  ✓ [%s] %s (%s:%d): cluster-state.config replicado exitosamente (vía JettraStoreDriver).%n",
                         roleTag, target.id(), target.host(), target.grpcPort()));
             } else {
                 report.append(String.format(
@@ -2880,12 +3101,11 @@ public final class JettraStoreShellApp implements AutoCloseable {
             return;
         Thread.ofVirtual().name("jettra-shell-sync-" + nodeId).start(() -> {
             try {
-                Path clusterConfigFile = JettraConfigValidator.locateClusterConfigFile();
+                Path clusterConfigFile = JettraConfigValidator.locateActiveClusterStateOrSeedFile();
                 if (clusterConfigFile == null || !Files.exists(clusterConfigFile))
                     return;
-                Properties props = JettraConfigValidator.loadProperties(clusterConfigFile, "/cluster.config",
-                        "/jettra.config");
-                List<JettraConfigValidator.ClusterNodeInfo> nodes = JettraConfigValidator.parseClusterNodes(props);
+                Properties props = JettraConfigValidator.loadProperties(clusterConfigFile);
+                List<JettraConfigValidator.ClusterNodeInfo> nodes = JettraConfigValidator.parseExplicitClusterNodes(props);
                 JettraConfigValidator.ClusterNodeInfo primary = null;
                 for (var cn : nodes) {
                     if ("PRIMARY".equalsIgnoreCase(cn.role())) {
@@ -6145,6 +6365,10 @@ public final class JettraStoreShellApp implements AutoCloseable {
     @Override
     public void close() {
         this.closed = true;
+        if (this.statusSyncWorkerThread != null) {
+            this.statusSyncWorkerThread.interrupt();
+            this.statusSyncWorkerThread = null;
+        }
         if (this.clusterEventListener != null) {
             try {
                 io.jettra.store.cluster.JettraClusterEventBus.getInstance().unsubscribe(this.clusterEventListener);

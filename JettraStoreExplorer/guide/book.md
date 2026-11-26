@@ -6,7 +6,7 @@
 
 ## 1. Configuración Inicial (`microprofile-config.properties`)
 
-La conexión inicial al clúster de **JettraStore** se configura mediante la propiedad `cluster.nodes` en `src/main/resources/META-INF/microprofile-config.properties` (o en `./microprofile-config.properties` / `./config/microprofile-config.properties`):
+La conexión inicial al clúster de **JettraStore** se configura mediante `cluster.ip.nodes` en `src/main/resources/META-INF/microprofile-config.properties` (o en `./microprofile-config.properties` / `./config/microprofile-config.properties`), consultando `cluster-state.config` desde el nodo `PRIMARY` y persistiendo cualquier edición dinámica en `conecction.config`:
 
 ```properties
 # JettraStore Explorer Configuration (Eclipse MicroProfile Config 3.1)
@@ -17,13 +17,14 @@ storage.mode=OFF_HEAP
 app.title=JettraStore Explorer
 cluster.multinode.active=on
 cluster.healthcheck.timeout.ms=1000
-cluster.nodes=node-01:127.0.0.1:50001,node-02:127.0.0.1:50002,node-03:127.0.0.1:50003
+jettra.cluster_state_config_dir=~/jettra-cluster-state/
+cluster.ip.nodes=127.0.0.1:50001
 ```
 
 ### Sincronización Bidireccional al Añadir o Expulsar Nodos
 Cuando desde `/cluster` se agrega un nuevo nodo o se expulsa un nodo secundario:
-1. **Actualización local en JettraStoreExplorer:** Se actualiza automáticamente la propiedad `cluster.nodes` en `microprofile-config.properties` preservando comentarios y demás parámetros.
-2. **Actualización y replicación de `cluster.config`:** Se genera el archivo `cluster.config` actualizado (con `id`, `role`, `ip`, `grpc.port` y `rest.port`, **sin** propiedades `cluster.node.<N>.storage.path`, ya que cada nodo define su propio `jettra.storage.path` en su `microprofile-config.properties`) y se envía mediante la trama Raft `TYPE_SYNC_CLUSTER_CONFIG` (`0x17`) primero al nodo `PRIMARY` y luego a los nodos `SECONDARY`, replicándose en todo el clúster.
+1. **Sincronización con `conecction.config` y `cluster-state.config`:** La topología viva del clúster se consulta desde el `cluster-state.config` del nodo `PRIMARY`, y los endpoints de conexión editados manualmente se persisten en `conecction.config` sin depender de `cluster.nodes`.
+2. **Actualización y replicación de `cluster-state.config`:** Se genera el archivo `cluster-state.config` actualizado (con `id`, `role`, `ip`, `grpc.port` y `rest.port`, **sin** propiedades `cluster.node.<N>.storage.path`, ya que cada nodo define su propio `jettra.storage.path` en su `microprofile-config.properties`) y se envía mediante la trama Raft `TYPE_SYNC_CLUSTER_CONFIG` (`0x17`) primero al nodo `PRIMARY` y luego a los nodos `SECONDARY`, replicándose en todo el clúster.
 3. **Sincronización Automática de Datos desde el PRIMARY:**
    Cada vez que un nodo se añade al clúster o cuando fue detenido y luego se reinicia (o se restablece su enlace de red), este nodo se actualiza automáticamente con el estado del nodo PRIMARY, obteniendo la réplica completa de la base de datos y objetos desde el nodo PRIMARY para que el clúster se mantenga permanentemente actualizado.
 4. **Reflejo Inmediato de Estatus en `/map` y `/cluster`:**
@@ -35,7 +36,7 @@ Cuando desde `/cluster` se agrega un nuevo nodo o se expulsa un nodo secundario:
 
 | Ruta | Módulo | Descripción |
 | :--- | :--- | :--- |
-| `/cluster` | **Nodos del Clúster** | Monitoreo en tiempo real (`ACTIVE`/`INACTIVE`, `PRIMARY`/`SECONDARY`), encendido/apagado de nodos, alta y expulsión con sincronización automática de `cluster.nodes` y `cluster.config`. |
+| `/cluster` | **Nodos del Clúster** | Monitoreo en tiempo real (`ACTIVE`/`INACTIVE`, `PRIMARY`/`SECONDARY`), encendido/apagado de nodos, alta y expulsión con sincronización automática de `cluster-state.config` y `conecction.config`. |
 | `/map` | **Mapa de Transferencia** | Visualización gráfica en tiempo real de la topología del clúster, estado de nodos, enlaces de replicación con latencia en `ms`, animación de paquetes Raft/datos en tránsito y bitácora en vivo de transferencias. |
 | `/databases` | **Bases de Datos y Motores** | Creación de bases de datos multimodelo (con los 9 motores nativos de JettraStore), administración de buckets/motores y gestión de índices (`BTREE`, `HASH`, `NUMBER`, `SEQUENTIAL`, `VECTOR_HNSW`, `SPATIAL_R_TREE`, etc.) con persistencia directa en el `jettra.storage.path` del nodo `PRIMARY` y replicación al clúster. |
 | `/examples` | **Bases de Datos de Ejemplo** | JettraStoreExplorer inicia limpio sin bases de ejemplo precargadas. Desde `/examples` se listan las bases de muestra (`example_factura_db`, `samples_hostipal_db`, `samples_ambiental_db`, `system_metadata_db`) permitiendo instalarlas o eliminarlas individualmente o en lote. |
@@ -452,5 +453,54 @@ Si el puerto ya está ocupado por otra instancia de `JettraStoreExplorer` u otro
   ```bash
   java -jar target/JettraStoreExplorer-1.0.0-SNAPSHOT.jar --server.port=8090
   ```
+
+---
+
+## 17. Gestión Permanente del Estado de Membresía (`cluster-state.config`) — RF-32
+
+`JettraStoreExplorer` (`JettraStorePlugin` y la vista web `/cluster/config`) administra la topología viva del clúster sobre `<jettra.cluster_state_config_dir>/cluster-state.config` sin alterar nunca la semilla estática opcional `cluster.config`.
+
+### 1. Flujo en `JettraStorePlugin` y `/cluster/config`
+* **Lectura autoritativa (`fetchPrimaryClusterConfig`):** Consulta al `PRIMARY` activo por red Raft para obtener el último `cluster-state.config` (con versión y estado `RUNNING` / `STOPPED` / `STANDBY` por nodo), recurriendo localmente a `<jettra.cluster_state_config_dir>/cluster-state.config` o la semilla opcional si el primario aún no responde.
+* **Guardado y propagación (`saveClusterConfigContent` / `synchronizeAllClusterConfigFiles`):** Valida integridad de IDs, IPs y puertos, persiste atómicamente (`.tmp` + `fsync` + `ATOMIC_MOVE`) en `cluster-state.config` y replica los bytes canónicos al `PRIMARY` y los `SECONDARY`.
+* **Alta de nodos en `STANDBY`:** Al incorporar o activar un nodo desde la consola web, `JettraStoreExplorer` propaga la membresía actualizada para que el nodo en `STANDBY` adopte su rol y almacene su `cluster-state.config` local.
+
+### 2. Configuración en `microprofile-config.properties`, `java -jar` y Docker
+```properties
+# JettraStoreExplorer/src/main/resources/META-INF/microprofile-config.properties
+server.host=0.0.0.0
+server.port=8085
+jettra.cluster_state_config_dir=~/jettra-cluster-state/
+```
+
+```bash
+# Ejecución standalone apuntando a estado persistente
+java -jar target/JettraStoreExplorer-1.0.0-SNAPSHOT.jar \
+  -Djettra.cluster_state_config_dir=$HOME/jettra-cluster-state \
+  --server.host=0.0.0.0 --server.port=8085
+```
+
+> Verificación automatizada en `JettraStoreExplorer`: `ClusterStateExplorerTest` comprueba con `JettraTest` que `JettraStorePlugin.saveClusterConfigContent` y `fetchPrimaryClusterConfig` persisten y sincronizan `cluster-state.config` sin modificar `cluster.config`.
+
+---
+
+## 18. Conexión Inicial (`cluster.ip.nodes`), Persistencia en `conecction.config` y Sincronización con `cluster-state.config` del `PRIMARY` (RF-32)
+
+### 1. Precedencia de Carga y Persistencia Atómica (`conecction.config`)
+`JettraStoreExplorer` resuelve la dirección de conexión al clúster mediante `JettraConnectionConfigManager` aplicando el siguiente orden de prioridad:
+1. **`conecction.config` en el directorio de ejecución / volumen Docker:** Si el archivo `conecction.config` existe (en el directorio de trabajo del proceso o en `/app/config/conecction.config` cuando se usa Docker mediante `JETTRA_CONNECTION_CONFIG_DIR=/app/config`), prevalece como fuente activa de conexión.
+2. **`cluster.ip.nodes=127.0.0.1:50001` en `microprofile-config.properties`:** Si aún no existe `conecction.config`, utiliza la propiedad `cluster.ip.nodes` (con soporte para una o múltiples direcciones `host:port` separadas por coma), y crea/actualiza `conecction.config` de forma atómica (`archivo temporal` + `FileChannel.force(true)` + `StandardCopyOption.ATOMIC_MOVE`) en cuanto el usuario edita o guarda desde `/connections`.
+
+### 2. Lectura de `cluster-state.config` del `PRIMARY` y Sincronización en Tiempo Real
+* Al conectarse a cualquier nodo (`host:port`), `JettraClient.fetchPrimaryClusterStatus(...)` consulta la topología y sigue automáticamente la referencia hacia el nodo **`PRIMARY`** activo (`TYPE_GET_CLUSTER_CONFIG_REQ` o `GET /api/v1/cluster/state.config`) para obtener `cluster-state.config`.
+* El monitor en segundo plano (`Virtual Thread Loom` en `JettraStorePlugin`), junto con `SSE` (`/api/cluster/events`) y polling reactivo (`/api/cluster/status`), actualiza en tiempo real `/connections`, `/cluster`, `/explorer`, `/databases` y los indicadores de nodos `ONLINE`/`OFFLINE`, roles (`PRIMARY`/`SECONDARY`) y versión de estado.
+
+### 3. Gestión desde `/connections` y Persistencia en Docker
+* **En la vista web `/connections`:** El panel superior **Conexión Principal al Clúster (`cluster.ip.nodes / conecction.config`)** muestra el origen activo, el `PRIMARY` resuelto desde `cluster-state.config`, los nodos en tiempo real y ofrece botones dedicados para **Probar / Aplicar en Vivo** y **Guardar en `conecction.config` y Aplicar**.
+* **En `Dockerfile` y `docker-compose.yml`:** `JETTRA_CONNECTION_CONFIG_DIR=/app/config` almacena `conecction.config` dentro del volumen nombrado `jettra_explorer_config:/app/config` (`jettra_single_explorer_config` en modo single-node), garantizando su persistencia tras reinicios o recreación de contenedores.
+
+> Pruebas automatizadas (`JettraTest`): `ConnectionConfigExplorerTest` verifica la precedencia `cluster.ip.nodes` → `conecction.config`, la resolución automática `SECONDARY → PRIMARY` de `cluster-state.config` y la actualización de estado al detener nodos.
+
+
 
 

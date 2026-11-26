@@ -3,6 +3,7 @@ package io.jettra.shell;
 import io.jettra.driver.JettraClient;
 import io.jettra.driver.config.JettraClientConfig;
 import io.jettra.store.JettraStoreServer;
+import io.jettra.store.core.JettraClusterStateBackupManager;
 import io.jettra.store.core.JettraConfigValidator;
 import io.jettra.store.core.JettraStoreConfig;
 import io.jettra.test.annotation.AfterAll;
@@ -33,6 +34,7 @@ public class ShowNodesConnectivityShellTest {
     private static String prevClusterProp;
     private static String prevMpProp;
     private static String prevStorageProp;
+    private static JettraClusterStateBackupManager.BackupHandle suiteStateBackup;
 
     private static int freePort() throws Exception {
         try (ServerSocket ss = new ServerSocket(0, 1, InetAddress.getByName("127.0.0.1"))) {
@@ -42,6 +44,7 @@ public class ShowNodesConnectivityShellTest {
 
     @BeforeAll
     public static void setup() throws Exception {
+        suiteStateBackup = JettraClusterStateBackupManager.protectConfigured();
         prevClusterProp = System.getProperty("cluster.config.path");
         prevMpProp = System.getProperty("jettra.shell.config.file");
         prevStorageProp = System.getProperty("jettra.storage.path");
@@ -64,18 +67,28 @@ public class ShowNodesConnectivityShellTest {
 
     @AfterAll
     public static void cleanup() {
-        restoreProp("cluster.config.path", prevClusterProp);
-        restoreProp("jettra.shell.config.file", prevMpProp);
-        restoreProp("jettra.storage.path", prevStorageProp);
-        if (tempDir != null) {
-            try (var walk = Files.walk(tempDir)) {
-                walk.sorted((a, b) -> b.compareTo(a)).forEach(p -> {
-                    try {
-                        Files.deleteIfExists(p);
-                    } catch (Exception ignored) {
-                    }
-                });
-            } catch (Exception ignored) {
+        try {
+            JettraStoreServer.stopAllActiveServers();
+            JettraAssert.assertEquals(0, JettraStoreServer.getActiveServerCount());
+            JettraAssert.assertEquals(0, io.jettra.store.cluster.JettraClusterTransportServer.getActiveTransportCount());
+        } finally {
+            restoreProp("cluster.config.path", prevClusterProp);
+            restoreProp("jettra.shell.config.file", prevMpProp);
+            restoreProp("jettra.storage.path", prevStorageProp);
+            if (tempDir != null) {
+                try (var walk = Files.walk(tempDir)) {
+                    walk.sorted((a, b) -> b.compareTo(a)).forEach(p -> {
+                        try {
+                            Files.deleteIfExists(p);
+                        } catch (Exception ignored) {
+                        }
+                    });
+                } catch (Exception ignored) {
+                }
+            }
+            if (suiteStateBackup != null) {
+                suiteStateBackup.close();
+                suiteStateBackup = null;
             }
         }
     }
@@ -125,7 +138,7 @@ public class ShowNodesConnectivityShellTest {
                         + "cluster.node.2.id=node-02\ncluster.node.2.role=SECONDARY\ncluster.node.2.ip=127.0.0.1\ncluster.node.2.grpc.port=" + grpc2 + "\ncluster.node.2.rest.port=" + rest2 + "\n",
                 StandardCharsets.UTF_8);
         Files.writeString(mpFile,
-                "cluster.nodes=node-01:127.0.0.1:" + grpc1 + ",node-02:127.0.0.1:" + grpc2 + "\n",
+                "cluster.ip.nodes=127.0.0.1:" + grpc1 + ",127.0.0.1:" + grpc2 + "\n",
                 StandardCharsets.UTF_8);
 
         JettraClientConfig cfg = JettraClientConfig.builder()
@@ -209,7 +222,7 @@ public class ShowNodesConnectivityShellTest {
                         + "cluster.node.2.id=node-02\ncluster.node.2.role=SECONDARY\ncluster.node.2.ip=127.0.0.1\ncluster.node.2.grpc.port=" + grpc2 + "\ncluster.node.2.rest.port=" + rest2 + "\n",
                 StandardCharsets.UTF_8);
         Files.writeString(mpFile,
-                "cluster.nodes=node-01:127.0.0.1:" + grpc1 + ",node-02:127.0.0.1:" + grpc2 + "\n",
+                "cluster.ip.nodes=127.0.0.1:" + grpc1 + ",127.0.0.1:" + grpc2 + "\n",
                 StandardCharsets.UTF_8);
 
         JettraStoreServer n1 = startNodeServer("node-01", "PRIMARY", grpc1, rest1);
@@ -255,5 +268,7 @@ public class ShowNodesConnectivityShellTest {
             JettraAssert.assertTrue(afterStop.contains("0/2 activos"),
                     "Tras detener node-01 debe reportar 0/2 activos:\n" + afterStop);
         }
+        JettraAssert.assertTrue(JettraStoreServer.awaitTcpPortAvailable("127.0.0.1", grpc1, 2000));
+        JettraAssert.assertTrue(JettraStoreServer.awaitTcpPortAvailable("127.0.0.1", rest1, 2000));
     }
 }

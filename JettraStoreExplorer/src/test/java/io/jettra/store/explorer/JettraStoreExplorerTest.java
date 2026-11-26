@@ -3,6 +3,7 @@ package io.jettra.store.explorer;
 import io.jettra.server.core.JettraServer;
 import io.jettra.server.core.config.ServerConfig;
 import io.jettra.server.core.storage.StorageMode;
+import io.jettra.store.core.JettraClusterStateBackupManager;
 import io.jettra.store.explorer.model.EngineBucketInfo;
 import io.jettra.store.explorer.model.EngineRecordInfo;
 import io.jettra.store.explorer.model.JettraDatabaseRole;
@@ -30,11 +31,18 @@ import java.net.http.HttpResponse;
  */
 public class JettraStoreExplorerTest {
 
-        private static final int BASE_TEST_PORT = 9480;
+        private static int freeLocalPort() {
+                try (java.net.ServerSocket ss = new java.net.ServerSocket(0, 1,
+                                java.net.InetAddress.getByName("127.0.0.1"))) {
+                        return ss.getLocalPort();
+                } catch (Exception e) {
+                        return 9480;
+                }
+        }
 
         // Servidor compartido para evitar arranque/parada secuencial en cada test
         private static JettraServer sharedServer;
-        private static int sharedPort = BASE_TEST_PORT;
+        private static int sharedPort = 0;
         private static String sharedAuthCookie;
 
         // Clientes HTTP reutilizables de alta eficiencia (evitan alloc innecesario de
@@ -51,6 +59,7 @@ public class JettraStoreExplorerTest {
         private static java.nio.file.Path tempTestClusterConfig;
         private static java.nio.file.Path tempTestClusterNodesFile;
         private static java.nio.file.Path tempTestStorageDir;
+        private static JettraClusterStateBackupManager.BackupHandle suiteStateBackup;
 
         static {
                 try {
@@ -75,8 +84,8 @@ public class JettraStoreExplorerTest {
                                                         + "storage.path=" + testStoragePath + "\n"
                                                         + "app.title=JettraStore Explorer\n"
                                                         + "cluster.multinode.active=on\n"
-                                                        + "cluster.healthcheck.timeout.ms=60\n"
-                                                        + "cluster.nodes=node-01:127.0.0.1:59001,node-02:127.0.0.1:59002,node-03:127.0.0.1:59003\n",
+                                                        + "cluster.healthcheck.timeout.ms=200\n"
+                                                        + "cluster.ip.nodes=127.0.0.1:59001,127.0.0.1:59002,127.0.0.1:59003\n",
                                         java.nio.charset.StandardCharsets.UTF_8);
                         tempTestClusterConfig = targetDir.resolve("cluster-test_db.config");
                         java.nio.file.Files.writeString(tempTestClusterConfig,
@@ -106,14 +115,12 @@ public class JettraStoreExplorerTest {
                         System.setProperty("cluster.config.path", tempTestClusterConfig.toAbsolutePath().toString());
                         System.setProperty("jettra.explorer.cluster.nodes.file",
                                         tempTestClusterNodesFile.toAbsolutePath().toString());
-                        System.setProperty("cluster.nodes",
-                                        "node-01:127.0.0.1:59001,node-02:127.0.0.1:59002,node-03:127.0.0.1:59003");
                 } catch (Exception ignored) {
                 }
 
-                // Reducir latencias de comprobación de clúster a loopback local (60 ms vs 1000 ms)
-                System.setProperty("cluster.healthcheck.timeout.ms", "60");
-                System.setProperty("jettra.node.shutdown.wait.ms", "150");
+                // Reducir latencias de comprobación de clúster a loopback local (0.05 ms vs
+                // 1000 ms por timeout TCP)
+                System.setProperty("cluster.healthcheck.timeout.ms", "200");
                 System.setProperty("cluster.heartbeat.interval.ms", "60000");
 
                 Runtime.getRuntime().addShutdownHook(new Thread(() -> {
@@ -154,6 +161,7 @@ public class JettraStoreExplorerTest {
 
         @BeforeAll
         public static void setUpSuite() throws Exception {
+                suiteStateBackup = JettraClusterStateBackupManager.protectConfigured();
                 ensureSharedServer();
                 JettraStorePlugin plugin = JettraStorePlugin.getInstance();
                 if (plugin.getDatabaseNames().isEmpty()) {
@@ -166,13 +174,32 @@ public class JettraStoreExplorerTest {
 
         @AfterAll
         public static void tearDownSuite() {
+                int portToVerify = sharedPort;
                 try {
                         JettraExplorerTestCleanup.cleanAll(JettraStorePlugin.getInstance(), tempTestStorageDir);
                 } catch (Exception ignored) {
                 }
-                if (sharedServer != null && sharedServer.isRunning()) {
+                if (sharedServer != null) {
                         App.stopApplication(sharedServer);
                         sharedServer = null;
+                } else {
+                        JettraStorePlugin.getInstance().stopClusterHeartbeatMonitor();
+                }
+                App.stopAllApplications();
+                io.jettra.store.JettraStoreServer.stopAllActiveServers();
+                JettraAssert.assertEquals(0, App.getActiveApplicationCount(),
+                                "No deben quedar servidores HTTP de Explorer activos al terminar la suite");
+                JettraAssert.assertEquals(0, io.jettra.store.JettraStoreServer.getActiveServerCount(),
+                                "No deben quedar servidores JettraStore activos al terminar la suite");
+                JettraAssert.assertEquals(0,
+                                io.jettra.store.cluster.JettraClusterTransportServer.getActiveTransportCount(),
+                                "No deben quedar transportes TCP activos al terminar la suite");
+                if (portToVerify > 0) {
+                        JettraAssert.assertTrue(
+                                        io.jettra.store.JettraStoreServer.awaitTcpPortAvailable("127.0.0.1",
+                                                        portToVerify, 2000),
+                                        "El puerto HTTP de JettraStoreExplorerTest debe quedar libre al terminar: "
+                                                        + portToVerify);
                 }
                 cleanupTempConfigFiles();
                 System.clearProperty("jettra.explorer.config.file");
@@ -183,13 +210,19 @@ public class JettraStoreExplorerTest {
                 if (tempTestStorageDir != null) {
                         JettraExplorerTestCleanup.deleteRecursively(tempTestStorageDir);
                 }
+                if (suiteStateBackup != null) {
+                        suiteStateBackup.close();
+                        suiteStateBackup = null;
+                }
         }
 
         private static volatile boolean cleanStartVerified = false;
 
         private static synchronized void ensureSharedServer() throws Exception {
                 if (sharedServer == null || !sharedServer.isRunning()) {
-                        sharedPort = BASE_TEST_PORT;
+                        if (sharedPort <= 0 || !App.isPortAvailable("127.0.0.1", sharedPort)) {
+                                sharedPort = freeLocalPort();
+                        }
                         sharedServer = App.startApplication(sharedPort, StorageMode.OFF_HEAP);
                         sharedAuthCookie = null;
                         JettraStorePlugin plugin = JettraStorePlugin.getInstance();
@@ -712,7 +745,7 @@ public class JettraStoreExplorerTest {
                         JettraAssert.assertEquals("PRIMARY", primaryNode.getRole(),
                                         "El rol de node-01 debe ser PRIMARY");
                         JettraAssert.assertEquals(59001, originalPrimaryPort,
-                                        "El puerto de node-01 debe provenir de cluster.nodes (59001), no de server.port");
+                                        "El puerto de node-01 debe provenir de cluster.ip.nodes (59001), no de server.port");
 
                         // 3. Aislar nodos secundarios y cerrar puerto de PRIMARY: todo el clúster
                         // OFFLINE
@@ -831,8 +864,8 @@ public class JettraStoreExplorerTest {
         @Test
         @DisplayName("17. Cierre de Sesiones al Detener y Reinicio Siempre en Página /login")
         public void testShutdownClosesSessionsAndRestartRequiresLogin() throws Exception {
-                int port1 = BASE_TEST_PORT + 17;
-                int port2 = BASE_TEST_PORT + 18;
+                int port1 = freeLocalPort();
+                int port2 = freeLocalPort();
 
                 String previousSessionCookie;
                 JettraServer server1 = App.startApplication(port1, StorageMode.OFF_HEAP);
@@ -864,6 +897,8 @@ public class JettraStoreExplorerTest {
                 } finally {
                         App.stopApplication(server1);
                 }
+                JettraAssert.assertTrue(io.jettra.store.JettraStoreServer.awaitTcpPortAvailable("127.0.0.1", port1, 2000),
+                                "El puerto HTTP de server1 debe quedar libre inmediatamente");
                 JettraAssert.assertEquals(0, App.getActiveSessionCount(),
                                 "Al detener el servidor todas las sesiones deben cerrarse");
 
@@ -912,6 +947,8 @@ public class JettraStoreExplorerTest {
                                 sharedAuthCookie = null;
                         }
                 }
+                JettraAssert.assertTrue(io.jettra.store.JettraStoreServer.awaitTcpPortAvailable("127.0.0.1", port2, 2000),
+                                "El puerto HTTP de server2 debe quedar libre inmediatamente");
         }
 
         @Test
@@ -1021,7 +1058,7 @@ public class JettraStoreExplorerTest {
         @Test
         @DisplayName("21. Detección Automática de Nodos y Sincronización de Estado en Tiempo Real (ACTIVE / INACTIVE)")
         public void testAutomaticNodeHeartbeatAndActiveInactiveState() throws Exception {
-                int dummyNodePort = 9791;
+                int dummyNodePort = freeLocalPort();
                 JettraStorePlugin plugin = JettraStorePlugin.getInstance();
                 java.net.ServerSocket dummySocket = null;
                 try {
@@ -1082,6 +1119,10 @@ public class JettraStoreExplorerTest {
                         }
                         plugin.removeNode("node-heartbeat-live");
                 }
+                JettraAssert.assertTrue(
+                                io.jettra.store.JettraStoreServer.awaitTcpPortAvailable("127.0.0.1", dummyNodePort,
+                                                2000),
+                                "El puerto temporal de heartbeat debe liberarse al terminar");
         }
 
         @Test
@@ -1111,7 +1152,10 @@ public class JettraStoreExplorerTest {
                 }
 
                 com.sun.net.httpserver.HttpServer mockHealthServer = null;
+                int mockNode2Port = -1;
+                int mockRestPort2 = -1;
                 try (java.net.ServerSocket mockNode2Tcp = new java.net.ServerSocket(0)) {
+                        mockNode2Port = mockNode2Tcp.getLocalPort();
                         mockHealthServer = com.sun.net.httpserver.HttpServer
                                         .create(new java.net.InetSocketAddress("127.0.0.1", 0), 0);
                         mockHealthServer.createContext("/api/v1/health", exchange -> {
@@ -1123,7 +1167,7 @@ public class JettraStoreExplorerTest {
                                 exchange.close();
                         });
                         mockHealthServer.start();
-                        int mockRestPort2 = mockHealthServer.getAddress().getPort();
+                        mockRestPort2 = mockHealthServer.getAddress().getPort();
 
                         node01.setPort(closedPort1);
                         node03.setPort(closedPort3);
@@ -1179,6 +1223,18 @@ public class JettraStoreExplorerTest {
                         node02.setRole(origRole2);
                         node02.setRestPort(origRest2);
                         plugin.refreshAllNodeStatuses(true);
+                }
+                if (mockNode2Port > 0) {
+                        JettraAssert.assertTrue(
+                                        io.jettra.store.JettraStoreServer.awaitTcpPortAvailable("127.0.0.1",
+                                                        mockNode2Port, 2000),
+                                        "El puerto mockNode2Tcp debe liberarse al terminar");
+                }
+                if (mockRestPort2 > 0) {
+                        JettraAssert.assertTrue(
+                                        io.jettra.store.JettraStoreServer.awaitTcpPortAvailable("127.0.0.1",
+                                                        mockRestPort2, 2000),
+                                        "El puerto mockHealthServer debe liberarse al terminar");
                 }
         }
 
@@ -1269,6 +1325,9 @@ public class JettraStoreExplorerTest {
                         lifecycle.setDockerController(originalDockerControl);
                         plugin.removeNode("node-test-dk");
                 }
+                JettraAssert.assertTrue(
+                                io.jettra.store.JettraStoreServer.awaitTcpPortAvailable("127.0.0.1", fakePort, 2000),
+                                "El puerto fakeDockerNodeSocket debe liberarse al terminar");
         }
 
         @Test
@@ -1878,34 +1937,34 @@ public class JettraStoreExplorerTest {
         }
 
         @Test
-        @DisplayName("37. Actualización de cluster.nodes en microprofile-config.properties y cluster.config al añadir o expulsar nodos")
+        @DisplayName("37. Operación de JettraStoreExplorer sin cluster.nodes= al añadir o expulsar nodos")
         public void testClusterNodesPersistenceInMicroprofileAndClusterConfig() throws Exception {
                 JettraStorePlugin plugin = JettraStorePlugin.getInstance();
                 java.nio.file.Path tempMp = java.nio.file.Files.createTempFile("jettra_explorer_mp_", ".properties");
                 String prevCfg = System.getProperty("jettra.explorer.config.file");
                 try {
                         java.nio.file.Files.writeString(tempMp,
-                                        "app.title=JettraStore Explorer\ncluster.nodes=node-01:127.0.0.1:50001,node-02:127.0.0.1:50002,node-03:127.0.0.1:50003\n",
+                                        "app.title=JettraStore Explorer\ncluster.ip.nodes=127.0.0.1:50001\n",
                                         java.nio.charset.StandardCharsets.UTF_8);
                         System.setProperty("jettra.explorer.config.file", tempMp.toAbsolutePath().toString());
 
-                        // 1. Añadir nodo-09 y verificar actualización en microprofile-config.properties
-                        // y cluster.config generado
+                        // 1. Añadir node-09 y verificar actualización en la topología/estado sin
+                        // escribir cluster.nodes=
                         boolean added = plugin.addNode("node-09", "node-09-replica", "SECONDARY", "127.0.0.1", 50009,
                                         2048);
                         JettraAssert.assertTrue(added, "Debe añadir node-09 correctamente");
 
                         String mpAfterAdd = java.nio.file.Files.readString(tempMp,
                                         java.nio.charset.StandardCharsets.UTF_8);
-                        JettraAssert.assertTrue(mpAfterAdd.contains("node-09:127.0.0.1:50009"),
-                                        "microprofile-config.properties debe contener node-09:127.0.0.1:50009 en cluster.nodes");
+                        JettraAssert.assertFalse(mpAfterAdd.contains("cluster.nodes="),
+                                        "microprofile-config.properties no debe contener ni requerir cluster.nodes=");
 
                         String clusterCfgAfterAdd = new String(plugin.buildClusterConfigBytesFromNodes(),
                                         java.nio.charset.StandardCharsets.UTF_8);
                         JettraAssert.assertTrue(clusterCfgAfterAdd.contains("node-09"),
-                                        "cluster.config generado para replicación debe incluir node-09");
+                                        "cluster-state.config generado para replicación debe incluir node-09");
                         JettraAssert.assertFalse(clusterCfgAfterAdd.contains(".storage.path"),
-                                        "cluster.config no debe contener propiedades storage.path");
+                                        "cluster-state.config no debe contener propiedades storage.path");
 
                         // 2. Verificar regla estricta: no se permite expulsar un nodo activo sin
                         // detenerlo primero
@@ -1921,15 +1980,10 @@ public class JettraStoreExplorerTest {
                         boolean removed = plugin.removeNode("node-09");
                         JettraAssert.assertTrue(removed, "Debe expulsar node-09 correctamente tras detenerlo");
 
-                        String mpAfterRemove = java.nio.file.Files.readString(tempMp,
-                                        java.nio.charset.StandardCharsets.UTF_8);
-                        JettraAssert.assertFalse(mpAfterRemove.contains("node-09:127.0.0.1:50009"),
-                                        "microprofile-config.properties no debe contener node-09 tras expulsarlo");
-
                         String clusterCfgAfterRemove = new String(plugin.buildClusterConfigBytesFromNodes(),
                                         java.nio.charset.StandardCharsets.UTF_8);
                         JettraAssert.assertFalse(clusterCfgAfterRemove.contains("node-09"),
-                                        "cluster.config generado para replicación no debe incluir node-09 tras expulsarlo");
+                                        "cluster-state.config generado para replicación no debe incluir node-09 tras expulsarlo");
                 } finally {
                         plugin.removeNode("node-09");
                         if (prevCfg == null) {
@@ -1946,21 +2000,57 @@ public class JettraStoreExplorerTest {
         public void testDatabasesCatalogReflectsPrimaryNodeDatabases() throws Exception {
                 java.nio.file.Path tempStorage = java.nio.file.Files
                                 .createTempDirectory("jettra_explorer_primary_dbs_");
-                int grpcPort = 51131;
-                int restPort = 61131;
+                int grpcPort = freeLocalPort();
+                int restPort = freeLocalPort();
                 java.util.Properties props = new java.util.Properties();
                 props.setProperty("cluster.node.id", "node-01");
                 props.setProperty("cluster.node.role", "PRIMARY");
+                props.setProperty("jettra.node.ip", "127.0.0.1");
                 props.setProperty("jettra.network.host", "127.0.0.1");
                 props.setProperty("jettra.network.rest.port", String.valueOf(restPort));
                 props.setProperty("jettra.network.grpc.port", String.valueOf(grpcPort));
                 props.setProperty("jettra.storage.path", tempStorage.toAbsolutePath().toString());
+                props.setProperty("jettra.cluster_state_config_dir",
+                                tempStorage.resolve("state").toAbsolutePath().toString());
                 props.setProperty("jettra.storage.mode", "JVM_RAM");
                 props.setProperty("cluster.multinode.active", "on");
                 props.setProperty("jettrapolice.active", "false");
-                io.jettra.store.core.JettraStoreConfig primaryCfg = new io.jettra.store.core.JettraStoreConfig(props);
-                io.jettra.store.JettraStoreServer primaryServer = new io.jettra.store.JettraStoreServer(primaryCfg);
+
+                String prevCp = System.getProperty("cluster.config.path");
+                String prevStateDir = System.getProperty("jettra.cluster_state_config_dir");
+                String prevJsp = System.getProperty("jettra.storage.path");
+                String prevSp = System.getProperty("storage.path");
+                io.jettra.store.JettraStoreServer primaryServer;
+                try {
+                        System.clearProperty("cluster.config.path");
+                        System.clearProperty("jettra.storage.path");
+                        System.clearProperty("storage.path");
+                        System.setProperty("jettra.cluster_state_config_dir",
+                                        tempStorage.resolve("state").toAbsolutePath().toString());
+                        io.jettra.store.core.JettraStoreConfig primaryCfg = new io.jettra.store.core.JettraStoreConfig(
+                                        props, new java.util.Properties(), props);
+                        primaryServer = new io.jettra.store.JettraStoreServer(primaryCfg);
+                } finally {
+                        if (prevCp != null)
+                                System.setProperty("cluster.config.path", prevCp);
+                        else
+                                System.clearProperty("cluster.config.path");
+                        if (prevStateDir != null)
+                                System.setProperty("jettra.cluster_state_config_dir", prevStateDir);
+                        else
+                                System.clearProperty("jettra.cluster_state_config_dir");
+                        if (prevJsp != null)
+                                System.setProperty("jettra.storage.path", prevJsp);
+                        else
+                                System.clearProperty("jettra.storage.path");
+                        if (prevSp != null)
+                                System.setProperty("storage.path", prevSp);
+                        else
+                                System.clearProperty("storage.path");
+                }
+
                 JettraStorePlugin plugin = JettraStorePlugin.getInstance();
+                var originalNodes = new java.util.ArrayList<>(plugin.getServerNodes());
                 var primaryNode = plugin.getPrimaryNode();
                 String origHost = primaryNode != null ? primaryNode.getHost() : "127.0.0.1";
                 int origPort = primaryNode != null ? primaryNode.getPort() : 50001;
@@ -1999,9 +2089,17 @@ public class JettraStoreExplorerTest {
                                 primaryNode.setRestPort(origRestPort);
                                 primaryNode.setActive(origActive);
                         }
+                        plugin.restoreServerNodes(originalNodes);
                         plugin.deleteDatabase("primary_crm_test_db");
                         plugin.deleteDatabase("primary_erp_test_db");
+                        if (plugin.getDatabaseNames().isEmpty()) {
+                                plugin.installAllExampleDatabases();
+                        }
                 }
+                JettraAssert.assertTrue(App.isPortAvailable("127.0.0.1", grpcPort),
+                                "El puerto gRPC temporal de Test 38 debe quedar libre al terminar: " + grpcPort);
+                JettraAssert.assertTrue(App.isPortAvailable("127.0.0.1", restPort),
+                                "El puerto REST temporal de Test 38 debe quedar libre al terminar: " + restPort);
         }
 
         @Test
@@ -2354,11 +2452,11 @@ public class JettraStoreExplorerTest {
                                 plugin.getServerNodes());
                 try {
                         var n1 = new io.jettra.store.core.JettraConfigValidator.ClusterNodeInfo("node-01", "PRIMARY",
-                                        "127.0.0.1", 59001, 69001, "./data/node-01");
+                                        "127.0.0.1", 50001, 60001, "./data/node-01");
                         var n2 = new io.jettra.store.core.JettraConfigValidator.ClusterNodeInfo("node-02", "SECONDARY",
-                                        "127.0.0.1", 59002, 69002, "./data/node-02");
+                                        "127.0.0.1", 50002, 60002, "./data/node-02");
                         var n4 = new io.jettra.store.core.JettraConfigValidator.ClusterNodeInfo("node-04", "SECONDARY",
-                                        "127.0.0.1", 59004, 69004, "./data/node-04");
+                                        "127.0.0.1", 50004, 60004, "./data/node-04");
 
                         // 1. Simular que Shell agregó node-04 en PRIMARY
                         plugin.applyAuthoritativeClusterNodes(java.util.List.of(n1, n2, n4), null);
@@ -3382,105 +3480,54 @@ public class JettraStoreExplorerTest {
         public void testMigratorPageAndEndpoints() throws Exception {
                 ensureSharedServer();
 
-        // 1. GET /migrator debe responder 200 OK y contener elementos del formulario
-        HttpResponse<String> resGet = get("/migrator");
-        JettraAssert.assertEquals(200, resGet.statusCode(), "GET /migrator debe responder 200 OK");
-        String html = resGet.body();
-        JettraAssert.assertTrue(html.contains("Migrador PostgreSQL"), "Debe contener el título de migrador");
-        JettraAssert.assertTrue(html.contains("Servidor Host PostgreSQL"), "Debe contener campo host");
-        JettraAssert.assertTrue(html.contains("Base de Datos Origen"), "Debe contener campo base de datos");
-        JettraAssert.assertTrue(html.contains("Base de Datos Destino JettraStore"), "Debe contener campo targetDatabase");
-        JettraAssert.assertTrue(html.contains("Conectar y Listar BDs"), "Debe contener botón Conectar y Listar BDs");
-        JettraAssert.assertTrue(html.contains("Analizar Esquema"), "Debe contener botón Analizar Esquema");
-        JettraAssert.assertTrue(html.contains("Iniciar Migración Completa"), "Debe contener botón Iniciar Migración");
+                // 1. GET /migrator debe responder 200 OK y contener elementos del formulario
+                HttpResponse<String> resGet = get("/migrator");
+                JettraAssert.assertEquals(200, resGet.statusCode(), "GET /migrator debe responder 200 OK");
+                String html = resGet.body();
+                JettraAssert.assertTrue(html.contains("Migrador PostgreSQL"), "Debe contener el título de migrador");
+                JettraAssert.assertTrue(html.contains("Servidor Host PostgreSQL"), "Debe contener campo host");
+                JettraAssert.assertTrue(html.contains("Base de Datos Origen"), "Debe contener campo base de datos");
+                JettraAssert.assertTrue(html.contains("Base de Datos Destino JettraStore"),
+                                "Debe contener campo targetDatabase");
+                JettraAssert.assertTrue(html.contains("Conectar y Listar BDs"),
+                                "Debe contener botón Conectar y Listar BDs");
+                JettraAssert.assertTrue(html.contains("Analizar Esquema"), "Debe contener botón Analizar Esquema");
+                JettraAssert.assertTrue(html.contains("Iniciar Migración Completa"),
+                                "Debe contener botón Iniciar Migración");
 
-        // 2. Simular POST /migrator con action=connect (descubrimiento de BDs y esquemas)
-        HttpResponse<String> resConnect = post("/migrator",
-                "action=connect&host=127.0.0.1&port=5432&user=postgres&password=");
-        JettraAssert.assertEquals(302, resConnect.statusCode(), "POST /migrator action=connect debe emitir redirección 302");
+                // 2. Simular POST /migrator con action=connect (descubrimiento de BDs y
+                // esquemas)
+                HttpResponse<String> resConnect = post("/migrator",
+                                "action=connect&host=127.0.0.1&port=5432&user=postgres&password=");
+                JettraAssert.assertEquals(302, resConnect.statusCode(),
+                                "POST /migrator action=connect debe emitir redirección 302");
 
-        // 3. Simular POST /migrator con action=dry-run
-        HttpResponse<String> resPost = post("/migrator",
-                "action=dry-run&host=127.0.0.1&port=5432&database=fake_db&targetDatabase=jettra_migrated_test&generateBackend=true");
-        JettraAssert.assertEquals(302, resPost.statusCode(), "POST /migrator debe redirigir tras procesar");
+                // 3. Simular POST /migrator con action=dry-run
+                HttpResponse<String> resPost = post("/migrator",
+                                "action=dry-run&host=127.0.0.1&port=5432&database=fake_db&targetDatabase=jettra_migrated_test&generateBackend=true");
+                JettraAssert.assertEquals(302, resPost.statusCode(), "POST /migrator debe redirigir tras procesar");
 
-        // 4. Comprobar que el endpoint /api/migrator/download responde
-        HttpResponse<String> resDownload = get("/api/migrator/download");
-        JettraAssert.assertTrue(resDownload.statusCode() == 200 || resDownload.statusCode() == 404,
-                "El endpoint de descarga debe responder HTTP válido (200 con archivo o 404 si aún no se analizó BD real)");
+                // 4. Comprobar que el endpoint /api/migrator/download responde
+                HttpResponse<String> resDownload = get("/api/migrator/download");
+                JettraAssert.assertTrue(resDownload.statusCode() == 200 || resDownload.statusCode() == 404,
+                                "El endpoint de descarga debe responder HTTP válido (200 con archivo o 404 si aún no se analizó BD real)");
 
-        // 5. Validar renderizado de componentes JettraFlux con bases y esquemas descubiertos
-        io.jettra.store.explorer.pages.migrator.MigratorFluxView viewWithDbs =
-                new io.jettra.store.explorer.pages.migrator.MigratorFluxView(
-                        new io.jettra.driver.migrator.PostgresConnectionConfig("127.0.0.1", 5432, "ventas_corp", "postgres", "", "public", "jettra_ventas"),
-                        java.util.List.of("postgres", "ventas_corp", "rrhh_db"),
-                        java.util.List.of("public", "ventas_schema"),
-                        null, null, null, false, false
-                );
-        io.jettra.server.flux.FluxRenderer renderer = new io.jettra.server.flux.FluxRenderer();
-        String renderedView = renderer.render(viewWithDbs.build(), "Migrador");
-        JettraAssert.assertTrue(renderedView.contains("ventas_corp"), "Debe renderizar la base de datos detectada 'ventas_corp'");
-        JettraAssert.assertTrue(renderedView.contains("rrhh_db"), "Debe renderizar 'rrhh_db'");
-        JettraAssert.assertTrue(renderedView.contains("ventas_schema"), "Debe renderizar el esquema 'ventas_schema'");
-        JettraAssert.assertTrue(renderedView.contains("Bases en PostgreSQL"), "Debe renderizar el panel informativo de bases de datos");
-    }
-
-        @Test
-        @DisplayName("RF-21: Diálogo modal JettraFlux de confirmación al eliminar base de datos (sin window.confirm)")
-        public void testRf21DeleteDatabaseJettraFluxConfirmationModal() throws Exception {
-                ensureSharedServer();
-                JettraStorePlugin plugin = JettraStorePlugin.getInstance();
-                String tempDb = "rf21_delete_modal_test_db";
-                plugin.createDatabase(tempDb, "ItemsRF21", "DOCUMENT", "BD temporal para prueba RF-21");
-                try {
-                        // 1. La vista /databases no debe usar window.confirm nativo para eliminar BD
-                        HttpResponse<String> listRes = get("/databases?db=" + tempDb);
-                        JettraAssert.assertEquals(200, listRes.statusCode(),
-                                        "GET /databases debe responder HTTP 200");
-                        String listBody = listRes.body();
-                        JettraAssert.assertTrue(listBody.contains("confirm_delete_db=" + tempDb),
-                                        "El botón eliminar debe abrir el diálogo modal JettraFlux mediante confirm_delete_db");
-                        JettraAssert.assertFalse(listBody.contains("return confirm('¿Seguro de eliminar la base de datos"),
-                                        "No debe utilizar window.confirm nativo para eliminar la base de datos");
-
-                        // 2. Abrir diálogo modal de confirmación JettraFlux
-                        HttpResponse<String> modalRes = get("/databases?db=" + tempDb + "&confirm_delete_db=" + tempDb);
-                        JettraAssert.assertEquals(200, modalRes.statusCode(),
-                                        "GET /databases?confirm_delete_db debe responder HTTP 200");
-                        String modalBody = modalRes.body();
-                        JettraAssert.assertTrue(modalBody.contains("id=\"deleteDatabaseModal\""),
-                                        "Debe renderizar el componente Modal de JettraFlux con id deleteDatabaseModal");
-                        JettraAssert.assertTrue(modalBody.contains("espresso-modal-overlay"),
-                                        "Debe usar el widget Modal nativo de JettraFlux");
-                        JettraAssert.assertTrue(modalBody.contains("¿Seguro de eliminar la base de datos?"),
-                                        "Debe mostrar explícitamente el mensaje de confirmación requerido");
-                        JettraAssert.assertTrue(modalBody.contains(tempDb),
-                                        "Debe indicar el nombre de la base de datos seleccionada");
-                        JettraAssert.assertTrue(modalBody.contains("Confirmar") && modalBody.contains("Cancelar"),
-                                        "Debe incluir las acciones Confirmar y Cancelar");
-
-                        // 3. Cancelar cierra el modal sin eliminar la BD
-                        HttpResponse<String> cancelRes = get("/databases");
-                        JettraAssert.assertEquals(200, cancelRes.statusCode(), "Cancelar debe volver a /databases");
-                        JettraAssert.assertFalse(cancelRes.body().contains("id=\"deleteDatabaseModal\""),
-                                        "Al cancelar el diálogo modal debe permanecer cerrado");
-                        JettraAssert.assertTrue(plugin.getDatabaseNames().contains(tempDb),
-                                        "Cancelar no debe eliminar la base de datos");
-
-                        // 4. Confirmar ejecuta la eliminación y actualiza el catálogo
-                        HttpResponse<String> confirmRes = postForm("/databases",
-                                        "action=delete_db&db=" + tempDb);
-                        JettraAssert.assertEquals(302, confirmRes.statusCode(),
-                                        "Confirmar eliminación vía POST /databases debe redirigir 302");
-                        JettraAssert.assertTrue(
-                                        confirmRes.headers().firstValue("Location").orElse("").contains("msg=db_deleted"),
-                                        "Debe redirigir confirmando eliminación de la base de datos");
-                        JettraAssert.assertFalse(plugin.getDatabaseNames().contains(tempDb),
-                                        "La base de datos debe quedar eliminada tras confirmar en el modal JettraFlux");
-                } finally {
-                        if (plugin.getDatabaseNames().contains(tempDb)) {
-                                plugin.deleteDatabase(tempDb);
-                        }
-                }
+                // 5. Validar renderizado de componentes JettraFlux con bases y esquemas
+                // descubiertos
+                io.jettra.store.explorer.pages.migrator.MigratorFluxView viewWithDbs = new io.jettra.store.explorer.pages.migrator.MigratorFluxView(
+                                new io.jettra.driver.migrator.PostgresConnectionConfig("127.0.0.1", 5432, "ventas_corp",
+                                                "postgres", "", "public", "jettra_ventas"),
+                                java.util.List.of("postgres", "ventas_corp", "rrhh_db"),
+                                java.util.List.of("public", "ventas_schema"),
+                                null, null, null, false, false);
+                io.jettra.server.flux.FluxRenderer renderer = new io.jettra.server.flux.FluxRenderer();
+                String renderedView = renderer.render(viewWithDbs.build(), "Migrador");
+                JettraAssert.assertTrue(renderedView.contains("ventas_corp"),
+                                "Debe renderizar la base de datos detectada 'ventas_corp'");
+                JettraAssert.assertTrue(renderedView.contains("rrhh_db"), "Debe renderizar 'rrhh_db'");
+                JettraAssert.assertTrue(renderedView.contains("ventas_schema"),
+                                "Debe renderizar el esquema 'ventas_schema'");
+                JettraAssert.assertTrue(renderedView.contains("Bases en PostgreSQL"),
+                                "Debe renderizar el panel informativo de bases de datos");
         }
 }

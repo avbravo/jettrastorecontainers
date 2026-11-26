@@ -1480,3 +1480,45 @@ try (JettraClient client = JettraClient.connect("127.0.0.1", 50001, "admin", "ad
 ```
 
 > **Trazabilidad y Limpieza (RF-16):** Los archivos de historial (`<databaseName>_versions.json` y sus temporales `.tmp`) se eliminan automáticamente al invocar `dropDatabase(db)` desde `JettraClient`, `JettraDatabase` o `JettraStoreServer`, garantizando cero residuos en pruebas automatizadas.
+
+---
+
+## Gestión Permanente del Estado de Membresía en Clúster (`cluster-state.config`) — RF-32
+
+**JettraStoreDriver** (`JettraClient`) gestiona la topología persistente del clúster sobre `<jettra.cluster_state_config_dir>/cluster-state.config`, garantizando que el archivo estático opcional `cluster.config` permanezca inmutable y que cada cambio se replique del `PRIMARY` hacia todos los nodos `SECONDARY` (o nodos en espera `STANDBY`).
+
+### 1. API de Estado de Clúster en `JettraClient`
+| Método en `JettraClient` | Descripción |
+| :--- | :--- |
+| `addClusterNode(id, host, grpcPort, restPort, role)` | Registra el nodo en el `PRIMARY`, persiste atómicamente `cluster-state.config`, replica hacia todos los `SECONDARY` y envía la membresía al nodo recién añadido (sacándolo de modo `STANDBY`). |
+| `stopClusterNode(nodeId)` | Envía apagado controlado, marca el nodo como `STOPPED` en `cluster-state.config` del `PRIMARY` y replica a los `SECONDARY`. |
+| `startClusterNode(nodeId)` | Inicia/activa el nodo, actualiza su estado a `RUNNING` en `cluster-state.config` y replica el estado. |
+| `removeStoppedClusterNode(nodeId)` | Expulsa un nodo previamente detenido (`STOPPED`) de `cluster-state.config` en `PRIMARY` y `SECONDARY`. |
+| `readClusterStateConfig()` / `readClusterStateVersion()` / `readClusterNodeStatuses()` | Consulta la configuración canónica, versión (`cluster.state.version`) y mapa de estados por nodo desde el `PRIMARY` (con respaldo local en `cluster-state.config`). |
+| `markNodeRunningInClusterState(nodeId)` | Registra la reconciliación a `RUNNING` al reconectar un nodo tras reinicio. |
+
+### 2. Ejemplo Práctico en Java 25+ (`java -jar` y Contenedores Docker)
+```java
+JettraClientConfig config = JettraClientConfig.builder()
+        .addClusterNode("127.0.0.1", 50001)
+        .credentials("admin", "admin-jettra")
+        .role("admin")
+        .build();
+
+try (JettraClient client = JettraClient.connect(config)) {
+    // Incorporar un nodo que arrancó en STANDBY
+    boolean added = client.addClusterNode("node-03", "127.0.0.1", 50003, 60003, "SECONDARY");
+
+    // Consultar estado vivo y versión persistida
+    long version = client.readClusterStateVersion();
+    Map<String, String> statuses = client.readClusterNodeStatuses();
+    System.out.println("Cluster state v" + version + " -> " + statuses);
+
+    // Ciclo de vida: detener y remover sin tocar cluster.config estático
+    client.stopClusterNode("node-03");
+    client.removeStoppedClusterNode("node-03");
+}
+```
+
+> Verificación automatizada en `JettraStoreDriver`: `ClusterStateLifecycleDriverTest` valida con `JettraTest` el arranque en `STANDBY`, alta con `addClusterNode`, replicación `PRIMARY -> SECONDARY`, detención `STOPPED`, reinicio completo del clúster, reconciliación de nodos y remoción definitiva sin alterar `cluster.config`.
+

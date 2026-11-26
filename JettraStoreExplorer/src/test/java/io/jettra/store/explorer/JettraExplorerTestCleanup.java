@@ -15,55 +15,56 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * Utilidad de limpieza para las bases de datos, nodos de prueba y archivos temporales de JettraStoreExplorer.
- * Elimina automáticamente todas las bases terminadas en _test_db, muestras temporales y nodos de prueba al finalizar el test.
+ * Utilidad de limpieza para las bases de datos, nodos de prueba y archivos
+ * temporales de JettraStoreExplorer.
+ * Elimina automáticamente todas las bases terminadas en _test_db, muestras
+ * temporales y nodos de prueba al finalizar el test.
  */
 public final class JettraExplorerTestCleanup {
 
     private static final ObjectMapper JSON = new ObjectMapper().enable(SerializationFeature.INDENT_OUTPUT);
 
     public static final Set<String> KNOWN_TEST_CLUSTER_NODES = Set.of(
-        "peer-dynamic-1",
-        "peer-dynamic-1-replica",
-        "node-lifecycle-test",
-        "node-lifecycle-test-secondary",
-        "node-heartbeat-live",
-        "node-heartbeat-live-secondary",
-        "node-test-dk",
-        "node-test-dk-secondary"
-    );
+            "peer-dynamic-1",
+            "peer-dynamic-1-replica",
+            "node-lifecycle-test",
+            "node-lifecycle-test-secondary",
+            "node-heartbeat-live",
+            "node-heartbeat-live-secondary",
+            "node-test-dk",
+            "node-test-dk-secondary");
 
     public static final List<String> KNOWN_TEST_DATABASES = List.of(
-        "example_factura_db",
-        "samples_hospital_db",
-        "samples_hostipal_db",
-        "samples_ambiental_db",
-        "test_memory_engine_db",
-        "test_meter_db",
-        "test_multiuser_db",
-        "system_metadata_db",
-        "idx_db",
-        "idx_test_db",
-        "ref_db",
-        "ref_test_db",
-        "gestacional",
-        "gestacional_test_db",
-        "test_drop_db",
-        "drop_test_db",
-        "default_db",
-        "default_test_db",
-        "dist_test_db",
-        "shell_calc_db",
-        "shell_calc_test_db",
-        "test_billing_db",
-        "billing_test_db",
-        "primary_crm_db",
-        "primary_crm_test_db",
-        "primary_erp_db",
-        "primary_erp_test_db"
-    );
+            "example_factura_db",
+            "samples_hospital_db",
+            "samples_hostipal_db",
+            "samples_ambiental_db",
+            "test_memory_engine_db",
+            "test_meter_db",
+            "test_multiuser_db",
+            "system_metadata_db",
+            "idx_db",
+            "idx_test_db",
+            "ref_db",
+            "ref_test_db",
+            "gestacional",
+            "gestacional_test_db",
+            "test_drop_db",
+            "drop_test_db",
+            "default_db",
+            "default_test_db",
+            "dist_test_db",
+            "shell_calc_db",
+            "shell_calc_test_db",
+            "test_billing_db",
+            "billing_test_db",
+            "primary_crm_db",
+            "primary_crm_test_db",
+            "primary_erp_db",
+            "primary_erp_test_db");
 
-    private JettraExplorerTestCleanup() {}
+    private JettraExplorerTestCleanup() {
+    }
 
     public static void cleanAll(JettraStorePlugin plugin) {
         cleanAll(plugin, null);
@@ -73,11 +74,13 @@ public final class JettraExplorerTestCleanup {
         if (plugin != null) {
             try {
                 plugin.uninstallAllExampleDatabases();
-            } catch (Exception ignored) {}
+            } catch (Exception ignored) {
+            }
             for (String db : KNOWN_TEST_DATABASES) {
                 try {
                     plugin.deleteDatabase(db);
-                } catch (Exception ignored) {}
+                } catch (Exception ignored) {
+                }
             }
             // Eliminar cualquier base remanente generada durante las pruebas
             try {
@@ -85,14 +88,22 @@ public final class JettraExplorerTestCleanup {
                 for (String db : remainingDbs) {
                     try {
                         plugin.deleteDatabase(db);
-                    } catch (Exception ignored) {}
+                    } catch (Exception ignored) {
+                    }
                 }
-            } catch (Exception ignored) {}
+            } catch (Exception ignored) {
+            }
             try {
                 plugin.getDatabasesCatalog().clear();
-            } catch (Exception ignored) {}
+            } catch (Exception ignored) {
+            }
         }
         cleanTestClusterNodes(plugin);
+        if (plugin != null && plugin.getLifecycleManager() != null) {
+            try {
+                plugin.getLifecycleManager().closeAllManagedEndpoints();
+            } catch (Exception ignored) {}
+        }
         cleanStorageDirectories();
         if (tempStorageDir != null && Files.exists(tempStorageDir)) {
             deleteRecursively(tempStorageDir);
@@ -101,10 +112,12 @@ public final class JettraExplorerTestCleanup {
 
     public static void cleanTestClusterNodes(JettraStorePlugin plugin) {
         if (plugin != null) {
-            for (String nodeId : List.of("peer-dynamic-1", "node-lifecycle-test", "node-heartbeat-live", "node-test-dk")) {
+            for (String nodeId : List.of("peer-dynamic-1", "node-lifecycle-test", "node-heartbeat-live",
+                    "node-test-dk")) {
                 try {
                     plugin.removeNode(nodeId);
-                } catch (Exception ignored) {}
+                } catch (Exception ignored) {
+                }
             }
         }
         cleanClusterNodesJsonFile(Path.of("memory/cluster_nodes.json"));
@@ -115,10 +128,14 @@ public final class JettraExplorerTestCleanup {
     }
 
     public static void cleanClusterNodesJsonFile(Path jsonFile) {
-        if (jsonFile == null || !Files.exists(jsonFile)) return;
+        if (jsonFile == null || !Files.exists(jsonFile))
+            return;
         try {
-            List<Map<String, Object>> nodes = JSON.readValue(jsonFile.toFile(), new TypeReference<List<Map<String, Object>>>() {});
-            if (nodes == null) return;
+            List<Map<String, Object>> nodes = JSON.readValue(jsonFile.toFile(),
+                    new TypeReference<List<Map<String, Object>>>() {
+                    });
+            if (nodes == null)
+                return;
             List<Map<String, Object>> filtered = new ArrayList<>();
             boolean changed = false;
             for (Map<String, Object> node : nodes) {
@@ -133,7 +150,8 @@ public final class JettraExplorerTestCleanup {
             if (changed) {
                 JSON.writeValue(jsonFile.toFile(), filtered);
             }
-        } catch (Exception ignored) {}
+        } catch (Exception ignored) {
+        }
     }
 
     public static void cleanStorageDirectories() {
@@ -142,7 +160,8 @@ public final class JettraExplorerTestCleanup {
             if (cfg != null && cfg.getStoragePath() != null && !cfg.getStoragePath().isBlank()) {
                 cleanDirectory(Path.of(cfg.getStoragePath()));
             }
-        } catch (Exception ignored) {}
+        } catch (Exception ignored) {
+        }
         cleanDirectory(Path.of("/jettra/data"));
         cleanDirectory(Path.of(System.getProperty("user.home"), "jettra", "data"));
         cleanDirectory(Path.of(System.getProperty("user.home"), "jettra-storage-01", "data"));
@@ -156,7 +175,8 @@ public final class JettraExplorerTestCleanup {
     }
 
     public static void cleanDirectory(Path dir) {
-        if (dir == null || !Files.exists(dir) || !Files.isDirectory(dir)) return;
+        if (dir == null || !Files.exists(dir) || !Files.isDirectory(dir))
+            return;
         for (String db : KNOWN_TEST_DATABASES) {
             deleteDatabaseArtifacts(dir, db);
         }
@@ -178,7 +198,8 @@ public final class JettraExplorerTestCleanup {
                     deleteRecursively(entry);
                 }
             });
-        } catch (Exception ignored) {}
+        } catch (Exception ignored) {
+        }
     }
 
     private static void deleteDatabaseArtifacts(Path dir, String db) {
@@ -193,23 +214,27 @@ public final class JettraExplorerTestCleanup {
             Files.deleteIfExists(dir.resolve(db + "_sequences.json.tmp"));
             Files.deleteIfExists(dir.resolve(db + "_backup.snap"));
             deleteRecursively(dir.resolve(db));
-        } catch (Exception ignored) {}
+        } catch (Exception ignored) {
+        }
     }
 
     public static void deleteRecursively(Path path) {
-        if (path == null || !Files.exists(path)) return;
+        if (path == null || !Files.exists(path))
+            return;
         try {
             if (Files.isDirectory(path)) {
                 try (var walk = Files.walk(path)) {
                     walk.sorted(Comparator.reverseOrder())
-                        .forEach(p -> {
-                            try {
-                                Files.deleteIfExists(p);
-                            } catch (Exception ignored) {}
-                        });
+                            .forEach(p -> {
+                                try {
+                                    Files.deleteIfExists(p);
+                                } catch (Exception ignored) {
+                                }
+                            });
                 }
             }
             Files.deleteIfExists(path);
-        } catch (Exception ignored) {}
+        } catch (Exception ignored) {
+        }
     }
 }

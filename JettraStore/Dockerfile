@@ -27,7 +27,7 @@ RUN if command -v apk > /dev/null; then \
 
 WORKDIR /app
 
-RUN mkdir -p /jettra/data /jettra/config /jettra/checkpoint /app/config && \
+RUN mkdir -p /jettra/data /jettra/config /jettra/checkpoint /jettra/cluster-state /app/config && \
     chown -R 1000:1000 /jettra /app
 
 COPY --from=packager --chown=1000:1000 /staging/JettraStore.jar /app/JettraStore.jar
@@ -38,6 +38,7 @@ ENV JETTRA_NODE_ID=node-01 \
     JETTRA_NODE_ROLE=PRIMARY \
     JETTRA_NODE_IP=0.0.0.0 \
     JETTRA_STORAGE_PATH=/jettra/data \
+    JETTRA_CLUSTER_STATE_CONFIG_DIR=/jettra/cluster-state \
     JETTRA_STORAGE_MODE=OFF_HEAP \
     JETTRA_MULTINODE_ACTIVE=on \
     JETTRA_CRAC_CHECKPOINT_PATH=/jettra/checkpoint \
@@ -52,7 +53,7 @@ ENV JETTRA_NODE_ID=node-01 \
 
 EXPOSE 60001 50001
 
-VOLUME ["/jettra/data", "/jettra/checkpoint"]
+VOLUME ["/jettra/data", "/jettra/checkpoint", "/jettra/cluster-state"]
 
 HEALTHCHECK --interval=10s --timeout=5s --start-period=8s --retries=3 \
     CMD curl -fsS http://localhost:${JETTRA_REST_PORT}/api/v1/health || exit 1
@@ -63,12 +64,15 @@ ENTRYPOINT ["sh", "-c", "if [ \"$JETTRA_CRAC_RESTORE\" = \"true\" ] && [ -d \"$J
         echo '[CRaC] Restaurando JettraStore desde checkpoint CRIU en '$JETTRA_CRAC_CHECKPOINT_PATH'...'; \
         exec java -XX:CRaCRestoreFrom=$JETTRA_CRAC_CHECKPOINT_PATH; \
     else \
+        CLUSTER_ARG=\"\"; \
+        if [ -n \"${JETTRA_CLUSTER_CONFIG_PATH:-}\" ]; then CLUSTER_ARG=\"-Dcluster.config.path=${JETTRA_CLUSTER_CONFIG_PATH}\"; fi; \
         exec java $JAVA_OPTS \
             -Djettra.storage.path=${JETTRA_STORAGE_PATH:-/jettra/data} \
+            -Djettra.cluster_state_config_dir=${JETTRA_CLUSTER_STATE_CONFIG_DIR:-/jettra/cluster-state} \
             -Djettra.storage.mode=${JETTRA_STORAGE_MODE:-OFF_HEAP} \
             -Dcluster.multinode.active=${JETTRA_MULTINODE_ACTIVE:-on} \
             -Djettra.samples.autoload=${JETTRA_SAMPLES_AUTOLOAD:-false} \
             -Dmicroprofile.config.file=/app/config/microprofile-config.properties \
-            -Dcluster.config.path=${JETTRA_CLUSTER_CONFIG_PATH:-/app/config/cluster.config} \
+            ${CLUSTER_ARG} \
             -jar /app/JettraStore.jar; \
     fi"]

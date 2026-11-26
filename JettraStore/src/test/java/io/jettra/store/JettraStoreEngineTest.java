@@ -25,9 +25,13 @@ import static io.jettra.test.core.JettraAssert.*;
 public class JettraStoreEngineTest extends JettraStoreBaseTest {
 
     @BeforeAll
+    public static void cleanUpEngineTestBeforeAll() {
+        JettraStoreBaseTest.cleanUpNode1AndTestDatabases();
+    }
+
     @AfterAll
-    public static void cleanUpNode1AndTestDatabases() {
-        JettraTestCleanup.cleanUpNode1AndTestDatabases();
+    public static void cleanUpEngineTestAfterAll() {
+        JettraStoreBaseTest.restoreClusterStateAfterSuite();
     }
 
 

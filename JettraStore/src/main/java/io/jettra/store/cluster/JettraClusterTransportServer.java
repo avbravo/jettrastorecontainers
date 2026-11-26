@@ -6,6 +6,7 @@ import io.jettra.store.core.JettraDatabase;
 import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
 import java.io.IOException;
+import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.file.Files;
@@ -14,6 +15,8 @@ import java.nio.file.StandardOpenOption;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -25,30 +28,92 @@ import java.util.concurrent.atomic.AtomicBoolean;
  */
 public final class JettraClusterTransportServer implements AutoCloseable {
 
+    private static final Set<JettraClusterTransportServer> ACTIVE_TRANSPORTS = ConcurrentHashMap.newKeySet();
+    private static final AtomicBoolean SHUTDOWN_HOOK_REGISTERED = new AtomicBoolean(false);
+
     private final int port;
     private final JettraStoreServer server;
     private final AtomicBoolean running = new AtomicBoolean(false);
+    private final Set<Socket> activeClientSockets = ConcurrentHashMap.newKeySet();
     private ServerSocket serverSocket;
     private ExecutorService virtualThreadExecutor;
+    private volatile Thread listenerThread;
 
     public JettraClusterTransportServer(int port, JettraStoreServer server) {
         this.port = port;
         this.server = server;
     }
 
+    private static void registerShutdownHook() {
+        if (SHUTDOWN_HOOK_REGISTERED.compareAndSet(false, true)) {
+            Runtime.getRuntime().addShutdownHook(new Thread(
+                JettraClusterTransportServer::stopAllActiveTransports,
+                "jettra-transport-shutdown-hook"
+            ));
+        }
+    }
+
+    /**
+     * Detiene todas las instancias activas de {@link JettraClusterTransportServer}
+     * para garantizar la liberación inmediata de sus puertos TCP al finalizar pruebas o el proceso JVM.
+     */
+    public static int stopAllActiveTransports() {
+        int stoppedCount = 0;
+        for (JettraClusterTransportServer transport : List.copyOf(ACTIVE_TRANSPORTS)) {
+            try {
+                transport.stop();
+                stoppedCount++;
+            } catch (Exception ignored) {}
+        }
+        return stoppedCount;
+    }
+
+    public static int getActiveTransportCount() {
+        return ACTIVE_TRANSPORTS.size();
+    }
+
+    public int getPort() {
+        return port;
+    }
+
     public void start() throws IOException {
         if (running.compareAndSet(false, true)) {
-            this.serverSocket = new ServerSocket(port);
-            this.virtualThreadExecutor = Executors.newVirtualThreadPerTaskExecutor();
+            registerShutdownHook();
+            try {
+                ServerSocket ss = new ServerSocket();
+                ss.setReuseAddress(true);
+                ss.bind(new InetSocketAddress(port));
+                this.serverSocket = ss;
+                this.virtualThreadExecutor = Executors.newVirtualThreadPerTaskExecutor();
+                ACTIVE_TRANSPORTS.add(this);
+            } catch (IOException | RuntimeException e) {
+                running.set(false);
+                ACTIVE_TRANSPORTS.remove(this);
+                if (this.serverSocket != null) {
+                    try { this.serverSocket.close(); } catch (Exception ignored) {}
+                    this.serverSocket = null;
+                }
+                if (this.virtualThreadExecutor != null) {
+                    this.virtualThreadExecutor.shutdownNow();
+                    this.virtualThreadExecutor = null;
+                }
+                throw e;
+            }
 
             // Hilo virtual de despacho de conexiones
-            Thread.ofVirtual().name("jettra-cluster-listener-" + port).start(() -> {
+            final ServerSocket boundSocket = this.serverSocket;
+            this.listenerThread = Thread.ofVirtual().name("jettra-cluster-listener-" + port).start(() -> {
                 System.out.printf("[JettraClusterTransport] Servidor TCP de Replicación Raft activo en 0.0.0.0:%d (Virtual Threads)%n", port);
-                while (running.get() && !serverSocket.isClosed()) {
+                while (running.get() && boundSocket != null && !boundSocket.isClosed()) {
                     try {
-                        Socket clientSocket = serverSocket.accept();
+                        Socket clientSocket = boundSocket.accept();
                         clientSocket.setTcpNoDelay(true);
-                        virtualThreadExecutor.submit(() -> handleConnection(clientSocket));
+                        ExecutorService exec = this.virtualThreadExecutor;
+                        if (running.get() && exec != null && !exec.isShutdown()) {
+                            exec.submit(() -> handleConnection(clientSocket));
+                        } else {
+                            clientSocket.close();
+                        }
                     } catch (IOException e) {
                         if (!running.get()) break;
                         System.err.printf("[JettraClusterTransport] Error aceptando conexión en puerto %d: %s%n", port, e.getMessage());
@@ -59,6 +124,7 @@ public final class JettraClusterTransportServer implements AutoCloseable {
     }
 
     private void handleConnection(Socket socket) {
+        activeClientSockets.add(socket);
         try (socket;
              BufferedInputStream bis = new BufferedInputStream(socket.getInputStream(), 65536);
              BufferedOutputStream bos = new BufferedOutputStream(socket.getOutputStream(), 65536)) {
@@ -77,6 +143,8 @@ public final class JettraClusterTransportServer implements AutoCloseable {
                 }
             }
         } catch (Exception ignored) {
+        } finally {
+            activeClientSockets.remove(socket);
         }
     }
 
@@ -526,28 +594,25 @@ public final class JettraClusterTransportServer implements AutoCloseable {
                                 "INVALID_CLUSTER_CONFIG: " + integrity.getSummary());
                         }
                         Path target = server != null
-                            ? server.resolveClusterConfigFile()
-                            : io.jettra.store.core.JettraConfigValidator.locateClusterConfigFile();
-                        if (target == null) {
-                            target = Path.of(io.jettra.store.core.JettraConfigValidator.DEFAULT_CLUSTER_CONFIG_PATH);
-                        }
+                            ? server.resolveClusterStateFile()
+                            : io.jettra.store.core.JettraConfigValidator.resolveClusterStateFile();
                         java.util.Properties syncedProps = new java.util.Properties();
                         try (var bais = new java.io.ByteArrayInputStream(cfgBytes)) {
                             syncedProps.load(bais);
                         }
                         List<io.jettra.store.core.JettraConfigValidator.ClusterNodeInfo> parsedNodes =
-                            io.jettra.store.core.JettraConfigValidator.parseClusterNodes(syncedProps);
+                            io.jettra.store.core.JettraConfigValidator.parseExplicitClusterNodes(syncedProps);
                         if (!parsedNodes.isEmpty()) {
                             boolean written = io.jettra.store.core.JettraConfigValidator.writeClusterConfigAtomically(target, cfgBytes);
                             if (written) {
-                                System.out.printf("[JettraClusterTransport] ✅ Archivo cluster.config sincronizado atómicamente (%d bytes, %d nodos) en '%s' desde '%s'.%n",
+                                System.out.printf("[JettraClusterTransport] ✅ Archivo cluster-state.config sincronizado atómicamente (%d bytes, %d nodos) en '%s' desde '%s'.%n",
                                     cfgBytes.length, parsedNodes.size(), target.toAbsolutePath().normalize(), frame.senderNodeId());
                             }
                             if (server != null) {
                                 String localId = server.getConfig().getNodeId();
+                                boolean wasStandby = server.getConfig().isStandbyMode();
 
-                                // 1. Conciliar rol local con el cluster.config canónico para evitar split-brain
-                                // (ej. un nodo nuevo que se promovió a PRIMARY estando aislado antes de ser añadido al clúster)
+                                // 1. Conciliar rol local con el cluster-state.config canónico para evitar split-brain
                                 boolean otherPrimaryExists = parsedNodes.stream().anyMatch(n ->
                                     "PRIMARY".equalsIgnoreCase(n.role()) && !n.id().equalsIgnoreCase(localId));
                                 boolean selfMarkedSecondary = parsedNodes.stream().anyMatch(n ->
@@ -556,33 +621,34 @@ public final class JettraClusterTransportServer implements AutoCloseable {
                                         && server.getConfig().getNodeRole() == ClusterNode.Role.PRIMARY) {
                                     server.getConfig().setNodeRole(ClusterNode.Role.SECONDARY);
                                     server.recordLeaderHeartbeat(frame.senderNodeId());
-                                    System.out.printf("[JettraClusterTransport] 🔄 Rol local de '%s' conciliado a SECONDARY según cluster.config canónico.%n", localId);
+                                    System.out.printf("[JettraClusterTransport] 🔄 Rol local de '%s' conciliado a SECONDARY según cluster-state.config canónico.%n", localId);
                                 }
 
-                                List<ClusterNode> newlyAddedPeers = server.applySyncedPeersToRuntime(parsedNodes);
+                                List<ClusterNode> newlyAddedPeers = server.handleClusterStateSynchronized(parsedNodes, syncedProps);
 
-                                // 2. Idempotencia estricta: si cluster.config ya era idéntico y no hay nuevos peers,
+                                // 2. Idempotencia estricta: si cluster-state.config ya era idéntico y no hay nuevos peers,
                                 // evitar re-difusiones o tormentas de sincronización (Broadcast Storm).
-                                if (!written && newlyAddedPeers.isEmpty()) {
+                                if (!written && !wasStandby && newlyAddedPeers.isEmpty()) {
                                     return JettraRaftFrame.ack(frame.term(), frame.logIndex(),
-                                        localId, "Cluster config already up to date");
+                                        localId, "Cluster state already up to date");
                                 }
 
                                 JettraClusterEventBus.getInstance().publish(
                                     ClusterLiveEvent.TYPE_DATA_TRANSFER,
                                     frame.senderNodeId(),
                                     localId,
-                                    String.format("Archivo cluster.config actualizado (%d nodos, %d bytes)", parsedNodes.size(), cfgBytes.length),
-                                    "cluster.config"
+                                    String.format("Archivo cluster-state.config actualizado (%d nodos, %d bytes)", parsedNodes.size(), cfgBytes.length),
+                                    "cluster-state.config"
                                 );
 
                                 // 3. Evitar bucles ping-pong entre nodos del clúster:
                                 // el PRIMARY solo re-difunde cuando la actualización proviene de un cliente externo
-                                // (Explorer/Shell), nunca cuando proviene de otro nodo miembro del clúster.
+                                // (Driver/Explorer/Shell), nunca cuando proviene de otro nodo miembro del clúster.
                                 String senderId = frame.senderNodeId() != null ? frame.senderNodeId().trim() : "";
                                 boolean senderIsClusterPeer = parsedNodes.stream().anyMatch(n -> n.id().equalsIgnoreCase(senderId));
 
-                                if (server.getConfig().getNodeRole() == ClusterNode.Role.PRIMARY
+                                if (!server.getConfig().isStandbyMode()
+                                        && server.getConfig().getNodeRole() == ClusterNode.Role.PRIMARY
                                         && !senderIsClusterPeer
                                         && !"cluster-master".equalsIgnoreCase(senderId)
                                         && !localId.equalsIgnoreCase(senderId)) {
@@ -598,8 +664,9 @@ public final class JettraClusterTransportServer implements AutoCloseable {
                                             }
                                         });
                                     }
-                                } else if (server.getConfig().getNodeRole() == ClusterNode.Role.SECONDARY) {
-                                    // Sincronizar de forma coalescida (sin apilar hilos) solo si cambió la configuración
+                                } else if (!server.getConfig().isStandbyMode()
+                                        && server.getConfig().getNodeRole() == ClusterNode.Role.SECONDARY) {
+                                    // Sincronizar de forma coalescida (sin apilar hilos) solo si cambió el estado
                                     server.triggerAsyncSynchronizeFromPrimary();
                                 }
                             }
@@ -643,17 +710,19 @@ public final class JettraClusterTransportServer implements AutoCloseable {
             case JettraRaftFrame.TYPE_GET_CLUSTER_CONFIG_REQ -> {
                 String nodeId = server != null ? server.getConfig().getNodeId() : "local";
                 try {
-                    Path target = server != null
-                        ? server.resolveClusterConfigFile()
-                        : io.jettra.store.core.JettraConfigValidator.locateClusterConfigFile();
                     byte[] bytes = null;
-                    if (target != null && java.nio.file.Files.exists(target)) {
-                        bytes = java.nio.file.Files.readAllBytes(target);
-                    } else if (server != null) {
-                        java.util.Properties p = io.jettra.store.core.JettraConfigValidator.loadProperties(null, "/cluster.config", "/jettra.config");
-                        List<io.jettra.store.core.JettraConfigValidator.ClusterNodeInfo> parsed =
-                            io.jettra.store.core.JettraConfigValidator.parseClusterNodes(p);
-                        bytes = io.jettra.store.core.JettraConfigValidator.buildCanonicalClusterConfigBytes(parsed, p);
+                    if (server != null) {
+                        bytes = server.readLiveClusterStateBytes();
+                    } else {
+                        Path stateTarget = io.jettra.store.core.JettraConfigValidator.resolveClusterStateFile();
+                        if (stateTarget != null && java.nio.file.Files.exists(stateTarget) && java.nio.file.Files.size(stateTarget) > 0) {
+                            bytes = java.nio.file.Files.readAllBytes(stateTarget);
+                        } else {
+                            Path seed = io.jettra.store.core.JettraConfigValidator.locateOptionalClusterSeedFile();
+                            if (seed != null && java.nio.file.Files.exists(seed)) {
+                                bytes = java.nio.file.Files.readAllBytes(seed);
+                            }
+                        }
                     }
                     return JettraRaftFrame.getClusterConfigResp(frame.term(), nodeId, bytes != null ? bytes : new byte[0]);
                 } catch (Exception ex) {
@@ -669,16 +738,39 @@ public final class JettraClusterTransportServer implements AutoCloseable {
     }
 
     public void stop() {
+        ACTIVE_TRANSPORTS.remove(this);
         if (running.compareAndSet(true, false)) {
             try {
                 if (serverSocket != null && !serverSocket.isClosed()) {
                     serverSocket.close();
                 }
             } catch (Exception ignored) {}
+            serverSocket = null;
+            for (Socket client : activeClientSockets) {
+                try {
+                    client.close();
+                } catch (Exception ignored) {}
+            }
+            activeClientSockets.clear();
+            if (listenerThread != null) {
+                listenerThread.interrupt();
+                try {
+                    listenerThread.join(500);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                }
+                listenerThread = null;
+            }
             if (virtualThreadExecutor != null) {
                 virtualThreadExecutor.shutdownNow();
+                try {
+                    virtualThreadExecutor.awaitTermination(500, java.util.concurrent.TimeUnit.MILLISECONDS);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                }
+                virtualThreadExecutor = null;
             }
-            System.out.printf("[JettraClusterTransport] Servidor TCP de replicación en puerto %d detenido.%n", port);
+            System.out.printf("[JettraClusterTransport] Servidor TCP de Replicación Raft en puerto %d detenido.%n", port);
         }
     }
 

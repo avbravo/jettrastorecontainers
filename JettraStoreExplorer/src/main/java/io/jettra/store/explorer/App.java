@@ -58,6 +58,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public class App {
 
     public static JettraServer serverInstance;
+    private static final Set<JettraServer> ACTIVE_SERVERS = ConcurrentHashMap.newKeySet();
     private static final FluxRenderer RENDERER = new FluxRenderer();
     private static final Map<String, String> ACTIVE_SESSIONS = new ConcurrentHashMap<>();
     private static volatile String serverBootId = UUID.randomUUID().toString();
@@ -170,7 +171,7 @@ public class App {
                 try (var is = Files.newInputStream(fp)) {
                     Properties p = new Properties();
                     p.load(is);
-                    if ("JettraStore Explorer".equals(p.getProperty("app.title")) || p.containsKey("cluster.nodes")
+                    if ("JettraStore Explorer".equals(p.getProperty("app.title")) || p.containsKey("cluster.ip.nodes")
                             || p.containsKey("server.port")) {
                         props.putAll(p);
                     }
@@ -404,17 +405,13 @@ public class App {
         JettraStorePlugin plugin = JettraStorePlugin.getInstance();
 
         JettraServer server = JettraServer.create(config);
+        ACTIVE_SERVERS.add(server);
         serverInstance = server;
 
         if (SHUTDOWN_HOOK_REGISTERED.compareAndSet(false, true)) {
             Runtime.getRuntime().addShutdownHook(new Thread(() -> {
                 System.out.println("[JettraStore Explorer] Apagado detectado. Cerrando todas las sesiones activas...");
-                closeAllSessions();
-                JettraStorePlugin.getInstance().stopClusterHeartbeatMonitor();
-                JettraServer running = serverInstance;
-                if (running != null && running.isRunning()) {
-                    running.stop();
-                }
+                stopAllApplications();
             }));
         }
 
@@ -508,10 +505,14 @@ public class App {
             plugin.setExplorerServerEndpoint(config.getHost(), config.getPort());
             plugin.refreshAllNodeStatuses(true);
         } catch (IOException e) {
+            stopApplication(server);
             if (e instanceof java.net.BindException) {
                 throw new PortAlreadyInUseException(config.getHost(), config.getPort());
             }
             throw new RuntimeException("Error iniciando JettraServer para JettraStore Explorer: " + e.getMessage(), e);
+        } catch (RuntimeException | Error e) {
+            stopApplication(server);
+            throw e;
         }
 
         return server;
@@ -1372,6 +1373,14 @@ public class App {
             messageText = "Perfil de conexión eliminado.";
         else if ("saved".equals(msg))
             messageText = "Perfil guardado exitosamente.";
+        else if ("saved_conn".equals(msg))
+            messageText = "Conexión guardada atómicamente en conecction.config y sincronizada con cluster-state.config del PRIMARY.";
+        else if ("tested_conn".equals(msg))
+            messageText = "Conexión aplicada en vivo y sincronizada desde cluster-state.config del PRIMARY.";
+        else if ("conn_error".equals(msg)) {
+            String err = JettraStorePlugin.getInstance().getLastConnectionSyncError();
+            messageText = "Error de conexión: " + (err != null && !err.isBlank() ? err : "Dirección host:port inválida.");
+        }
 
         Widget content = new ConnectionManagerFluxView(messageText);
         renderTemplate(resp, server, getLoggedUser(req), "Gestión de Conexiones a Clúster", "connections", content);
@@ -1384,7 +1393,18 @@ public class App {
         String action = form.get("action");
         JettraStorePlugin plugin = JettraStorePlugin.getInstance();
 
-        if ("connect".equalsIgnoreCase(action)) {
+        if ("save_cluster_connection".equalsIgnoreCase(action) || "test_cluster_connection".equalsIgnoreCase(action)) {
+            boolean persist = "save_cluster_connection".equalsIgnoreCase(action);
+            String seeds = form.get("cluster_ip_nodes");
+            String username = form.get("username");
+            var res = plugin.applyAndSaveClusterConnection(seeds, username, persist);
+            if (!res.success()) {
+                redirect(resp, "/connections?msg=conn_error");
+            } else {
+                redirect(resp, persist ? "/connections?msg=saved_conn" : "/connections?msg=tested_conn");
+            }
+            return;
+        } else if ("connect".equalsIgnoreCase(action)) {
             String id = form.get("id");
             if (id != null)
                 plugin.connectProfile(id);
@@ -1666,10 +1686,23 @@ public class App {
         long totalPanama = nodes.stream().filter(ServerNodeInfo::isActive).mapToLong(ServerNodeInfo::getPanamaDirectMb)
                 .sum();
 
+        var connState = plugin.getClusterConnectionState();
+        var latestSnap = plugin.getLatestPrimaryClusterStatus();
+        String activeSeeds = connState != null ? connState.clusterIpNodes() : "127.0.0.1:50001";
+        String connSource = (connState != null && connState.loadedFromConnectionFile())
+                ? "conecction.config"
+                : "cluster.ip.nodes";
+        long clusterStatusVersion = latestSnap != null ? latestSnap.stateVersion() : 0L;
+        String resolvedPrimaryEndpoint = primary != null ? (primary.getHost() + ":" + primary.getPort()) : "";
+
         StringBuilder json = new StringBuilder();
         json.append("{");
         json.append("\"executionEnvironment\":\"")
                 .append(escapeJson(plugin.getLifecycleManager().detectExecutionEnvironment())).append("\",");
+        json.append("\"activeClusterIpNodes\":\"").append(escapeJson(activeSeeds)).append("\",");
+        json.append("\"connectionConfigSource\":\"").append(escapeJson(connSource)).append("\",");
+        json.append("\"clusterStatusVersion\":").append(clusterStatusVersion).append(",");
+        json.append("\"resolvedPrimaryEndpoint\":\"").append(escapeJson(resolvedPrimaryEndpoint)).append("\",");
         json.append("\"primaryNodeId\":\"").append(escapeJson(primaryNodeId)).append("\",");
         json.append("\"primaryNodeName\":\"").append(escapeJson(primaryNodeName)).append("\",");
         json.append("\"primaryRole\":\"").append(escapeJson(primaryRole)).append("\",");
@@ -1844,7 +1877,12 @@ public class App {
 
     public static void stopApplication(JettraServer server) {
         closeAllSessions();
+        try {
+            JettraStorePlugin.getInstance().stopClusterHeartbeatMonitor();
+        } catch (Exception ignored) {
+        }
         if (server != null) {
+            ACTIVE_SERVERS.remove(server);
             try {
                 server.stop();
             } catch (Exception ignored) {
@@ -1853,6 +1891,36 @@ public class App {
                 serverInstance = null;
             }
         }
+        if (ACTIVE_SERVERS.isEmpty()) {
+            try {
+                JettraStorePlugin.getInstance().getLifecycleManager().closeAllManagedEndpoints();
+            } catch (Exception ignored) {
+            }
+        }
+    }
+
+    /**
+     * Detiene todas las instancias activas de {@link JettraServer} abiertas por JettraStoreExplorer
+     * (incluyendo pruebas automatizadas) y cierra los endpoints gestionados pendientes.
+     */
+    public static int stopAllApplications() {
+        int stoppedCount = 0;
+        for (JettraServer srv : List.copyOf(ACTIVE_SERVERS)) {
+            stopApplication(srv);
+            stoppedCount++;
+        }
+        if (serverInstance != null) {
+            stopApplication(serverInstance);
+        }
+        try {
+            JettraStorePlugin.getInstance().getLifecycleManager().closeAllManagedEndpoints();
+        } catch (Exception ignored) {
+        }
+        return stoppedCount;
+    }
+
+    public static int getActiveApplicationCount() {
+        return ACTIVE_SERVERS.size();
     }
 
     public static void closeAllSessions() {

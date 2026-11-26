@@ -39,6 +39,7 @@ ENV SERVER_HOST=0.0.0.0 \
     STORAGE_MODE=OFF_HEAP \
     JETTRA_DOCKER_COMPOSE=true \
     MICROPROFILE_CONFIG_FILE=/app/config/microprofile-config.properties \
+    JETTRA_CONNECTION_CONFIG_DIR=/app/config \
     JAVA_TOOL_OPTIONS="-XX:+UseContainerSupport -XX:+UseG1GC -XX:+UseStringDeduplication -XX:CICompilerCount=2 -XX:+UnlockExperimentalVMOptions -XX:+UseCompactObjectHeaders -XX:MaxRAMPercentage=70.0 --enable-preview --enable-native-access=ALL-UNNAMED" \
     JAVA_OPTS="-Xms96m -Xmx384m -XX:MaxMetaspaceSize=192m -XX:MaxDirectMemorySize=128m"
 

@@ -7,6 +7,7 @@ import io.jettra.driver.config.JettraClientConfig;
 import io.jettra.driver.listener.JettraPoliceEventListener;
 import io.jettra.driver.query.JettraResultSet;
 import io.jettra.driver.query.JettraResults;
+import io.jettra.store.core.JettraClusterStateBackupManager;
 import io.jettra.store.core.JettraDatabase;
 import io.jettra.store.core.StreamResponse;
 import io.jettra.store.engine.index.JettraIndexManager;
@@ -37,9 +38,11 @@ public class JettraClientTest {
     private static String prevClusterConfigProp;
     private static String prevStoragePathProp;
     private static String prevNodeRoleProp;
+    private static JettraClusterStateBackupManager.BackupHandle suiteStateBackup;
 
     @BeforeAll
     public static void setUpIsolatedDriverTestEnv() throws IOException {
+        suiteStateBackup = JettraClusterStateBackupManager.protectConfigured();
         prevClusterConfigProp = System.getProperty("cluster.config.path");
         prevStoragePathProp = System.getProperty("jettra.storage.path");
         prevNodeRoleProp = System.getProperty("jettra.node.role");
@@ -86,6 +89,10 @@ public class JettraClientTest {
                     try { Files.deleteIfExists(p); } catch (Exception ignored) {}
                 });
             } catch (Exception ignored) {}
+        }
+        if (suiteStateBackup != null) {
+            suiteStateBackup.close();
+            suiteStateBackup = null;
         }
     }
 
@@ -471,14 +478,34 @@ public class JettraClientTest {
         }
         java.nio.file.Path tmpDir = java.nio.file.Files.createTempDirectory("jettra-node04-test-");
         java.util.Properties p = new java.util.Properties();
-        p.setProperty("node.id", "node-04");
-        p.setProperty("node.role", "SECONDARY");
-        p.setProperty("server.rest.port", String.valueOf(restPort));
-        p.setProperty("server.grpc.port", String.valueOf(grpcPort));
+        p.setProperty("cluster.node.id", "node-04");
+        p.setProperty("jettra.node.id", "node-04");
+        p.setProperty("jettra.node.ip", "127.0.0.1");
+        p.setProperty("jettra.network.rest.port", String.valueOf(restPort));
+        p.setProperty("jettra.network.grpc.port", String.valueOf(grpcPort));
         p.setProperty("cluster.multinode.active", "true");
-        p.setProperty("storage.data.dir", tmpDir.toAbsolutePath().toString());
-        p.setProperty("cluster.endpoints", "127.0.0.1:" + grpcPort);
-        io.jettra.store.core.JettraStoreConfig node04Cfg = new io.jettra.store.core.JettraStoreConfig(p);
+        p.setProperty("jettra.storage.path", tmpDir.resolve("data").toAbsolutePath().toString());
+        p.setProperty("jettra.cluster_state_config_dir", tmpDir.resolve("state").toAbsolutePath().toString());
+        p.setProperty("jettrapolice.active", "false");
+
+        java.util.Properties cp = new java.util.Properties();
+        cp.setProperty("cluster.node.1.id", "node-04");
+        cp.setProperty("cluster.node.1.role", "SECONDARY");
+        cp.setProperty("cluster.node.1.ip", "127.0.0.1");
+        cp.setProperty("cluster.node.1.grpc.port", String.valueOf(grpcPort));
+        cp.setProperty("cluster.node.1.rest.port", String.valueOf(restPort));
+
+        String prevRoleSys = System.getProperty("jettra.node.role");
+        String prevSpSys = System.getProperty("jettra.storage.path");
+        io.jettra.store.core.JettraStoreConfig node04Cfg;
+        try {
+            System.clearProperty("jettra.node.role");
+            System.setProperty("jettra.storage.path", tmpDir.resolve("data").toAbsolutePath().toString());
+            node04Cfg = new io.jettra.store.core.JettraStoreConfig(p, cp);
+        } finally {
+            if (prevRoleSys != null) System.setProperty("jettra.node.role", prevRoleSys); else System.clearProperty("jettra.node.role");
+            if (prevSpSys != null) System.setProperty("jettra.storage.path", prevSpSys); else System.clearProperty("jettra.storage.path");
+        }
         io.jettra.store.JettraStoreServer node04Server = new io.jettra.store.JettraStoreServer(node04Cfg);
         node04Server.start();
         try (JettraClient client = JettraClient.connect("127.0.0.1", grpcPort, "admin", "admin-jettra")) {
@@ -490,6 +517,11 @@ public class JettraClientTest {
             assertTrue(stopRes.verifiedState(), "stopClusterNode debe verificar que los puertos de node-04 cerraron: " + stopRes.message());
         } finally {
             try { node04Server.stop(); } catch (Exception ignored) {}
+            try (var walk = Files.walk(tmpDir)) {
+                walk.sorted(Comparator.reverseOrder()).forEach(path -> {
+                    try { Files.deleteIfExists(path); } catch (Exception ignored) {}
+                });
+            } catch (Exception ignored) {}
         }
     }
 

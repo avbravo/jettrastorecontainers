@@ -17,7 +17,9 @@ services:
       - SERVER_PORT=${SERVER_PORT:-8085}
       - STORAGE_MODE=${STORAGE_MODE:-OFF_HEAP}
       - MICROPROFILE_CONFIG_FILE=/app/config/microprofile-config.properties
-      - JAVA_OPTS=-Xms96m -Xmx384m -XX:MaxMetaspaceSize=192m -XX:MaxDirectMemorySize=128m -Dcluster.nodes=${CLUSTER_NODES:-node-01:jettra-node-01:50001,node-02:jettra-node-02:50002,node-03:jettra-node-03:50003}
+      - JETTRA_CONNECTION_CONFIG_DIR=/app/config
+      - CLUSTER_IP_NODES=${CLUSTER_IP_NODES:-jettra-node-01:50001}
+      - JAVA_OPTS=-Xms96m -Xmx384m -XX:MaxMetaspaceSize=192m -XX:MaxDirectMemorySize=128m -Dcluster.ip.nodes=${CLUSTER_IP_NODES:-jettra-node-01:50001}
     mem_limit: 512m
     mem_reservation: 128m
     cpus: 1.0

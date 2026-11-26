@@ -36,12 +36,13 @@ COPY --from=packager --chown=1000:1000 /staging/start.sh /app/start.sh
 
 ENV HOME=/home/jettra \
     MICROPROFILE_CONFIG_FILE=/app/config/microprofile-config.properties \
+    JETTRA_CONNECTION_CONFIG_DIR=/app/config \
     JETTRA_HOST=jettra-node-01 \
     JETTRA_PORT=50001 \
     JAVA_TOOL_OPTIONS="-XX:+UseContainerSupport -XX:+UseG1GC -XX:+UseStringDeduplication -XX:CICompilerCount=2 -XX:+UnlockExperimentalVMOptions -XX:+UseCompactObjectHeaders -XX:MaxRAMPercentage=70.0 --enable-preview --enable-native-access=ALL-UNNAMED" \
     JAVA_OPTS="-Xms48m -Xmx192m -XX:MaxMetaspaceSize=128m -XX:MaxDirectMemorySize=96m"
 
-VOLUME ["/home/jettra/.jettra"]
+VOLUME ["/home/jettra/.jettra", "/app/config"]
 
 USER 1000:1000
 

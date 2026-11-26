@@ -3,6 +3,7 @@ package io.jettra.store.explorer;
 import io.jettra.server.core.JettraServer;
 import io.jettra.server.core.config.ServerConfig;
 import io.jettra.server.core.storage.StorageMode;
+import io.jettra.store.core.JettraClusterStateBackupManager;
 import io.jettra.store.explorer.plugin.JettraStorePlugin;
 import io.jettra.test.annotation.AfterAll;
 import io.jettra.test.annotation.BeforeAll;
@@ -38,9 +39,11 @@ public class RemoteBindConfigTest {
     private static String prevServerHost;
     private static String prevBindAddress;
     private static String prevServerPort;
+    private static JettraClusterStateBackupManager.BackupHandle suiteStateBackup;
 
     @BeforeAll
     public static void setup() throws Exception {
+        suiteStateBackup = JettraClusterStateBackupManager.protectConfigured();
         prevStoragePath = System.getProperty("jettra.storage.path");
         prevMpConfig = System.getProperty("jettra.explorer.config.file");
         prevClusterConfig = System.getProperty("cluster.config.path");
@@ -64,16 +67,25 @@ public class RemoteBindConfigTest {
     @AfterAll
     public static void cleanup() {
         try {
+            App.stopAllApplications();
+            io.jettra.store.JettraStoreServer.stopAllActiveServers();
             JettraExplorerTestCleanup.cleanAll(JettraStorePlugin.getInstance(), tempStorageDir);
-        } catch (Exception ignored) {
+            JettraAssert.assertEquals(0, App.getActiveApplicationCount());
+            JettraAssert.assertEquals(0, io.jettra.store.JettraStoreServer.getActiveServerCount());
+            JettraAssert.assertEquals(0, io.jettra.store.cluster.JettraClusterTransportServer.getActiveTransportCount());
+        } finally {
+            restoreProp("jettra.storage.path", prevStoragePath);
+            restoreProp("jettra.explorer.config.file", prevMpConfig);
+            restoreProp("cluster.config.path", prevClusterConfig);
+            restoreProp("server.host", prevServerHost);
+            restoreProp("bindAddress", prevBindAddress);
+            restoreProp("server.port", prevServerPort);
+            JettraExplorerTestCleanup.deleteRecursively(tempStorageDir);
+            if (suiteStateBackup != null) {
+                suiteStateBackup.close();
+                suiteStateBackup = null;
+            }
         }
-        restoreProp("jettra.storage.path", prevStoragePath);
-        restoreProp("jettra.explorer.config.file", prevMpConfig);
-        restoreProp("cluster.config.path", prevClusterConfig);
-        restoreProp("server.host", prevServerHost);
-        restoreProp("bindAddress", prevBindAddress);
-        restoreProp("server.port", prevServerPort);
-        JettraExplorerTestCleanup.deleteRecursively(tempStorageDir);
     }
 
     private static void restoreProp(String key, String prev) {
@@ -214,5 +226,8 @@ public class RemoteBindConfigTest {
                 App.stopApplication(server);
             }
         }
+        JettraAssert.assertTrue(
+                io.jettra.store.JettraStoreServer.awaitTcpPortAvailable("0.0.0.0", freePort, 2000),
+                "El puerto HTTP enlazado en 0.0.0.0 debe quedar libre al terminar el test");
     }
 }

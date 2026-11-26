@@ -42,6 +42,7 @@
    - [6.2 Guía de Despliegue de Clúster en Producción: JARs Distribuidos y Docker Compose](#62-guía-de-despliegue-de-clúster-en-producción-jars-distribuidos-y-docker-compose)
    - [6.3 Despliegue Optimizado de Bajo Consumo RAM/CPU (1 Nodo y 3 Nodos Raft) y Publicación en Docker Hub](#63-despliegue-optimizado-de-bajo-consumo-ramcpu-1-nodo-y-3-nodos-raft-y-publicación-en-docker-hub)
    - [6.4 Despliegue desde Docker Hub (`avbravo/jettrastore:1.0-SNAPSHOT`), Persistencia y Conflictos de Puerto](#64-despliegue-desde-docker-hub-avbravojettrastore10-snapshot-persistencia-y-conflictos-de-puerto)
+   - [6.5 Gestión Permanente del Estado de Membresía (`jettra.cluster_state_config_dir` y `cluster-state.config`) — RF-32](#65-gestión-permanente-del-estado-de-membresía-jettracluster_state_config_dir-y-cluster-stateconfig--rf-32)
 7. [Integración con Clientes, Herramientas, Migrador y Pruebas (`JettraTest`)](#7-integración-con-clientes-herramientas-migrador-y-pruebas-jettratest)
    - [7.1 Cliente `JettraStoreDriver` y Proyecto de Referencia `JettraStoreExampleSE`](#71-cliente-jettrastoredriver-y-proyecto-de-referencia-jettrastoreexamplese)
    - [7.2 Consola Interactiva `JettraStoreShell` y Verificación Real de Nodos (`show nodes`)](#72-consola-interactiva-jettrastoreshell-y-verificación-real-de-nodos-show-nodes)
@@ -1725,11 +1726,11 @@ jettra.storage.path = ~/jettra-storage-01/data
 #### 4.3.2 Arranque Limpio sin Bases de Datos de Ejemplo Precargadas
 Por defecto, `JettraStore` inicia **sin instalar automáticamente** bases de datos de muestra (`sample_*`, `samples_*`, `example_factura_db`). Las bases de ejemplo pueden instalarse o eliminarse bajo demanda desde el formulario `/examples` de **JettraStoreExplorer**, o activando explícitamente `-Djettra.samples.autoload=true` si se requiere en un entorno de demostración.
 
-#### 4.3.3 Replicación Dinámica de `cluster.config` (Trama Raft `0x17`)
+#### 4.3.3 Replicación Dinámica de `cluster-state.config` (Trama Raft `0x17`)
 Cuando se añade o se expulsa un nodo desde **JettraStoreExplorer** o **JettraStoreShell**:
-1. Se actualiza automáticamente la propiedad `cluster.nodes` en el archivo `microprofile-config.properties` del cliente (`JettraStoreExplorer` / `JettraStoreShell`).
-2. Se transmite el nuevo archivo `cluster.config` mediante la trama binaria Raft `TYPE_SYNC_CLUSTER_CONFIG` (`0x17`) al nodo `PRIMARY` y a los nodos `SECONDARY`.
-3. Cada nodo actualiza su `cluster.config` local, refresca los *peers* en `DynamicRingEngine` y publica un evento en `JettraClusterEventBus` visible en tiempo real en `/map`.
+1. Se actualiza la topología consultando y sincronizando el estado del nodo `PRIMARY` (`cluster-state.config`).
+2. Se transmite el nuevo archivo `cluster-state.config` mediante la trama binaria Raft `TYPE_SYNC_CLUSTER_CONFIG` (`0x17`) al nodo `PRIMARY` y a los nodos `SECONDARY`.
+3. Cada nodo actualiza su `cluster-state.config` local dentro de `jettra.cluster_state_config_dir`, refresca los *peers* en `DynamicRingEngine` y publica un evento en `JettraClusterEventBus` visible en tiempo real en `/map`.
 
 
 ### 4.4 Sincronización de Nuevos Nodos y Consistencia Zero-Downtime
@@ -3143,48 +3144,21 @@ curl http://localhost:60003/api/v1/health
 docker compose down
 ```
 
-##### 6.2.2.3 Conexión e Integración con JettraStoreExplorer (`cluster.nodes`)
+##### 6.2.2.3 Conexión e Integración con JettraStoreExplorer (`cluster.ip.nodes` y `cluster-state.config`)
 
-El panel de administración web **`JettraStoreExplorer`** monitorea en tiempo real mediante *Virtual Threads* (Loom) el estado de salud, disponibilidad y latencia de todos los nodos del clúster en la vista `/cluster`.
+El panel de administración web **`JettraStoreExplorer`** monitorea en tiempo real mediante *Virtual Threads* (Loom) el estado de salud, disponibilidad y latencia de todos los nodos del clúster en la vista `/cluster`, descubriendo la topología completa directamente desde `cluster-state.config` del nodo `PRIMARY`.
 
-Para que `JettraStoreExplorer` detecte y consulte adecuadamente los 3 nodos definidos en `docker-compose.yml`, se debe configurar la propiedad `cluster.nodes` en su archivo `microprofile-config.properties`:
+Para que `JettraStoreExplorer` conecte con el clúster definido en `docker-compose.yml`, se configura `cluster.ip.nodes` en `microprofile-config.properties` (o `conecction.config`):
 
-###### 1. Estructura y Sintaxis de la Propiedad `cluster.nodes`
 ```properties
-cluster.nodes=<id>:<host>:<puerto-tcp>[:<rol>],...
-```
-* **`<id>`:** Identificador del nodo registrado (`node-01`, `node-02`, `node-03`).
-* **`<host>`:** Dirección IP o nombre de host accesible desde donde se ejecuta `JettraStoreExplorer`.
-* **`<puerto-tcp>`:** Puerto TCP asignado al clúster (puerto expuesto en el host en despliegues con Docker Compose).
-* **`[:<rol>]` (Opcional):** Rol asignado en la topología (`PRIMARY` o `SECONDARY`). Si se omite, `node-01` se asume como `PRIMARY` y los demás como `SECONDARY`.
-
-###### 2. Mapeo frente a `docker-compose.yml` (JettraStoreExplorer ejecutándose en el Host)
-Cuando `docker-compose.yml` corre en una máquina de desarrollo local y `JettraStoreExplorer` se ejecuta desde la estación de trabajo (ej. IDE o consola en el Host), los contenedores exponen sus puertos al host de la siguiente manera:
-
-| Contenedor Docker | Rol Raft | Puerto Interno Contenedor | Puerto Mapeado al Host | Entrada en `cluster.nodes` |
-|:---|:---:|:---:|:---:|:---|
-| `jettra-node-01` | **PRIMARY** | `50001` (gRPC), `60001` (REST) | **`50001`** (gRPC), `60001` (REST) | `node-01:127.0.0.1:50001` (o `:PRIMARY`) |
-| `jettra-node-02` | **SECONDARY** | `50002` (gRPC), `60002` (REST) | **`50002`** (gRPC), `60002` (REST) | `node-02:127.0.0.1:50002` (o `:SECONDARY`) |
-| `jettra-node-03` | **SECONDARY** | `50003` (gRPC), `60003` (REST) | **`50003`** (gRPC), `60003` (REST) | `node-03:127.0.0.1:50003` (o `:SECONDARY`) |
-
-> **¿Por qué los puertos se incrementan a `50001`, `50002`, `50003` y `60001`, `60002`, `60003` en el host?**  
-> Para evitar colisiones en la interfaz `127.0.0.1` del sistema anfitrión, cada contenedor expone y mapea su propio rango unívoco de puertos TCP (`50001+` para Raft/gRPC y `60001+` para REST). Por tanto, cualquier cliente externo en el host se comunica usando dichos puertos.
-
-**Configuración recomendada en `JettraStoreExplorer/src/main/resources/microprofile-config.properties`:**
-```properties
-# Nodos del Clúster JettraStore en Docker Compose (Host Local)
-cluster.nodes=node-01:127.0.0.1:50001,node-02:127.0.0.1:50002,node-03:127.0.0.1:50003
-```
-*O con roles explícitos:*
-```properties
-cluster.nodes=node-01:127.0.0.1:50001:PRIMARY,node-02:127.0.0.1:50002:SECONDARY,node-03:127.0.0.1:50003:SECONDARY
+# Punto de entrada al Clúster JettraStore en Docker Compose (Host Local)
+cluster.ip.nodes=127.0.0.1:50001
 ```
 
-###### 3. Escenario Alternativo: JettraStoreExplorer dentro de la Red Docker (`jettra-cluster-net`)
-Si `JettraStoreExplorer` se empaqueta e inicia dentro de un contenedor Docker conectado a la misma red bridge `jettra-cluster-net`, la comunicación ocurre mediante los nombres de servicio DNS internos en el puerto nativo `50001`:
+###### Escenario Alternativo: JettraStoreExplorer dentro de la Red Docker (`jettra-cluster-net`)
+Si `JettraStoreExplorer` se ejecuta dentro de un contenedor Docker conectado a `jettra-cluster-net`, utiliza el nombre de servicio DNS del nodo líder (`jettra-node-01:50001`):
 ```properties
-# Nodos del Clúster JettraStore dentro de la Red Bridge Docker
-cluster.nodes=node-01:jettra-node-01:50001,node-02:jettra-node-02:50001,node-03:jettra-node-03:50001
+cluster.ip.nodes=jettra-node-01:50001
 ```
 
 ---
@@ -3716,6 +3690,54 @@ docker ps -a --format "table {{.ID}}\t{{.Names}}\t{{.Status}}\t{{.Ports}}"
 cat /proc/sys/net/ipv4/ip_local_port_range
 ```
 
+
+### 6.5 Gestión Permanente del Estado de Membresía (`jettra.cluster_state_config_dir` y `cluster-state.config`) — RF-32
+
+Para garantizar que altas dinámicas de nodos, paradas (`STOPPED`), arranques (`RUNNING`) y remociones sobrevivan reinicios completos tanto con `java -jar` como en contenedores Docker sin sobrescribir configuraciones de despliegue, **JettraStore** separa estrictamente:
+
+| Archivo / Propiedad | Naturaleza | Comportamiento en tiempo de ejecución |
+| :--- | :--- | :--- |
+| `jettra.cluster_state_config_dir` (env `JETTRA_CLUSTER_STATE_CONFIG_DIR`) | Directorio de estado persistente | Resuelve `~` / variables (`$HOME`, `${VAR}`). Si no existe, se crea automáticamente en el arranque (`Files.createDirectories`) y se validan permisos de lectura y escritura. Valor por defecto: `~/jettra-cluster-state/` (`java -jar`) o `/jettra/cluster-state` (Docker). |
+| `<jettra.cluster_state_config_dir>/cluster-state.config` | Estado vivo del clúster | Fuente autoritativa de membresía (`PRIMARY`/`SECONDARY`, IPs, `grpc.port`, `rest.port`, `status` = `RUNNING`/`STOPPED`/`STANDBY` y `cluster.state.version`). Se persiste de forma atómica (`.tmp` + `fsync` mediante `FileChannel.force(true)` + `ATOMIC_MOVE`). |
+| `cluster.config` (opcional) | Semilla estática read-only | Si `cluster-state.config` no existe y `cluster.config` está presente, siembra `cluster-state.config` una sola vez sin modificarse jamás. Si `cluster-state.config` ya existe, prevalece siempre sobre `cluster.config`. |
+
+#### Arranque en Modo `STANDBY` (`UNASSIGNED`)
+Si un nodo inicia sin `cluster-state.config` ni `cluster.config` (y sin pares configurados en `cluster.multinode.active=on`), **no fabrica nodos ficticios**: entra en modo **`STANDBY`**, expone `node_state="STANDBY"` y `role="UNASSIGNED"` en `/api/v1/health`, y mantiene su transporte Raft escuchando para ser incorporado desde `JettraStoreDriver`, `JettraStoreShell` o `JettraStoreExplorer`, momento en el que recibe y persiste `cluster-state.config` replicado desde el `PRIMARY`.
+
+#### Replicación y Reconciliación Automática
+* Toda mutación de membresía (`ADD NODE`, `STOP NODE`, `START NODE`, `REMOVE NODE`) actualiza primero `cluster-state.config` en el `PRIMARY` y replica los bytes canónicos a cada `SECONDARY` activo (`TYPE_SYNC_CLUSTER_CONFIG`).
+* Si el clúster completo se detiene y se vuelve a iniciar, cada nodo recarga su `<jettra.cluster_state_config_dir>/cluster-state.config` conservando la última topología y el estado real de cada miembro.
+
+#### Ejemplos Prácticos (`java -jar` y Docker Compose)
+
+```properties
+# microprofile-config.properties del nodo
+cluster.node.id=node-01
+cluster.node.role=PRIMARY
+jettra.storage.path=~/jettra-storage-01/data
+jettra.cluster_state_config_dir=~/jettra-storage-01/statedir
+cluster.multinode.active=on
+```
+
+```bash
+# Ejecución bare-metal con semilla inicial opcional en solo lectura
+java -jar target/JettraStore-1.0-SNAPSHOT.jar \
+  -Djettra.cluster_state_config_dir=$HOME/jettra-storage-01/statedir \
+  -Dcluster.config.path=$HOME/jettra/config/cluster.config
+```
+
+```yaml
+# Fragmento en docker-compose.yml / docker-compose-hub.yml (RF-32)
+services:
+  jettrastore:
+    image: avbravo/jettrastore:1.0-SNAPSHOT
+    environment:
+      - JETTRA_CLUSTER_STATE_CONFIG_DIR=/jettra/cluster-state
+      - JETTRA_STORAGE_PATH=/jettra/data
+    volumes:
+      - jettrastore_hub_data:/jettra/data
+      - jettrastore_hub_state:/jettra/cluster-state
+```
 
 ---
 

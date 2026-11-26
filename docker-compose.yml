@@ -20,6 +20,7 @@ services:
       - JETTRA_NODE_ROLE=PRIMARY
       - JETTRA_NODE_IP=jettra-node-01
       - JETTRA_STORAGE_PATH=/jettra/data
+      - JETTRA_CLUSTER_STATE_CONFIG_DIR=/jettra/cluster-state
       - JETTRA_STORAGE_MODE=${JETTRA_STORAGE_MODE:-OFF_HEAP}
       - JETTRA_MULTINODE_ACTIVE=on
       - JETTRA_CLUSTER_CONFIG_PATH=/jettra/config/cluster.config
@@ -36,6 +37,7 @@ services:
     volumes:
       - jettra_data_node01:/jettra/data
       - jettra_checkpoint_node01:/jettra/checkpoint
+      - jettra_state_node01:/jettra/cluster-state
       - ./docker/cluster-3nodes.config:/jettra/config/cluster.config:ro
     networks:
       - jettra-cluster-net
@@ -66,6 +68,7 @@ services:
       - JETTRA_NODE_ROLE=SECONDARY
       - JETTRA_NODE_IP=jettra-node-02
       - JETTRA_STORAGE_PATH=/jettra/data
+      - JETTRA_CLUSTER_STATE_CONFIG_DIR=/jettra/cluster-state
       - JETTRA_STORAGE_MODE=${JETTRA_STORAGE_MODE:-OFF_HEAP}
       - JETTRA_MULTINODE_ACTIVE=on
       - JETTRA_CLUSTER_CONFIG_PATH=/jettra/config/cluster.config
@@ -82,6 +85,7 @@ services:
     volumes:
       - jettra_data_node02:/jettra/data
       - jettra_checkpoint_node02:/jettra/checkpoint
+      - jettra_state_node02:/jettra/cluster-state
       - ./docker/cluster-3nodes.config:/jettra/config/cluster.config:ro
     networks:
       - jettra-cluster-net
@@ -112,6 +116,7 @@ services:
       - JETTRA_NODE_ROLE=SECONDARY
       - JETTRA_NODE_IP=jettra-node-03
       - JETTRA_STORAGE_PATH=/jettra/data
+      - JETTRA_CLUSTER_STATE_CONFIG_DIR=/jettra/cluster-state
       - JETTRA_STORAGE_MODE=${JETTRA_STORAGE_MODE:-OFF_HEAP}
       - JETTRA_MULTINODE_ACTIVE=on
       - JETTRA_CLUSTER_CONFIG_PATH=/jettra/config/cluster.config
@@ -128,6 +133,7 @@ services:
     volumes:
       - jettra_data_node03:/jettra/data
       - jettra_checkpoint_node03:/jettra/checkpoint
+      - jettra_state_node03:/jettra/cluster-state
       - ./docker/cluster-3nodes.config:/jettra/config/cluster.config:ro
     networks:
       - jettra-cluster-net
@@ -154,12 +160,15 @@ services:
       - JETTRA_HOST=jettra-node-01
       - JETTRA_PORT=50001
       - MICROPROFILE_CONFIG_FILE=/app/config/microprofile-config.properties
-      - JAVA_OPTS=-Xms48m -Xmx192m -XX:MaxMetaspaceSize=128m -XX:MaxDirectMemorySize=96m -Dcluster.config.path=/jettra/config/cluster.config -Dcluster.nodes=node-01:jettra-node-01:50001,node-02:jettra-node-02:50002,node-03:jettra-node-03:50003
+      - JETTRA_CONNECTION_CONFIG_DIR=/app/config
+      - CLUSTER_IP_NODES=${CLUSTER_IP_NODES:-jettra-node-01:50001}
+      - JAVA_OPTS=-Xms48m -Xmx192m -XX:MaxMetaspaceSize=128m -XX:MaxDirectMemorySize=96m -Dcluster.config.path=/jettra/config/cluster.config -Dcluster.ip.nodes=${CLUSTER_IP_NODES:-jettra-node-01:50001}
     mem_limit: 320m
     mem_reservation: 48m
     cpus: 0.5
     volumes:
       - jettra_shell_data:/home/jettra/.jettra
+      - jettra_shell_config:/app/config
       - ./docker/cluster-3nodes.config:/jettra/config/cluster.config:ro
     networks:
       - jettra-cluster-net
@@ -183,12 +192,15 @@ services:
       - STORAGE_MODE=${JETTRA_STORAGE_MODE:-OFF_HEAP}
       - JETTRA_DOCKER_COMPOSE=true
       - MICROPROFILE_CONFIG_FILE=/app/config/microprofile-config.properties
-      - JAVA_OPTS=-Xms96m -Xmx384m -XX:MaxMetaspaceSize=192m -XX:MaxDirectMemorySize=128m -Dcluster.config.path=/jettra/config/cluster.config -Dcluster.nodes=node-01:jettra-node-01:50001,node-02:jettra-node-02:50002,node-03:jettra-node-03:50003
+      - JETTRA_CONNECTION_CONFIG_DIR=/app/config
+      - CLUSTER_IP_NODES=${CLUSTER_IP_NODES:-jettra-node-01:50001}
+      - JAVA_OPTS=-Xms96m -Xmx384m -XX:MaxMetaspaceSize=192m -XX:MaxDirectMemorySize=128m -Dcluster.config.path=/jettra/config/cluster.config -Dcluster.ip.nodes=${CLUSTER_IP_NODES:-jettra-node-01:50001}
     mem_limit: 512m
     mem_reservation: 128m
     cpus: 1.0
     volumes:
       - jettra_explorer_memory:/app/memory
+      - jettra_explorer_config:/app/config
       - ./docker/cluster-3nodes.config:/jettra/config/cluster.config:ro
     networks:
       - jettra-cluster-net
@@ -221,8 +233,23 @@ volumes:
   jettra_shell_data:
     name: jettra_shell_data
     driver: local
+  jettra_shell_config:
+    name: jettra_shell_config
+    driver: local
   jettra_explorer_memory:
     name: jettra_explorer_memory
+    driver: local
+  jettra_explorer_config:
+    name: jettra_explorer_config
+    driver: local
+  jettra_state_node01:
+    name: jettra_state_node01
+    driver: local
+  jettra_state_node02:
+    name: jettra_state_node02
+    driver: local
+  jettra_state_node03:
+    name: jettra_state_node03
     driver: local
 
 networks:

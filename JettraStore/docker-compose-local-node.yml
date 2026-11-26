@@ -19,6 +19,7 @@ services:
       - JETTRA_NODE_ROLE=PRIMARY
       - JETTRA_NODE_IP=jettra-node-01
       - JETTRA_STORAGE_PATH=/jettra/data
+      - JETTRA_CLUSTER_STATE_CONFIG_DIR=/jettra/cluster-state
       - JETTRA_STORAGE_MODE=${JETTRA_STORAGE_MODE:-OFF_HEAP}
       - JETTRA_MULTINODE_ACTIVE=off
       - JETTRA_REST_PORT=60001
@@ -32,6 +33,7 @@ services:
     volumes:
       - jettra_single_data_node01:/jettra/data
       - jettra_single_checkpoint_node01:/jettra/checkpoint
+      - jettra_single_state_node01:/jettra/cluster-state
     networks:
       - jettra-single-net
     healthcheck:
@@ -47,6 +49,9 @@ volumes:
     driver: local
   jettra_single_checkpoint_node01:
     name: jettra_single_checkpoint_node01
+    driver: local
+  jettra_single_state_node01:
+    name: jettra_single_state_node01
     driver: local
 
 networks:

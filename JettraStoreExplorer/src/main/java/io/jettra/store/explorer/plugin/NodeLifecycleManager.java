@@ -118,6 +118,23 @@ public final class NodeLifecycleManager {
         }
     }
 
+    /**
+     * Cierra todos los recursos de red registrados localmente para asegurar que no queden sockets abiertos.
+     */
+    public int closeAllManagedEndpoints() {
+        int closedCount = 0;
+        for (String key : List.copyOf(managedEndpoints.keySet())) {
+            AutoCloseable resource = managedEndpoints.remove(key);
+            if (resource != null) {
+                try {
+                    resource.close();
+                    closedCount++;
+                } catch (Exception ignored) {}
+            }
+        }
+        return closedCount;
+    }
+
     public void registerRestPortHint(String nodeId, int restPort) {
         if (nodeId != null && restPort > 0) {
             restPortHints.put(nodeId.trim().toLowerCase(), restPort);

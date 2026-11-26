@@ -2601,27 +2601,29 @@ logout
 
 ---
 
-## Configuración Inicial del Clúster mediante `microprofile-config.properties` (`cluster.nodes`)
+## Configuración Inicial del Clúster mediante `microprofile-config.properties` (`cluster.ip.nodes`)
 
-`JettraStoreShell` utiliza **Eclipse MicroProfile Config 3.1** a través de `src/main/resources/META-INF/microprofile-config.properties` (o `./microprofile-config.properties` / `./config/microprofile-config.properties` en disco) para cargar la topología inicial de conexiones del clúster:
+`JettraStoreShell` utiliza **Eclipse MicroProfile Config 3.1** a través de `src/main/resources/META-INF/microprofile-config.properties` (o `./microprofile-config.properties` / `./config/microprofile-config.properties` en disco) para cargar el punto de entrada inicial del clúster (`cluster.ip.nodes`), consultar el estado vivo en `cluster-state.config` del nodo `PRIMARY` y persistir cambios de conexión en `conecction.config`:
 
 ```properties
 # JettraStore Shell Configuration (Eclipse MicroProfile Config 3.1)
 app.title=JettraStore Shell
 cluster.multinode.active=on
 cluster.healthcheck.timeout.ms=1000
-cluster.nodes=node-01:127.0.0.1:50001,node-02:127.0.0.1:50002,node-03:127.0.0.1:50003
+jettra.cluster_state_config_dir=~/jettra-cluster-state/
+cluster.ip.nodes=127.0.0.1:50001
 ```
 
-### Actualización Automática al Modificar Conexiones o Nodos
-Cada vez que el usuario ejecuta alguno de los siguientes comandos en `JettraStoreShell`, el archivo `microprofile-config.properties` se actualiza automáticamente reescribiendo la propiedad `cluster.nodes` (sin alterar comentarios ni otras propiedades):
+### Actualización de Conexiones y Topología del Clúster
+Al ejecutar operaciones de conexión o administración de nodos en `JettraStoreShell`, el shell sincroniza `conecction.config` y `cluster-state.config` sin modificar `microprofile-config.properties` con `cluster.nodes`:
 
-| Comando | Efecto en `microprofile-config.properties` |
+| Comando | Efecto |
 | :--- | :--- |
-| `SAVE CONNECTION <nombre> <host> <puerto> [user]` | Agrega o actualiza `<nombre>:<host>:<puerto>` en `cluster.nodes`. |
-| `REMOVE CONNECTION <nombre>` | Elimina `<nombre>` de `cluster.nodes`. |
-| `ADD NODE <nodeId> <host> <port> [PRIMARY\|SECONDARY]` | Registra el nodo en el clúster Raft y agrega `<nodeId>:<host>:<port>` en `cluster.nodes`. |
-| `REMOVE NODE <nodeId>` | Remueve el nodo del anillo Raft y lo elimina de `cluster.nodes`. |
+| `SAVE CONNECTION <nombre> <host> <puerto> [user]` | Guarda o actualiza el perfil de conexión en las conexiones locales del shell. |
+| `REMOVE CONNECTION <nombre>` | Elimina el perfil de conexión guardado. |
+| `CONNECTION SET <host:puerto[,...]>` | Persiste los endpoints de acceso al clúster en `conecction.config`. |
+| `ADD NODE <nodeId> <host> <port> [PRIMARY\|SECONDARY]` | Registra el nodo en el clúster Raft y actualiza `cluster-state.config`. |
+| `REMOVE NODE <nodeId>` | Remueve el nodo del anillo Raft y actualiza `cluster-state.config`. |
 
 > También puede especificarse un archivo externo mediante la propiedad JVM `-Djettra.shell.config.file=/ruta/microprofile-config.properties` o `-Dmicroprofile.config.file=/ruta/microprofile-config.properties`.
 
@@ -2841,4 +2843,63 @@ jettra-shell [admin@127.0.0.1:50001/no-db]> show nodes
 jettra-shell [admin@127.0.0.1:50001/no-db]> start node node-01
 jettra-shell [admin@127.0.0.1:50001/no-db]> SHOW DATABASES
 ```
+
+---
+
+## Gestión Permanente del Estado de Membresía (`cluster-state.config`) — RF-32
+
+**JettraStoreShell** opera directamente sobre el estado vivo persistente `<jettra.cluster_state_config_dir>/cluster-state.config`, manteniendo intacta la semilla estática opcional `cluster.config`.
+
+### 1. Comandos de Estado de Clúster en Shell
+| Comando | Descripción |
+| :--- | :--- |
+| `SHOW CLUSTER STATE` / `SHOW CLUSTER CONFIG` | Muestra el contenido persistido en `cluster-state.config` (priorizando la respuesta en vivo del `PRIMARY` y mostrando versión e estado de cada nodo). |
+| `SYNC CLUSTER STATE` / `SYNC CLUSTER CONFIG` | Reconcilia el archivo local `cluster-state.config` desde el nodo `PRIMARY` sin sobrescribir cambios más recientes ni alterar `cluster.config`. |
+| `ADD NODE <id> <host> <grpcPort> [PRIMARY\|SECONDARY] [restPort]` | Incorpora un nodo (incluyendo nodos en modo `STANDBY`), actualiza `cluster-state.config` de forma atómica en el `PRIMARY` y replica hacia todos los `SECONDARY`. |
+| `STOP NODE <id>` / `START NODE <id>` | Detiene o inicia el nodo, actualiza su `status` (`STOPPED` / `RUNNING`) en `cluster-state.config` y difunde el cambio al quórum. |
+| `REMOVE NODE <id>` | Expulsa un nodo previamente detenido (`STOPPED`) de `cluster-state.config` en el `PRIMARY` y los `SECONDARY`. |
+
+### 2. Ejemplo Práctico de Ciclo de Vida y Configuración (`java -jar` y Docker)
+```bash
+# Iniciar Shell especificando el directorio persistente de estado del clúster
+java -jar target/JettraStoreShell-1.0-SNAPSHOT.jar \
+  -Djettra.cluster_state_config_dir=$HOME/jettra-cluster-state
+```
+
+```text
+jettra-shell [admin@127.0.0.1:50001/no-db]> SHOW CLUSTER STATE
+jettra-shell [admin@127.0.0.1:50001/no-db]> ADD NODE node-03 127.0.0.1 50003 SECONDARY 60003
+jettra-shell [admin@127.0.0.1:50001/no-db]> show nodes
+jettra-shell [admin@127.0.0.1:50001/no-db]> STOP NODE node-03
+jettra-shell [admin@127.0.0.1:50001/no-db]> SYNC CLUSTER STATE
+jettra-shell [admin@127.0.0.1:50001/no-db]> REMOVE NODE node-03
+```
+
+> Verificación automatizada en `JettraStoreShell`: `ClusterStateShellTest` valida con `JettraTest` que `SHOW CLUSTER STATE`, `ADD NODE`, `STOP NODE`, `SYNC CLUSTER STATE` y `REMOVE NODE` persisten en `cluster-state.config` en `PRIMARY` y `SECONDARY` dejando intacto `cluster.config`.
+
+---
+
+## Conexión Inicial (`cluster.ip.nodes`), `conecction.config` y Estado en Tiempo Real desde `cluster-state.config` del `PRIMARY` (RF-32)
+
+### 1. Precedencia de Carga y Persistencia Atómica (`conecction.config`)
+Al iniciar **JettraStoreShell**:
+1. Si existe `conecction.config` en el directorio de ejecución (o en `/app/config/conecction.config` dentro del volumen persistente `jettra_shell_config:/app/config` en Docker mediante `JETTRA_CONNECTION_CONFIG_DIR=/app/config`), carga automáticamente las direcciones guardadas.
+2. Si `conecction.config` aún no existe, toma `cluster.ip.nodes=127.0.0.1:50001` desde `microprofile-config.properties` (soportando uno o varios pares `host:port` separados por coma) y persiste `conecction.config` atómicamente (temporal + `fsync` + `ATOMIC_MOVE`) cuando el usuario edita o guarda su conexión.
+
+### 2. Comandos `/connections` y Resolución Dinámica del `PRIMARY`
+| Comando en Consola | Acción |
+| :--- | :--- |
+| `/connections` / `CONNECTIONS` | Muestra origen cargado (`conecction.config` vs `cluster.ip.nodes`), ruta local/volumen, `PRIMARY` resuelto, versión de `cluster-state.config` y detalle en vivo de todos los nodos. |
+| `/connections <host:port[,...]> [usuario]` | Edita la conexión activa, guarda atómicamente en `conecction.config`, sigue cualquier nodo secundario hasta el `PRIMARY` vigente y sincroniza operaciones y topología en tiempo real. |
+| `/connections <host:port[,...]> [usuario] --no-save` | Aplica y sincroniza la conexión en memoria sin modificar `conecction.config`. |
+| `SET CONNECTION <host:port[,...]>` / `EDIT CONNECTION <host:port[,...]>` | Alias equivalentes para actualizar y guardar la conexión activa en `conecction.config`. |
+| `CONNECT <host:port> [--save]` | Conecta apuntando al endpoint indicado (siguiendo al `PRIMARY` si aplica) y guarda opcionalmente en `conecction.config`. |
+
+### 3. Sincronización en Tiempo Real en Virtual Threads y Docker Compose
+* Un worker ligero en Virtual Thread (`jettra-shell-status-sync`) sincroniza continuamente el estado real desde `cluster-state.config` del nodo `PRIMARY`, actualizando los nodos activos/detenidos/removidos, la detección de disponibilidad de operaciones de base de datos y las salidas de `show nodes` y `SHOW CLUSTER STATE`.
+* En `JettraStoreShell/Dockerfile`, `JettraStoreShell/docker-compose.yml` y los manifiestos raíz `docker-compose*.yml`, el volumen `/app/config` (`jettra_shell_config` / `jettra_single_shell_config`) preserva `conecction.config` ante recreación del contenedor.
+
+> Verificación automatizada (`JettraTest`): `ConnectionConfigShellTest` valida la carga inicial `127.0.0.1:50001`, el comando `/connections` conectado vía un `SECONDARY` con resolución hacia `PRIMARY`, la lectura de `cluster-state.config` y la recarga persistente desde `conecction.config`.
+
+
 

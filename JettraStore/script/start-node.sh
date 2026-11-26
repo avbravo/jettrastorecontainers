@@ -74,6 +74,15 @@ echo "JVM Opts        : ${JETTRA_JAVA_OPTS}"
 echo "=============================================================================="
 
 # shellcheck disable=SC2086
+CLUSTER_FLAG=""
+if [ -f "${CLUSTER_CONFIG}" ]; then
+    CLUSTER_FLAG="-Dcluster.config.path=${CLUSTER_CONFIG}"
+fi
+STATE_DIR_FLAG=""
+if [ -n "${JETTRA_CLUSTER_STATE_CONFIG_DIR:-}" ]; then
+    STATE_DIR_FLAG="-Djettra.cluster_state_config_dir=${JETTRA_CLUSTER_STATE_CONFIG_DIR}"
+fi
+
 exec java --enable-preview \
      --enable-native-access=ALL-UNNAMED \
      -XX:+UnlockExperimentalVMOptions \
@@ -83,6 +92,7 @@ exec java --enable-preview \
      -Dcluster.node.role="${NODE_ROLE}" \
      -Djettra.node.id="${NODE_ID}" \
      -Djettra.node.role="${NODE_ROLE}" \
-     -Dcluster.config.path="${CLUSTER_CONFIG}" \
+     ${CLUSTER_FLAG} \
+     ${STATE_DIR_FLAG} \
      -Dmicroprofile.config.file="${MP_CONFIG}" \
      -jar "${JAR_FILE}"

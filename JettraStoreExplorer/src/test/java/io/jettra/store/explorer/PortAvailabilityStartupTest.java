@@ -3,6 +3,7 @@ package io.jettra.store.explorer;
 import io.jettra.server.core.JettraServer;
 import io.jettra.server.core.config.ServerConfig;
 import io.jettra.server.core.storage.StorageMode;
+import io.jettra.store.core.JettraClusterStateBackupManager;
 import io.jettra.store.explorer.plugin.JettraStorePlugin;
 import io.jettra.test.annotation.AfterAll;
 import io.jettra.test.annotation.BeforeAll;
@@ -33,9 +34,11 @@ public class PortAvailabilityStartupTest {
     private static String prevStoragePath;
     private static String prevMpConfig;
     private static String prevClusterConfig;
+    private static JettraClusterStateBackupManager.BackupHandle suiteStateBackup;
 
     @BeforeAll
     public static void setupIsolatedEnvironment() throws Exception {
+        suiteStateBackup = JettraClusterStateBackupManager.protectConfigured();
         prevStoragePath = System.getProperty("jettra.storage.path");
         prevMpConfig = System.getProperty("jettra.explorer.config.file");
         prevClusterConfig = System.getProperty("cluster.config.path");
@@ -68,13 +71,22 @@ public class PortAvailabilityStartupTest {
     @AfterAll
     public static void teardownIsolatedEnvironment() {
         try {
+            App.stopAllApplications();
+            io.jettra.store.JettraStoreServer.stopAllActiveServers();
             JettraExplorerTestCleanup.cleanAll(JettraStorePlugin.getInstance(), tempStorageDir);
-        } catch (Exception ignored) {
+            JettraAssert.assertEquals(0, App.getActiveApplicationCount());
+            JettraAssert.assertEquals(0, io.jettra.store.JettraStoreServer.getActiveServerCount());
+            JettraAssert.assertEquals(0, io.jettra.store.cluster.JettraClusterTransportServer.getActiveTransportCount());
+        } finally {
+            restoreProperty("jettra.storage.path", prevStoragePath);
+            restoreProperty("jettra.explorer.config.file", prevMpConfig);
+            restoreProperty("cluster.config.path", prevClusterConfig);
+            JettraExplorerTestCleanup.deleteRecursively(tempStorageDir);
+            if (suiteStateBackup != null) {
+                suiteStateBackup.close();
+                suiteStateBackup = null;
+            }
         }
-        restoreProperty("jettra.storage.path", prevStoragePath);
-        restoreProperty("jettra.explorer.config.file", prevMpConfig);
-        restoreProperty("cluster.config.path", prevClusterConfig);
-        JettraExplorerTestCleanup.deleteRecursively(tempStorageDir);
     }
 
     private static void restoreProperty(String key, String previous) {
@@ -187,11 +199,19 @@ public class PortAvailabilityStartupTest {
                     .redirectErrorStream(true)
                     .start();
 
-            boolean finished = proc.waitFor(15, TimeUnit.SECONDS);
-            if (!finished) {
-                proc.destroyForcibly();
+            boolean finished;
+            String output;
+            try {
+                finished = proc.waitFor(15, TimeUnit.SECONDS);
+                if (!finished) {
+                    proc.destroyForcibly();
+                }
+                output = new String(proc.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+            } finally {
+                if (proc.isAlive()) {
+                    proc.destroyForcibly();
+                }
             }
-            String output = new String(proc.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
 
             JettraAssert.assertTrue(finished, "El proceso de JettraStoreExplorer debe terminar rápidamente ante puerto ocupado");
             JettraAssert.assertEquals(1, proc.exitValue(),
@@ -202,5 +222,26 @@ public class PortAvailabilityStartupTest {
             JettraAssert.assertFalse(output.contains("java.net.BindException"),
                     "No debe imprimir stacktrace genérico de BindException. Salida: " + output);
         }
+    }
+
+    @Test
+    @DisplayName("stopAllApplications detiene múltiples servidores Explorer activos y libera todos sus puertos")
+    public void testStopAllApplicationsReleasesEveryOpenedPort() throws Exception {
+        int portA = findFreeLocalPort();
+        int portB = findFreeLocalPort();
+        try {
+            JettraServer srvA = App.startApplication(portA, StorageMode.OFF_HEAP);
+            JettraServer srvB = App.startApplication(portB, StorageMode.OFF_HEAP);
+            JettraAssert.assertTrue(srvA != null && srvA.isRunning());
+            JettraAssert.assertTrue(srvB != null && srvB.isRunning());
+            JettraAssert.assertTrue(App.getActiveApplicationCount() >= 2);
+            JettraAssert.assertFalse(App.isPortAvailable("127.0.0.1", portA));
+            JettraAssert.assertFalse(App.isPortAvailable("127.0.0.1", portB));
+        } finally {
+            App.stopAllApplications();
+        }
+        JettraAssert.assertEquals(0, App.getActiveApplicationCount());
+        JettraAssert.assertTrue(io.jettra.store.JettraStoreServer.awaitTcpPortAvailable("127.0.0.1", portA, 2000));
+        JettraAssert.assertTrue(io.jettra.store.JettraStoreServer.awaitTcpPortAvailable("127.0.0.1", portB, 2000));
     }
 }

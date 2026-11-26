@@ -68,10 +68,10 @@ public class ClusterConfigFluxView extends FluxView {
         }
 
         // 1. Cabecera y Metadatos del Origen (Nodo PRIMARY)
-        Header title = Header.of(2, "📄 Configuración del Clúster (cluster.config — Nodo PRIMARY)");
+        Header title = Header.of(2, "📄 Estado Persistente del Clúster (cluster-state.config — Nodo PRIMARY)");
         title.modifier(new Modifier().style("margin: 0 0 0.35rem 0; font-size: 1.25rem; color: #00d4ff;"));
 
-        Paragraph desc = Paragraph.of("Visualice y edite el archivo cluster.config del nodo PRIMARY. Antes de guardar o distribuir se verifica la integridad completa para evitar IDs de nodos y puertos gRPC/REST duplicados.");
+        Paragraph desc = Paragraph.of("Visualice y edite el archivo persistente cluster-state.config (inicializado opcionalmente desde cluster.config estático). Antes de guardar o distribuir se verifica la integridad completa para evitar IDs de nodos y puertos gRPC/REST duplicados.");
         desc.modifier(new Modifier().style("margin: 0 0 1rem 0; font-size: 0.85rem; color: var(--text-muted);"));
 
         String sourceLabel = snapshot.fromRemotePrimary()

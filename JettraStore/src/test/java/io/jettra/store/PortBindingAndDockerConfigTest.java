@@ -110,6 +110,10 @@ public class PortBindingAndDockerConfigTest extends JettraStoreBaseTest {
                     startedServer.stop();
                 }
             }
+            assertTrue(JettraStoreServer.awaitTcpPortAvailable("127.0.0.1", primaryRest, 2000),
+                    "El puerto REST primario " + primaryRest + " debe quedar libre tras el test");
+            assertTrue(JettraStoreServer.awaitTcpPortAvailable("127.0.0.1", fallbackRest, 2000),
+                    "El puerto REST alternativo " + fallbackRest + " debe quedar libre tras detener el servidor");
         } finally {
             JettraTestCleanup.deleteRecursively(tempDir);
         }
@@ -179,6 +183,71 @@ public class PortBindingAndDockerConfigTest extends JettraStoreBaseTest {
             if (n1 != null) try { n1.stop(); } catch (Exception ignored) {}
             JettraTestCleanup.deleteRecursively(tempDir);
         }
+        assertTrue(JettraStoreServer.awaitTcpPortAvailable("127.0.0.1", grpc1, 2000), "node-01 gRPC debe liberarse");
+        assertTrue(JettraStoreServer.awaitTcpPortAvailable("127.0.0.1", rest1, 2000), "node-01 REST debe liberarse");
+        assertTrue(JettraStoreServer.awaitTcpPortAvailable("127.0.0.1", grpc2, 2000), "node-02 gRPC debe liberarse");
+        assertTrue(JettraStoreServer.awaitTcpPortAvailable("127.0.0.1", rest2, 2000), "node-02 REST debe liberarse");
+    }
+
+    @Test
+    @DisplayName("stopAllActiveServers cierra todos los servidores y transportes activos y libera sus puertos")
+    public void testStopAllActiveServersReleasesAllOpenedPorts() throws Exception {
+        Path tempDir = Files.createTempDirectory("jettra_stop_all_ports_");
+        int g1 = findFreePort();
+        int r1 = findFreePort();
+        int g2 = findFreePort();
+        int r2 = findFreePort();
+        int extraTransportPort = findFreePort();
+
+        try {
+            Properties p1 = new Properties();
+            p1.setProperty("cluster.node.id", "node-stop-1");
+            p1.setProperty("cluster.node.role", "PRIMARY");
+            p1.setProperty("jettra.node.ip", "127.0.0.1");
+            p1.setProperty("jettra.network.grpc.port", String.valueOf(g1));
+            p1.setProperty("jettra.network.rest.port", String.valueOf(r1));
+            p1.setProperty("jettra.storage.path", tempDir.resolve("s1").toAbsolutePath().toString());
+            p1.setProperty("jettra.cluster_state_config_dir", tempDir.resolve("state1").toAbsolutePath().toString());
+            p1.setProperty("jettra.storage.mode", "JVM_RAM");
+            p1.setProperty("cluster.multinode.active", "off");
+            p1.setProperty("jettrapolice.active", "false");
+
+            Properties p2 = new Properties();
+            p2.setProperty("cluster.node.id", "node-stop-2");
+            p2.setProperty("cluster.node.role", "PRIMARY");
+            p2.setProperty("jettra.node.ip", "127.0.0.1");
+            p2.setProperty("jettra.network.grpc.port", String.valueOf(g2));
+            p2.setProperty("jettra.network.rest.port", String.valueOf(r2));
+            p2.setProperty("jettra.storage.path", tempDir.resolve("s2").toAbsolutePath().toString());
+            p2.setProperty("jettra.cluster_state_config_dir", tempDir.resolve("state2").toAbsolutePath().toString());
+            p2.setProperty("jettra.storage.mode", "JVM_RAM");
+            p2.setProperty("cluster.multinode.active", "off");
+            p2.setProperty("jettrapolice.active", "false");
+
+            JettraStoreServer s1 = new JettraStoreServer(new JettraStoreConfig(p1, new Properties(), p1));
+            JettraStoreServer s2 = new JettraStoreServer(new JettraStoreConfig(p2, new Properties(), p2));
+            io.jettra.store.cluster.JettraClusterTransportServer extraTransport =
+                    new io.jettra.store.cluster.JettraClusterTransportServer(extraTransportPort, s1);
+
+            s1.start();
+            s2.start();
+            extraTransport.start();
+
+            assertTrue(JettraStoreServer.getActiveServerCount() >= 2);
+            assertTrue(io.jettra.store.cluster.JettraClusterTransportServer.getActiveTransportCount() >= 1);
+            assertFalse(JettraStoreServer.isTcpPortAvailable("127.0.0.1", r1));
+            assertFalse(JettraStoreServer.isTcpPortAvailable("127.0.0.1", r2));
+            assertFalse(JettraStoreServer.isTcpPortAvailable("127.0.0.1", extraTransportPort));
+        } finally {
+            JettraStoreServer.stopAllActiveServers();
+            JettraTestCleanup.deleteRecursively(tempDir);
+        }
+
+        assertEquals(0, JettraStoreServer.getActiveServerCount());
+        assertEquals(0, io.jettra.store.cluster.JettraClusterTransportServer.getActiveTransportCount());
+        assertTrue(JettraStoreServer.awaitTcpPortAvailable("127.0.0.1", r1, 2000));
+        assertTrue(JettraStoreServer.awaitTcpPortAvailable("127.0.0.1", r2, 2000));
+        assertTrue(JettraStoreServer.awaitTcpPortAvailable("127.0.0.1", extraTransportPort, 2000));
     }
 
     @Test

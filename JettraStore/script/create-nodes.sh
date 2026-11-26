@@ -48,6 +48,8 @@ setup_node() {
     local node_dir="$HOME/jettra-$node_num"
     local storage_fs_path="$HOME/jettra-storage-${node_suffix}/data"
     local storage_prop_path="~/jettra-storage-${node_suffix}/data"
+    local state_fs_path="$HOME/jettra-storage-${node_suffix}/statedir"
+    local state_prop_path="~/jettra-storage-${node_suffix}/statedir"
     # Nota: microprofile-config.properties se copia dentro de config/, por lo que la ruta relativa interna es config/microprofile-config.properties
     local config_file="$node_dir/config/microprofile-config.properties"
     local start_node_file="$node_dir/start-node.sh"
@@ -55,9 +57,10 @@ setup_node() {
     echo "------------------------------------------------"
     echo "Configurando Nodo $node_num (Rol: $node_role)"
 
-    # 1. Crear directorios del nodo y de almacenamiento
+    # 1. Crear directorios del nodo, almacenamiento y estado persistente del clúster
     mkdir -p "$node_dir/config"
     mkdir -p "$storage_fs_path"
+    mkdir -p "$state_fs_path"
 
     # 2. Copiar archivos base de configuración desde sus nuevas rutas en src/main/resources
     cp "$PROJECT_ROOT/src/main/resources/cluster.config" "$node_dir/config/"
@@ -76,6 +79,7 @@ setup_node() {
     update_property "$config_file" "cluster.node.id" "$node_num" "="
     update_property "$config_file" "cluster.node.role" "$node_role" "="
     update_property "$config_file" "jettra.storage.path" "$storage_prop_path" " = "
+    update_property "$config_file" "jettra.cluster_state_config_dir" "$state_prop_path" "="
 
     # 6. Actualizar variables en el script start-node.sh copiado
     update_property "$start_node_file" "NODE_ID" "$node_num" "="

@@ -2,12 +2,15 @@ package io.jettra.store.cluster;
 
 import io.jettra.store.JettraStoreBaseTest;
 import io.jettra.store.JettraStoreServer;
+import io.jettra.store.JettraTestCleanup;
 import io.jettra.store.core.JettraStoreConfig;
 import io.jettra.test.annotation.Test;
 import io.jettra.test.annotation.DisplayName;
 import static io.jettra.test.core.JettraAssert.*;
 
 import java.io.IOException;
+import java.net.InetAddress;
+import java.net.ServerSocket;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
@@ -15,24 +18,32 @@ import java.util.Properties;
 
 public class JettraClusterReplicationTest extends JettraStoreBaseTest {
 
+    private static int freePort() throws IOException {
+        try (ServerSocket ss = new ServerSocket(0, 1, InetAddress.getByName("127.0.0.1"))) {
+            return ss.getLocalPort();
+        }
+    }
+
     @Test
     @DisplayName("Debe replicar creación y borrado de base de datos a través de JettraClusterTransport")
     public void testReplicationDatabaseLifecycle() throws IOException, InterruptedException {
         Path tempDir = Files.createTempDirectory("jettra_repl_test");
-        int testPort = 19091;
+        int testPort = freePort();
+        int primPort = freePort();
+        int restPort = freePort();
 
         Properties dbProps = new Properties();
         dbProps.setProperty("jettra.node.id", "node-02");
         dbProps.setProperty("jettra.node.role", "SECONDARY");
         dbProps.setProperty("jettra.storage.path", tempDir.toString());
         dbProps.setProperty("jettra.network.grpc.port", String.valueOf(testPort));
-        dbProps.setProperty("jettra.network.rest.port", "18082");
+        dbProps.setProperty("jettra.network.rest.port", String.valueOf(restPort));
         dbProps.setProperty("cluster.multinode.active", "on");
 
         Properties clusterProps = new Properties();
         clusterProps.setProperty("cluster.node.1.id", "node-01");
         clusterProps.setProperty("cluster.node.1.ip", "127.0.0.1");
-        clusterProps.setProperty("cluster.node.1.grpc.port", "19090");
+        clusterProps.setProperty("cluster.node.1.grpc.port", String.valueOf(primPort));
         clusterProps.setProperty("cluster.node.2.id", "node-02");
         clusterProps.setProperty("cluster.node.2.ip", "127.0.0.1");
         clusterProps.setProperty("cluster.node.2.grpc.port", String.valueOf(testPort));
@@ -106,7 +117,11 @@ public class JettraClusterReplicationTest extends JettraStoreBaseTest {
                 secondaryDbs = secondaryServer.listDatabaseNames();
                 assertFalse(secondaryDbs.contains("replicated_test_db"));
             }
+        } finally {
+            secondaryServer.stop();
+            JettraTestCleanup.deleteRecursively(tempDir);
         }
+        assertTrue(JettraStoreServer.isTcpPortAvailable("127.0.0.1", testPort), "Puerto de prueba debe quedar libre al finalizar");
     }
 
     @Test
@@ -114,15 +129,18 @@ public class JettraClusterReplicationTest extends JettraStoreBaseTest {
     public void testFullDatabaseDistributionWithRecords() throws IOException, InterruptedException {
         Path tempDirPrimary = Files.createTempDirectory("jettra_prim_dist");
         Path tempDirSecondary = Files.createTempDirectory("jettra_sec_dist");
-        int testPort = 19095;
+        int primPort = freePort();
+        int primRestPort = freePort();
+        int testPort = freePort();
+        int secRestPort = freePort();
 
         // Servidor primario
         Properties primProps = new Properties();
         primProps.setProperty("jettra.node.id", "node-01");
         primProps.setProperty("jettra.node.role", "PRIMARY");
         primProps.setProperty("jettra.storage.path", tempDirPrimary.toString());
-        primProps.setProperty("jettra.network.grpc.port", "19094");
-        primProps.setProperty("jettra.network.rest.port", "18084");
+        primProps.setProperty("jettra.network.grpc.port", String.valueOf(primPort));
+        primProps.setProperty("jettra.network.rest.port", String.valueOf(primRestPort));
         primProps.setProperty("cluster.multinode.active", "on");
 
         // Servidor secundario
@@ -131,13 +149,13 @@ public class JettraClusterReplicationTest extends JettraStoreBaseTest {
         secProps.setProperty("jettra.node.role", "SECONDARY");
         secProps.setProperty("jettra.storage.path", tempDirSecondary.toString());
         secProps.setProperty("jettra.network.grpc.port", String.valueOf(testPort));
-        secProps.setProperty("jettra.network.rest.port", "18085");
+        secProps.setProperty("jettra.network.rest.port", String.valueOf(secRestPort));
         secProps.setProperty("cluster.multinode.active", "on");
 
         Properties clusterProps = new Properties();
         clusterProps.setProperty("cluster.node.1.id", "node-01");
         clusterProps.setProperty("cluster.node.1.ip", "127.0.0.1");
-        clusterProps.setProperty("cluster.node.1.grpc.port", "19094");
+        clusterProps.setProperty("cluster.node.1.grpc.port", String.valueOf(primPort));
         clusterProps.setProperty("cluster.node.2.id", "node-02");
         clusterProps.setProperty("cluster.node.2.ip", "127.0.0.1");
         clusterProps.setProperty("cluster.node.2.grpc.port", String.valueOf(testPort));
@@ -220,48 +238,60 @@ public class JettraClusterReplicationTest extends JettraStoreBaseTest {
                 assertNotNull(secRecEng.find("r1"));
                 assertEquals("Admin", secRecEng.find("r1").name());
             }
+        } finally {
+            primServer.stop();
+            secServer.stop();
+            JettraTestCleanup.deleteRecursively(tempDirPrimary);
+            JettraTestCleanup.deleteRecursively(tempDirSecondary);
         }
+        assertTrue(JettraStoreServer.awaitTcpPortAvailable("127.0.0.1", testPort, 2000));
     }
 
     @Test
     @DisplayName("Debe ejecutar failover automático y promover nodo secundario a PRIMARY al detenerse el nodo primario")
     public void testFailoverAndPromotion() throws IOException, InterruptedException {
         Path tempDir = Files.createTempDirectory("jettra_failover_test");
-        int testPort = 19098;
+        int primPort = freePort();
+        int testPort = freePort();
+        int secRestPort = freePort();
 
-        Properties dbProps = new Properties();
-        dbProps.setProperty("jettra.node.id", "node-02");
-        dbProps.setProperty("jettra.node.role", "SECONDARY");
-        dbProps.setProperty("jettra.storage.path", tempDir.toString());
-        dbProps.setProperty("jettra.network.grpc.port", String.valueOf(testPort));
-        dbProps.setProperty("jettra.network.rest.port", "18088");
-        dbProps.setProperty("cluster.multinode.active", "on");
+        try {
+            Properties dbProps = new Properties();
+            dbProps.setProperty("jettra.node.id", "node-02");
+            dbProps.setProperty("jettra.node.role", "SECONDARY");
+            dbProps.setProperty("jettra.storage.path", tempDir.toString());
+            dbProps.setProperty("jettra.network.grpc.port", String.valueOf(testPort));
+            dbProps.setProperty("jettra.network.rest.port", String.valueOf(secRestPort));
+            dbProps.setProperty("cluster.multinode.active", "on");
 
-        Properties clusterProps = new Properties();
-        clusterProps.setProperty("cluster.node.1.id", "node-01");
-        clusterProps.setProperty("cluster.node.1.ip", "127.0.0.1");
-        clusterProps.setProperty("cluster.node.1.grpc.port", "19090");
-        clusterProps.setProperty("cluster.node.1.role", "PRIMARY");
-        clusterProps.setProperty("cluster.node.2.id", "node-02");
-        clusterProps.setProperty("cluster.node.2.ip", "127.0.0.1");
-        clusterProps.setProperty("cluster.node.2.grpc.port", String.valueOf(testPort));
-        clusterProps.setProperty("cluster.node.2.role", "SECONDARY");
+            Properties clusterProps = new Properties();
+            clusterProps.setProperty("cluster.node.1.id", "node-01");
+            clusterProps.setProperty("cluster.node.1.ip", "127.0.0.1");
+            clusterProps.setProperty("cluster.node.1.grpc.port", String.valueOf(primPort));
+            clusterProps.setProperty("cluster.node.1.role", "PRIMARY");
+            clusterProps.setProperty("cluster.node.2.id", "node-02");
+            clusterProps.setProperty("cluster.node.2.ip", "127.0.0.1");
+            clusterProps.setProperty("cluster.node.2.grpc.port", String.valueOf(testPort));
+            clusterProps.setProperty("cluster.node.2.role", "SECONDARY");
 
-        JettraStoreConfig secConfig = new JettraStoreConfig(dbProps, clusterProps);
-        JettraStoreServer secServer = new JettraStoreServer(secConfig);
+            JettraStoreConfig secConfig = new JettraStoreConfig(dbProps, clusterProps);
+            try (JettraStoreServer secServer = new JettraStoreServer(secConfig)) {
+                assertEquals(ClusterNode.Role.SECONDARY, secServer.getConfig().getNodeRole());
 
-        assertEquals(ClusterNode.Role.SECONDARY, secServer.getConfig().getNodeRole());
+                // Simular que el PRIMARY 'node-01' se detiene limpiamente
+                secServer.handleNodeStopping("node-01", "Graceful shutdown test");
 
-        // Simular que el PRIMARY 'node-01' se detiene limpiamente
-        secServer.handleNodeStopping("node-01", "Graceful shutdown test");
+                // El nodo secundario debe promoverse a PRIMARY
+                assertEquals(ClusterNode.Role.PRIMARY, secServer.getConfig().getNodeRole());
 
-        // El nodo secundario debe promoverse a PRIMARY
-        assertEquals(ClusterNode.Role.PRIMARY, secServer.getConfig().getNodeRole());
-
-        // Validar que el evento fue emitido en el bus de eventos
-        List<ClusterLiveEvent> events = JettraClusterEventBus.getInstance().getRecentEvents(10);
-        boolean foundPromoted = events.stream().anyMatch(e -> ClusterLiveEvent.TYPE_LEADER_PROMOTED.equals(e.type()));
-        assertTrue(foundPromoted);
+                // Validar que el evento fue emitido en el bus de eventos
+                List<ClusterLiveEvent> events = JettraClusterEventBus.getInstance().getRecentEvents(10);
+                boolean foundPromoted = events.stream().anyMatch(e -> ClusterLiveEvent.TYPE_LEADER_PROMOTED.equals(e.type()));
+                assertTrue(foundPromoted);
+            }
+        } finally {
+            JettraTestCleanup.deleteRecursively(tempDir);
+        }
     }
 
     @Test
@@ -298,15 +328,16 @@ public class JettraClusterReplicationTest extends JettraStoreBaseTest {
     @DisplayName("Debe ajustar dinámicamente el consenso cuando uno o más nodos están desconectados")
     public void testDynamicConsensusWithDisconnectedPeers() throws IOException, InterruptedException {
         Path tempDir = Files.createTempDirectory("jettra_dyn_consensus");
-        int activePeerPort = 19120;
-        int deadPeerPort = 19129; // Puerto donde no corre ningún servicio
+        int activePeerPort = freePort();
+        int deadPeerPort = freePort(); // Puerto libre donde no corre ningún servicio
+        int secRestPort = freePort();
 
         Properties secProps = new Properties();
         secProps.setProperty("jettra.node.id", "node-02");
         secProps.setProperty("jettra.node.role", "SECONDARY");
         secProps.setProperty("jettra.storage.path", tempDir.toString());
         secProps.setProperty("jettra.network.grpc.port", String.valueOf(activePeerPort));
-        secProps.setProperty("jettra.network.rest.port", "18090");
+        secProps.setProperty("jettra.network.rest.port", String.valueOf(secRestPort));
         secProps.setProperty("cluster.multinode.active", "on");
 
         JettraStoreConfig secConfig = new JettraStoreConfig(secProps, new Properties());
@@ -331,7 +362,11 @@ public class JettraClusterReplicationTest extends JettraStoreBaseTest {
                 boolean okAlone = clientB.broadcastCreateDatabase("solo_node_db");
                 assertTrue(okAlone);
             }
+        } finally {
+            secServer.stop();
+            JettraTestCleanup.deleteRecursively(tempDir);
         }
+        assertTrue(JettraStoreServer.isTcpPortAvailable("127.0.0.1", activePeerPort));
     }
 
     @Test
@@ -339,8 +374,10 @@ public class JettraClusterReplicationTest extends JettraStoreBaseTest {
     public void testSecondaryNodeStartupSynchronizationFlow() throws IOException, InterruptedException {
         Path primaryDir = Files.createTempDirectory("jettra_prim_sync");
         Path secondaryDir = Files.createTempDirectory("jettra_sec_sync");
-        int primPort = 19130;
-        int secPort = 19135;
+        int primPort = freePort();
+        int primRestPort = freePort();
+        int secPort = freePort();
+        int secRestPort = freePort();
 
         // Configuración y datos en PRIMARY
         Properties primDbProps = new Properties();
@@ -348,7 +385,7 @@ public class JettraClusterReplicationTest extends JettraStoreBaseTest {
         primDbProps.setProperty("jettra.node.role", "PRIMARY");
         primDbProps.setProperty("jettra.storage.path", primaryDir.toString());
         primDbProps.setProperty("jettra.network.grpc.port", String.valueOf(primPort));
-        primDbProps.setProperty("jettra.network.rest.port", "18092");
+        primDbProps.setProperty("jettra.network.rest.port", String.valueOf(primRestPort));
         primDbProps.setProperty("cluster.multinode.active", "on");
 
         Properties primClusterProps = new Properties();
@@ -361,72 +398,83 @@ public class JettraClusterReplicationTest extends JettraStoreBaseTest {
 
         JettraStoreConfig primConfig = new JettraStoreConfig(primDbProps, primClusterProps);
         JettraStoreServer primServer = new JettraStoreServer(primConfig);
+        JettraStoreServer secServer = null;
 
-        // Crear base de datos en PRIMARIO con datos y persistirla
-        var primDb = primServer.getOrCreateDatabaseInternal("tienda_online_db", false);
-        primDb.getDocumentEngine("productos").insert("p100", java.util.Map.of("nombre", "Laptop Pro", "precio", 1200.0));
-        primDb.getKeyValueEngine("config").put("moneda", "USD".getBytes(java.nio.charset.StandardCharsets.UTF_8));
-        primDb.saveToDisk();
+        try {
+            // Crear base de datos en PRIMARIO con datos y persistirla
+            var primDb = primServer.getOrCreateDatabaseInternal("tienda_online_db", false);
+            primDb.getDocumentEngine("productos").insert("p100", java.util.Map.of("nombre", "Laptop Pro", "precio", 1200.0));
+            primDb.getKeyValueEngine("config").put("moneda", "USD".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            primDb.saveToDisk();
 
-        // Iniciar transporte en PRIMARY
-        try (JettraClusterTransportServer primTransport = new JettraClusterTransportServer(primPort, primServer)) {
-            primTransport.start();
-            Thread.sleep(100);
+            // Iniciar transporte en PRIMARY
+            try (JettraClusterTransportServer primTransport = new JettraClusterTransportServer(primPort, primServer)) {
+                primTransport.start();
+                Thread.sleep(100);
 
-            // Configuración en SECONDARY apuntando a PRIMARY
-            Properties secDbProps = new Properties();
-            secDbProps.setProperty("jettra.node.id", "node-02");
-            secDbProps.setProperty("jettra.node.role", "SECONDARY");
-            secDbProps.setProperty("jettra.storage.path", secondaryDir.toString());
-            secDbProps.setProperty("jettra.network.grpc.port", String.valueOf(secPort));
-            secDbProps.setProperty("jettra.network.rest.port", "18093");
-            secDbProps.setProperty("cluster.multinode.active", "on");
+                // Configuración en SECONDARY apuntando a PRIMARY
+                Properties secDbProps = new Properties();
+                secDbProps.setProperty("jettra.node.id", "node-02");
+                secDbProps.setProperty("jettra.node.role", "SECONDARY");
+                secDbProps.setProperty("jettra.storage.path", secondaryDir.toString());
+                secDbProps.setProperty("jettra.network.grpc.port", String.valueOf(secPort));
+                secDbProps.setProperty("jettra.network.rest.port", String.valueOf(secRestPort));
+                secDbProps.setProperty("cluster.multinode.active", "on");
 
-            JettraStoreConfig secConfig = new JettraStoreConfig(secDbProps, primClusterProps);
-            JettraStoreServer secServer = new JettraStoreServer(secConfig);
+                JettraStoreConfig secConfig = new JettraStoreConfig(secDbProps, primClusterProps);
+                secServer = new JettraStoreServer(secConfig);
 
-            // Ejecutar el flujo de sincronización inicial
-            secServer.start();
-            boolean syncOk = secServer.synchronizeFromPrimary();
-            assertTrue(syncOk);
+                // Ejecutar el flujo de sincronización inicial
+                secServer.start();
+                boolean syncOk = secServer.synchronizeFromPrimary();
+                assertTrue(syncOk);
 
-            // Validar que el nodo SECUNDARIO obtuvo el catálogo y todos los registros del PRIMARY
-            List<String> secDbs = secServer.listDatabaseNames();
-            assertTrue(secDbs.contains("tienda_online_db"));
+                // Validar que el nodo SECUNDARIO obtuvo el catálogo y todos los registros del PRIMARY
+                List<String> secDbs = secServer.listDatabaseNames();
+                assertTrue(secDbs.contains("tienda_online_db"));
 
-            var secDb = secServer.getOrCreateDatabaseInternal("tienda_online_db", false);
-            assertNotNull(secDb);
-            assertEquals(1L, secDb.getDocumentEngine("productos").count());
-            var prod = secDb.getDocumentEngine("productos").findById("p100");
-            assertNotNull(prod);
-            assertEquals("Laptop Pro", prod.get("nombre"));
+                var secDb = secServer.getOrCreateDatabaseInternal("tienda_online_db", false);
+                assertNotNull(secDb);
+                assertEquals(1L, secDb.getDocumentEngine("productos").count());
+                var prod = secDb.getDocumentEngine("productos").findById("p100");
+                assertNotNull(prod);
+                assertEquals("Laptop Pro", prod.get("nombre"));
 
-            byte[] monedaBytes = secDb.getKeyValueEngine("config").get("moneda");
-            assertNotNull(monedaBytes);
-            assertEquals("USD", new String(monedaBytes, java.nio.charset.StandardCharsets.UTF_8));
-
-            secServer.stop();
+                byte[] monedaBytes = secDb.getKeyValueEngine("config").get("moneda");
+                assertNotNull(monedaBytes);
+                assertEquals("USD", new String(monedaBytes, java.nio.charset.StandardCharsets.UTF_8));
+            }
+        } finally {
+            if (secServer != null) try { secServer.stop(); } catch (Exception ignored) {}
+            primServer.stop();
+            JettraTestCleanup.deleteRecursively(primaryDir);
+            JettraTestCleanup.deleteRecursively(secondaryDir);
         }
+        assertTrue(JettraStoreServer.isTcpPortAvailable("127.0.0.1", primPort));
+        assertTrue(JettraStoreServer.isTcpPortAvailable("127.0.0.1", secPort));
+        assertTrue(JettraStoreServer.isTcpPortAvailable("127.0.0.1", secRestPort));
     }
 
     @Test
     @DisplayName("Debe replicar creación de motores especializados y transferencias en vivo")
     public void testReplicationEngineCreationAndDataTransfer() throws IOException, InterruptedException {
         Path tempDir = Files.createTempDirectory("jettra_engine_repl_test");
-        int testPort = 19140;
+        int primPort = freePort();
+        int testPort = freePort();
+        int secRestPort = freePort();
 
         Properties dbProps = new Properties();
         dbProps.setProperty("jettra.node.id", "node-02");
         dbProps.setProperty("jettra.node.role", "SECONDARY");
         dbProps.setProperty("jettra.storage.path", tempDir.toString());
         dbProps.setProperty("jettra.network.grpc.port", String.valueOf(testPort));
-        dbProps.setProperty("jettra.network.rest.port", "18084");
+        dbProps.setProperty("jettra.network.rest.port", String.valueOf(secRestPort));
         dbProps.setProperty("cluster.multinode.active", "on");
 
         Properties clusterProps = new Properties();
         clusterProps.setProperty("cluster.node.1.id", "node-01");
         clusterProps.setProperty("cluster.node.1.ip", "127.0.0.1");
-        clusterProps.setProperty("cluster.node.1.grpc.port", "19139");
+        clusterProps.setProperty("cluster.node.1.grpc.port", String.valueOf(primPort));
         clusterProps.setProperty("cluster.node.2.id", "node-02");
         clusterProps.setProperty("cluster.node.2.ip", "127.0.0.1");
         clusterProps.setProperty("cluster.node.2.grpc.port", String.valueOf(testPort));
@@ -472,7 +520,11 @@ public class JettraClusterReplicationTest extends JettraStoreBaseTest {
                 assertTrue(foundEngine);
                 assertTrue(foundTransfer);
             }
+        } finally {
+            secondaryServer.stop();
+            JettraTestCleanup.deleteRecursively(tempDir);
         }
+        assertTrue(JettraStoreServer.awaitTcpPortAvailable("127.0.0.1", testPort, 2000));
     }
 
     @Test
@@ -481,9 +533,12 @@ public class JettraClusterReplicationTest extends JettraStoreBaseTest {
         Path tempDirSec1 = Files.createTempDirectory("jettra_cluster_sec1");
         Path tempDirSec2 = Files.createTempDirectory("jettra_cluster_sec2");
         Path tempDirPrim = Files.createTempDirectory("jettra_cluster_prim");
-        int sec1Port = 19162;
-        int sec2Port = 19163;
-        int primPort = 19161;
+        int primPort = freePort();
+        int primRestPort = freePort();
+        int sec1Port = freePort();
+        int sec1RestPort = freePort();
+        int sec2Port = freePort();
+        int sec2RestPort = freePort();
 
         // Configuración Nodo Secundario 1
         Properties sec1DbProps = new Properties();
@@ -491,7 +546,7 @@ public class JettraClusterReplicationTest extends JettraStoreBaseTest {
         sec1DbProps.setProperty("jettra.node.role", "SECONDARY");
         sec1DbProps.setProperty("jettra.storage.path", tempDirSec1.toString());
         sec1DbProps.setProperty("jettra.network.grpc.port", String.valueOf(sec1Port));
-        sec1DbProps.setProperty("jettra.network.rest.port", "18092");
+        sec1DbProps.setProperty("jettra.network.rest.port", String.valueOf(sec1RestPort));
         sec1DbProps.setProperty("cluster.multinode.active", "on");
 
         Properties sec1ClusterProps = new Properties();
@@ -511,7 +566,7 @@ public class JettraClusterReplicationTest extends JettraStoreBaseTest {
         sec2DbProps.setProperty("jettra.node.role", "SECONDARY");
         sec2DbProps.setProperty("jettra.storage.path", tempDirSec2.toString());
         sec2DbProps.setProperty("jettra.network.grpc.port", String.valueOf(sec2Port));
-        sec2DbProps.setProperty("jettra.network.rest.port", "18093");
+        sec2DbProps.setProperty("jettra.network.rest.port", String.valueOf(sec2RestPort));
         sec2DbProps.setProperty("cluster.multinode.active", "on");
 
         Properties sec2ClusterProps = new Properties();
@@ -537,7 +592,7 @@ public class JettraClusterReplicationTest extends JettraStoreBaseTest {
             primDbProps.setProperty("jettra.node.role", "PRIMARY");
             primDbProps.setProperty("jettra.storage.path", tempDirPrim.toString());
             primDbProps.setProperty("jettra.network.grpc.port", String.valueOf(primPort));
-            primDbProps.setProperty("jettra.network.rest.port", "18091");
+            primDbProps.setProperty("jettra.network.rest.port", String.valueOf(primRestPort));
             primDbProps.setProperty("cluster.multinode.active", "on");
 
             Properties primClusterProps = new Properties();
@@ -620,7 +675,12 @@ public class JettraClusterReplicationTest extends JettraStoreBaseTest {
         } finally {
             secServer1.stop();
             secServer2.stop();
+            JettraTestCleanup.deleteRecursively(tempDirSec1);
+            JettraTestCleanup.deleteRecursively(tempDirSec2);
+            JettraTestCleanup.deleteRecursively(tempDirPrim);
         }
+        assertTrue(JettraStoreServer.isTcpPortAvailable("127.0.0.1", sec1Port));
+        assertTrue(JettraStoreServer.isTcpPortAvailable("127.0.0.1", sec2Port));
     }
 
     @Test
@@ -631,8 +691,10 @@ public class JettraClusterReplicationTest extends JettraStoreBaseTest {
         Path tempClusterCfg = tempPrim.resolve("cluster.config");
         String prevClusterProp = System.getProperty("cluster.config.path");
 
-        int primPort = 19271;
-        int node4Port = 19274;
+        int primPort = freePort();
+        int primRestPort = freePort();
+        int node4Port = freePort();
+        int node4RestPort = freePort();
 
         try {
             System.setProperty("cluster.config.path", tempClusterCfg.toAbsolutePath().toString());
@@ -643,7 +705,7 @@ public class JettraClusterReplicationTest extends JettraStoreBaseTest {
             primDbProps.setProperty("cluster.node.role", "PRIMARY");
             primDbProps.setProperty("jettra.storage.path", tempPrim.toString());
             primDbProps.setProperty("jettra.network.grpc.port", String.valueOf(primPort));
-            primDbProps.setProperty("jettra.network.rest.port", "18271");
+            primDbProps.setProperty("jettra.network.rest.port", String.valueOf(primRestPort));
             primDbProps.setProperty("cluster.multinode.active", "on");
 
             Properties primClusterProps = new Properties();
@@ -651,7 +713,7 @@ public class JettraClusterReplicationTest extends JettraStoreBaseTest {
             primClusterProps.setProperty("cluster.node.1.role", "PRIMARY");
             primClusterProps.setProperty("cluster.node.1.ip", "127.0.0.1");
             primClusterProps.setProperty("cluster.node.1.grpc.port", String.valueOf(primPort));
-            primClusterProps.setProperty("cluster.node.1.rest.port", "18271");
+            primClusterProps.setProperty("cluster.node.1.rest.port", String.valueOf(primRestPort));
 
             JettraStoreConfig primConfig = new JettraStoreConfig(primDbProps, primClusterProps);
             JettraStoreServer primServer = new JettraStoreServer(primConfig);
@@ -669,7 +731,7 @@ public class JettraClusterReplicationTest extends JettraStoreBaseTest {
             n4DbProps.setProperty("cluster.node.role", "SECONDARY");
             n4DbProps.setProperty("jettra.storage.path", tempNode4.toString());
             n4DbProps.setProperty("jettra.network.grpc.port", String.valueOf(node4Port));
-            n4DbProps.setProperty("jettra.network.rest.port", "18274");
+            n4DbProps.setProperty("jettra.network.rest.port", String.valueOf(node4RestPort));
             n4DbProps.setProperty("cluster.multinode.active", "on");
 
             Properties n4ClusterProps = new Properties();
@@ -677,12 +739,12 @@ public class JettraClusterReplicationTest extends JettraStoreBaseTest {
             n4ClusterProps.setProperty("cluster.node.1.role", "PRIMARY");
             n4ClusterProps.setProperty("cluster.node.1.ip", "127.0.0.1");
             n4ClusterProps.setProperty("cluster.node.1.grpc.port", String.valueOf(primPort));
-            n4ClusterProps.setProperty("cluster.node.1.rest.port", "18271");
+            n4ClusterProps.setProperty("cluster.node.1.rest.port", String.valueOf(primRestPort));
             n4ClusterProps.setProperty("cluster.node.4.id", "nodo-04");
             n4ClusterProps.setProperty("cluster.node.4.role", "SECONDARY");
             n4ClusterProps.setProperty("cluster.node.4.ip", "127.0.0.1");
             n4ClusterProps.setProperty("cluster.node.4.grpc.port", String.valueOf(node4Port));
-            n4ClusterProps.setProperty("cluster.node.4.rest.port", "18274");
+            n4ClusterProps.setProperty("cluster.node.4.rest.port", String.valueOf(node4RestPort));
 
             JettraStoreConfig n4Config = new JettraStoreConfig(n4DbProps, n4ClusterProps);
             JettraStoreServer n4Server = new JettraStoreServer(n4Config);
@@ -700,12 +762,12 @@ public class JettraClusterReplicationTest extends JettraStoreBaseTest {
                     "cluster.node.1.role = PRIMARY\n" +
                     "cluster.node.1.ip = 127.0.0.1\n" +
                     "cluster.node.1.grpc.port = " + primPort + "\n" +
-                    "cluster.node.1.rest.port = 18271\n" +
+                    "cluster.node.1.rest.port = " + primRestPort + "\n" +
                     "cluster.node.2.id = nodo-04\n" +
                     "cluster.node.2.role = SECONDARY\n" +
                     "cluster.node.2.ip = 127.0.0.1\n" +
                     "cluster.node.2.grpc.port = " + node4Port + "\n" +
-                    "cluster.node.2.rest.port = 18274\n";
+                    "cluster.node.2.rest.port = " + node4RestPort + "\n";
 
                 JettraRaftFrame syncFrame = JettraRaftFrame.syncClusterConfig(
                     1L, "jettra-explorer-config", updatedCfg.getBytes(java.nio.charset.StandardCharsets.UTF_8));
@@ -745,7 +807,11 @@ public class JettraClusterReplicationTest extends JettraStoreBaseTest {
             } else {
                 System.setProperty("cluster.config.path", prevClusterProp);
             }
+            JettraTestCleanup.deleteRecursively(tempPrim);
+            JettraTestCleanup.deleteRecursively(tempNode4);
         }
+        assertTrue(JettraStoreServer.isTcpPortAvailable("127.0.0.1", primPort));
+        assertTrue(JettraStoreServer.isTcpPortAvailable("127.0.0.1", node4Port));
     }
 
     @Test
@@ -761,7 +827,8 @@ public class JettraClusterReplicationTest extends JettraStoreBaseTest {
         Files.createDirectories(dir4);
         Files.createDirectories(dir5);
 
-        int p1 = 19371, p2 = 19372, p4 = 19374, p5 = 19375;
+        int p1 = freePort(), p2 = freePort(), p4 = freePort(), p5 = freePort();
+        int r1 = freePort(), r2 = freePort(), r4 = freePort(), r5 = freePort();
 
         String initial12 =
             "cluster.name = jettra-test\n" +
@@ -769,12 +836,12 @@ public class JettraClusterReplicationTest extends JettraStoreBaseTest {
             "cluster.node.1.role = PRIMARY\n" +
             "cluster.node.1.ip = 127.0.0.1\n" +
             "cluster.node.1.grpc.port = " + p1 + "\n" +
-            "cluster.node.1.rest.port = 18371\n" +
+            "cluster.node.1.rest.port = " + r1 + "\n" +
             "cluster.node.2.id = node-02\n" +
             "cluster.node.2.role = SECONDARY\n" +
             "cluster.node.2.ip = 127.0.0.1\n" +
             "cluster.node.2.grpc.port = " + p2 + "\n" +
-            "cluster.node.2.rest.port = 18372\n";
+            "cluster.node.2.rest.port = " + r2 + "\n";
 
         Path cfg1 = dir1.resolve("cluster.config");
         Path cfg2 = dir2.resolve("cluster.config");
@@ -789,12 +856,12 @@ public class JettraClusterReplicationTest extends JettraStoreBaseTest {
             "cluster.node.1.role = PRIMARY\n" +
             "cluster.node.1.ip = 127.0.0.1\n" +
             "cluster.node.1.grpc.port = " + p1 + "\n" +
-            "cluster.node.1.rest.port = 18371\n" +
+            "cluster.node.1.rest.port = " + r1 + "\n" +
             "cluster.node.4.id = node-04\n" +
             "cluster.node.4.role = SECONDARY\n" +
             "cluster.node.4.ip = 127.0.0.1\n" +
             "cluster.node.4.grpc.port = " + p4 + "\n" +
-            "cluster.node.4.rest.port = 18374\n";
+            "cluster.node.4.rest.port = " + r4 + "\n";
         Files.writeString(cfg4, local4, java.nio.charset.StandardCharsets.UTF_8);
 
         String local5 =
@@ -803,12 +870,12 @@ public class JettraClusterReplicationTest extends JettraStoreBaseTest {
             "cluster.node.1.role = PRIMARY\n" +
             "cluster.node.1.ip = 127.0.0.1\n" +
             "cluster.node.1.grpc.port = " + p1 + "\n" +
-            "cluster.node.1.rest.port = 18371\n" +
+            "cluster.node.1.rest.port = " + r1 + "\n" +
             "cluster.node.5.id = node-05\n" +
             "cluster.node.5.role = SECONDARY\n" +
             "cluster.node.5.ip = 127.0.0.1\n" +
             "cluster.node.5.grpc.port = " + p5 + "\n" +
-            "cluster.node.5.rest.port = 18375\n";
+            "cluster.node.5.rest.port = " + r5 + "\n";
         Files.writeString(cfg5, local5, java.nio.charset.StandardCharsets.UTF_8);
 
         Properties cProps12 = new Properties();
@@ -895,7 +962,12 @@ public class JettraClusterReplicationTest extends JettraStoreBaseTest {
             s2.stop();
             s4.stop();
             s5.stop();
+            JettraTestCleanup.deleteRecursively(root);
         }
+        assertTrue(JettraStoreServer.isTcpPortAvailable("127.0.0.1", p1));
+        assertTrue(JettraStoreServer.isTcpPortAvailable("127.0.0.1", p2));
+        assertTrue(JettraStoreServer.isTcpPortAvailable("127.0.0.1", p4));
+        assertTrue(JettraStoreServer.isTcpPortAvailable("127.0.0.1", p5));
     }
 
     @Test
@@ -909,7 +981,8 @@ public class JettraClusterReplicationTest extends JettraStoreBaseTest {
         Files.createDirectories(dir2);
         Files.createDirectories(dir3);
 
-        int p1 = 19481, p2 = 19482, p3 = 19483;
+        int p1 = freePort(), p2 = freePort(), p3 = freePort();
+        int r1 = freePort(), r2 = freePort(), r3 = freePort();
 
         String clusterCfg =
             "cluster.name = jettra-test-sync\n" +
@@ -917,12 +990,12 @@ public class JettraClusterReplicationTest extends JettraStoreBaseTest {
             "cluster.node.1.role = PRIMARY\n" +
             "cluster.node.1.ip = 127.0.0.1\n" +
             "cluster.node.1.grpc.port = " + p1 + "\n" +
-            "cluster.node.1.rest.port = 18481\n" +
+            "cluster.node.1.rest.port = " + r1 + "\n" +
             "cluster.node.2.id = node-02\n" +
             "cluster.node.2.role = SECONDARY\n" +
             "cluster.node.2.ip = 127.0.0.1\n" +
             "cluster.node.2.grpc.port = " + p2 + "\n" +
-            "cluster.node.2.rest.port = 18482\n";
+            "cluster.node.2.rest.port = " + r2 + "\n";
 
         Path cfg1 = dir1.resolve("cluster.config");
         Path cfg2 = dir2.resolve("cluster.config");
@@ -950,6 +1023,7 @@ public class JettraClusterReplicationTest extends JettraStoreBaseTest {
 
         JettraClusterTransportServer t1 = new JettraClusterTransportServer(p1, s1);
         JettraClusterTransportServer t2 = new JettraClusterTransportServer(p2, s2);
+        JettraStoreServer s2Restarted = null;
         try {
             t1.start();
             t2.start();
@@ -983,7 +1057,7 @@ public class JettraClusterReplicationTest extends JettraStoreBaseTest {
             dbPedidos.saveToDisk();
 
             // 4. REINICIAR node-02
-            JettraStoreServer s2Restarted = new JettraStoreServer(new JettraStoreConfig(mp2, cProps12));
+            s2Restarted = new JettraStoreServer(new JettraStoreConfig(mp2, cProps12));
             s2Restarted.setClusterConfigFilePath(cfg2);
             t2 = new JettraClusterTransportServer(p2, s2Restarted);
             t2.start();
@@ -1018,12 +1092,12 @@ public class JettraClusterReplicationTest extends JettraStoreBaseTest {
                 "cluster.node.1.role = PRIMARY\n" +
                 "cluster.node.1.ip = 127.0.0.1\n" +
                 "cluster.node.1.grpc.port = " + p1 + "\n" +
-                "cluster.node.1.rest.port = 18481\n" +
+                "cluster.node.1.rest.port = " + r1 + "\n" +
                 "cluster.node.3.id = node-03\n" +
                 "cluster.node.3.role = SECONDARY\n" +
                 "cluster.node.3.ip = 127.0.0.1\n" +
                 "cluster.node.3.grpc.port = " + p3 + "\n" +
-                "cluster.node.3.rest.port = 18483\n";
+                "cluster.node.3.rest.port = " + r3 + "\n";
             Path cfg3 = dir3.resolve("cluster.config");
             Files.writeString(cfg3, local3, java.nio.charset.StandardCharsets.UTF_8);
             Properties cProps3 = new Properties();
@@ -1058,12 +1132,17 @@ public class JettraClusterReplicationTest extends JettraStoreBaseTest {
             } finally {
                 s3.stop();
             }
-
-            s2Restarted.stop();
         } finally {
-            t1.stop();
-            s1.stop();
+            if (t2 != null) try { t2.stop(); } catch (Exception ignored) {}
+            if (s2Restarted != null) try { s2Restarted.stop(); } catch (Exception ignored) {}
+            try { s2.stop(); } catch (Exception ignored) {}
+            try { t1.stop(); } catch (Exception ignored) {}
+            try { s1.stop(); } catch (Exception ignored) {}
+            JettraTestCleanup.deleteRecursively(root);
         }
+        assertTrue(JettraStoreServer.isTcpPortAvailable("127.0.0.1", p1));
+        assertTrue(JettraStoreServer.isTcpPortAvailable("127.0.0.1", p2));
+        assertTrue(JettraStoreServer.isTcpPortAvailable("127.0.0.1", p3));
     }
 
     public record TestRecord(String id, String name, int score) {}

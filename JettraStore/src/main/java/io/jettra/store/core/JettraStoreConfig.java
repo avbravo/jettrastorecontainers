@@ -16,8 +16,14 @@ public final class JettraStoreConfig {
     private final String nodeIp;
     private volatile ClusterNode.Role nodeRole;
     private final String clusterPeers;
-    private final List<ClusterNode> parsedPeers;
-    private final List<JettraConfigValidator.ClusterNodeInfo> allClusterNodes;
+    private volatile List<ClusterNode> parsedPeers;
+    private volatile List<JettraConfigValidator.ClusterNodeInfo> allClusterNodes;
+    private final String clusterStateConfigDir;
+    private final Path clusterStateFile;
+    private final boolean clusterStateDirExplicit;
+    private volatile boolean standbyMode;
+    private volatile long clusterStateVersion;
+    private final java.util.Map<String, String> clusterNodeStatuses = new java.util.concurrent.ConcurrentHashMap<>();
     private final String rawConfiguredPath;
     private final String storagePath;
     private final int memTableSizeMb;
@@ -86,15 +92,27 @@ public final class JettraStoreConfig {
     public JettraStoreConfig(Properties props, Properties clusterProps, Properties serverProps) {
         Properties effectiveClusterProps = clusterProps != null ? clusterProps : new Properties();
         Properties effectiveServerProps = serverProps != null ? serverProps : new Properties();
-        List<JettraConfigValidator.ClusterNodeInfo> clusterNodes = JettraConfigValidator.parseClusterNodes(effectiveClusterProps);
+        this.clusterStateDirExplicit = JettraConfigValidator.hasExplicitClusterStateConfigDir(props);
+        Path resolvedStateDir;
+        try {
+            resolvedStateDir = JettraConfigValidator.ensureClusterStateConfigDirExists(props);
+        } catch (Exception ex) {
+            resolvedStateDir = JettraConfigValidator.resolveClusterStateConfigDirPath(props);
+        }
+        this.clusterStateConfigDir = resolvedStateDir.toString();
+        this.clusterStateFile = resolvedStateDir.resolve(JettraConfigValidator.CLUSTER_STATE_FILENAME);
+
+        List<JettraConfigValidator.ClusterNodeInfo> clusterNodes = JettraConfigValidator.parseExplicitClusterNodes(effectiveClusterProps);
         this.allClusterNodes = Collections.unmodifiableList(clusterNodes);
+        this.clusterStateVersion = JettraConfigValidator.parseClusterStateVersion(effectiveClusterProps);
+        this.clusterNodeStatuses.putAll(JettraConfigValidator.parseClusterNodeStatuses(effectiveClusterProps));
 
         String rawNodeId = getPropOrEnv(props, 
             new String[]{"cluster.node.id", "jettra.node.id", "jettra.cluster.node.id", "node.id"}, 
             new String[]{"CLUSTER_NODE_ID", "JETTRA_NODE_ID", "JETTRA_CLUSTER_NODE_ID"}, 
             "node-01");
 
-        // Sincronizar con el nodo correspondiente en cluster.config buscando por id o número de nodo (ej. node-01 o 01)
+        // Sincronizar con el nodo correspondiente en cluster-state.config / cluster.config buscando por id o número de nodo
         JettraConfigValidator.ClusterNodeInfo currentNode = JettraConfigValidator.findNodeInCluster(clusterNodes, rawNodeId);
         this.nodeId = (currentNode != null && currentNode.id() != null && !currentNode.id().isBlank())
             ? currentNode.id()
@@ -133,7 +151,7 @@ public final class JettraStoreConfig {
 
         int defaultGrpc = (currentNode != null && currentNode.grpcPort() > 0) ? currentNode.grpcPort() : 9091;
         this.grpcPort = Integer.parseInt(getPropOrEnv(props, 
-            new String[]{"jettra.network.grpc.port", "jettra.grpc.port", "grpc.port"}, 
+            new String[]{"jettra.network.grpc.port", "jettra.grpc.port", "server.grpc.port", "grpc.port"}, 
             new String[]{"JETTRA_GRPC_PORT", "JETTRA_NETWORK_GRPC_PORT"}, 
             String.valueOf(defaultGrpc)));
 
@@ -148,7 +166,7 @@ public final class JettraStoreConfig {
             } catch (Exception ignored) {}
         }
         String configuredRest = getPropOrEnv(props,
-            new String[]{"jettra.network.rest.port", "jettra.rest.port", "server.port", "jettra.server.port", "rest.port"},
+            new String[]{"jettra.network.rest.port", "jettra.rest.port", "server.rest.port", "server.port", "jettra.server.port", "rest.port"},
             new String[]{"JETTRA_REST_PORT", "JETTRA_SERVER_PORT", "SERVER_PORT", "JETTRA_NETWORK_REST_PORT"},
             String.valueOf(defaultRest));
         this.restPort = Integer.parseInt(configuredRest);
@@ -333,7 +351,8 @@ public final class JettraStoreConfig {
 
         // Resolver pares del clúster con IPs y puertos configurados
         List<ClusterNode> peersList = new ArrayList<>();
-        if (this.clusterPeers != null && !this.clusterPeers.isBlank()) {
+        boolean hasExplicitPeersEnv = (this.clusterPeers != null && !this.clusterPeers.isBlank());
+        if (hasExplicitPeersEnv) {
             for (String entry : this.clusterPeers.split(",")) {
                 String[] p = entry.trim().split(":");
                 if (p.length >= 3) {
@@ -350,22 +369,19 @@ public final class JettraStoreConfig {
                 if (!node.id().equalsIgnoreCase(this.nodeId) && (nodeNum == null || !nodeNum.equals(node.nodeNumber()))) {
                     ClusterNode.Role peerRole = "PRIMARY".equalsIgnoreCase(node.role()) 
                         ? ClusterNode.Role.PRIMARY : ClusterNode.Role.SECONDARY;
-                    peersList.add(new ClusterNode(node.id(), node.ip(), node.grpcPort(), peerRole));
+                    ClusterNode peer = new ClusterNode(node.id(), node.ip(), node.grpcPort(), peerRole);
+                    String persistedStatus = this.clusterNodeStatuses.get(node.id().toLowerCase(java.util.Locale.ROOT));
+                    if ("STOPPED".equalsIgnoreCase(persistedStatus)) {
+                        peer.stop();
+                    }
+                    peersList.add(peer);
                 }
             }
         }
-        if (peersList.isEmpty()) {
-            if ("node-01".equalsIgnoreCase(this.nodeId)) {
-                peersList.add(new ClusterNode("node-02", "127.0.0.1", 9091, ClusterNode.Role.SECONDARY));
-                peersList.add(new ClusterNode("node-03", "127.0.0.1", 9091, ClusterNode.Role.SECONDARY));
-            } else if ("node-02".equalsIgnoreCase(this.nodeId)) {
-                peersList.add(new ClusterNode("node-01", "127.0.0.1", 9091, ClusterNode.Role.PRIMARY));
-                peersList.add(new ClusterNode("node-03", "127.0.0.1", 9091, ClusterNode.Role.SECONDARY));
-            } else if ("node-03".equalsIgnoreCase(this.nodeId)) {
-                peersList.add(new ClusterNode("node-01", "127.0.0.1", 9091, ClusterNode.Role.PRIMARY));
-                peersList.add(new ClusterNode("node-02", "127.0.0.1", 9091, ClusterNode.Role.SECONDARY));
-            }
-        }
+        boolean allowStandby = !"false".equalsIgnoreCase(getPropOrEnv(
+            props, "jettra.cluster.standby.enabled", "JETTRA_CLUSTER_STANDBY_ENABLED", "true"));
+        this.standbyMode = allowStandby && this.clusterMultinodeActive && clusterNodes.isEmpty()
+            && !hasExplicitPeersEnv && this.nodeRole != ClusterNode.Role.PRIMARY;
         this.parsedPeers = Collections.unmodifiableList(peersList);
     }
 
@@ -373,14 +389,19 @@ public final class JettraStoreConfig {
         JettraConfigValidator.ensureConfigFilesExist();
 
         Path configPath = JettraConfigValidator.locateMicroProfileConfigFile();
-        Path clusterPath = JettraConfigValidator.locateClusterConfigFile();
-
         Properties configProps = JettraConfigValidator.loadProperties(configPath, 
             "/META-INF/microprofile-config.properties", "/microprofile-config.properties", "/jettraserver.config");
-        Properties clusterProps = JettraConfigValidator.loadProperties(clusterPath, 
-            "/cluster.config", "/jettra.config");
 
-        return new JettraStoreConfig(configProps, clusterProps, configProps);
+        Path stateFile = JettraConfigValidator.resolveClusterStateFile(configProps);
+        Path optionalSeed = JettraConfigValidator.locateOptionalClusterSeedFile(
+            stateFile != null ? stateFile.getParent() : null);
+        Properties stateProps = JettraConfigValidator.seedOrLoadClusterState(stateFile, optionalSeed);
+        if (stateProps == null) {
+            stateProps = JettraConfigValidator.bootstrapInitialPrimaryOrPeersState(stateFile, configProps);
+        }
+
+        Properties effectiveTopologyProps = stateProps != null ? stateProps : new Properties();
+        return new JettraStoreConfig(configProps, effectiveTopologyProps, configProps);
     }
 
     public String getConfiguredStoragePath() { return rawConfiguredPath; }
@@ -447,5 +468,41 @@ public final class JettraStoreConfig {
 
     public List<JettraConfigValidator.ClusterNodeInfo> getAllClusterNodes() {
         return allClusterNodes;
+    }
+
+    public String getClusterStateConfigDir() { return clusterStateConfigDir; }
+    public Path getClusterStateFile() { return clusterStateFile; }
+    public boolean isClusterStateDirExplicit() { return clusterStateDirExplicit; }
+    public boolean isStandbyMode() { return standbyMode; }
+    public void setStandbyMode(boolean standbyMode) { this.standbyMode = standbyMode; }
+    public long getClusterStateVersion() { return clusterStateVersion; }
+    public void setClusterStateVersion(long clusterStateVersion) { this.clusterStateVersion = clusterStateVersion; }
+    public java.util.Map<String, String> getClusterNodeStatuses() { return clusterNodeStatuses; }
+    public synchronized void updateRuntimeTopology(
+            List<JettraConfigValidator.ClusterNodeInfo> nodes,
+            java.util.Map<String, String> statuses,
+            long version) {
+        if (nodes != null) {
+            this.allClusterNodes = Collections.unmodifiableList(new ArrayList<>(nodes));
+            List<ClusterNode> updated = new ArrayList<>();
+            for (var n : nodes) {
+                if (!n.id().equalsIgnoreCase(this.nodeId)) {
+                    ClusterNode.Role r = "PRIMARY".equalsIgnoreCase(n.role()) ? ClusterNode.Role.PRIMARY : ClusterNode.Role.SECONDARY;
+                    ClusterNode p = new ClusterNode(n.id(), n.ip(), n.grpcPort(), r);
+                    if (statuses != null && "STOPPED".equalsIgnoreCase(statuses.get(n.id().toLowerCase(java.util.Locale.ROOT)))) {
+                        p.stop();
+                    }
+                    updated.add(p);
+                }
+            }
+            this.parsedPeers = Collections.unmodifiableList(updated);
+        }
+        if (statuses != null) {
+            this.clusterNodeStatuses.clear();
+            this.clusterNodeStatuses.putAll(statuses);
+        }
+        if (version > 0) {
+            this.clusterStateVersion = version;
+        }
     }
 }

@@ -31,6 +31,7 @@ services:
       - JETTRA_NODE_IP=${JETTRA_NODE_IP:-jettra-node-01}
       - JETTRA_STORAGE_PATH=/jettra/data
       - JETTRA_INDEX_STORAGE_PATH=/jettra/data/indexes
+      - JETTRA_CLUSTER_STATE_CONFIG_DIR=/jettra/cluster-state
       - JETTRA_STORAGE_MODE=${JETTRA_STORAGE_MODE:-OFF_HEAP}
       - JETTRA_MULTINODE_ACTIVE=${JETTRA_MULTINODE_ACTIVE:-off}
       - JETTRA_CLUSTER_MULTINODE_ACTIVE=${JETTRA_MULTINODE_ACTIVE:-off}
@@ -51,6 +52,7 @@ services:
       # exportando JETTRA_DATA_VOLUME=/ruta/en/disco (asegurando permisos UID 1000:1000).
       - ${JETTRA_DATA_VOLUME:-jettrastore_hub_data}:/jettra/data
       - ${JETTRA_CHECKPOINT_VOLUME:-jettrastore_hub_checkpoint}:/jettra/checkpoint
+      - ${JETTRA_STATE_VOLUME:-jettrastore_hub_state}:/jettra/cluster-state
     networks:
       - jettra-hub-net
     healthcheck:
@@ -66,6 +68,9 @@ volumes:
     driver: local
   jettrastore_hub_checkpoint:
     name: ${JETTRA_CHECKPOINT_VOLUME_NAME:-jettrastore_hub_checkpoint}
+    driver: local
+  jettrastore_hub_state:
+    name: ${JETTRA_STATE_VOLUME_NAME:-jettrastore_hub_state}
     driver: local
 
 networks:

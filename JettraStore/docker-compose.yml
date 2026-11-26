@@ -25,6 +25,7 @@ services:
       - JETTRA_NODE_ID=node-01
       - JETTRA_NODE_ROLE=PRIMARY
       - JETTRA_STORAGE_PATH=/jettra/data
+      - JETTRA_CLUSTER_STATE_CONFIG_DIR=/jettra/cluster-state
       - JETTRA_STORAGE_MODE=${JETTRA_STORAGE_MODE:-OFF_HEAP}
       - JETTRA_CRAC_CHECKPOINT_PATH=/jettra/checkpoint
       - JETTRA_CRAC_RESTORE=${JETTRA_CRAC_RESTORE:-false}
@@ -40,6 +41,7 @@ services:
     volumes:
       - jettra_data_node01:/jettra/data
       - jettra_checkpoint_node01:/jettra/checkpoint
+      - jettra_state_node01:/jettra/cluster-state
     networks:
       - jettra-cluster-net
     healthcheck:
@@ -76,6 +78,7 @@ services:
       - JETTRA_NODE_ID=node-02
       - JETTRA_NODE_ROLE=SECONDARY
       - JETTRA_STORAGE_PATH=/jettra/data
+      - JETTRA_CLUSTER_STATE_CONFIG_DIR=/jettra/cluster-state
       - JETTRA_STORAGE_MODE=${JETTRA_STORAGE_MODE:-OFF_HEAP}
       - JETTRA_CRAC_CHECKPOINT_PATH=/jettra/checkpoint
       - JETTRA_CRAC_RESTORE=${JETTRA_CRAC_RESTORE:-false}
@@ -91,6 +94,7 @@ services:
     volumes:
       - jettra_data_node02:/jettra/data
       - jettra_checkpoint_node02:/jettra/checkpoint
+      - jettra_state_node02:/jettra/cluster-state
     networks:
       - jettra-cluster-net
     healthcheck:
@@ -127,6 +131,7 @@ services:
       - JETTRA_NODE_ID=node-03
       - JETTRA_NODE_ROLE=SECONDARY
       - JETTRA_STORAGE_PATH=/jettra/data
+      - JETTRA_CLUSTER_STATE_CONFIG_DIR=/jettra/cluster-state
       - JETTRA_STORAGE_MODE=${JETTRA_STORAGE_MODE:-OFF_HEAP}
       - JETTRA_CRAC_CHECKPOINT_PATH=/jettra/checkpoint
       - JETTRA_CRAC_RESTORE=${JETTRA_CRAC_RESTORE:-false}
@@ -142,6 +147,7 @@ services:
     volumes:
       - jettra_data_node03:/jettra/data
       - jettra_checkpoint_node03:/jettra/checkpoint
+      - jettra_state_node03:/jettra/cluster-state
     networks:
       - jettra-cluster-net
     healthcheck:
@@ -172,6 +178,15 @@ volumes:
     driver: local
   jettra_checkpoint_node03:
     name: jettra_checkpoint_node03
+    driver: local
+  jettra_state_node01:
+    name: jettra_state_node01
+    driver: local
+  jettra_state_node02:
+    name: jettra_state_node02
+    driver: local
+  jettra_state_node03:
+    name: jettra_state_node03
     driver: local
 
 # ==============================================================================

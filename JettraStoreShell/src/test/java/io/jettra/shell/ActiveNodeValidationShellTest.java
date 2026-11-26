@@ -3,6 +3,7 @@ package io.jettra.shell;
 import io.jettra.driver.JettraClient;
 import io.jettra.driver.config.JettraClientConfig;
 import io.jettra.store.JettraStoreServer;
+import io.jettra.store.core.JettraClusterStateBackupManager;
 import io.jettra.store.core.JettraConfigValidator;
 import io.jettra.store.core.JettraStoreConfig;
 import io.jettra.test.annotation.AfterAll;
@@ -32,6 +33,7 @@ public class ActiveNodeValidationShellTest {
     private static String prevClusterProp;
     private static String prevMpProp;
     private static String prevStorageProp;
+    private static JettraClusterStateBackupManager.BackupHandle suiteStateBackup;
 
     private static int freePort() throws Exception {
         try (ServerSocket ss = new ServerSocket(0, 1, InetAddress.getByName("127.0.0.1"))) {
@@ -41,6 +43,7 @@ public class ActiveNodeValidationShellTest {
 
     @BeforeAll
     public static void setup() throws Exception {
+        suiteStateBackup = JettraClusterStateBackupManager.protectConfigured();
         prevClusterProp = System.getProperty("cluster.config.path");
         prevMpProp = System.getProperty("jettra.shell.config.file");
         prevStorageProp = System.getProperty("jettra.storage.path");
@@ -63,16 +66,20 @@ public class ActiveNodeValidationShellTest {
 
     @AfterAll
     public static void cleanup() {
-        if (JettraStoreServer.getActiveInstance() != null) {
-            try {
-                JettraStoreServer.getActiveInstance().stop();
-            } catch (Exception ignored) {
+        try {
+            JettraStoreServer.stopAllActiveServers();
+            JettraAssert.assertEquals(0, JettraStoreServer.getActiveServerCount());
+            JettraAssert.assertEquals(0, io.jettra.store.cluster.JettraClusterTransportServer.getActiveTransportCount());
+        } finally {
+            restoreProp("cluster.config.path", prevClusterProp);
+            restoreProp("jettra.shell.config.file", prevMpProp);
+            restoreProp("jettra.storage.path", prevStorageProp);
+            JettraShellTestCleanup.deleteRecursively(tempDir);
+            if (suiteStateBackup != null) {
+                suiteStateBackup.close();
+                suiteStateBackup = null;
             }
         }
-        restoreProp("cluster.config.path", prevClusterProp);
-        restoreProp("jettra.shell.config.file", prevMpProp);
-        restoreProp("jettra.storage.path", prevStorageProp);
-        JettraShellTestCleanup.deleteRecursively(tempDir);
     }
 
     private static void restoreProp(String key, String value) {
@@ -107,8 +114,8 @@ public class ActiveNodeValidationShellTest {
 
         Files.writeString(tempMpFile,
                 "app.title=JettraStore Shell\n"
-                        + "cluster.nodes=node-01:127.0.0.1:" + closedGrpc1
-                        + ",node-02:127.0.0.1:" + closedGrpc2 + "\n",
+                        + "cluster.ip.nodes=127.0.0.1:" + closedGrpc1
+                        + ",127.0.0.1:" + closedGrpc2 + "\n",
                 StandardCharsets.UTF_8);
 
         JettraClientConfig cfg = JettraClientConfig.builder()
@@ -192,7 +199,7 @@ public class ActiveNodeValidationShellTest {
 
         Files.writeString(tempMpFile,
                 "app.title=JettraStore Shell\n"
-                        + "cluster.nodes=node-01:127.0.0.1:" + grpcPort + "\n",
+                        + "cluster.ip.nodes=127.0.0.1:" + grpcPort + "\n",
                 StandardCharsets.UTF_8);
 
         Properties srvProps = new Properties();
@@ -262,5 +269,7 @@ public class ActiveNodeValidationShellTest {
             } catch (Exception ignored) {
             }
         }
+        JettraAssert.assertTrue(JettraStoreServer.awaitTcpPortAvailable("127.0.0.1", grpcPort, 2000));
+        JettraAssert.assertTrue(JettraStoreServer.awaitTcpPortAvailable("127.0.0.1", restPort, 2000));
     }
 }

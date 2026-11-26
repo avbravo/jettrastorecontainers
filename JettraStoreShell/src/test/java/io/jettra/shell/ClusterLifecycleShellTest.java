@@ -3,17 +3,49 @@ package io.jettra.shell;
 import io.jettra.driver.JettraClient;
 import io.jettra.driver.config.JettraClientConfig;
 import io.jettra.store.JettraStoreServer;
+import io.jettra.store.core.JettraClusterStateBackupManager;
 import io.jettra.store.core.JettraConfigValidator;
 import io.jettra.store.core.JettraStoreConfig;
+import io.jettra.test.annotation.AfterAll;
+import io.jettra.test.annotation.BeforeAll;
 import io.jettra.test.annotation.DisplayName;
 import io.jettra.test.annotation.Test;
 import io.jettra.test.core.JettraAssert;
 
+import java.net.InetAddress;
+import java.net.ServerSocket;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Properties;
 
 public class ClusterLifecycleShellTest {
+
+    private static JettraClusterStateBackupManager.BackupHandle suiteStateBackup;
+
+    @BeforeAll
+    public static void backupConfiguredState() {
+        suiteStateBackup = JettraClusterStateBackupManager.protectConfigured();
+    }
+
+    @AfterAll
+    public static void restoreConfiguredState() {
+        try {
+            JettraStoreServer.stopAllActiveServers();
+            JettraAssert.assertEquals(0, JettraStoreServer.getActiveServerCount());
+            JettraAssert.assertEquals(0, io.jettra.store.cluster.JettraClusterTransportServer.getActiveTransportCount());
+        } finally {
+            if (suiteStateBackup != null) {
+                suiteStateBackup.close();
+                suiteStateBackup = null;
+            }
+        }
+    }
+
+    private static int freePort() throws Exception {
+        try (ServerSocket ss = new ServerSocket(0, 1, InetAddress.getByName("127.0.0.1"))) {
+            return ss.getLocalPort();
+        }
+    }
 
     private JettraStoreServer startNodeServer(Path baseDir, Path clusterFile, String nodeId, String role, int grpcPort, int restPort) throws Exception {
         Path dataDir = baseDir.resolve(nodeId);
@@ -43,24 +75,28 @@ public class ClusterLifecycleShellTest {
         Path clusterFile = tmpDir.resolve("cluster.config");
         String prevClusterProp = System.getProperty("cluster.config.path");
 
+        int g1 = freePort(), r1 = freePort();
+        int g2 = freePort(), r2 = freePort();
+        int g3 = freePort(), r3 = freePort();
+
         String initialCfg = """
                 cluster.multinode.active=on
                 cluster.node.1.id=node-01
                 cluster.node.1.role=PRIMARY
                 cluster.node.1.ip=127.0.0.1
-                cluster.node.1.grpc.port=52101
-                cluster.node.1.rest.port=62101
+                cluster.node.1.grpc.port=%d
+                cluster.node.1.rest.port=%d
                 cluster.node.2.id=node-02
                 cluster.node.2.role=SECONDARY
                 cluster.node.2.ip=127.0.0.1
-                cluster.node.2.grpc.port=52102
-                cluster.node.2.rest.port=62102
+                cluster.node.2.grpc.port=%d
+                cluster.node.2.rest.port=%d
                 cluster.node.3.id=node-03
                 cluster.node.3.role=SECONDARY
                 cluster.node.3.ip=127.0.0.1
-                cluster.node.3.grpc.port=52103
-                cluster.node.3.rest.port=62103
-                """;
+                cluster.node.3.grpc.port=%d
+                cluster.node.3.rest.port=%d
+                """.formatted(g1, r1, g2, r2, g3, r3);
         Files.writeString(clusterFile, initialCfg);
         System.setProperty("cluster.config.path", clusterFile.toAbsolutePath().toString());
 
@@ -68,18 +104,18 @@ public class ClusterLifecycleShellTest {
         JettraStoreServer n2 = null;
         JettraStoreServer n3 = null;
         try {
-            n1 = startNodeServer(tmpDir, clusterFile, "node-01", "PRIMARY", 52101, 62101);
-            n2 = startNodeServer(tmpDir, clusterFile, "node-02", "SECONDARY", 52102, 62102);
-            n3 = startNodeServer(tmpDir, clusterFile, "node-03", "SECONDARY", 52103, 62103);
+            n1 = startNodeServer(tmpDir, clusterFile, "node-01", "PRIMARY", g1, r1);
+            n2 = startNodeServer(tmpDir, clusterFile, "node-02", "SECONDARY", g2, r2);
+            n3 = startNodeServer(tmpDir, clusterFile, "node-03", "SECONDARY", g3, r3);
 
             JettraClientConfig cCfg = JettraClientConfig.builder()
-                    .addClusterNode("127.0.0.1", 52101)
+                    .addClusterNode("127.0.0.1", g1)
                     .credentials("admin", "admin-jettra")
                     .role("admin")
                     .defaultDatabase("rf01_shell_db_" + System.currentTimeMillis())
                     .build();
-            try (JettraClient client = JettraClient.connect(cCfg)) {
-                JettraStoreShellApp shell = new JettraStoreShellApp(client);
+            try (JettraClient client = JettraClient.connect(cCfg);
+                 JettraStoreShellApp shell = new JettraStoreShellApp(client)) {
 
                 // 1. Verificar show nodes: exactamente UN PRIMARY/LEADER
                 String show1 = shell.executeCommand("show nodes");
@@ -127,6 +163,13 @@ public class ClusterLifecycleShellTest {
             if (n1 != null) try { n1.stop(); } catch (Exception ignored) {}
             if (prevClusterProp == null) System.clearProperty("cluster.config.path");
             else System.setProperty("cluster.config.path", prevClusterProp);
+            JettraShellTestCleanup.deleteRecursively(tmpDir);
         }
+        JettraAssert.assertTrue(JettraStoreServer.isTcpPortAvailable("127.0.0.1", g1));
+        JettraAssert.assertTrue(JettraStoreServer.isTcpPortAvailable("127.0.0.1", r1));
+        JettraAssert.assertTrue(JettraStoreServer.isTcpPortAvailable("127.0.0.1", g2));
+        JettraAssert.assertTrue(JettraStoreServer.isTcpPortAvailable("127.0.0.1", r2));
+        JettraAssert.assertTrue(JettraStoreServer.isTcpPortAvailable("127.0.0.1", g3));
+        JettraAssert.assertTrue(JettraStoreServer.isTcpPortAvailable("127.0.0.1", r3));
     }
 }

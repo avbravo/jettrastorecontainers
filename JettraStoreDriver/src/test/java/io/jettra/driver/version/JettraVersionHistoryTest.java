@@ -1,6 +1,9 @@
 package io.jettra.driver.version;
 
 import io.jettra.driver.JettraClient;
+import io.jettra.store.core.JettraClusterStateBackupManager;
+import io.jettra.test.annotation.AfterAll;
+import io.jettra.test.annotation.BeforeAll;
 import io.jettra.test.annotation.DisplayName;
 import io.jettra.test.annotation.Test;
 
@@ -11,6 +14,21 @@ import java.util.*;
 import static io.jettra.test.core.JettraAssert.*;
 
 public class JettraVersionHistoryTest {
+
+    private static JettraClusterStateBackupManager.BackupHandle suiteStateBackup;
+
+    @BeforeAll
+    public static void backupConfiguredState() {
+        suiteStateBackup = JettraClusterStateBackupManager.protectConfigured();
+    }
+
+    @AfterAll
+    public static void restoreConfiguredState() {
+        if (suiteStateBackup != null) {
+            suiteStateBackup.close();
+            suiteStateBackup = null;
+        }
+    }
 
     private static Path createIsolatedStorage() throws Exception {
         return Files.createTempDirectory("jettra_rf18_versions_test_");
