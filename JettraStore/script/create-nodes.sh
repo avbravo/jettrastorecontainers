@@ -99,7 +99,6 @@ setup_node() {
 setup_node "node-01" "PRIMARY"
 setup_node "node-02" "SECONDARY"
 setup_node "node-03" "SECONDARY"
-setup_node "node-04" "SECONDARY"
 
 echo ""
 echo "_____________________________________________________________________________"

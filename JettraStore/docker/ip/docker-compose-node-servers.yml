@@ -1,0 +1,191 @@
+# ==============================================================================
+# JettraStore - Docker Compose para Clúster de 3 Nodos en Servidores Diferentes
+# (Cada nodo se ejecuta en su propio servidor físico/VM con IP distinta)
+#
+# Uso recomendado (crear un archivo .env en cada servidor con las 3 IPs reales):
+#   NODE1_IP=192.168.10.11
+#   NODE2_IP=192.168.10.12
+#   NODE3_IP=192.168.10.13
+#
+# Ejecución por servidor mediante perfiles de Docker Compose:
+#   - Servidor 1 (PRIMARY):
+#       docker compose -f docker/docker-compose-node-servers.yml --profile node-01 up -d
+#   - Servidor 2 (SECONDARY 1):
+#       docker compose -f docker/docker-compose-node-servers.yml --profile node-02 up -d
+#   - Servidor 3 (SECONDARY 2):
+#       docker compose -f docker/docker-compose-node-servers.yml --profile node-03 up -d
+# ==============================================================================
+
+services:
+  # ============================================================================
+  # SERVIDOR 1 — NODO 01 (PRIMARY / LÍDER RAFT)
+  # ============================================================================
+  jettra-node-01:
+    profiles: ["node-01"]
+    image: ${JETTRA_DOCKER_IMAGE:-avbravo/jettrastore:1.0-SNAPSHOT}
+    pull_policy: ${JETTRA_PULL_POLICY:-if_not_present}
+    container_name: jettra-node-01
+    hostname: jettra-node-01
+    restart: unless-stopped
+    stop_grace_period: 30s
+    ports:
+      - "${JETTRA_HOST_BIND:-0.0.0.0}:${NODE1_GRPC_PORT:-50001}:${NODE1_GRPC_PORT:-50001}"
+      - "${JETTRA_HOST_BIND:-0.0.0.0}:${NODE1_REST_PORT:-60001}:${NODE1_REST_PORT:-60001}"
+    environment:
+      - JETTRA_NODE_ID=node-01
+      - JETTRA_NODE_ROLE=PRIMARY
+      - JETTRA_NODE_IP=${NODE1_IP:-192.168.10.11}
+      - JETTRA_GRPC_PORT=${NODE1_GRPC_PORT:-50001}
+      - JETTRA_REST_PORT=${NODE1_REST_PORT:-60001}
+      - JETTRA_MULTINODE_ACTIVE=on
+      - JETTRA_CLUSTER_MULTINODE_ACTIVE=on
+      - JETTRA_CLUSTER_PEERS=node-02:${NODE2_IP:-192.168.10.12}:${NODE2_GRPC_PORT:-50001}:SECONDARY,node-03:${NODE3_IP:-192.168.10.13}:${NODE3_GRPC_PORT:-50001}:SECONDARY
+      - JETTRA_STORAGE_PATH=/jettra/data
+      - JETTRA_INDEX_STORAGE_PATH=/jettra/data/indexes
+      - JETTRA_CLUSTER_STATE_CONFIG_DIR=/jettra/cluster-state
+      - JETTRA_STORAGE_MODE=${JETTRA_STORAGE_MODE:-OFF_HEAP}
+      - JETTRA_CRAC_CHECKPOINT_PATH=/jettra/checkpoint
+      - JETTRA_CRAC_RESTORE=${JETTRA_CRAC_RESTORE:-false}
+      - JETTRA_ADMIN_USERNAME=${JETTRA_ADMIN_USERNAME:-admin}
+      - JETTRA_ADMIN_PASSWORD=${JETTRA_ADMIN_PASSWORD:-admin-jettra}
+      - JETTRA_SAMPLES_AUTOLOAD=${JETTRA_SAMPLES_AUTOLOAD:-false}
+      - JAVA_OPTS=${JAVA_OPTS:--Xms96m -Xmx384m -XX:MaxMetaspaceSize=192m -XX:MaxDirectMemorySize=192m}
+    mem_limit: ${JETTRA_MEM_LIMIT:-640m}
+    mem_reservation: 128m
+    cpus: ${JETTRA_CPUS:-1.0}
+    volumes:
+      - jettra_srv_data_node01:/jettra/data
+      - jettra_srv_checkpoint_node01:/jettra/checkpoint
+      - jettra_srv_state_node01:/jettra/cluster-state
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:${NODE1_REST_PORT:-60001}/api/v1/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 8s
+
+  # ============================================================================
+  # SERVIDOR 2 — NODO 02 (SECONDARY / RÉPLICA RAFT 1)
+  # ============================================================================
+  jettra-node-02:
+    profiles: ["node-02"]
+    image: ${JETTRA_DOCKER_IMAGE:-avbravo/jettrastore:1.0-SNAPSHOT}
+    pull_policy: ${JETTRA_PULL_POLICY:-if_not_present}
+    container_name: jettra-node-02
+    hostname: jettra-node-02
+    restart: unless-stopped
+    stop_grace_period: 30s
+    ports:
+      - "${JETTRA_HOST_BIND:-0.0.0.0}:${NODE2_GRPC_PORT:-50001}:${NODE2_GRPC_PORT:-50001}"
+      - "${JETTRA_HOST_BIND:-0.0.0.0}:${NODE2_REST_PORT:-60001}:${NODE2_REST_PORT:-60001}"
+    environment:
+      - JETTRA_NODE_ID=node-02
+      - JETTRA_NODE_ROLE=SECONDARY
+      - JETTRA_NODE_IP=${NODE2_IP:-192.168.10.12}
+      - JETTRA_GRPC_PORT=${NODE2_GRPC_PORT:-50001}
+      - JETTRA_REST_PORT=${NODE2_REST_PORT:-60001}
+      - JETTRA_MULTINODE_ACTIVE=on
+      - JETTRA_CLUSTER_MULTINODE_ACTIVE=on
+      - JETTRA_CLUSTER_PEERS=node-01:${NODE1_IP:-192.168.10.11}:${NODE1_GRPC_PORT:-50001}:PRIMARY,node-03:${NODE3_IP:-192.168.10.13}:${NODE3_GRPC_PORT:-50001}:SECONDARY
+      - JETTRA_STORAGE_PATH=/jettra/data
+      - JETTRA_INDEX_STORAGE_PATH=/jettra/data/indexes
+      - JETTRA_CLUSTER_STATE_CONFIG_DIR=/jettra/cluster-state
+      - JETTRA_STORAGE_MODE=${JETTRA_STORAGE_MODE:-OFF_HEAP}
+      - JETTRA_CRAC_CHECKPOINT_PATH=/jettra/checkpoint
+      - JETTRA_CRAC_RESTORE=${JETTRA_CRAC_RESTORE:-false}
+      - JETTRA_ADMIN_USERNAME=${JETTRA_ADMIN_USERNAME:-admin}
+      - JETTRA_ADMIN_PASSWORD=${JETTRA_ADMIN_PASSWORD:-admin-jettra}
+      - JETTRA_SAMPLES_AUTOLOAD=${JETTRA_SAMPLES_AUTOLOAD:-false}
+      - JAVA_OPTS=${JAVA_OPTS:--Xms96m -Xmx384m -XX:MaxMetaspaceSize=192m -XX:MaxDirectMemorySize=192m}
+    mem_limit: ${JETTRA_MEM_LIMIT:-640m}
+    mem_reservation: 128m
+    cpus: ${JETTRA_CPUS:-1.0}
+    volumes:
+      - jettra_srv_data_node02:/jettra/data
+      - jettra_srv_checkpoint_node02:/jettra/checkpoint
+      - jettra_srv_state_node02:/jettra/cluster-state
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:${NODE2_REST_PORT:-60001}/api/v1/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 8s
+
+  # ============================================================================
+  # SERVIDOR 3 — NODO 03 (SECONDARY / RÉPLICA RAFT 2)
+  # ============================================================================
+  jettra-node-03:
+    profiles: ["node-03"]
+    image: ${JETTRA_DOCKER_IMAGE:-avbravo/jettrastore:1.0-SNAPSHOT}
+    pull_policy: ${JETTRA_PULL_POLICY:-if_not_present}
+    container_name: jettra-node-03
+    hostname: jettra-node-03
+    restart: unless-stopped
+    stop_grace_period: 30s
+    ports:
+      - "${JETTRA_HOST_BIND:-0.0.0.0}:${NODE3_GRPC_PORT:-50001}:${NODE3_GRPC_PORT:-50001}"
+      - "${JETTRA_HOST_BIND:-0.0.0.0}:${NODE3_REST_PORT:-60001}:${NODE3_REST_PORT:-60001}"
+    environment:
+      - JETTRA_NODE_ID=node-03
+      - JETTRA_NODE_ROLE=SECONDARY
+      - JETTRA_NODE_IP=${NODE3_IP:-192.168.10.13}
+      - JETTRA_GRPC_PORT=${NODE3_GRPC_PORT:-50001}
+      - JETTRA_REST_PORT=${NODE3_REST_PORT:-60001}
+      - JETTRA_MULTINODE_ACTIVE=on
+      - JETTRA_CLUSTER_MULTINODE_ACTIVE=on
+      - JETTRA_CLUSTER_PEERS=node-01:${NODE1_IP:-192.168.10.11}:${NODE1_GRPC_PORT:-50001}:PRIMARY,node-02:${NODE2_IP:-192.168.10.12}:${NODE2_GRPC_PORT:-50001}:SECONDARY
+      - JETTRA_STORAGE_PATH=/jettra/data
+      - JETTRA_INDEX_STORAGE_PATH=/jettra/data/indexes
+      - JETTRA_CLUSTER_STATE_CONFIG_DIR=/jettra/cluster-state
+      - JETTRA_STORAGE_MODE=${JETTRA_STORAGE_MODE:-OFF_HEAP}
+      - JETTRA_CRAC_CHECKPOINT_PATH=/jettra/checkpoint
+      - JETTRA_CRAC_RESTORE=${JETTRA_CRAC_RESTORE:-false}
+      - JETTRA_ADMIN_USERNAME=${JETTRA_ADMIN_USERNAME:-admin}
+      - JETTRA_ADMIN_PASSWORD=${JETTRA_ADMIN_PASSWORD:-admin-jettra}
+      - JETTRA_SAMPLES_AUTOLOAD=${JETTRA_SAMPLES_AUTOLOAD:-false}
+      - JAVA_OPTS=${JAVA_OPTS:--Xms96m -Xmx384m -XX:MaxMetaspaceSize=192m -XX:MaxDirectMemorySize=192m}
+    mem_limit: ${JETTRA_MEM_LIMIT:-640m}
+    mem_reservation: 128m
+    cpus: ${JETTRA_CPUS:-1.0}
+    volumes:
+      - jettra_srv_data_node03:/jettra/data
+      - jettra_srv_checkpoint_node03:/jettra/checkpoint
+      - jettra_srv_state_node03:/jettra/cluster-state
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:${NODE3_REST_PORT:-60001}/api/v1/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 8s
+
+# ==============================================================================
+# VOLÚMENES PERSISTENTES LOCALES EN CADA SERVIDOR (Datos, Checkpoints y Estado)
+# ==============================================================================
+volumes:
+  jettra_srv_data_node01:
+    name: jettra_srv_data_node01
+    driver: local
+  jettra_srv_checkpoint_node01:
+    name: jettra_srv_checkpoint_node01
+    driver: local
+  jettra_srv_state_node01:
+    name: jettra_srv_state_node01
+    driver: local
+  jettra_srv_data_node02:
+    name: jettra_srv_data_node02
+    driver: local
+  jettra_srv_checkpoint_node02:
+    name: jettra_srv_checkpoint_node02
+    driver: local
+  jettra_srv_state_node02:
+    name: jettra_srv_state_node02
+    driver: local
+  jettra_srv_data_node03:
+    name: jettra_srv_data_node03
+    driver: local
+  jettra_srv_checkpoint_node03:
+    name: jettra_srv_checkpoint_node03
+    driver: local
+  jettra_srv_state_node03:
+    name: jettra_srv_state_node03
+    driver: local

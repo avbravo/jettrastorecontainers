@@ -162,6 +162,22 @@ public class JettraStoreExplorerTest {
         @BeforeAll
         public static void setUpSuite() throws Exception {
                 suiteStateBackup = JettraClusterStateBackupManager.protectConfigured();
+                if (tempTestMicroprofileConfig != null) {
+                        System.setProperty("jettra.explorer.config.file",
+                                        tempTestMicroprofileConfig.toAbsolutePath().toString());
+                        System.setProperty("microprofile.config.file",
+                                        tempTestMicroprofileConfig.toAbsolutePath().toString());
+                }
+                if (tempTestClusterConfig != null) {
+                        System.setProperty("cluster.config.path", tempTestClusterConfig.toAbsolutePath().toString());
+                }
+                if (tempTestClusterNodesFile != null) {
+                        System.setProperty("jettra.explorer.cluster.nodes.file",
+                                        tempTestClusterNodesFile.toAbsolutePath().toString());
+                }
+                System.clearProperty("server.host");
+                System.clearProperty("bindAddress");
+                JettraStorePlugin.getInstance().reloadRuntimeConfiguration();
                 ensureSharedServer();
                 JettraStorePlugin plugin = JettraStorePlugin.getInstance();
                 if (plugin.getDatabaseNames().isEmpty()) {

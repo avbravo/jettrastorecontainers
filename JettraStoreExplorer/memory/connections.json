@@ -1,7 +1,7 @@
 [ {
   "id" : "conn_local",
-  "name" : "Clúster Activo (127.0.0.1:59001,127.0.0.1:59002,127.0.0.1:59003)",
-  "url" : "tcp://127.0.0.1:59001,127.0.0.1:59002,127.0.0.1:59003",
+  "name" : "Clúster Activo (127.0.0.1:50001)",
+  "url" : "tcp://127.0.0.1:50001",
   "username" : "admin",
   "password" : "admin123",
   "default" : true

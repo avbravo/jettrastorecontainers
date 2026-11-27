@@ -130,6 +130,26 @@ public class JettraStorePlugin {
                 io.jettra.driver.config.JettraConnectionConfigManager.loadInitialConnection(this.loadedConfigProps);
     }
 
+    /**
+     * Recarga la configuración MicroProfile, el estado de conexión del clúster y la topología
+     * inicial de nodos a partir de las propiedades vigentes del entorno/JVM.
+     */
+    public synchronized void reloadRuntimeConfiguration() {
+        this.connectionExplicitlyApplied = false;
+        this.lastConnectionSyncError = null;
+        this.latestPrimaryClusterStatus = null;
+        if (this.driverClient != null) {
+            try {
+                this.driverClient.close();
+            } catch (Exception ignored) {
+            }
+            this.driverClient = null;
+            this.driverClientEndpoint = "";
+        }
+        initClusterConnectionConfig();
+        initServerNodes();
+    }
+
     public io.jettra.driver.config.JettraConnectionConfigManager.ConnectionState getClusterConnectionState() {
         if (this.activeClusterConnectionState == null) {
             initClusterConnectionConfig();

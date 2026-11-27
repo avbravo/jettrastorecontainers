@@ -43,6 +43,8 @@
    - [6.3 Despliegue Optimizado de Bajo Consumo RAM/CPU (1 Nodo y 3 Nodos Raft) y Publicación en Docker Hub](#63-despliegue-optimizado-de-bajo-consumo-ramcpu-1-nodo-y-3-nodos-raft-y-publicación-en-docker-hub)
    - [6.4 Despliegue desde Docker Hub (`avbravo/jettrastore:1.0-SNAPSHOT`), Persistencia y Conflictos de Puerto](#64-despliegue-desde-docker-hub-avbravojettrastore10-snapshot-persistencia-y-conflictos-de-puerto)
    - [6.5 Gestión Permanente del Estado de Membresía (`jettra.cluster_state_config_dir` y `cluster-state.config`) — RF-32](#65-gestión-permanente-del-estado-de-membresía-jettracluster_state_config_dir-y-cluster-stateconfig--rf-32)
+   - [6.6 Clúster de 3 Nodos en Servidores Diferentes (IPs Distintas) y `docker-compose-node-servers.yml`](#66-clúster-de-3-nodos-en-servidores-diferentes-ips-distintas-y-docker-compose-node-serversyml)
+   - [6.7 Plantilla de Un Solo Nodo Conectado al Clúster (`docker-compose-only-node-servers.yml`)](#67-plantilla-de-un-solo-nodo-conectado-al-clúster-docker-compose-only-node-serversyml)
 7. [Integración con Clientes, Herramientas, Migrador y Pruebas (`JettraTest`)](#7-integración-con-clientes-herramientas-migrador-y-pruebas-jettratest)
    - [7.1 Cliente `JettraStoreDriver` y Proyecto de Referencia `JettraStoreExampleSE`](#71-cliente-jettrastoredriver-y-proyecto-de-referencia-jettrastoreexamplese)
    - [7.2 Consola Interactiva `JettraStoreShell` y Verificación Real de Nodos (`show nodes`)](#72-consola-interactiva-jettrastoreshell-y-verificación-real-de-nodos-show-nodes)
@@ -3738,6 +3740,264 @@ services:
       - jettrastore_hub_data:/jettra/data
       - jettrastore_hub_state:/jettra/cluster-state
 ```
+
+### 6.6 Clúster de 3 Nodos en Servidores Diferentes (IPs Distintas) y `docker-compose-node-servers.yml`
+
+En entornos de producción o alta disponibilidad real, cada nodo del clúster Raft se despliega en un **servidor físico o máquina virtual independiente**, cada uno con su propia dirección IP en la red privada/LAN. Esta arquitectura garantiza tolerancia a fallos ante la caída completa de un servidor (quórum Raft 2 de 3) y aislamiento total de disco, CPU y memoria.
+
+#### 6.6.1 Topología de Referencia (3 Servidores / 3 IPs)
+
+| Servidor | ID de Nodo | Rol Inicial | IP del Servidor | Puerto gRPC / Raft | Puerto REST / Health |
+| :--- | :--- | :--- | :--- | :---: | :---: |
+| **Servidor 1** | `node-01` | `PRIMARY` | `192.168.10.11` | `50001` | `60001` |
+| **Servidor 2** | `node-02` | `SECONDARY` | `192.168.10.12` | `50001` | `60001` |
+| **Servidor 3** | `node-03` | `SECONDARY` | `192.168.10.13` | `50001` | `60001` |
+
+> **Nota sobre puertos:** Al ejecutarse cada nodo en un servidor diferente, todos pueden usar los puertos estándar (`50001` para transporte Raft/gRPC y `60001` para REST/Health). Si se desea usar puertos diferenciados por nodo (`50001`/`50002`/`50003`), basta con ajustarlos en `.env` o `cluster.config`.
+
+#### 6.6.2 Requisitos Previos de Red y Firewall
+
+En **los 3 servidores**, abrir los puertos TCP de replicación Raft (`50001`) y API REST (`60001`), y asegurar conectividad bidireccional y sincronización horaria (NTP/chrony):
+
+```bash
+# Ubuntu / Debian (UFW) — restringido a la subred del clúster
+sudo ufw allow from 192.168.10.0/24 to any port 50001 proto tcp
+sudo ufw allow from 192.168.10.0/24 to any port 60001 proto tcp
+sudo ufw reload
+
+# Verificar conectividad TCP entre servidores (ejemplo desde Servidor 1 hacia 2 y 3)
+nc -zv 192.168.10.12 50001
+nc -zv 192.168.10.13 50001
+```
+
+---
+
+#### 6.6.3 Opción A: Despliegue con Docker Compose (`docker/docker-compose-node-servers.yml`)
+
+El archivo [`docker/docker-compose-node-servers.yml`](../docker/docker-compose-node-servers.yml) define los tres nodos (`jettra-node-01`, `jettra-node-02`, `jettra-node-03`) mediante **perfiles de Docker Compose** (`--profile node-01`, `--profile node-02`, `--profile node-03`) para que pueda copiarse el mismo archivo en los 3 servidores sin duplicar plantillas.
+
+##### Paso 1: Crear el archivo `.env` en los 3 servidores
+En el directorio donde copie `docker/docker-compose-node-servers.yml`, cree un archivo `.env` idéntico con las IPs reales de cada servidor:
+
+```dotenv
+# Imagen Docker (Docker Hub o imagen construida localmente)
+JETTRA_DOCKER_IMAGE=avbravo/jettrastore:1.0-SNAPSHOT
+JETTRA_PULL_POLICY=if_not_present
+
+# Direcciones IP reales de cada servidor
+NODE1_IP=192.168.10.11
+NODE2_IP=192.168.10.12
+NODE3_IP=192.168.10.13
+
+# Puertos TCP por servidor (por defecto 50001 Raft/gRPC y 60001 REST)
+NODE1_GRPC_PORT=50001
+NODE1_REST_PORT=60001
+NODE2_GRPC_PORT=50001
+NODE2_REST_PORT=60001
+NODE3_GRPC_PORT=50001
+NODE3_REST_PORT=60001
+
+# Motor de almacenamiento, credenciales y límites de recursos
+JETTRA_STORAGE_MODE=OFF_HEAP
+JETTRA_ADMIN_USERNAME=admin
+JETTRA_ADMIN_PASSWORD=admin-jettra
+JETTRA_MEM_LIMIT=640m
+JETTRA_CPUS=1.0
+JAVA_OPTS=-Xms96m -Xmx384m -XX:MaxMetaspaceSize=192m -XX:MaxDirectMemorySize=192m
+```
+
+##### Paso 2: Iniciar cada nodo en su servidor correspondiente
+
+1. **En el Servidor 1 (`192.168.10.11`) — Iniciar primero el `PRIMARY`:**
+   ```bash
+   docker compose --env-file .env -f docker/docker-compose-node-servers.yml --profile node-01 up -d
+   docker logs -f jettra-node-01
+   ```
+
+2. **En el Servidor 2 (`192.168.10.12`) — Iniciar `SECONDARY` 1:**
+   ```bash
+   docker compose --env-file .env -f docker/docker-compose-node-servers.yml --profile node-02 up -d
+   docker logs -f jettra-node-02
+   ```
+
+3. **En el Servidor 3 (`192.168.10.13`) — Iniciar `SECONDARY` 2:**
+   ```bash
+   docker compose --env-file .env -f docker/docker-compose-node-servers.yml --profile node-03 up -d
+   docker logs -f jettra-node-03
+   ```
+
+Cada servidor persiste de forma independiente sus datos `.jettra` (`/jettra/data`), checkpoints (`/jettra/checkpoint`) y estado de membresía (`/jettra/cluster-state/cluster-state.config`) en volúmenes Docker locales que sobreviven reinicios y recreaciones de contenedores.
+
+---
+
+#### 6.6.4 Opción B: Despliegue Bare-Metal (`java -jar`) en 3 Servidores
+
+Si despliega el JAR ejecutable directamente sobre Java 25+ sin Docker:
+
+1. **Cree un `cluster.config` idéntico en los 3 servidores** (p. ej. `/opt/jettrastore/config/cluster.config`):
+   ```properties
+   cluster.name=jettra-prod-cluster
+   cluster.consensus.protocol=RAFT
+   cluster.replication.factor=3
+   cluster.multinode.active=on
+
+   cluster.node.1.id=node-01
+   cluster.node.1.role=PRIMARY
+   cluster.node.1.ip=192.168.10.11
+   cluster.node.1.grpc.port=50001
+   cluster.node.1.rest.port=60001
+
+   cluster.node.2.id=node-02
+   cluster.node.2.role=SECONDARY
+   cluster.node.2.ip=192.168.10.12
+   cluster.node.2.grpc.port=50001
+   cluster.node.2.rest.port=60001
+
+   cluster.node.3.id=node-03
+   cluster.node.3.role=SECONDARY
+   cluster.node.3.ip=192.168.10.13
+   cluster.node.3.grpc.port=50001
+   cluster.node.3.rest.port=60001
+   ```
+
+2. **Ejecute cada nodo en su servidor indicando su identidad e IP:**
+   ```bash
+   # Servidor 1 (192.168.10.11 — PRIMARY)
+   JETTRA_NODE_ID=node-01 JETTRA_NODE_ROLE=PRIMARY JETTRA_NODE_IP=192.168.10.11 \
+   JETTRA_GRPC_PORT=50001 JETTRA_REST_PORT=60001 \
+   java --enable-preview --enable-native-access=ALL-UNNAMED -Xms128m -Xmx512m \
+     -Djettra.storage.path=/var/lib/jettrastore/data \
+     -Djettra.cluster_state_config_dir=/var/lib/jettrastore/cluster-state \
+     -Dcluster.config.path=/opt/jettrastore/config/cluster.config \
+     -Dcluster.multinode.active=on \
+     -jar /opt/jettrastore/JettraStore.jar
+
+   # Servidor 2 (192.168.10.12 — SECONDARY)
+   JETTRA_NODE_ID=node-02 JETTRA_NODE_ROLE=SECONDARY JETTRA_NODE_IP=192.168.10.12 \
+   JETTRA_GRPC_PORT=50001 JETTRA_REST_PORT=60001 \
+   java --enable-preview --enable-native-access=ALL-UNNAMED -Xms128m -Xmx512m \
+     -Djettra.storage.path=/var/lib/jettrastore/data \
+     -Djettra.cluster_state_config_dir=/var/lib/jettrastore/cluster-state \
+     -Dcluster.config.path=/opt/jettrastore/config/cluster.config \
+     -Dcluster.multinode.active=on \
+     -jar /opt/jettrastore/JettraStore.jar
+
+   # Servidor 3 (192.168.10.13 — SECONDARY)
+   JETTRA_NODE_ID=node-03 JETTRA_NODE_ROLE=SECONDARY JETTRA_NODE_IP=192.168.10.13 \
+   JETTRA_GRPC_PORT=50001 JETTRA_REST_PORT=60001 \
+   java --enable-preview --enable-native-access=ALL-UNNAMED -Xms128m -Xmx512m \
+     -Djettra.storage.path=/var/lib/jettrastore/data \
+     -Djettra.cluster_state_config_dir=/var/lib/jettrastore/cluster-state \
+     -Dcluster.config.path=/opt/jettrastore/config/cluster.config \
+     -Dcluster.multinode.active=on \
+     -jar /opt/jettrastore/JettraStore.jar
+   ```
+
+---
+
+#### 6.6.5 Verificación de Salud, Consenso Raft, Failover y Conexión de Clientes
+
+1. **Comprobar salud REST en los 3 servidores:**
+   ```bash
+   curl -s http://192.168.10.11:60001/api/v1/health && echo
+   curl -s http://192.168.10.12:60001/api/v1/health && echo
+   curl -s http://192.168.10.13:60001/api/v1/health && echo
+   ```
+
+2. **Conectar `JettraStoreShell` y validar topología en vivo:**
+   ```bash
+   connect 192.168.10.11:50001 admin admin-jettra
+   show nodes
+   ```
+   Debe visualizar los 3 nodos (`node-01` como `PRIMARY` y `node-02`/`node-03` como `SECONDARY`) en estado `ONLINE`.
+
+3. **Configurar clientes (`JettraStoreDriver` / `JettraStoreExplorer`):**
+   ```properties
+   cluster.ip.nodes=192.168.10.11:50001,192.168.10.12:50001,192.168.10.13:50001
+   ```
+
+4. **Validar conmutación por error (Failover Raft):**
+   ```bash
+   # En el Servidor 1 (192.168.10.11), detener temporalmente el PRIMARY:
+   docker compose --env-file .env -f docker/docker-compose-node-servers.yml --profile node-01 stop
+
+   # Verificar desde Servidor 2 o 3 que uno de los SECONDARY asume el liderazgo:
+   curl -s http://192.168.10.12:60001/api/v1/health && echo
+   curl -s http://192.168.10.13:60001/api/v1/health && echo
+
+   # Reincorporar Servidor 1 al clúster:
+   docker compose --env-file .env -f docker/docker-compose-node-servers.yml --profile node-01 start
+   ```
+
+### 6.7 Plantilla de Un Solo Nodo Conectado al Clúster (`docker-compose-only-node-servers.yml`)
+
+Cuando se prefiere un archivo Compose minimalista que defina **únicamente un servicio (`jettra-node`)** por servidor —sin perfiles ni definiciones de los otros contenedores— pero que identifique explícitamente a los demás pares del clúster en la red mediante `JETTRA_CLUSTER_PEERS`, utilice [`docker/docker-compose-only-node-servers.yml`](../docker/docker-compose-only-node-servers.yml).
+
+Este enfoque resulta especialmente útil para automatización con Ansible, Terraform, Cloud-Init o despliegues escalables (3, 5 o más nodos) donde cada servidor recibe el mismo archivo Compose acompañado únicamente de su propio `.env`.
+
+#### 6.7.1 Archivos `.env` por Servidor
+
+* **Servidor 1 (`192.168.10.11` — `node-01` / `PRIMARY`):**
+  ```dotenv
+  JETTRA_DOCKER_IMAGE=avbravo/jettrastore:1.0-SNAPSHOT
+  JETTRA_CONTAINER_NAME=jettra-node-01
+  JETTRA_NODE_ID=node-01
+  JETTRA_NODE_ROLE=PRIMARY
+  JETTRA_NODE_IP=192.168.10.11
+  JETTRA_GRPC_PORT=50001
+  JETTRA_REST_PORT=60001
+  JETTRA_CLUSTER_PEERS=node-02:192.168.10.12:50001:SECONDARY,node-03:192.168.10.13:50001:SECONDARY
+  JETTRA_DATA_VOLUME_NAME=jettra_node01_data
+  JETTRA_CHECKPOINT_VOLUME_NAME=jettra_node01_checkpoint
+  JETTRA_STATE_VOLUME_NAME=jettra_node01_state
+  JETTRA_ADMIN_USERNAME=admin
+  JETTRA_ADMIN_PASSWORD=admin-jettra
+  ```
+
+* **Servidor 2 (`192.168.10.12` — `node-02` / `SECONDARY`):**
+  ```dotenv
+  JETTRA_DOCKER_IMAGE=avbravo/jettrastore:1.0-SNAPSHOT
+  JETTRA_CONTAINER_NAME=jettra-node-02
+  JETTRA_NODE_ID=node-02
+  JETTRA_NODE_ROLE=SECONDARY
+  JETTRA_NODE_IP=192.168.10.12
+  JETTRA_GRPC_PORT=50001
+  JETTRA_REST_PORT=60001
+  JETTRA_CLUSTER_PEERS=node-01:192.168.10.11:50001:PRIMARY,node-03:192.168.10.13:50001:SECONDARY
+  JETTRA_DATA_VOLUME_NAME=jettra_node02_data
+  JETTRA_CHECKPOINT_VOLUME_NAME=jettra_node02_checkpoint
+  JETTRA_STATE_VOLUME_NAME=jettra_node02_state
+  JETTRA_ADMIN_USERNAME=admin
+  JETTRA_ADMIN_PASSWORD=admin-jettra
+  ```
+
+* **Servidor 3 (`192.168.10.13` — `node-03` / `SECONDARY`):**
+  ```dotenv
+  JETTRA_DOCKER_IMAGE=avbravo/jettrastore:1.0-SNAPSHOT
+  JETTRA_CONTAINER_NAME=jettra-node-03
+  JETTRA_NODE_ID=node-03
+  JETTRA_NODE_ROLE=SECONDARY
+  JETTRA_NODE_IP=192.168.10.13
+  JETTRA_GRPC_PORT=50001
+  JETTRA_REST_PORT=60001
+  JETTRA_CLUSTER_PEERS=node-01:192.168.10.11:50001:PRIMARY,node-02:192.168.10.12:50001:SECONDARY
+  JETTRA_DATA_VOLUME_NAME=jettra_node03_data
+  JETTRA_CHECKPOINT_VOLUME_NAME=jettra_node03_checkpoint
+  JETTRA_STATE_VOLUME_NAME=jettra_node03_state
+  JETTRA_ADMIN_USERNAME=admin
+  JETTRA_ADMIN_PASSWORD=admin-jettra
+  ```
+
+#### 6.7.2 Ejecución en Cada Servidor
+
+En cada servidor (iniciando primero el Servidor 1 `PRIMARY` y luego los `SECONDARY`), ejecute el mismo comando:
+
+```bash
+docker compose --env-file .env -f docker/docker-compose-only-node-servers.yml up -d
+docker compose --env-file .env -f docker/docker-compose-only-node-servers.yml logs -f
+```
+
+> **Tip para agregar un 4.º nodo dinámicamente:** Basta con iniciar un nuevo servidor usando `docker-compose-only-node-servers.yml` con `JETTRA_NODE_ID=node-04`, `JETTRA_NODE_ROLE=SECONDARY`, su propia `JETTRA_NODE_IP` y apuntando `JETTRA_CLUSTER_PEERS` a los nodos existentes; el `PRIMARY` actualizará y replicará automáticamente `cluster-state.config` a todo el clúster.
 
 ---
 

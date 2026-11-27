@@ -1,1 +1,15 @@
-[ ]
+[ {
+  "id" : "node-02",
+  "name" : "node-02",
+  "role" : "PRIMARY",
+  "host" : "0.0.0.0",
+  "port" : 50002,
+  "heapMaxMb" : 2048
+}, {
+  "id" : "node-03",
+  "name" : "node-03",
+  "role" : "SECONDARY",
+  "host" : "0.0.0.0",
+  "port" : 50003,
+  "heapMaxMb" : 2048
+} ]
