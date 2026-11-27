@@ -189,9 +189,17 @@ Tanto en **`/explorer?db=<db>&bucket=<bucket>&section=indexes`** como en **`/dat
 
 ---
 
-## 8. Administración de Índices, Motores de Almacenamiento y Buckets en `/database` (`/databases`)
+## 8. Administración de Bases de Datos (`Storage Mode`), Índices, Motores y Buckets en `/database` (`/databases`)
 
-La página **`/database`** (alias directo de `/databases`) centraliza dos diálogos modales JettraFlux sobre el catálogo maestro de bases de datos:
+La página **`/database`** (alias directo de `/databases`) centraliza la creación y edición del **Storage Mode** por base de datos junto con los diálogos modales JettraFlux sobre el catálogo maestro:
+
+### 8.0 Selección y Edición de Storage Mode (`OFF-HEAP` Predeterminado — RF-38)
+Al crear una base de datos (`➕ Crear Nueva Base de Datos`, `POST /databases` con `action=create_db`) o editarla (`✏️ Editar Storage Mode`, modal `editDatabaseModal`, `action=edit_db`), el usuario selecciona el motor físico entre los tres modos soportados:
+1. **`JVM-RAM`:** Memoria RAM estándar de la JVM (Heap & Stack).
+2. **`DISK-MEMORY` (Integración Nativa `JettraMemory`):** Motor directo en disco con arquitectura LSM Off-Heap FFM.
+3. **`OFF-HEAP` (Integración Nativa `JettraStore-OffHeap` — Predeterminado):** Motor nativo Slotted-Page FFM con Zero-Copy y gestión determinista RAII (preseleccionado por defecto).
+
+* En la consola interactiva web **`/query`** (`JettraStoreShellExecutor`), el usuario también puede crear o modificar el Storage Mode con `CREATE DATABASE <db> [JVM-RAM|DISK-MEMORY|OFF-HEAP]`, `EDIT DATABASE <db> <JVM-RAM|DISK-MEMORY|OFF-HEAP>` y `STORAGE_MODE <OFF-HEAP|DISK-MEMORY|JVM-RAM>`.
 
 ### 8.1 Diálogo "Administración de Índices en `[nombre-base-de-datos]`"
 Al hacer clic en **`⚡ Administrar Índices`** (`/database?db=ventas_db&manage_indexes_db=ventas_db`):

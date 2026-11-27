@@ -11,6 +11,7 @@ import io.jettra.store.cluster.JettraRaftFrame;
 import io.jettra.store.core.JettraDatabase;
 import io.jettra.store.core.JettraStoreConfig;
 import io.jettra.store.core.JettraConfigValidator;
+import io.jettra.store.core.StorageMode;
 import io.jettra.store.police.JettraPolice;
 import io.jettra.store.security.JettraSecurityManager;
 
@@ -671,7 +672,29 @@ public final class JettraStoreServer implements AutoCloseable {
 
             String method = exchange.getRequestMethod();
             if ("GET".equalsIgnoreCase(method)) {
+                String query = exchange.getRequestURI().getQuery();
+                if (query != null && query.contains("name=")) {
+                    String targetName = extractQueryParam(query, "name");
+                    if (targetName != null && !targetName.isBlank()) {
+                        StorageMode mode = getDatabaseStorageMode(targetName.trim());
+                        sendResponse(exchange, 200, String.format("{\"database\":\"%s\",\"storageMode\":\"%s\"}",
+                                targetName.trim(), mode.getCode()));
+                        return;
+                    }
+                }
                 List<String> dbs = listDatabaseNames();
+                if (query != null && query.contains("details=true")) {
+                    StringBuilder sb = new StringBuilder("[");
+                    for (int i = 0; i < dbs.size(); i++) {
+                        String dbName = dbs.get(i);
+                        StorageMode mode = getDatabaseStorageMode(dbName);
+                        sb.append(String.format("{\"database\":\"%s\",\"storageMode\":\"%s\"}", dbName, mode.getCode()));
+                        if (i < dbs.size() - 1) sb.append(",");
+                    }
+                    sb.append("]");
+                    sendResponse(exchange, 200, sb.toString());
+                    return;
+                }
                 StringBuilder sb = new StringBuilder("[");
                 for (int i = 0; i < dbs.size(); i++) {
                     sb.append("\"").append(dbs.get(i)).append("\"");
@@ -693,8 +716,36 @@ public final class JettraStoreServer implements AutoCloseable {
                     sendResponse(exchange, 400, "{\"error\":\"Missing 'name' field in request\"}");
                     return;
                 }
-                getOrCreateDatabase(name.trim());
-                sendResponse(exchange, 200, String.format("{\"status\":\"CREATED\",\"database\":\"%s\"}", name.trim()));
+                String modeStr = extractJsonField(body, "storageMode");
+                StorageMode requestedMode = StorageMode.parseStrict(modeStr);
+                JettraDatabase created = getOrCreateDatabase(name.trim(), requestedMode);
+                String activeCode = (created != null && created.getStorageMode() != null)
+                        ? created.getStorageMode().getCode()
+                        : StorageMode.OFF_HEAP.getCode();
+                sendResponse(exchange, 200, String.format("{\"status\":\"CREATED\",\"database\":\"%s\",\"storageMode\":\"%s\"}",
+                        name.trim(), activeCode));
+            } else if ("PUT".equalsIgnoreCase(method)) {
+                if (config.isClusterMultinodeActive() && config.getNodeRole() == ClusterNode.Role.SECONDARY) {
+                    sendResponse(exchange, 403, String.format("{\"error\":\"[READ-ONLY REPLICA] El nodo actual '%s' tiene rol SECUNDARIO. No se permite editar bases de datos directamente.\"}", config.getNodeId()));
+                    return;
+                }
+                String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+                String name = extractJsonField(body, "name");
+                if (name == null || name.isBlank()) {
+                    name = extractJsonField(body, "database");
+                }
+                String modeStr = extractJsonField(body, "storageMode");
+                StorageMode requestedMode = StorageMode.parseStrict(modeStr);
+                if (name == null || name.isBlank() || requestedMode == null) {
+                    sendResponse(exchange, 400, "{\"error\":\"Missing valid 'name'/'database' or 'storageMode' (JVM-RAM, DISK-MEMORY, OFF-HEAP)\"}");
+                    return;
+                }
+                JettraDatabase updated = updateDatabaseStorageMode(name.trim(), requestedMode);
+                String activeCode = (updated != null && updated.getStorageMode() != null)
+                        ? updated.getStorageMode().getCode()
+                        : requestedMode.getCode();
+                sendResponse(exchange, 200, String.format("{\"status\":\"UPDATED\",\"database\":\"%s\",\"storageMode\":\"%s\"}",
+                        name.trim(), activeCode));
             } else if ("DELETE".equalsIgnoreCase(method)) {
                 if (config.isClusterMultinodeActive() && config.getNodeRole() == ClusterNode.Role.SECONDARY) {
                     sendResponse(exchange, 403, String.format("{\"error\":\"[READ-ONLY REPLICA] El nodo actual '%s' tiene rol SECUNDARIO. No se permite eliminar bases de datos directamente.\"}", config.getNodeId()));
@@ -736,8 +787,22 @@ public final class JettraStoreServer implements AutoCloseable {
                         sendResponse(exchange, 403, "{\"error\":\"[READ-ONLY REPLICA] Operación de creación denegada en secundario.\"}");
                         return;
                     }
-                    getOrCreateDatabaseInternal(db.trim(), true);
+                    StorageMode reqMode = StorageMode.parseStrict(extractJsonField(body, "storageMode"));
+                    getOrCreateDatabaseInternal(db.trim(), true, reqMode);
                     sendResponse(exchange, 200, "{\"status\":\"ACK\",\"op\":\"CREATE_DATABASE\"}");
+                    return;
+                } else if ("SET_STORAGE_MODE".equalsIgnoreCase(op) && db != null) {
+                    if (config.isClusterMultinodeActive() && config.getNodeRole() == ClusterNode.Role.SECONDARY) {
+                        sendResponse(exchange, 403, "{\"error\":\"[READ-ONLY REPLICA] Operación de edición denegada en secundario.\"}");
+                        return;
+                    }
+                    StorageMode reqMode = StorageMode.parseStrict(extractJsonField(body, "storageMode"));
+                    if (reqMode == null) {
+                        sendResponse(exchange, 400, "{\"error\":\"Invalid 'storageMode'\"}");
+                        return;
+                    }
+                    updateDatabaseStorageMode(db.trim(), reqMode);
+                    sendResponse(exchange, 200, "{\"status\":\"ACK\",\"op\":\"SET_STORAGE_MODE\"}");
                     return;
                 } else if ("DROP_DATABASE".equalsIgnoreCase(op) && db != null) {
                     if (config.isClusterMultinodeActive() && config.getNodeRole() == ClusterNode.Role.SECONDARY) {
@@ -938,8 +1003,55 @@ public final class JettraStoreServer implements AutoCloseable {
         return httpServer != null && activeInstance == this;
     }
 
+    private static String extractQueryParam(String query, String key) {
+        if (query == null || key == null) return null;
+        for (String pair : query.split("&")) {
+            int eq = pair.indexOf('=');
+            if (eq > 0 && pair.substring(0, eq).equalsIgnoreCase(key)) {
+                return java.net.URLDecoder.decode(pair.substring(eq + 1), StandardCharsets.UTF_8);
+            }
+        }
+        return null;
+    }
+
     public JettraDatabase getOrCreateDatabase(String name) {
-        return getOrCreateDatabaseInternal(name, true);
+        return getOrCreateDatabaseInternal(name, true, null);
+    }
+
+    public JettraDatabase getOrCreateDatabase(String name, StorageMode storageMode) {
+        return getOrCreateDatabaseInternal(name, true, storageMode);
+    }
+
+    public StorageMode getDatabaseStorageMode(String name) {
+        if (name == null || name.isBlank()) {
+            return config.getStorageMode() != null ? config.getStorageMode() : StorageMode.OFF_HEAP;
+        }
+        JettraDatabase loaded = databases.get(name.trim());
+        if (loaded != null) {
+            return loaded.getStorageMode();
+        }
+        return JettraDatabase.readPersistedStorageMode(name.trim(), config);
+    }
+
+    public JettraDatabase updateDatabaseStorageMode(String name, StorageMode storageMode) {
+        if (name == null || name.isBlank()) return null;
+        StorageMode targetMode = (storageMode != null) ? storageMode : StorageMode.OFF_HEAP;
+        JettraDatabase db = getOrCreateDatabaseInternal(name.trim(), false, null);
+        if (db != null) {
+            db.setStorageMode(targetMode);
+            if (!db.isReadOnlyNode()) {
+                try { db.flushMemTable(); } catch (Exception ignored) {}
+                db.saveToDisk();
+            }
+            if (config.isClusterMultinodeActive() && config.getNodeRole() == ClusterNode.Role.PRIMARY) {
+                byte[] payload = getDatabaseSnapshotBytes(name.trim());
+                JettraClusterReplicationClient client = getOrCreateReplicationClient();
+                if (client != null) {
+                    client.broadcastCreateDatabase(name.trim(), payload);
+                }
+            }
+        }
+        return db;
     }
 
     public synchronized JettraClusterReplicationClient getOrCreateReplicationClient() {
@@ -958,8 +1070,23 @@ public final class JettraStoreServer implements AutoCloseable {
     }
 
     public JettraDatabase getOrCreateDatabaseInternal(String name, boolean broadcast) {
+        return getOrCreateDatabaseInternal(name, broadcast, null);
+    }
+
+    public JettraDatabase getOrCreateDatabaseInternal(String name, boolean broadcast, StorageMode storageMode) {
         if (name == null || name.isBlank()) return null;
-        JettraDatabase db = databases.computeIfAbsent(name, k -> new JettraDatabase(k, config, ringEngine));
+        boolean[] createdNew = {false};
+        JettraDatabase db = databases.computeIfAbsent(name, k -> {
+            createdNew[0] = true;
+            JettraDatabase newDb = new JettraDatabase(k, config, ringEngine);
+            if (storageMode != null) {
+                newDb.setStorageMode(storageMode);
+            }
+            return newDb;
+        });
+        if (!createdNew[0] && storageMode != null) {
+            db.setStorageMode(storageMode);
+        }
         if (db != null && !db.isReadOnlyNode()) {
             try {
                 db.flushMemTable();

@@ -351,9 +351,9 @@ Tanto `JettraDatabase` en el core como `JettraClient` en el driver exponen méto
 
 
 #### 1.4.3 Modos Triples de Almacenamiento: `JVM-RAM`, `DISK-MEMORY` y `OFF-HEAP`
-JettraStore permite operar cada base de datos bajo tres paradigmas complementarios y conmutables en tiempo real:
+JettraStore permite operar cada base de datos bajo tres paradigmas complementarios y conmutables en tiempo real (siendo **`OFF-HEAP`** el motor predeterminado del ecosistema):
 
-1. **Modo `JVM-RAM` (Predeterminado):**
+1. **Modo `JVM-RAM`:**
    * Almacenamiento y procesamiento en las áreas de memoria Stack y Heap de la Máquina Virtual de Java.
    * Utiliza colecciones optimizadas `UnifiedMap` con cabeceras compactas (Compact Object Headers de 64 bits de Project Lilliput) y Generational ZGC.
    * Ideal para cargas de trabajo de baja latencia con límites de memoria holgados.
@@ -362,14 +362,14 @@ JettraStore permite operar cada base de datos bajo tres paradigmas complementari
    * Persistencia directa en disco mediante la arquitectura LSM de `JettraMemory` y mapeo fuera del Heap con Project Panama (`MemorySegment`).
    * Cero consumo de Heap para la carga de datos masivos, erradicando fallos por `OutOfMemoryError`.
    * Los registros se escriben a través de `JettraStoreConnector` con compatibilidad multimodelo total.
-   * Conmutable en caliente por API (`db.setStorageMode(mode)`), en consola Shell (`STORAGE_MODE DISK_MEMORY`), en la interfaz gráfica `JettraStoreFX` o mediante `microprofile-config.properties` (`storage.mode = DISK_MEMORY`).
+   * Conmutable en caliente por API (`db.setStorageMode(mode)`), en consola Shell (`STORAGE_MODE DISK_MEMORY`), en la interfaz gráfica `JettraStoreExplorer` o mediante `microprofile-config.properties` (`storage.mode = DISK_MEMORY`).
 
-3. **Modo `OFF-HEAP` (Integración Nativa JettraStore-OffHeap):**
+3. **Modo `OFF-HEAP` (Integración Nativa JettraStore-OffHeap — Predeterminado):**
    * Almacenamiento nativo de ultra-alto rendimiento en regiones contiguas de memoria virtual gestionadas por Project Panama (`Arena` y `MemorySegment`).
    * **Arquitectura Slotted-Page:** Páginas binarias de 64 KB o 256 KB con directorio de slots que crecen bidireccionalmente.
    * **Zero-Copy Deserialization:** Extracción selectiva de campos primitivos mediante VarHandles no alineados sin instanciar objetos intermedios en el Heap de la JVM.
    * **Gestión Determinista RAII:** Ciclo de vida transaccional acotado con `JettraTransactionContext` que libera instantáneamente en $O(1)$ la memoria nativa sin esperar ciclos de GC.
-   * Activación vía `microprofile-config.properties` (`storage.mode = OFF_HEAP` o `jettra.storage.mode = OFF_HEAP`), en consola Shell (`STORAGE_MODE OFF-HEAP`) o por código Java (`config.setStorageMode(StorageMode.OFF_HEAP)`).
+   * Modo predeterminado por defecto (`OFF_HEAP`) y configurable explícitamente vía `microprofile-config.properties` (`storage.mode = OFF_HEAP` o `jettra.storage.mode = OFF_HEAP`), en consola Shell (`STORAGE_MODE OFF-HEAP`) o por código Java (`config.setStorageMode(StorageMode.OFF_HEAP)`).
 
 ---
 
@@ -461,19 +461,19 @@ Se ha evaluado exhaustivamente la viabilidad técnica de extender `JettraStore-O
 
 #### 1.4.7 Guía Operativa de Activación de los Tres Modos: JettraStore, JettraShell y JettraDriver
 
-JettraStore unifica tres arquitecturas de almacenamiento complementarias que pueden elegirse globalmente o alternarse en caliente para cada base de datos:
+JettraStore unifica tres arquitecturas de almacenamiento complementarias que pueden elegirse al crear o editar una base de datos, o alternarse en caliente globalmente (siendo **`OFF-HEAP`** el motor predeterminado):
 
-1. **Modo `JVM-RAM` (Predeterminado):** Memoria RAM gestionada por la JVM (Heap y Stack) potenciada por `UnifiedMap` y cabeceras compactas de 8 bytes de Project Lilliput.
+1. **Modo `JVM-RAM`:** Memoria RAM gestionada por la JVM (Heap y Stack) potenciada por `UnifiedMap` y cabeceras compactas de 8 bytes de Project Lilliput.
 2. **Modo `DISK-MEMORY` (Integración Nativa JettraMemory):** Motor directo en disco con arquitectura LSM basada en Project Panama (`MemorySegment`), diseñado para erradicar el consumo de heap en almacenamiento masivo.
-3. **Modo `OFF-HEAP` (Integración Nativa JettraStore-OffHeap):** Motor de páginas ranuradas nativas contiguas (Slotted-Page de 64 KB / 256 KB) con Project Panama (`Arena` y `MemorySegment`), deserialización selectiva cero-copia y liberación transaccional determinista RAII.
+3. **Modo `OFF-HEAP` (Integración Nativa JettraStore-OffHeap — Predeterminado):** Motor de páginas ranuradas nativas contiguas (Slotted-Page de 64 KB / 256 KB) con Project Panama (`Arena` y `MemorySegment`), deserialización selectiva cero-copia y liberación transaccional determinista RAII.
 
-A continuación se detalla la activación de cada modo en los tres componentes fundamentales del ecosistema:
+A continuación se detalla la activación de cada modo en los componentes fundamentales del ecosistema:
 
 ---
 
 ##### 1. Activación al Ejecutar el Servidor `JettraStore`
 
-El motor de `JettraStore` evalúa el modo de almacenamiento en el arranque siguiendo una jerarquía estricta: Propiedades del Sistema (`-D`) $\to$ Variables de Entorno $\to$ Archivo `microprofile-config.properties` $\to$ Valor por defecto (`JVM_RAM` o `OFF_HEAP`).
+El motor de `JettraStore` evalúa el modo de almacenamiento en el arranque siguiendo una jerarquía estricta: Propiedades del Sistema (`-D`) $\to$ Variables de Entorno $\to$ Archivo `microprofile-config.properties` $\to$ Valor por defecto (**`OFF_HEAP`**).
 
 ###### A. Mediante archivo de configuración `microprofile-config.properties`:
 En el archivo `microprofile-config.properties` ubicado en la raíz del proyecto o en el directorio de configuración (`config/microprofile-config.properties`):
@@ -485,17 +485,17 @@ En el archivo `microprofile-config.properties` ubicado en la raíz del proyecto 
 # Opciones disponibles:
 #   JVM_RAM     -> Modo memoria RAM estándar de la JVM (Heap & Stack).
 #   DISK_MEMORY -> Motor de disco directo Off-Heap LSM (JettraMemory).
-#   OFF_HEAP    -> Motor de páginas ranuradas nativas Slotted-Page (JettraStore-OffHeap).
+#   OFF_HEAP    -> Motor de páginas ranuradas nativas Slotted-Page (JettraStore-OffHeap) [Predeterminado].
 # ==============================================================================
 
-# 1. Para activar el Modo JVM-RAM (Predeterminado):
-jettra.storage.mode = JVM_RAM
+# 1. Para activar el Modo JVM-RAM:
+# jettra.storage.mode = JVM_RAM
 
 # 2. Para activar el Modo DISK-MEMORY (JettraMemory LSM):
 # jettra.storage.mode = DISK_MEMORY
 
-# 3. Para activar el Modo OFF-HEAP (JettraStore-OffHeap Slotted-Page):
-# jettra.storage.mode = OFF_HEAP
+# 3. Modo predeterminado recomendado: OFF-HEAP (JettraStore-OffHeap Slotted-Page):
+jettra.storage.mode = OFF_HEAP
 ```
 
 ###### B. Mediante variable de entorno del sistema operativo:

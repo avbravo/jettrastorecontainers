@@ -36,6 +36,16 @@ public class DatabasesFluxView extends FluxView {
             "JAVA_RECORD", "VECTOR", "COLUMNAR", "OBJECT", "RELATIONAL"
     );
 
+    private static final String STORAGE_OPTION_OFF_HEAP = "3. OFF-HEAP (Integración Nativa JettraStore-OffHeap — Predeterminado)";
+    private static final String STORAGE_OPTION_DISK_MEMORY = "2. DISK-MEMORY (Integración Nativa JettraMemory)";
+    private static final String STORAGE_OPTION_JVM_RAM = "1. JVM-RAM (Memoria RAM JVM Heap & Stack)";
+
+    public static final List<String> STORAGE_MODE_OPTIONS = List.of(
+            STORAGE_OPTION_JVM_RAM,
+            STORAGE_OPTION_DISK_MEMORY,
+            STORAGE_OPTION_OFF_HEAP
+    );
+
     private static final String TYPE_PRESET_PLACEHOLDER = "-- Tipo sugerido --";
 
     public static final List<String> STRUCTURE_TYPES = List.of(
@@ -61,36 +71,45 @@ public class DatabasesFluxView extends FluxView {
     private final String editBucketName;
     private final String addBucketEngine;
     private final String confirmDeleteDb;
+    private final String editDb;
     private final boolean isAdmin;
     private final String message;
 
     public DatabasesFluxView(String selectedDb, String message) {
-        this(selectedDb, null, null, null, null, false, false, null, null, null, true, message);
+        this(selectedDb, null, null, null, null, false, false, null, null, null, null, true, message);
     }
 
     public DatabasesFluxView(String selectedDb, String manageUsersDb, boolean isAdmin, String message) {
-        this(selectedDb, manageUsersDb, null, null, null, false, false, null, null, null, isAdmin, message);
+        this(selectedDb, manageUsersDb, null, null, null, false, false, null, null, null, null, isAdmin, message);
     }
 
     public DatabasesFluxView(String selectedDb, String manageUsersDb, boolean manageEngines, boolean isAdmin, String message) {
-        this(selectedDb, manageUsersDb, null, null, null, manageEngines, false, null, null, null, isAdmin, message);
+        this(selectedDb, manageUsersDb, null, null, null, manageEngines, false, null, null, null, null, isAdmin, message);
     }
 
     public DatabasesFluxView(String selectedDb, String manageUsersDb, String manageIndexesDb, String manageIndexesBucket,
                              boolean manageEngines, boolean isAdmin, String message) {
-        this(selectedDb, manageUsersDb, manageIndexesDb, manageIndexesBucket, null, manageEngines, false, null, null, null, isAdmin, message);
+        this(selectedDb, manageUsersDb, manageIndexesDb, manageIndexesBucket, null, manageEngines, false, null, null, null, null, isAdmin, message);
     }
 
     public DatabasesFluxView(String selectedDb, String manageUsersDb, String manageIndexesDb, String manageIndexesBucket,
                              String editIndexName, boolean manageEngines, boolean showAddBucketDialog,
                              String editBucketName, String addBucketEngine, boolean isAdmin, String message) {
         this(selectedDb, manageUsersDb, manageIndexesDb, manageIndexesBucket, editIndexName, manageEngines,
-                showAddBucketDialog, editBucketName, addBucketEngine, null, isAdmin, message);
+                showAddBucketDialog, editBucketName, addBucketEngine, null, null, isAdmin, message);
     }
 
     public DatabasesFluxView(String selectedDb, String manageUsersDb, String manageIndexesDb, String manageIndexesBucket,
                              String editIndexName, boolean manageEngines, boolean showAddBucketDialog,
                              String editBucketName, String addBucketEngine, String confirmDeleteDb,
+                             boolean isAdmin, String message) {
+        this(selectedDb, manageUsersDb, manageIndexesDb, manageIndexesBucket, editIndexName, manageEngines,
+                showAddBucketDialog, editBucketName, addBucketEngine, confirmDeleteDb, null, isAdmin, message);
+    }
+
+    public DatabasesFluxView(String selectedDb, String manageUsersDb, String manageIndexesDb, String manageIndexesBucket,
+                             String editIndexName, boolean manageEngines, boolean showAddBucketDialog,
+                             String editBucketName, String addBucketEngine, String confirmDeleteDb, String editDb,
                              boolean isAdmin, String message) {
         this.selectedDb = selectedDb;
         this.manageUsersDb = manageUsersDb;
@@ -102,6 +121,7 @@ public class DatabasesFluxView extends FluxView {
         this.editBucketName = editBucketName;
         this.addBucketEngine = addBucketEngine;
         this.confirmDeleteDb = confirmDeleteDb;
+        this.editDb = editDb;
         this.isAdmin = isAdmin;
         this.message = message;
     }
@@ -198,6 +218,15 @@ public class DatabasesFluxView extends FluxView {
             deleteDbConfirmModal = deleteModal;
         }
 
+        // 8. Diálogo Modal JettraFlux para Editar Storage Mode de una Base de Datos
+        Widget editDbModal = null;
+        if (editDb != null && !editDb.isBlank() && catalog.containsKey(editDb)) {
+            Modal dbEditModal = Modal.of(buildEditDatabaseDialog(plugin, editDb, currentDb)).open(true);
+            dbEditModal.id("editDatabaseModal");
+            dbEditModal.modifier(new Modifier().style("z-index: 1250;"));
+            editDbModal = dbEditModal;
+        }
+
         List<Widget> rootChildren = new java.util.ArrayList<>();
         if (flashWidget != null) rootChildren.add(flashWidget);
         rootChildren.add(kpiGrid);
@@ -208,6 +237,7 @@ public class DatabasesFluxView extends FluxView {
         if (bucketFormOverlayModal != null) rootChildren.add(bucketFormOverlayModal);
         if (indexesSection != null) rootChildren.add(indexesSection);
         if (deleteDbConfirmModal != null) rootChildren.add(deleteDbConfirmModal);
+        if (editDbModal != null) rootChildren.add(editDbModal);
 
         return Div.of(rootChildren.toArray(new Widget[0]));
     }
@@ -234,13 +264,15 @@ public class DatabasesFluxView extends FluxView {
         Widget infoNote = Div.of(
                 Text.of("⚡ Toda base de datos creada habilita automáticamente soporte nativo para los "),
                 FluxUi.coloredSpan("9 motores (engines) de JettraStore", "color: #00d4ff; font-weight: 700;"),
-                Text.of(": DOCUMENT, KEY_VALUE, COLUMNAR, TIMESERIES, GEOSPATIAL, GRAPH, VECTOR, JAVA_RECORD y OBJECT.")
+                Text.of(": DOCUMENT, KEY_VALUE, COLUMNAR, TIMESERIES, GEOSPATIAL, GRAPH, VECTOR, JAVA_RECORD y OBJECT. Seleccione el Storage Mode deseado: "),
+                FluxUi.coloredSpan("1. JVM-RAM | 2. DISK-MEMORY (JettraMemory) | 3. OFF-HEAP (Predeterminado).", "color: #10b981; font-weight: 600;")
         ).modifier(new Modifier().style("font-size: 0.8rem; color: var(--text-muted); margin-bottom: 0.85rem;"));
 
         Form form = Form.of(
                 FluxUi.hidden("action", "create_db"),
-                FluxUi.fieldColumn("Nombre de la Base de Datos", FluxUi.textInput("dbName", "", "ecommerce_core_db", true), "flex: 1.5; min-width: 220px;"),
-                FluxUi.fieldColumn("Descripción", FluxUi.textInput("description", "", "Base de datos empresarial multimodelo para gestión de inventarios", false), "flex: 2.5; min-width: 260px;"),
+                FluxUi.fieldColumn("Nombre de la Base de Datos", FluxUi.textInput("dbName", "", "ecommerce_core_db", true), "flex: 1.3; min-width: 210px;"),
+                FluxUi.fieldColumn("Storage Mode (Almacenamiento)", FluxUi.dropdown("storageMode", STORAGE_MODE_OPTIONS, STORAGE_OPTION_OFF_HEAP), "flex: 1.6; min-width: 260px;"),
+                FluxUi.fieldColumn("Descripción", FluxUi.textInput("description", "", "Base de datos empresarial multimodelo para gestión de inventarios", false), "flex: 2; min-width: 240px;"),
                 Div.of(FluxUi.submitButton("➕ Crear Base de Datos", "app-btn-primary", "height: 38px;"))
         ).action("/databases").method("POST");
         form.modifier(new Modifier().style("display: flex; flex-wrap: wrap; gap: 0.85rem; align-items: flex-end;"));
@@ -251,11 +283,13 @@ public class DatabasesFluxView extends FluxView {
     }
 
     private Widget buildDatabasesTable(Map<String, List<EngineBucketInfo>> catalog, String currentDb) {
+        JettraStorePlugin plugin = JettraStorePlugin.getInstance();
         Header header = Header.of(3, "🗄️ Catálogo Maestro de Bases de Datos");
         header.modifier(new Modifier().style("font-size: 1.1rem; color: var(--text-main); margin: 0 0 0.85rem 0;"));
 
         List<Widget> headers = List.of(
             Text.of("Base de Datos"),
+            Text.of("Storage Mode"),
             Text.of("Motores / Buckets"),
             Text.of("Total Registros"),
             Text.of("Espacio en Memoria/Disco"),
@@ -270,6 +304,8 @@ public class DatabasesFluxView extends FluxView {
 
             long dbObjects = buckets.stream().mapToLong(EngineBucketInfo::getTotalObjects).sum();
             long dbBytes = buckets.stream().mapToLong(EngineBucketInfo::getTotalBytes).sum();
+            io.jettra.store.core.StorageMode dbStorageMode = plugin.getDatabaseStorageMode(db);
+            String modeColor = dbStorageMode.isOffHeap() ? "#10b981" : (dbStorageMode.isDiskMemory() ? "#38bdf8" : "#f59e0b");
 
             List<Widget> dbCellItems = new ArrayList<>();
             dbCellItems.add(FluxUi.coloredSpan("📁 " + db, "color:#00d4ff; font-weight:700;"));
@@ -277,11 +313,13 @@ public class DatabasesFluxView extends FluxView {
                 dbCellItems.add(FluxUi.coloredSpan(" [SELECCIONADA]", "color:#ffd700; font-size:0.75rem; font-weight:700;"));
             }
             Widget dbCell = Div.of(dbCellItems.toArray(new Widget[0]));
+            Widget storageCell = FluxUi.pillBadge(dbStorageMode.getCode(), modeColor);
             Widget bucketsCell = Text.of(buckets.size() + " motores");
             Widget objCell = Text.of(String.format("%,d", dbObjects));
             Widget sizeCell = Text.of(formatBytes(dbBytes));
 
             List<Widget> actionsList = new ArrayList<>();
+            actionsList.add(FluxUi.linkButton("/databases?db=" + db + "&edit_db=" + db, "✏️ Editar Storage Mode", "app-btn-secondary", "margin-right:6px;"));
             actionsList.add(FluxUi.linkButton("/databases?db=" + db + "&manage_engines=true", "⚙️ Administrar Motores", "app-btn-secondary", "margin-right:6px;"));
             actionsList.add(FluxUi.linkButton("/databases?db=" + db + "&manage_indexes_db=" + db, "⚡ Administrar Índices", "app-btn-secondary", "margin-right:6px;"));
             if (isAdmin) {
@@ -304,7 +342,7 @@ public class DatabasesFluxView extends FluxView {
             }
             Widget actionsCell = Div.of(actionsList.toArray(new Widget[0]));
 
-            rows.add(List.of(dbCell, bucketsCell, objCell, sizeCell, actionsCell));
+            rows.add(List.of(dbCell, storageCell, bucketsCell, objCell, sizeCell, actionsCell));
         }
 
         Datatable datatable = Datatable.ofWidgets(headers, rows);
@@ -313,6 +351,64 @@ public class DatabasesFluxView extends FluxView {
         Div card = Div.of(header, datatable);
         card.modifier(new Modifier().cssClass("ui-card").style("margin-bottom: 2rem;"));
         return card;
+    }
+
+    private static String storageModeOptionFor(io.jettra.store.core.StorageMode mode) {
+        if (mode == null) {
+            return STORAGE_OPTION_OFF_HEAP;
+        }
+        return switch (mode) {
+            case JVM_RAM -> STORAGE_OPTION_JVM_RAM;
+            case DISK_MEMORY -> STORAGE_OPTION_DISK_MEMORY;
+            case OFF_HEAP -> STORAGE_OPTION_OFF_HEAP;
+        };
+    }
+
+    private Widget buildEditDatabaseDialog(JettraStorePlugin plugin, String targetDb, String currentDb) {
+        io.jettra.store.core.StorageMode currentMode = plugin.getDatabaseStorageMode(targetDb);
+        Header header = Header.of(3, "✏️ Editar Storage Mode de Base de Datos");
+        header.modifier(new Modifier().style("font-size: 1.15rem; color: var(--text-main); margin: 0 0 0.75rem 0;"));
+
+        Div dbSummary = Div.of(
+                FluxUi.coloredSpan("Base de datos: ", "color: var(--text-muted); font-size: 0.88rem;"),
+                FluxUi.pillBadge(targetDb, "#00d4ff"),
+                FluxUi.coloredSpan("  Actual: ", "color: var(--text-muted); font-size: 0.88rem;"),
+                FluxUi.pillBadge(currentMode.getCode(), "#10b981")
+        );
+        dbSummary.modifier(new Modifier().style("display: flex; align-items: center; gap: 0.45rem; flex-wrap: wrap; margin-bottom: 0.85rem;"));
+
+        Div modeLegend = Div.of(
+                Paragraph.of("Modos de almacenamiento disponibles (Predeterminado: OFF-HEAP):")
+                        .modifier(new Modifier().style("margin: 0 0 0.35rem 0; font-size: 0.82rem; font-weight: 600; color: var(--text-main);")),
+                Paragraph.of("• 1. JVM-RAM: Memoria RAM estándar de la JVM (Heap & Stack).")
+                        .modifier(new Modifier().style("margin: 0; font-size: 0.78rem; color: var(--text-muted);")),
+                Paragraph.of("• 2. DISK-MEMORY: Integración Nativa JettraMemory (LSM Direct Off-Heap en disco).")
+                        .modifier(new Modifier().style("margin: 0; font-size: 0.78rem; color: var(--text-muted);")),
+                Paragraph.of("• 3. OFF-HEAP: Integración Nativa JettraStore-OffHeap (Slotted-Page FFM RAII) [Predeterminado].")
+                        .modifier(new Modifier().style("margin: 0; font-size: 0.78rem; color: #10b981;"))
+        );
+        modeLegend.modifier(new Modifier().style(
+                "background: rgba(16, 185, 129, 0.08); border: 1px solid rgba(16, 185, 129, 0.3); "
+                        + "border-radius: 8px; padding: 0.75rem 0.9rem; margin-bottom: 1rem;"));
+
+        String cancelUrl = (currentDb != null && !currentDb.isBlank()) ? "/databases?db=" + currentDb : "/databases";
+        Form editForm = Form.of(
+                FluxUi.hidden("action", "edit_db"),
+                FluxUi.hidden("db", targetDb),
+                FluxUi.fieldColumn("Nuevo Storage Mode",
+                        FluxUi.dropdown("storageMode", STORAGE_MODE_OPTIONS, storageModeOptionFor(currentMode)),
+                        "margin-bottom: 1rem;"),
+                Div.of(
+                        FluxUi.linkButton(cancelUrl, "Cancelar", "app-btn-secondary",
+                                "height: 38px; display: inline-flex; align-items: center; padding: 0 1rem;"),
+                        FluxUi.submitButton("💾 Guardar Storage Mode", "app-btn-primary",
+                                "height: 38px; padding: 0 1.15rem; font-weight: 700;")
+                ).modifier(new Modifier().style("display: flex; justify-content: flex-end; gap: 0.65rem; align-items: center;"))
+        ).action("/databases").method("POST");
+
+        Div container = Div.of(header, dbSummary, modeLegend, editForm);
+        container.modifier(new Modifier().style("min-width: 420px; max-width: 560px; padding: 0.35rem;"));
+        return container;
     }
 
     private Widget buildDeleteDatabaseConfirmDialog(String targetDb, String currentDb) {

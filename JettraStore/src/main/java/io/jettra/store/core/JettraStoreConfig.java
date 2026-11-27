@@ -271,7 +271,7 @@ public final class JettraStoreConfig {
         String modeStr = getPropOrEnv(props, 
             new String[]{"jettra.storage.mode", "storage.mode"}, 
             new String[]{"JETTRA_STORAGE_MODE", "STORAGE_MODE"}, 
-            "JVM_RAM");
+            "OFF_HEAP");
         this.storageMode = StorageMode.fromString(modeStr);
         System.out.printf("[JettraStoreConfig] Parámetro 'jettra.storage.mode' configurado como: %s (%s)%n",
             this.storageMode.name(), this.storageMode.getDescription());

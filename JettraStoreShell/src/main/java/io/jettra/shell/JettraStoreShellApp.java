@@ -716,7 +716,8 @@ public final class JettraStoreShellApp implements AutoCloseable {
                 "/connections", "CONNECTIONS", "SET CONNECTION ", "EDIT CONNECTION ",
                 "CONNECT ", "LOGIN ", "LOGOUT", "SAVE CONNECTION ", "REMOVE CONNECTION ", "LIST CONNECTIONS",
                 // Bases de Datos
-                "SHOW DATABASES", "SHOW SAMPLES", "SHOW SAMPLE DATABASES", "CREATE DATABASE ", "DROP DATABASE ", "USE ",
+                "SHOW DATABASES", "SHOW SAMPLES", "SHOW SAMPLE DATABASES",
+                "CREATE DATABASE ", "EDIT DATABASE ", "ALTER DATABASE ", "DROP DATABASE ", "USE ",
                 "DB STATS", "DB INFO",
                 // Buckets & Índices
                 "SHOW BUCKETS", "SHOW TABLES", "SHOW UNITS", "SHOW RECORDS ", "COUNT ",
@@ -1100,7 +1101,9 @@ public final class JettraStoreShellApp implements AutoCloseable {
         if (u.startsWith("USE "))
             return "Conmuta la base de datos activa para la sesión";
         if (u.startsWith("CREATE DATABASE ") || u.startsWith("CREATE DB "))
-            return "Crea una nueva base de datos distribuida";
+            return "Crea una base de datos indicando Storage Mode (JVM-RAM, DISK-MEMORY, OFF-HEAP [default])";
+        if (u.startsWith("EDIT DATABASE ") || u.startsWith("EDIT DB ") || u.startsWith("ALTER DATABASE "))
+            return "Edita el Storage Mode de una base de datos (JVM-RAM, DISK-MEMORY, OFF-HEAP)";
         if (u.startsWith("DROP DATABASE ") || u.startsWith("DROP DB "))
             return "Elimina permanentemente una base de datos";
         if (u.equals("SHOW BUCKETS") || u.equals("SHOW UNITS"))
@@ -1355,6 +1358,8 @@ public final class JettraStoreShellApp implements AutoCloseable {
                 || upper.equals("SHOW SAMPLES") || upper.equals("SHOW SAMPLE DBS")
                 || upper.equals("SHOW SAMPLE DATABASES") || upper.equals("SHOW DBS SAMPLES")
                 || upper.startsWith("CREATE DATABASE ") || upper.startsWith("CREATE DB ")
+                || upper.startsWith("EDIT DATABASE ") || upper.startsWith("EDIT DB ")
+                || upper.startsWith("ALTER DATABASE ")
                 || upper.startsWith("DROP DATABASE ") || upper.startsWith("DROP DB ")
                 || upper.startsWith("USE ")
                 || upper.equals("DB STATS") || upper.equals("DB INFO") || upper.equals("STATS")
@@ -1651,6 +1656,9 @@ public final class JettraStoreShellApp implements AutoCloseable {
             return handleShowSampleDatabases();
         } else if (upper.startsWith("CREATE DATABASE ") || upper.startsWith("CREATE DB ")) {
             return handleCreateDatabase(trimmed);
+        } else if (upper.startsWith("EDIT DATABASE ") || upper.startsWith("EDIT DB ")
+                || upper.startsWith("ALTER DATABASE ")) {
+            return handleEditDatabase(trimmed);
         } else if (upper.startsWith("DROP DATABASE ") || upper.startsWith("DROP DB ")) {
             return handleDropDatabase(trimmed);
         } else if (upper.startsWith("USE ")) {
@@ -3428,19 +3436,95 @@ public final class JettraStoreShellApp implements AutoCloseable {
     }
 
     private String handleCreateDatabase(String command) {
-        String dbName = cleanQuotes(command.replaceAll("(?i)^(CREATE\\s+DATABASE|CREATE\\s+DB)\\s+", "").trim());
-        if (dbName.isBlank())
-            return "[ERROR] Nombre de base de datos requerido. Uso: CREATE DATABASE <nombre> o CREATE DB <nombre>";
+        String rest = command.replaceAll("(?i)^(CREATE\\s+DATABASE|CREATE\\s+DB)\\s+", "").trim();
+        if (rest.isBlank()) {
+            return "[ERROR] Nombre de base de datos requerido. Uso: CREATE DATABASE <nombre> [JVM-RAM|DISK-MEMORY|OFF-HEAP]\n"
+                    + "Modos disponibles (predeterminado: OFF-HEAP):\n"
+                    + io.jettra.store.core.StorageMode.formattedOptionsSummary();
+        }
+        String[] tokens = rest.split("\\s+");
+        String dbName = cleanQuotes(tokens[0]);
+        if (dbName.isBlank()) {
+            return "[ERROR] Nombre de base de datos inválido. Uso: CREATE DATABASE <nombre> [JVM-RAM|DISK-MEMORY|OFF-HEAP]";
+        }
+        io.jettra.store.core.StorageMode targetMode = io.jettra.store.core.StorageMode.OFF_HEAP;
+        if (tokens.length > 1) {
+            String rawMode = extractStorageModeToken(tokens, 1);
+            if (rawMode != null && !rawMode.isBlank()) {
+                io.jettra.store.core.StorageMode parsed = io.jettra.store.core.StorageMode.parseStrict(rawMode);
+                if (parsed == null) {
+                    return "[ERROR] Storage Mode inválido '" + rawMode + "'. Modos disponibles:\n"
+                            + io.jettra.store.core.StorageMode.formattedOptionsSummary();
+                }
+                targetMode = parsed;
+            }
+        }
+        try {
+            var db = this.client.getDatabase(dbName, targetMode);
+            if (db != null) {
+                db.assertWritable();
+                db.setStorageMode(targetMode);
+                db.saveToDisk();
+            }
+            this.currentDatabase = dbName;
+            return String.format("[SUCCESS] Base de datos '%s' creada exitosamente con Storage Mode '%s' (%s) y seleccionada como activa.\nModos disponibles:\n%s",
+                    dbName, targetMode.getCode(), targetMode.getDescription(),
+                    io.jettra.store.core.StorageMode.formattedOptionsSummary());
+        } catch (UnsupportedOperationException e) {
+            return "[ERROR] " + e.getMessage();
+        }
+    }
+
+    private String handleEditDatabase(String command) {
+        String rest = command.replaceAll("(?i)^(EDIT\\s+DATABASE|EDIT\\s+DB|ALTER\\s+DATABASE)\\s+", "").trim();
+        if (rest.isBlank()) {
+            return "[ERROR] Uso: EDIT DATABASE <nombre> <JVM-RAM|DISK-MEMORY|OFF-HEAP>\n"
+                    + io.jettra.store.core.StorageMode.formattedOptionsSummary();
+        }
+        String[] tokens = rest.split("\\s+");
+        String dbName = cleanQuotes(tokens[0]);
+        if (dbName.isBlank()) {
+            return "[ERROR] Nombre de base de datos requerido. Uso: EDIT DATABASE <nombre> <JVM-RAM|DISK-MEMORY|OFF-HEAP>";
+        }
+        if (tokens.length == 1) {
+            io.jettra.store.core.StorageMode current = client.getStorageMode(dbName);
+            return String.format("[INFO] Base de datos '%s' tiene Storage Mode actual: %s (%s).\n"
+                    + "Para modificarlo use: EDIT DATABASE %s <JVM-RAM|DISK-MEMORY|OFF-HEAP>\n%s",
+                    dbName, current.getCode(), current.getDescription(), dbName,
+                    io.jettra.store.core.StorageMode.formattedOptionsSummary());
+        }
+        String rawMode = extractStorageModeToken(tokens, 1);
+        io.jettra.store.core.StorageMode parsed = io.jettra.store.core.StorageMode.parseStrict(rawMode);
+        if (parsed == null) {
+            return "[ERROR] Storage Mode inválido '" + rawMode + "'. Modos disponibles:\n"
+                    + io.jettra.store.core.StorageMode.formattedOptionsSummary();
+        }
         try {
             var db = this.client.getDatabase(dbName);
             if (db != null) {
                 db.assertWritable();
             }
-            this.currentDatabase = dbName;
-            return "[SUCCESS] Base de datos '" + dbName + "' creada exitosamente y seleccionada como activa.";
+            this.client.updateDatabaseStorageMode(dbName, parsed);
+            return String.format("[SUCCESS] Base de datos '%s' actualizada al Storage Mode '%s' (%s).",
+                    dbName, parsed.getCode(), parsed.getDescription());
         } catch (UnsupportedOperationException e) {
             return "[ERROR] " + e.getMessage();
         }
+    }
+
+    private String extractStorageModeToken(String[] tokens, int startIndex) {
+        if (tokens == null || tokens.length <= startIndex) {
+            return null;
+        }
+        String t1 = cleanQuotes(tokens[startIndex]);
+        if (("STORAGE_MODE".equalsIgnoreCase(t1) || "STORAGE".equalsIgnoreCase(t1) || "MODE".equalsIgnoreCase(t1))
+                && tokens.length > startIndex + 1) {
+            return cleanQuotes(tokens[startIndex + 1]);
+        }
+        if (t1.toUpperCase(Locale.ROOT).startsWith("STORAGE_MODE=")) {
+            return cleanQuotes(t1.substring("STORAGE_MODE=".length()));
+        }
+        return t1;
     }
 
     private String handleDropDatabase(String command) {
@@ -5639,7 +5723,9 @@ public final class JettraStoreShellApp implements AutoCloseable {
 
                 3. BASES DE DATOS, BUCKETS, ESQUEMAS Y PERSISTENCIA:
                   show databases / show dbs                 Lista todas las bases de datos en disco y memoria.
-                  create database <nombre>                  Crea una nueva base de datos lógica.
+                  create database <nombre> [STORAGE_MODE]   Crea una base de datos especificando Storage Mode:
+                                                            1. JVM-RAM | 2. DISK-MEMORY (JettraMemory) | 3. OFF-HEAP (Predeterminado).
+                  edit database <nombre> <STORAGE_MODE>     Edita el Storage Mode (JVM-RAM | DISK-MEMORY | OFF-HEAP) de una base de datos.
                   drop database <nombre>                    Elimina la base de datos especificada.
                   use <nombre>                              Conmuta la base de datos activa.
                   db stats                                  Muestra estadísticas de la base de datos activa.
@@ -5663,8 +5749,8 @@ public final class JettraStoreShellApp implements AutoCloseable {
                   SQL INSERT INTO <col> VALUES (id, json)   Inserta registro en la colección activa.
                   SQL UPDATE <col> SET k = v WHERE _id = id Actualiza campos de un registro.
                   SQL DELETE FROM <col> WHERE _id = id      Elimina un registro mediante sintaxis SQL.
-                  STORAGE_MODE                              Muestra el modo activo (JVM_RAM, DISK_MEMORY, OFF_HEAP).
-                  STORAGE_MODE <JVM_RAM|DISK_MEMORY|OFF_HEAP>  Conmuta el modo de almacenamiento en caliente.
+                  STORAGE_MODE                              Muestra el modo activo (OFF-HEAP predeterminado, JVM-RAM, DISK-MEMORY).
+                  STORAGE_MODE <OFF_HEAP|DISK_MEMORY|JVM_RAM>  Conmuta el modo de almacenamiento en caliente.
 
                 5. CÁLCULO, AGREGACIONES, ESTADÍSTICA, FINANZAS Y ÁLGEBRA VECTORIAL:
                   AGGREGATE <col> [GROUP BY c] [SUM|AVG|MIN|MAX|MEDIAN|COUNT]  Agregaciones nativas.
@@ -5797,9 +5883,11 @@ public final class JettraStoreShellApp implements AutoCloseable {
                   en tiempo de ejecución para la base de datos seleccionada o a nivel global.
 
                   SINTAXIS:
+                    CREATE DATABASE <nombre> [JVM-RAM|DISK-MEMORY|OFF-HEAP]  Crea BD eligiendo el modo de almacenamiento (predeterminado: OFF-HEAP).
+                    EDIT DATABASE <nombre> <JVM-RAM|DISK-MEMORY|OFF-HEAP>    Edita el modo de almacenamiento de una BD existente.
                     STORAGE_MODE                              Muestra el modo de almacenamiento activo.
-                    STORAGE_MODE <JVM_RAM|DISK_MEMORY|OFF_HEAP>  Cambia el modo de almacenamiento.
-                    SET STORAGE_MODE <JVM_RAM|DISK_MEMORY|OFF_HEAP> Forma alternativa de asignación.
+                    STORAGE_MODE <OFF_HEAP|DISK_MEMORY|JVM_RAM>  Cambia el modo de almacenamiento.
+                    SET STORAGE_MODE <OFF_HEAP|DISK_MEMORY|JVM_RAM> Forma alternativa de asignación.
 
                   OPCIONES DISPONIBLES:
                     1. JVM_RAM (o JVM-RAM)
@@ -5812,7 +5900,7 @@ public final class JettraStoreShellApp implements AutoCloseable {
                        -> Utiliza Project Panama FFM (Foreign Function & Memory API) y buffers de archivo mapeados.
                        -> Persistencia directa en disco sin pausas de Garbage Collector.
 
-                    3. OFF_HEAP (o OFF-HEAP)
+                    3. OFF_HEAP (o OFF-HEAP) [PREDETERMINADO]
                        -> Motor de páginas ranuradas nativas Slotted-Page (JettraStore-OffHeap).
                        -> Asignación contigua en memoria virtual nativa fuera del Heap con Project Panama.
                        -> Cero pausas de GC (GC pauses = 0) y liberación determinista por ámbito RAII (Arena).
@@ -5882,12 +5970,15 @@ public final class JettraStoreShellApp implements AutoCloseable {
                     ==============================================================================================
                                               MODO DE ALMACENAMIENTO GLOBAL (JettraStore)
                     ==============================================================================================
-                      Modo Activo: JVM_RAM (Memoria RAM Heap/Stack de Java)
+                      Modo Predeterminado Activo: OFF_HEAP (JettraStore-OffHeap Slotted-Page FFM Panama)
                       Modos Disponibles:
-                       * JVM_RAM      : Trabaja en memoria RAM usando áreas de Heap y Stack de la JVM.
-                       * DISK_MEMORY  : Modo directo en disco sin pausas GC usando JettraMemory (LSM Panama FFM).
-                       * OFF_HEAP     : Motor de páginas ranuradas nativas Slotted-Page Off-Heap FFM (JettraStore-OffHeap).
-                      Comando para cambiar: STORAGE_MODE <JVM_RAM | DISK_MEMORY | OFF_HEAP>
+                       1. JVM_RAM      : Trabaja en memoria RAM usando áreas de Heap y Stack de la JVM.
+                       2. DISK_MEMORY  : Modo directo en disco sin pausas GC usando JettraMemory (LSM Panama FFM).
+                       3. OFF_HEAP     : Motor de páginas ranuradas nativas Slotted-Page Off-Heap FFM (JettraStore-OffHeap) [Predeterminado].
+                      Comandos:
+                       * STORAGE_MODE <OFF_HEAP | DISK_MEMORY | JVM_RAM>
+                       * CREATE DATABASE <nombre> <OFF-HEAP | DISK-MEMORY | JVM-RAM>
+                       * EDIT DATABASE <nombre> <OFF-HEAP | DISK-MEMORY | JVM-RAM>
                     ==============================================================================================""";
         }
         var mode = client.getStorageMode(currentDatabase);
@@ -6355,7 +6446,34 @@ public final class JettraStoreShellApp implements AutoCloseable {
                 break;
             }
 
-            String result = shell.executeCommand(trimmed);
+            String cmdToExecute = trimmed;
+            if (cmdToExecute.matches("(?i)^(CREATE\\s+(DATABASE|DB)|EDIT\\s+(DATABASE|DB)|ALTER\\s+DATABASE)\\s+\\S+$")) {
+                System.out.println("Seleccione el Storage Mode:");
+                System.out.println("  [1] JVM-RAM      (Memoria RAM estándar de la JVM)");
+                System.out.println("  [2] DISK-MEMORY  (Integración Nativa JettraMemory)");
+                System.out.println("  [3] OFF-HEAP     (Integración Nativa JettraStore-OffHeap) [Predeterminado]");
+                String choicePrompt = "Storage Mode [1-3, Enter=OFF-HEAP]: ";
+                String chosen = null;
+                if (lineReader != null) {
+                    chosen = lineReader.readLine(choicePrompt);
+                } else if (console != null) {
+                    System.out.print(choicePrompt);
+                    chosen = console.readLine();
+                } else if (scanner.hasNextLine()) {
+                    System.out.print(choicePrompt);
+                    chosen = scanner.nextLine();
+                }
+                io.jettra.store.core.StorageMode chosenMode = (chosen == null || chosen.isBlank())
+                        ? io.jettra.store.core.StorageMode.OFF_HEAP
+                        : io.jettra.store.core.StorageMode.parseStrict(chosen);
+                if (chosenMode != null) {
+                    cmdToExecute = cmdToExecute + " " + chosenMode.getCode();
+                } else if (chosen != null && !chosen.isBlank()) {
+                    cmdToExecute = cmdToExecute + " " + chosen.trim();
+                }
+            }
+
+            String result = shell.executeCommand(cmdToExecute);
             if (!result.isBlank()) {
                 System.out.println(result);
             }

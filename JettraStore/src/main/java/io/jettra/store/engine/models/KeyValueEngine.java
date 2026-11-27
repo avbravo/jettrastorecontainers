@@ -119,6 +119,9 @@ public final class KeyValueEngine {
     }
 
     public Map<String, byte[]> getAll() {
+        if (isOffHeap()) {
+            return Collections.unmodifiableMap(offHeapStore.getAll());
+        }
         return Collections.unmodifiableMap(store);
     }
 
@@ -163,7 +166,7 @@ public final class KeyValueEngine {
 
     public void applyReplicatedClear() {
         if (isOffHeap()) {
-            offHeapStore.close();
+            offHeapStore.clear();
         }
         store.clear();
     }

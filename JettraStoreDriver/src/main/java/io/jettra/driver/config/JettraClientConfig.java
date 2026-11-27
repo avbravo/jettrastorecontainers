@@ -59,7 +59,7 @@ public final class JettraClientConfig {
         private Duration connectionTimeout = Duration.ofMillis(1000);
         private boolean enableVirtualThreads = true;
         private boolean clusterMultinodeActive = true;
-        private StorageMode defaultStorageMode = StorageMode.JVM_RAM;
+        private StorageMode defaultStorageMode = StorageMode.OFF_HEAP;
         private String defaultDatabase = "default_db";
 
         public Builder addClusterNode(String host, int port) {
@@ -94,7 +94,7 @@ public final class JettraClientConfig {
         }
 
         public Builder storageMode(StorageMode mode) {
-            this.defaultStorageMode = mode != null ? mode : StorageMode.JVM_RAM;
+            this.defaultStorageMode = mode != null ? mode : StorageMode.OFF_HEAP;
             return this;
         }
 

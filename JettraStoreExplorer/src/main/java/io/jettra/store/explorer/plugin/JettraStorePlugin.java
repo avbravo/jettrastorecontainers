@@ -68,6 +68,7 @@ public class JettraStorePlugin {
             .connectTimeout(Duration.ofMillis(300))
             .build();
     private final Map<String, List<EngineBucketInfo>> databasesCatalog = new ConcurrentHashMap<>();
+    private final Map<String, io.jettra.store.core.StorageMode> databaseStorageModes = new ConcurrentHashMap<>();
     private final List<PoliceSentinelInfo> policeSentinels = new ArrayList<>();
     private final List<PoliceIncident> policeIncidents = new CopyOnWriteArrayList<>();
     private final List<BackupSnapshotInfo> backupSnapshots = new ArrayList<>();
@@ -95,7 +96,7 @@ public class JettraStorePlugin {
     private final AtomicBoolean heartbeatRunning = new AtomicBoolean(false);
     private volatile Thread heartbeatThread;
     private volatile long heartbeatIntervalMs = Long.getLong("jettra.explorer.heartbeat.interval.ms", 3000L);
-    private final String clusterNodesConfigPath = System.getProperty("jettra.explorer.cluster.nodes.file",
+    private volatile String clusterNodesConfigPath = System.getProperty("jettra.explorer.cluster.nodes.file",
             "memory/cluster_nodes.json");
 
     private JettraStorePlugin() {
@@ -140,6 +141,10 @@ public class JettraStorePlugin {
                 this.connectionExplicitlyApplied = false;
                 this.lastConnectionSyncError = null;
                 this.latestPrimaryClusterStatus = null;
+                this.clusterNodesConfigPath = System.getProperty("jettra.explorer.cluster.nodes.file",
+                        "memory/cluster_nodes.json");
+                this.databasesCatalog.clear();
+                this.databaseStorageModes.clear();
                 if (this.driverClient != null) {
                     try {
                         this.driverClient.close();
@@ -289,6 +294,7 @@ public class JettraStorePlugin {
 
         this.lastCatalogSyncMs = 0L;
         this.databasesCatalog.clear();
+        this.databaseStorageModes.clear();
         syncDatabasesFromPrimary(true);
         notifyClusterChanged();
 
@@ -2182,6 +2188,7 @@ public class JettraStorePlugin {
                 // Remover del catálogo local las bases que ya no están almacenadas en el
                 // PRIMARY
                 databasesCatalog.keySet().removeIf(existing -> !primaryDbs.contains(existing));
+                databaseStorageModes.keySet().removeIf(existing -> !primaryDbs.contains(existing));
 
                 // Incorporar las bases almacenadas en el PRIMARY que aún no están en el
                 // catálogo local
@@ -2346,8 +2353,18 @@ public class JettraStorePlugin {
     }
 
     private void syncDatabaseCreationToPrimary(String dbName, List<EngineBucketInfo> buckets) {
+        syncDatabaseCreationToPrimary(dbName, buckets, getDatabaseStorageMode(dbName));
+    }
+
+    private void syncDatabaseCreationToPrimary(String dbName, List<EngineBucketInfo> buckets,
+            io.jettra.store.core.StorageMode storageMode) {
+        io.jettra.store.core.StorageMode effectiveMode = (storageMode != null)
+                ? storageMode
+                : io.jettra.store.core.StorageMode.OFF_HEAP;
+        byte[] metaPayload = String.format("{\"databaseName\":\"%s\",\"storageMode\":\"%s\"}",
+                dbName, effectiveMode.getCode()).getBytes(java.nio.charset.StandardCharsets.UTF_8);
         sendFrameToPrimaryNode(
-                io.jettra.store.cluster.JettraRaftFrame.createDatabase(1L, 0L, "jettra-explorer", dbName, new byte[0]));
+                io.jettra.store.cluster.JettraRaftFrame.createDatabase(1L, 0L, "jettra-explorer", dbName, metaPayload));
         if (buckets != null) {
             for (EngineBucketInfo b : buckets) {
                 sendFrameToPrimaryNode(io.jettra.store.cluster.JettraRaftFrame.createEngine(
@@ -2843,17 +2860,56 @@ public class JettraStorePlugin {
         return null;
     }
 
+    public io.jettra.store.core.StorageMode getDatabaseStorageMode(String dbName) {
+        if (dbName == null || dbName.isBlank()) {
+            return io.jettra.store.core.StorageMode.OFF_HEAP;
+        }
+        String key = dbName.trim();
+        io.jettra.store.core.StorageMode cached = databaseStorageModes.get(key);
+        if (cached != null) {
+            return cached;
+        }
+        io.jettra.store.core.StorageMode persisted = io.jettra.store.core.JettraDatabase.readPersistedStorageMode(
+                key, io.jettra.store.core.JettraStoreConfig.load());
+        if (persisted != null) {
+            databaseStorageModes.put(key, persisted);
+            return persisted;
+        }
+        return io.jettra.store.core.StorageMode.OFF_HEAP;
+    }
+
+    public List<io.jettra.store.core.StorageMode> getAvailableStorageModes() {
+        return List.of(
+                io.jettra.store.core.StorageMode.JVM_RAM,
+                io.jettra.store.core.StorageMode.DISK_MEMORY,
+                io.jettra.store.core.StorageMode.OFF_HEAP
+        );
+    }
+
     public synchronized boolean createDatabase(String dbName, String description) {
-        return createDatabase(dbName, null, null, description);
+        return createDatabase(dbName, null, null, description, io.jettra.store.core.StorageMode.OFF_HEAP);
+    }
+
+    public synchronized boolean createDatabase(String dbName, String description,
+            io.jettra.store.core.StorageMode storageMode) {
+        return createDatabase(dbName, null, null, description, storageMode);
     }
 
     public synchronized boolean createDatabase(String dbName, String defaultBucket, String engineType,
             String description) {
+        return createDatabase(dbName, defaultBucket, engineType, description, io.jettra.store.core.StorageMode.OFF_HEAP);
+    }
+
+    public synchronized boolean createDatabase(String dbName, String defaultBucket, String engineType,
+            String description, io.jettra.store.core.StorageMode storageMode) {
         if (dbName == null || dbName.isBlank())
             return false;
         String cleanName = dbName.trim().toLowerCase().replaceAll("[^a-z0-9_]", "_");
         if (databasesCatalog.containsKey(cleanName))
             return false;
+        io.jettra.store.core.StorageMode effectiveMode = (storageMode != null)
+                ? storageMode
+                : io.jettra.store.core.StorageMode.OFF_HEAP;
 
         String baseDesc = (description != null && !description.isBlank())
                 ? description.trim()
@@ -2907,11 +2963,44 @@ public class JettraStorePlugin {
         }
 
         databasesCatalog.put(cleanName, buckets);
-        syncDatabaseCreationToPrimary(cleanName, buckets);
+        databaseStorageModes.put(cleanName, effectiveMode);
+        try {
+            getDriverClient().createDatabase(cleanName, effectiveMode);
+        } catch (Exception ignored) {
+        }
+        syncDatabaseCreationToPrimary(cleanName, buckets, effectiveMode);
         lastCatalogSyncMs = 0L;
         logPoliceIncident("Catalog Patrol",
-                "Base de datos '" + cleanName + "' creada con soporte nativo para los 9 motores de JettraStore", "OK",
-                "9 engines multimodelo registrados en catálogo");
+                "Base de datos '" + cleanName + "' creada con Storage Mode '" + effectiveMode.getCode()
+                        + "' y soporte nativo para los 9 motores de JettraStore",
+                "OK",
+                "StorageMode=" + effectiveMode.getCode() + " | 9 engines multimodelo registrados en catálogo");
+        return true;
+    }
+
+    public synchronized boolean updateDatabaseStorageMode(String dbName,
+            io.jettra.store.core.StorageMode storageMode) {
+        if (dbName == null || dbName.isBlank() || storageMode == null) {
+            return false;
+        }
+        String cleanName = dbName.trim();
+        if (!databasesCatalog.containsKey(cleanName)) {
+            return false;
+        }
+        databaseStorageModes.put(cleanName, storageMode);
+        try {
+            getDriverClient().updateDatabaseStorageMode(cleanName, storageMode);
+        } catch (Exception ignored) {
+        }
+        byte[] metaPayload = String.format("{\"databaseName\":\"%s\",\"storageMode\":\"%s\"}",
+                cleanName, storageMode.getCode()).getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        sendFrameToPrimaryNode(
+                io.jettra.store.cluster.JettraRaftFrame.createDatabase(1L, 0L, "jettra-explorer", cleanName, metaPayload));
+        lastCatalogSyncMs = 0L;
+        logPoliceIncident("Catalog Patrol",
+                "Storage Mode de '" + cleanName + "' actualizado a '" + storageMode.getCode() + "'",
+                "OK",
+                "Modo de almacenamiento: " + storageMode.getDescription());
         return true;
     }
 
@@ -2919,6 +3008,7 @@ public class JettraStorePlugin {
         if (dbName == null || dbName.isBlank() || "system_metadata_db".equalsIgnoreCase(dbName))
             return false;
         boolean removed = databasesCatalog.remove(dbName.trim()) != null;
+        databaseStorageModes.remove(dbName.trim());
         try {
             getDriverClient().dropDatabase(dbName.trim());
         } catch (Exception ignored) {

@@ -181,7 +181,8 @@ public final class JettraClusterTransportServer implements AutoCloseable {
                         if (payload != null && payload.length > 0) {
                             Files.write(targetMeta, payload, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
                         }
-                        boolean shouldBroadcast = "jettra-explorer".equalsIgnoreCase(frame.senderNodeId())
+                        boolean shouldBroadcast = ("jettra-explorer".equalsIgnoreCase(frame.senderNodeId())
+                                || "jettra-client".equalsIgnoreCase(frame.senderNodeId()))
                             && server.getConfig().getNodeRole() == ClusterNode.Role.PRIMARY;
                         JettraDatabase db = server.getOrCreateDatabaseInternal(dbName, shouldBroadcast);
                         if (db != null) {
@@ -233,7 +234,8 @@ public final class JettraClusterTransportServer implements AutoCloseable {
                         if (payload != null && payload.length > 0) {
                             Files.write(targetMeta, payload, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
                         }
-                        boolean shouldBroadcast = "jettra-explorer".equalsIgnoreCase(frame.senderNodeId())
+                        boolean shouldBroadcast = ("jettra-explorer".equalsIgnoreCase(frame.senderNodeId())
+                                || "jettra-client".equalsIgnoreCase(frame.senderNodeId()))
                             && server.getConfig().getNodeRole() == ClusterNode.Role.PRIMARY;
                         JettraDatabase db = server.getOrCreateDatabaseInternal(dbName, shouldBroadcast);
                         if (db != null) {
@@ -273,7 +275,8 @@ public final class JettraClusterTransportServer implements AutoCloseable {
                     dbName, frame.senderNodeId());
                 try {
                     if (server != null) {
-                        boolean shouldBroadcast = "jettra-explorer".equalsIgnoreCase(frame.senderNodeId())
+                        boolean shouldBroadcast = ("jettra-explorer".equalsIgnoreCase(frame.senderNodeId())
+                                || "jettra-client".equalsIgnoreCase(frame.senderNodeId()))
                             && server.getConfig().getNodeRole() == ClusterNode.Role.PRIMARY;
                         server.dropDatabaseInternal(dbName, shouldBroadcast);
                     }

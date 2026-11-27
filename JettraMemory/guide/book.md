@@ -508,8 +508,8 @@ java --enable-preview \
 
 ## 7. Integración como Motor `DISK-MEMORY` en el Ecosistema JettraStore
 
-`JettraMemory` proporciona el backend fundamental de almacenamiento fuera del Heap para el modo **`DISK-MEMORY`** disponible en:
-* **`JettraStore`:** Persistencia directa de colecciones y registros mediante `JettraStoreConnector` sin impacto en el Heap.
-* **`JettraStoreDriver`:** Invocación de operaciones binarias off-heap, métricas de fragmentación y compactación en caliente.
-* **`JettraStoreShell`:** Conmutación dinámica con comandos `STORAGE_MODE <JVM_RAM | DISK_MEMORY>`.
-* **`JettraStoreFX`:** Visualización y control de estado de memoria off-heap en la consola de mando visual JavaFX 25+.
+`JettraMemory` proporciona el backend fundamental de almacenamiento fuera del Heap para el modo **`DISK-MEMORY`** (complementando al motor predeterminado **`OFF-HEAP`** de `JettraStore-OffHeap` y al modo **`JVM-RAM`**) disponible al crear o editar bases de datos en:
+* **`JettraStore`:** Persistencia directa de colecciones y registros mediante `JettraStoreConnector` sin impacto en el Heap (`storageMode` persistido en `<db>_meta.json`).
+* **`JettraStoreDriver`:** Selección explícita en creación/edición (`createDatabase(db, StorageMode.DISK_MEMORY)` / `updateDatabaseStorageMode(db, StorageMode)`), métricas de fragmentación y compactación en caliente.
+* **`JettraStoreShell`:** Selección interactiva o directa (`CREATE DATABASE <db> DISK-MEMORY`, `EDIT DATABASE <db> DISK-MEMORY` y `STORAGE_MODE <OFF_HEAP | DISK_MEMORY | JVM_RAM>`).
+* **`JettraStoreExplorer`:** Selector visual de Storage Mode al crear o editar una base de datos en `/databases` y consola web `/query`.

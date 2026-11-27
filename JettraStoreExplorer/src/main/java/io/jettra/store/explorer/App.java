@@ -828,6 +828,7 @@ public class App {
 
         String db = req.getQueryParam("db");
         String confirmDeleteDb = req.getQueryParam("confirm_delete_db");
+        String editDb = req.getQueryParam("edit_db");
         String manageUsersDb = req.getQueryParam("manage_users_db");
         String manageIndexesDb = req.getQueryParam("manage_indexes_db");
         String indexBucket = req.getQueryParam("index_bucket");
@@ -842,6 +843,8 @@ public class App {
         String messageText = null;
         if ("db_created".equals(msg))
             messageText = "Base de datos creada exitosamente.";
+        else if ("db_updated".equals(msg))
+            messageText = "Storage Mode de la base de datos actualizado correctamente.";
         else if ("db_deleted".equals(msg))
             messageText = "Base de datos eliminada.";
         else if ("bucket_added".equals(msg))
@@ -875,7 +878,7 @@ public class App {
         }
 
         Widget content = new DatabasesFluxView(db, manageUsersDb, manageIndexesDb, indexBucket, editIndex,
-                manageEngines, showAddBucketDialog, editBucket, addBucketEngine, confirmDeleteDb, isAdmin, messageText);
+                manageEngines, showAddBucketDialog, editBucket, addBucketEngine, confirmDeleteDb, editDb, isAdmin, messageText);
         renderTemplate(resp, server, getLoggedUser(req), "Catálogo de Bases de Datos & Motores", "databases", content);
     }
 
@@ -891,13 +894,26 @@ public class App {
             String defaultBucket = form.get("defaultBucket");
             String engineType = form.get("engineType");
             String description = form.get("description");
+            io.jettra.store.core.StorageMode storageMode = io.jettra.store.core.StorageMode.fromString(form.get("storageMode"));
 
             if (defaultBucket != null && !defaultBucket.isBlank()) {
-                plugin.createDatabase(dbName, defaultBucket, engineType, description);
+                plugin.createDatabase(dbName, defaultBucket, engineType, description, storageMode);
             } else {
-                plugin.createDatabase(dbName, description);
+                plugin.createDatabase(dbName, description, storageMode);
             }
             redirect(resp, "/databases?db=" + dbName + "&msg=db_created");
+            return;
+        } else if ("edit_db".equalsIgnoreCase(action)) {
+            String db = form.get("db");
+            io.jettra.store.core.StorageMode parsedMode = io.jettra.store.core.StorageMode.parseStrict(form.get("storageMode"));
+            if (db != null && !db.isBlank() && parsedMode != null) {
+                plugin.updateDatabaseStorageMode(db.trim(), parsedMode);
+                redirect(resp, "/databases?db=" + db.trim() + "&msg=db_updated");
+            } else {
+                redirect(resp, "/databases?msg=" + java.net.URLEncoder.encode(
+                        "Storage Mode inválido. Modos válidos: JVM-RAM, DISK-MEMORY, OFF-HEAP.",
+                        StandardCharsets.UTF_8));
+            }
             return;
         } else if ("delete_db".equalsIgnoreCase(action)) {
             String db = form.get("db");

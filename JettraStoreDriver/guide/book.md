@@ -985,13 +985,13 @@ for (var alert : alerts) {
 
 ## 9. Integración de Almacenamiento Off-Heap con `JettraMemory` y `JettraStore-OffHeap`
 
-`JettraStoreDriver` soporta de forma nativa los tres modos de almacenamiento del motor `JettraStore`:
-* **Modo `JVM-RAM` (Predeterminado):** Almacenamiento en Heap y Stack de la JVM optimizado con colecciones `UnifiedMap` y cabeceras compactas de 8 bytes de Project Lilliput.
-* **Modo `DISK-MEMORY` (Integración Nativa JettraMemory):** Motor directo en disco con arquitectura LSM basado en Project Panama (`MemorySegment`), eliminando el consumo de heap en grandes volúmenes.
-* **Modo `OFF-HEAP` (Integración Nativa JettraStore-OffHeap):** Motor de páginas ranuradas nativas contiguas (Slotted-Page de 64 KB / 256 KB) con Project Panama (`Arena` y `MemorySegment`), deserialización selectiva cero-copia y liberación transaccional determinista RAII sin intervención del Garbage Collector.
+`JettraStoreDriver` soporta de forma nativa los tres modos de almacenamiento del motor `JettraStore`, siendo **`OFF-HEAP`** el motor predeterminado del sistema al crear bases de datos o inicializar `JettraClientConfig`:
+1. **Modo `JVM-RAM`:** Almacenamiento en Heap y Stack de la JVM optimizado con colecciones `UnifiedMap` y cabeceras compactas de 8 bytes de Project Lilliput.
+2. **Modo `DISK-MEMORY` (Integración Nativa JettraMemory):** Motor directo en disco con arquitectura LSM basado en Project Panama (`MemorySegment`), eliminando el consumo de heap en grandes volúmenes.
+3. **Modo `OFF-HEAP` (Integración Nativa JettraStore-OffHeap — Predeterminado):** Motor de páginas ranuradas nativas contiguas (Slotted-Page de 64 KB / 256 KB) con Project Panama (`Arena` y `MemorySegment`), deserialización selectiva cero-copia y liberación transaccional determinista RAII sin intervención del Garbage Collector.
 
 ### 9.1 Configuración Inicial del Modo de Almacenamiento con `JettraClientConfig`
-Al construir el cliente, se puede especificar el modo de almacenamiento predeterminado para todas las bases de datos:
+Por defecto, `JettraClientConfig.builder()` asigna **`StorageMode.OFF_HEAP`**. Al construir el cliente, también puede consultarse o sobrescribirse explícitamente para todas las bases de datos:
 
 ```java
 import io.jettra.driver.JettraClient;
@@ -1011,10 +1011,22 @@ try (JettraClient client = JettraClient.connect(config)) {
 }
 ```
 
-### 9.2 Conmutación Programática y Ejecución de Comandos de los Tres Modos
-El driver permite conmutar dinámicamente el modo de almacenamiento por base de datos, de forma global o mediante ejecución directa de comandos administrativos:
+### 9.2 Creación, Edición y Conmutación de Storage Mode por Base de Datos (RF-38)
+El driver expone la lista de modos disponibles y permite especificar el `StorageMode` desde la creación de la base de datos o editarlo posteriormente (con persistencia en `<db>_meta.json` y sincronización en clúster):
 
 ```java
+// 0. Consultar los 3 modos de almacenamiento disponibles (OFF-HEAP predeterminado)
+List<StorageMode> modes = client.getAvailableStorageModes();
+// [JVM_RAM, DISK_MEMORY, OFF_HEAP]
+
+// Crear una base de datos indicando explícitamente su Storage Mode (por defecto OFF_HEAP)
+client.createDatabase("facturacion_db", StorageMode.OFF_HEAP);
+client.createDatabase("historico_db", StorageMode.DISK_MEMORY);
+client.createDatabase("cache_db", StorageMode.JVM_RAM);
+
+// Editar posteriormente el Storage Mode de una base de datos existente
+client.updateDatabaseStorageMode("historico_db", StorageMode.OFF_HEAP);
+
 // 1. Consultar el modo actual a nivel de cliente o base de datos específica
 StorageMode currentDefaultMode = client.getStorageMode();
 StorageMode currentDbMode = client.getStorageMode("facturacion_db");

@@ -19,7 +19,7 @@ public final class OffHeapSlottedMap implements AutoCloseable {
 
     public record RecordLocation(long pageId, int slotIndex) {}
 
-    private final Arena arena;
+    private volatile Arena arena;
     private final int pageSize;
     private final List<OffHeapPageBuffer> pages = new ArrayList<>();
     private final Map<String, RecordLocation> index = new ConcurrentHashMap<>();
@@ -135,11 +135,43 @@ public final class OffHeapSlottedMap implements AutoCloseable {
         return pages.size();
     }
 
-    @Override
-    public void close() {
+    public synchronized Map<String, byte[]> getAll() {
+        Map<String, byte[]> snapshot = new java.util.LinkedHashMap<>();
+        for (String k : index.keySet()) {
+            byte[] val = get(k);
+            if (val != null) {
+                snapshot.put(k, val);
+            }
+        }
+        return snapshot;
+    }
+
+    public synchronized void clear() {
         index.clear();
         pages.clear();
-        arena.close();
+        size.set(0);
+        Arena oldArena = this.arena;
+        this.arena = Arena.ofShared();
+        allocateNewPage();
+        if (oldArena != null) {
+            try {
+                oldArena.close();
+            } catch (Exception ignored) {
+            }
+        }
+    }
+
+    @Override
+    public synchronized void close() {
+        index.clear();
+        pages.clear();
+        size.set(0);
+        if (arena != null) {
+            try {
+                arena.close();
+            } catch (Exception ignored) {
+            }
+        }
     }
 }
 

@@ -49,7 +49,7 @@ public final class JettraStoreShellExecutor {
     private final List<String> graphEdges = new CopyOnWriteArrayList<>();
     private final Map<String, List<Double>> timeSeries = new ConcurrentHashMap<>();
     private final Map<String, double[]> vectors = new ConcurrentHashMap<>();
-    private String storageMode = "OFF_HEAP";
+    private String storageMode = "OFF-HEAP";
 
     private JettraStoreShellExecutor() {
         kvStore.put("cluster:version", "JettraStore 2.0 (Java 25 Loom/FFM)");
@@ -141,13 +141,22 @@ public final class JettraStoreShellExecutor {
 
             if ("STORAGE_MODE".equals(cmd)) {
                 if (parts.length > 1) {
-                    String newMode = parts[1].toUpperCase(Locale.ROOT);
-                    if (!List.of("OFF_HEAP", "HEAP", "DISK", "MEMORY", "HYBRID").contains(newMode)) {
-                        return errorResult(trimmed, activeDb, activeBucket, "[ERROR] STORAGE_MODE inválido '" + newMode + "'. Valores: OFF_HEAP, HEAP, DISK, MEMORY, HYBRID.", t0);
+                    io.jettra.store.core.StorageMode parsed = io.jettra.store.core.StorageMode.parseStrict(parts[1]);
+                    if (parsed == null) {
+                        return errorResult(trimmed, activeDb, activeBucket,
+                                "[ERROR] STORAGE_MODE inválido '" + parts[1] + "'. Modos válidos: JVM-RAM, DISK-MEMORY, OFF-HEAP (predeterminado).",
+                                t0);
                     }
-                    this.storageMode = newMode;
+                    this.storageMode = parsed.getCode();
+                    if (activeDb != null && !activeDb.isBlank()) {
+                        plugin.updateDatabaseStorageMode(activeDb, parsed);
+                    }
                 }
-                String out = "[OK] STORAGE_MODE activo: " + this.storageMode;
+                io.jettra.store.core.StorageMode effective = (activeDb != null && !activeDb.isBlank())
+                        ? plugin.getDatabaseStorageMode(activeDb)
+                        : io.jettra.store.core.StorageMode.fromString(this.storageMode);
+                String out = "[OK] STORAGE_MODE activo para '" + activeDb + "': " + effective.getCode()
+                        + " (" + effective.getDescription() + ")";
                 return okResult(trimmed, activeDb, activeBucket, out, out, Collections.emptyList(), t0);
             }
 
@@ -193,6 +202,10 @@ public final class JettraStoreShellExecutor {
 
             if ("CREATE".equals(cmd)) {
                 return handleCreate(plugin, trimmed, parts, activeDb, activeBucket, t0);
+            }
+
+            if ("EDIT".equals(cmd) || "ALTER".equals(cmd)) {
+                return handleEditDatabase(plugin, trimmed, parts, activeDb, activeBucket, t0);
             }
 
             if ("DROP".equals(cmd)) {
@@ -449,12 +462,31 @@ public final class JettraStoreShellExecutor {
         String objType = parts[1].toUpperCase(Locale.ROOT);
         if ("DATABASE".equals(objType) || "DB".equals(objType)) {
             String name = parts[2];
-            String engine = parts.length > 3 ? parts[3].toUpperCase(Locale.ROOT) : "DOCUMENT";
-            boolean created = plugin.createDatabase(name, "DefaultBucket", engine, "Creada vía JettraStoreShell Console");
+            String engine = "DOCUMENT";
+            io.jettra.store.core.StorageMode targetMode = io.jettra.store.core.StorageMode.OFF_HEAP;
+            for (int i = 3; i < parts.length; i++) {
+                String tok = parts[i];
+                if ("STORAGE_MODE".equalsIgnoreCase(tok) || "MODE".equalsIgnoreCase(tok)) {
+                    continue;
+                }
+                io.jettra.store.core.StorageMode parsed = io.jettra.store.core.StorageMode.parseStrict(tok);
+                if (parsed != null) {
+                    targetMode = parsed;
+                } else if (i == 3) {
+                    engine = tok.toUpperCase(Locale.ROOT);
+                } else {
+                    return errorResult(cmd, db, bucket,
+                            "[ERROR] Storage Mode inválido '" + tok + "'. Valores: 1. JVM-RAM | 2. DISK-MEMORY (JettraMemory) | 3. OFF-HEAP (Predeterminado).",
+                            t0);
+                }
+            }
+            boolean created = plugin.createDatabase(name, "DefaultBucket", engine,
+                    "Creada vía JettraStoreShell Console", targetMode);
             if (!created) {
                 return errorResult(cmd, db, bucket, "[ERROR] No se pudo crear la base de datos '" + name + "' (¿ya existe?).", t0);
             }
-            String out = "[OK] Base de datos '" + name + "' creada exitosamente.";
+            String out = String.format("[OK] Base de datos '%s' creada con Storage Mode '%s' (%s).",
+                    name, targetMode.getCode(), targetMode.getDescription());
             return okResult(cmd, name, "DefaultBucket", out, out, Collections.emptyList(), t0);
         }
         if ("BUCKET".equals(objType) || "ENGINE".equals(objType)) {
@@ -484,6 +516,36 @@ public final class JettraStoreShellExecutor {
             return okResult(cmd, db, b.getBucketName(), out, out, Collections.emptyList(), t0);
         }
         return errorResult(cmd, db, bucket, "[ERROR] Tipo no soportado en CREATE: '" + objType + "'", t0);
+    }
+
+    private ShellExecutionResult handleEditDatabase(JettraStorePlugin plugin, String cmd, String[] parts,
+            String db, String bucket, long t0) {
+        if (parts.length < 3 || (!"DATABASE".equalsIgnoreCase(parts[1]) && !"DB".equalsIgnoreCase(parts[1]))) {
+            return errorResult(cmd, db, bucket,
+                    "[ERROR] Uso: EDIT DATABASE <nombre> <JVM-RAM|DISK-MEMORY|OFF-HEAP>",
+                    t0);
+        }
+        String targetDb = parts[2];
+        if (parts.length < 4) {
+            io.jettra.store.core.StorageMode currentMode = plugin.getDatabaseStorageMode(targetDb);
+            String out = String.format("[INFO] '%s' usa Storage Mode '%s'. Modos disponibles: 1. JVM-RAM | 2. DISK-MEMORY (JettraMemory) | 3. OFF-HEAP (Predeterminado).",
+                    targetDb, currentMode.getCode());
+            return okResult(cmd, targetDb, bucket, out, out, Collections.emptyList(), t0);
+        }
+        String rawMode = ("STORAGE_MODE".equalsIgnoreCase(parts[3]) && parts.length > 4) ? parts[4] : parts[3];
+        io.jettra.store.core.StorageMode parsed = io.jettra.store.core.StorageMode.parseStrict(rawMode);
+        if (parsed == null) {
+            return errorResult(cmd, db, bucket,
+                    "[ERROR] Storage Mode inválido '" + rawMode + "'. Valores: JVM-RAM, DISK-MEMORY, OFF-HEAP.",
+                    t0);
+        }
+        boolean ok = plugin.updateDatabaseStorageMode(targetDb, parsed);
+        if (!ok) {
+            return errorResult(cmd, db, bucket, "[ERROR] Base de datos no encontrada: " + targetDb, t0);
+        }
+        String out = String.format("[OK] Base de datos '%s' actualizada al Storage Mode '%s' (%s).",
+                targetDb, parsed.getCode(), parsed.getDescription());
+        return okResult(cmd, targetDb, bucket, out, out, Collections.emptyList(), t0);
     }
 
     private ShellExecutionResult handleDrop(JettraStorePlugin plugin, String cmd, String[] parts, String db, String bucket, long t0) {
@@ -843,7 +905,9 @@ public final class JettraStoreShellExecutor {
                 new HelpCommand("JQL FROM <bucket> [WHERE ...]", "Ejecuta consultas nativas JettraQL sobre documentos u objetos.", "JQL FROM Facturas WHERE emisor LIKE Corp"),
                 new HelpCommand("GET <recordId>", "Recupera el documento completo y versión vigente de un registro.", "GET FAC-2026-001"),
                 new HelpCommand("INSERT INTO <bucket> VALUES (...)", "Inserta un nuevo registro en el bucket seleccionado.", "INSERT INTO Facturas VALUES ('FAC-900', 'Factura Demo', '{\"total\":950}')"),
-                new HelpCommand("CREATE DATABASE <db> [ENGINE]", "Crea una nueva base de datos y su bucket inicial.", "CREATE DATABASE billing_demo_db DOCUMENT")
+                new HelpCommand("CREATE DATABASE <db> [STORAGE_MODE]", "Crea una base de datos especificando el Storage Mode (1. JVM-RAM | 2. DISK-MEMORY [JettraMemory] | 3. OFF-HEAP [Predeterminado]).", "CREATE DATABASE billing_demo_db OFF-HEAP"),
+                new HelpCommand("EDIT DATABASE <db> <STORAGE_MODE>", "Edita el Storage Mode (JVM-RAM, DISK-MEMORY, OFF-HEAP) de una base de datos existente.", "EDIT DATABASE billing_demo_db DISK-MEMORY"),
+                new HelpCommand("STORAGE_MODE [OFF-HEAP|DISK-MEMORY|JVM-RAM]", "Consulta o cambia el Storage Mode activo de la base de datos.", "STORAGE_MODE OFF-HEAP")
             )
         ));
         cats.add(new HelpCategory(

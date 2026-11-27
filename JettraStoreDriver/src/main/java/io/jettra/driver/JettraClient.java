@@ -356,27 +356,51 @@ public final class JettraClient implements AutoCloseable {
     }
 
     public JettraDatabase getDatabase(String name) {
+        return getDatabase(name, null);
+    }
+
+    public JettraDatabase getDatabase(String name, StorageMode preferredStorageMode) {
         if (io.jettra.store.JettraStoreServer.getActiveInstance() != null) {
-            return io.jettra.store.JettraStoreServer.getActiveInstance().getOrCreateDatabase(name);
+            return io.jettra.store.JettraStoreServer.getActiveInstance().getOrCreateDatabase(name, preferredStorageMode);
         }
         boolean isNew = !databases.containsKey(name);
         JettraDatabase db = databases.computeIfAbsent(name, k -> {
             JettraDatabase newDb = new JettraDatabase(k, JettraStoreConfig.load(), ringEngine);
-            if (config != null && config.getDefaultStorageMode() != null) {
-                newDb.setStorageMode(config.getDefaultStorageMode());
-            }
+            StorageMode targetMode = preferredStorageMode != null
+                    ? preferredStorageMode
+                    : (config != null && config.getDefaultStorageMode() != null
+                        ? config.getDefaultStorageMode()
+                        : StorageMode.OFF_HEAP);
+            newDb.setStorageMode(targetMode);
+            newDb.saveToDisk();
             return newDb;
         });
-        if (isNew && config.isClusterMultinodeActive()) {
-            triggerServerDatabaseOp("CREATE_DATABASE", name);
+        if (!isNew && preferredStorageMode != null) {
+            db.setStorageMode(preferredStorageMode);
+            db.saveToDisk();
+        }
+        if ((isNew || preferredStorageMode != null) && config.isClusterMultinodeActive()) {
+            triggerServerDatabaseOp("CREATE_DATABASE", name, preferredStorageMode);
         }
         return db;
     }
 
     private boolean triggerServerDatabaseOp(String op, String databaseName) {
+        return triggerServerDatabaseOp(op, databaseName, null);
+    }
+
+    private boolean triggerServerDatabaseOp(String op, String databaseName, StorageMode storageMode) {
         // 1. Enviar trama binaria Raft directamente al puerto gRPC/clúster del PRIMARY si es CREATE/DROP
-        if ("CREATE_DATABASE".equalsIgnoreCase(op) || "DROP_DATABASE".equalsIgnoreCase(op)) {
-            if (sendDatabaseFrameToPrimaryNode(op, databaseName)) {
+        if ("CREATE_DATABASE".equalsIgnoreCase(op) || "DROP_DATABASE".equalsIgnoreCase(op)
+                || "SET_STORAGE_MODE".equalsIgnoreCase(op)) {
+            byte[] payload = new byte[0];
+            if (("CREATE_DATABASE".equalsIgnoreCase(op) || "SET_STORAGE_MODE".equalsIgnoreCase(op))
+                    && storageMode != null) {
+                String metaJson = String.format("{\"databaseName\":\"%s\",\"storageMode\":\"%s\"}",
+                        databaseName, storageMode.getCode());
+                payload = metaJson.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            }
+            if (sendDatabaseFrameToPrimaryNode(op, databaseName, payload)) {
                 return true;
             }
         }
@@ -404,7 +428,10 @@ public final class JettraClient implements AutoCloseable {
             java.net.http.HttpClient httpClient = java.net.http.HttpClient.newBuilder()
                 .connectTimeout(java.time.Duration.ofMillis(800))
                 .build();
-            String jsonPayload = String.format("{\"op\":\"%s\",\"database\":\"%s\"}", op, databaseName);
+            String jsonPayload = storageMode != null
+                    ? String.format("{\"op\":\"%s\",\"database\":\"%s\",\"storageMode\":\"%s\"}",
+                            op, databaseName, storageMode.getCode())
+                    : String.format("{\"op\":\"%s\",\"database\":\"%s\"}", op, databaseName);
             java.net.http.HttpRequest.Builder reqBuilder = java.net.http.HttpRequest.newBuilder()
                 .uri(java.net.URI.create(String.format("http://%s:%d/api/v1/cluster/replicate", host, restPort)))
                 .timeout(java.time.Duration.ofSeconds(3))
@@ -421,6 +448,10 @@ public final class JettraClient implements AutoCloseable {
     }
 
     private boolean sendDatabaseFrameToPrimaryNode(String op, String databaseName) {
+        return sendDatabaseFrameToPrimaryNode(op, databaseName, new byte[0]);
+    }
+
+    private boolean sendDatabaseFrameToPrimaryNode(String op, String databaseName, byte[] payload) {
         String host = "127.0.0.1";
         int grpcPort = 50001;
         if (config != null && !config.getClusterEndpoints().isEmpty()) {
@@ -441,7 +472,8 @@ public final class JettraClient implements AutoCloseable {
                  java.io.BufferedInputStream bis = new java.io.BufferedInputStream(s.getInputStream(), 8192)) {
                 io.jettra.store.cluster.JettraRaftFrame frame = "DROP_DATABASE".equalsIgnoreCase(op)
                         ? io.jettra.store.cluster.JettraRaftFrame.dropDatabase(1L, 0L, "jettra-client", databaseName)
-                        : io.jettra.store.cluster.JettraRaftFrame.createDatabase(1L, 0L, "jettra-client", databaseName, new byte[0]);
+                        : io.jettra.store.cluster.JettraRaftFrame.createDatabase(1L, 0L, "jettra-client", databaseName,
+                                payload != null ? payload : new byte[0]);
                 io.jettra.store.cluster.JettraClusterProtocol.writeFrame(bos, frame);
                 io.jettra.store.cluster.JettraRaftFrame ack = io.jettra.store.cluster.JettraClusterProtocol.readFrame(bis);
                 return ack != null && ack.frameType() == io.jettra.store.cluster.JettraRaftFrame.TYPE_ACK;
@@ -1112,6 +1144,10 @@ public final class JettraClient implements AutoCloseable {
     }
 
 
+    public List<StorageMode> getAvailableStorageModes() {
+        return List.of(StorageMode.JVM_RAM, StorageMode.DISK_MEMORY, StorageMode.OFF_HEAP);
+    }
+
     public StorageMode getStorageMode() {
         return getStorageMode(config.getDefaultDatabase());
     }
@@ -1126,8 +1162,27 @@ public final class JettraClient implements AutoCloseable {
     }
 
     public void setStorageMode(String databaseName, StorageMode mode) {
-        String db = (databaseName != null && !databaseName.isBlank()) ? databaseName : config.getDefaultDatabase();
-        getDatabase(db).setStorageMode(mode);
+        String dbName = (databaseName != null && !databaseName.isBlank()) ? databaseName : config.getDefaultDatabase();
+        StorageMode targetMode = (mode != null) ? mode : StorageMode.OFF_HEAP;
+        if (io.jettra.store.JettraStoreServer.getActiveInstance() != null) {
+            io.jettra.store.JettraStoreServer.getActiveInstance().updateDatabaseStorageMode(dbName, targetMode);
+            return;
+        }
+        JettraDatabase db = getDatabase(dbName);
+        db.setStorageMode(targetMode);
+        db.saveToDisk();
+        if (config != null && config.isClusterMultinodeActive()) {
+            triggerServerDatabaseOp("SET_STORAGE_MODE", dbName, targetMode);
+        }
+    }
+
+    public boolean updateDatabaseStorageMode(String databaseName, StorageMode mode) {
+        if (databaseName == null || databaseName.isBlank()) {
+            return false;
+        }
+        StorageMode targetMode = (mode != null) ? mode : StorageMode.OFF_HEAP;
+        setStorageMode(databaseName.trim(), targetMode);
+        return true;
     }
 
     public void setGlobalStorageMode(StorageMode mode) {
@@ -1383,8 +1438,17 @@ public final class JettraClient implements AutoCloseable {
     }
 
     public boolean createDatabase(String name) {
+        return createDatabase(name, null);
+    }
+
+    public boolean createDatabase(String name, StorageMode storageMode) {
         if (name == null || name.isBlank()) return false;
-        getDatabase(name.trim());
+        StorageMode effectiveMode = (storageMode != null)
+                ? storageMode
+                : (config != null && config.getDefaultStorageMode() != null
+                    ? config.getDefaultStorageMode()
+                    : StorageMode.OFF_HEAP);
+        getDatabase(name.trim(), effectiveMode);
         return true;
     }
 

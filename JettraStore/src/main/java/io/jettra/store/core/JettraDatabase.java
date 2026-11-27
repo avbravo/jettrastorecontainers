@@ -73,7 +73,7 @@ public final class JettraDatabase implements AutoCloseable {
 
         // Los motores auxiliares (JettraMemoryEngine, OffHeapSlottedMap, OffHeapPageManager)
         // se inicializan de forma perezosa (lazy) al primer uso para minimizar el consumo de RAM y threads.
-        this.storageMode = (this.config != null && this.config.getStorageMode() != null) ? this.config.getStorageMode() : StorageMode.JVM_RAM;
+        this.storageMode = (this.config != null && this.config.getStorageMode() != null) ? this.config.getStorageMode() : StorageMode.OFF_HEAP;
 
         if (this.config.isClusterMultinodeActive() && this.ringEngine.getPeers().isEmpty()) {
             for (ClusterNode peer : this.config.getParsedPeers()) {
@@ -480,6 +480,7 @@ public final class JettraDatabase implements AutoCloseable {
                 StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE)) {
             writer.write("{\n");
             writer.write("  \"databaseName\": \"" + databaseName + "\",\n");
+            writer.write("  \"storageMode\": \"" + getStorageMode().getCode() + "\",\n");
             writer.write("  \"savedAt\": " + System.currentTimeMillis() + ",\n");
 
             // Metadatos ligeros de buckets al inicio
@@ -763,6 +764,13 @@ public final class JettraDatabase implements AutoCloseable {
                 scanner.skipWhitespaceAndSeparators();
 
                 switch (sectionKey) {
+                    case "storageMode" -> {
+                        String modeVal = scanner.readQuotedString();
+                        StorageMode parsed = StorageMode.parseStrict(modeVal);
+                        if (parsed != null) {
+                            this.storageMode = parsed;
+                        }
+                    }
                     case "documentEngines" -> {
                         scanner.skipWhitespace();
                         if (scanner.peek() == '{') {
@@ -2088,11 +2096,55 @@ public final class JettraDatabase implements AutoCloseable {
     public JettraIndexManager getIndexManager() { return indexManager; }
 
     public StorageMode getStorageMode() {
-        return storageMode != null ? storageMode : StorageMode.JVM_RAM;
+        return storageMode != null ? storageMode : StorageMode.OFF_HEAP;
+    }
+
+    public static StorageMode readPersistedStorageMode(String databaseName, JettraStoreConfig config) {
+        StorageMode fallback = (config != null && config.getStorageMode() != null)
+                ? config.getStorageMode()
+                : StorageMode.OFF_HEAP;
+        if (databaseName == null || databaseName.isBlank()) {
+            return fallback;
+        }
+        Path metaFile = resolveMetaFile(databaseName, config);
+        if (metaFile == null || !Files.exists(metaFile)) {
+            return fallback;
+        }
+        try (FileChannel channel = FileChannel.open(metaFile, StandardOpenOption.READ);
+             Arena arena = Arena.ofShared()) {
+            long size = channel.size();
+            if (size <= 0) {
+                return fallback;
+            }
+            MemorySegment segment = channel.map(FileChannel.MapMode.READ_ONLY, 0, size, arena);
+            PanamaOffHeapScanner s = new PanamaOffHeapScanner(segment, size);
+            s.skipWhitespace();
+            if (s.peek() == '{') {
+                s.read();
+            }
+            while (s.hasMore() && s.peek() != '}') {
+                s.skipWhitespaceAndSeparators();
+                if (s.peek() == '}') break;
+                String key = s.readKeyString();
+                if (key == null) break;
+                s.skipWhitespaceAndSeparators();
+                if ("storageMode".equals(key)) {
+                    String val = s.readQuotedString();
+                    StorageMode parsed = StorageMode.parseStrict(val);
+                    if (parsed != null) {
+                        return parsed;
+                    }
+                } else {
+                    s.skipValue();
+                }
+            }
+        } catch (Exception ignored) {
+        }
+        return fallback;
     }
 
     public void setStorageMode(StorageMode storageMode) {
-        this.storageMode = (storageMode != null) ? storageMode : StorageMode.JVM_RAM;
+        this.storageMode = (storageMode != null) ? storageMode : StorageMode.OFF_HEAP;
         System.out.printf("[JettraDatabase:%s] Modo de almacenamiento conmutado a: %s (%s)%n",
             databaseName, this.storageMode.getCode(), this.storageMode.getDescription());
         if (this.storageMode.isDiskMemory() && getMemoryEngine() != null) {

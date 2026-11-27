@@ -809,8 +809,11 @@ Gran Total en 'sample_enterprise_db': 9 registro(s) multimodelo.
 ### 13.1 Ciclo de Vida de Base de Datos y Creación de Motores (Unidades / Buckets)
 
 ```sql
--- 1. Crear una base de datos lógica
-CREATE DATABASE clinica_db;
+-- 1. Crear una base de datos indicando su Storage Mode (predeterminado: OFF-HEAP)
+-- Opciones disponibles: JVM-RAM | DISK-MEMORY (JettraMemory) | OFF-HEAP (JettraStore-OffHeap)
+CREATE DATABASE clinica_db OFF-HEAP;
+-- Editar el Storage Mode de una base de datos existente:
+-- EDIT DATABASE clinica_db DISK-MEMORY;
 
 -- 2. Conmutar a la base de datos de trabajo
 USE clinica_db;
@@ -2163,17 +2166,29 @@ jettra-shell> migrate --host=db.cloud.corp --port=5432 --db=facturacion --ssl --
 
 ## 17. Gestión del Modo de Almacenamiento: `JVM-RAM`, `DISK-MEMORY` y `OFF-HEAP`
 
-`JettraStoreShell` permite consultar y conmutar en caliente el modo de almacenamiento entre la memoria RAM de la JVM, el motor de disco off-heap LSM `JettraMemory` y el motor de páginas ranuradas nativas `JettraStore-OffHeap`:
+`JettraStoreShell` utiliza **`OFF-HEAP` (`JettraStore-OffHeap`) como motor de almacenamiento predeterminado** y permite elegir o editar el modo de almacenamiento al crear/editar una base de datos o al conmutar en caliente el modo activo entre los tres motores disponibles:
+1. **`JVM-RAM`:** Memoria RAM estándar de la JVM (Heap & Stack).
+2. **`DISK-MEMORY`:** Integración Nativa `JettraMemory` (LSM Direct Off-Heap en disco).
+3. **`OFF-HEAP` (Predeterminado):** Integración Nativa `JettraStore-OffHeap` (páginas ranuradas Slotted-Page FFM y ámbitos RAII).
 
-### 17.1 Comandos de Consola
+### 17.1 Comandos de Consola (`CREATE DATABASE`, `EDIT DATABASE`, `STORAGE_MODE` y `HELP`)
+* **Especificar Storage Mode al Crear o Editar Base de Datos:**
+  ```text
+  jettra-shell> CREATE DATABASE billing_db OFF-HEAP
+  jettra-shell> CREATE DATABASE logs_db DISK-MEMORY
+  jettra-shell> CREATE DATABASE staging_db JVM-RAM
+  jettra-shell> EDIT DATABASE logs_db OFF-HEAP
+  ```
+  > En sesión interactiva, si se ejecuta `CREATE DATABASE <nombre>` o `EDIT DATABASE <nombre>` sin indicar el modo, `JettraStoreShell` muestra el menú numérico `[1] JVM-RAM`, `[2] DISK-MEMORY (JettraMemory)` y `[3] OFF-HEAP (JettraStore-OffHeap) [Predeterminado]` para que el usuario elija la opción deseada (o presione `Enter` para `OFF-HEAP`). La ayuda integrada (`HELP` y `HELP STORAGE_MODE`) detalla todas estas opciones.
+
 * **Consultar Modo Activo:**
   ```text
   jettra-shell> STORAGE_MODE
   jettra-shell> SHOW STORAGE_MODE
   ```
-  *Sintaxis soportada:* Muestra el modo activo tanto para la base de datos seleccionada como a nivel global del shell y cliente.
+  *Sintaxis soportada:* Muestra el modo activo tanto para la base de datos seleccionada como a nivel global del shell y cliente (`OFF-HEAP` por defecto).
 
-* **Conmutar a Memoria RAM (JVM Heap/Stack - Predeterminado):**
+* **Conmutar a Memoria RAM (JVM Heap/Stack):**
   ```text
   jettra-shell> STORAGE_MODE JVM_RAM
   jettra-shell> STORAGE_MODE JVM-RAM
@@ -2185,7 +2200,7 @@ jettra-shell> migrate --host=db.cloud.corp --port=5432 --db=facturacion --ssl --
   jettra-shell> STORAGE_MODE DISK-MEMORY
   jettra-shell> SET STORAGE_MODE DISK_MEMORY
   ```
-* **Conmutar a Páginas Ranuradas Nativa Off-Heap (JettraStore-OffHeap):**
+* **Conmutar a Páginas Ranuradas Nativa Off-Heap (JettraStore-OffHeap — Predeterminado):**
   ```text
   jettra-shell> STORAGE_MODE OFF_HEAP
   jettra-shell> STORAGE_MODE OFF-HEAP
@@ -2196,13 +2211,13 @@ jettra-shell> migrate --host=db.cloud.corp --port=5432 --db=facturacion --ssl --
 > Las opciones de comando aceptan guión bajo (`_`) o guión medio (`-`) indistintamente:
 > * `JVM_RAM` / `JVM-RAM`
 > * `DISK_MEMORY` / `DISK-MEMORY`
-> * `OFF_HEAP` / `OFF-HEAP`
-> La conmutación se aplica de inmediato a nivel de sesión interactiva de `JettraStoreShell` y se propaga a la base de datos activa y al motor `JettraClient`.
+> * `OFF_HEAP` / `OFF-HEAP` (Predeterminado)
+> La conmutación se aplica de inmediato a nivel de sesión interactiva de `JettraStoreShell` y se propaga a la base de datos activa (`<db>_meta.json`) y al motor `JettraClient`.
 
 ### 17.2 Comportamiento de los Tres Modos
-* **`JVM-RAM` (Predeterminado):** Las colecciones se cargan y consultan en las áreas de memoria Stack y Heap de Java con estructuras `UnifiedMap`, aprovechando ZGC y Compact Object Headers de 8 bytes (Project Lilliput).
-* **`DISK-MEMORY`:** Los registros se escriben y leen directamente en disco mediante `JettraMemory` utilizando punteros nativos Panama `MemorySegment` y compactación autónoma LSM, asegurando 0% de impacto en el montículo para grandes datasets.
-* **`OFF-HEAP`:** Los registros residen en páginas ranuradas nativas contiguas de 64 KB o 256 KB administradas por `JettraStore-OffHeap`, con soporte para deserialización selectiva cero-copia (Zero-Copy) y ámbitos transaccionales deterministas RAII que devuelven la memoria al sistema operativo sin pausas de Garbage Collector.
+* **`JVM-RAM`:** Las colecciones se cargan y consultan en las áreas de memoria Stack y Heap de Java con estructuras `UnifiedMap`, aprovechando ZGC y Compact Object Headers de 8 bytes (Project Lilliput).
+* **`DISK-MEMORY` (Integración Nativa `JettraMemory`):** Los registros se escriben y leen directamente en disco mediante `JettraMemory` utilizando punteros nativos Panama `MemorySegment` y compactación autónoma LSM, asegurando 0% de impacto en el montículo para grandes datasets.
+* **`OFF-HEAP` (Integración Nativa `JettraStore-OffHeap` — Predeterminado):** Los registros residen en páginas ranuradas nativas contiguas de 64 KB o 256 KB administradas por `JettraStore-OffHeap`, con soporte para deserialización selectiva cero-copia (Zero-Copy) y ámbitos transaccionales deterministas RAII que devuelven la memoria al sistema operativo sin pausas de Garbage Collector.
 
 ---
 
