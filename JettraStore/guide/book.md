@@ -4059,9 +4059,12 @@ Todo el ecosistema (`JettraStore`, `JettraStoreDriver`, `JettraStoreShell`, `Jet
 
 #### 7.4.1 Anotaciones y Ejecución en Maven
 - **Anotaciones principales:** `@Test`, `@BeforeAll`, `@AfterAll`, `@BeforeEach`, `@AfterEach`, `@DisplayName` y aserciones mediante `JettraAssert`.
-- **Ejecución aislada:** Cada módulo invoca `io.jettra.test.JettraTestRunner` mediante `exec-maven-plugin` (`mvn test` / `mvn install`), manteniendo `<skipTests>true</skipTests>` en `maven-surefire-plugin` para evitar ejecuciones duplicadas.
+- **Ejecución aislada:** Cada módulo invoca `io.jettra.test.JettraTestRunner` mediante `exec-maven-plugin` (`mvn test` / `mvn clean verify`), manteniendo `<skipTests>true</skipTests>` en `maven-surefire-plugin` para evitar ejecuciones duplicadas.
 
 ```bash
+# Compilar y verificar todo el ecosistema jettrastorecontainers con cierre garantizado de instancias y puertos
+mvn clean verify
+
 # Verificar módulo servidor JettraStore (Java 25+ con Panama FFM)
 cd JettraStore && mvn test
 
@@ -4069,5 +4072,28 @@ cd JettraStore && mvn test
 cd ../JettraStoreDriver && mvn install
 cd ../JettraStoreShell && mvn test
 ```
+
+### 7.5 Consolidación Operativa en Contenedores, Script `start-node.sh` y Cierre Limpio en Pruebas (RF-36)
+
+1. **Cierre garantizado de instancias y procesos de prueba (`mvn clean verify`):**
+   - `JettraStoreServer`, `JettraClusterTransportServer` y `App` (`JettraStoreExplorer`) mantienen un registro central de instancias iniciadas en la JVM junto con `stopAllActiveServers()` / `stopAllActiveTransports()` / `stopAllApplications()` y *Shutdown Hooks* automáticos.
+   - Al concluir cada método de prueba (`finally`), cada suite (`@AfterAll`) y al finalizar `mvn clean verify`, se detienen todas las instancias de prueba, se cierran los subprocesos hijos lanzados por el test (sin afectar nunca procesos externos ajenos a la ejecución de prueba) y se verifica mediante `awaitTcpPortAvailable(...)` que todos los puertos TCP/gRPC/REST queden liberados.
+   - `JettraClusterStateBackupManager` respalda automáticamente cualquier `cluster-state.config` preexistente en `jettra.cluster_state_config_dir` como `cluster-state.config-backup` y lo restaura al finalizar la suite.
+
+2. **`Dockerfile` y manifiestos `docker-compose` bajo modelo `PRIMARY` / `SECONDARY`:**
+   - **Nodo `PRIMARY` (`jettra-node-01`):** Único servicio que monta o utiliza `cluster.config` (`JETTRA_CLUSTER_CONFIG_PATH=/jettra/config/cluster.config`) como semilla inicial cuando aún no existe `cluster-state.config` en `/jettra/cluster-state`.
+   - **Nodos `SECONDARY` (`jettra-node-02`, `jettra-node-03`, ...):** En `docker-compose.yml`, `JettraStore/docker/docker-compose.yml`, `JettraStore/docker/hub/docker-compose-hub.yml` (`avbravo/jettrastore:1.0-SNAPSHOT`), `JettraStore/docker/ip/docker-compose-node-servers.yml` y `docker-compose-only-node-servers.yml`, arrancan **sin exigir `cluster.config`**, persisten `/jettra/cluster-state` (`JETTRA_CLUSTER_STATE_CONFIG_DIR=/jettra/cluster-state`) en su volumen dedicado y esperan detección por el `PRIMARY` o incorporación dinámica para recibir `cluster-state.config`.
+   - **Shell y Explorer:** `JettraStoreShell/Dockerfile`, `JettraStoreExplorer/Dockerfile` y sus `docker-compose.yml` no requieren `cluster.config`; persisten `conecction.config` en `/app/config` (`JETTRA_CONNECTION_CONFIG_DIR=/app/config`), se conectan mediante `CLUSTER_IP_NODES` (`cluster.ip.nodes`) y persisten su caché de estado en `/app/cluster-state` (`JETTRA_CLUSTER_STATE_CONFIG_DIR=/app/cluster-state`).
+
+3. **Arranque por rol en `script/start-node.sh`:**
+   ```bash
+   # Nodo PRIMARY (resuelve cluster.config y jettra.cluster_state_config_dir)
+   ./script/start-node.sh node-01 PRIMARY
+
+   # Nodo SECONDARY (arranca sin exigir cluster.config; persiste cluster-state.config al sincronizar)
+   ./script/start-node.sh node-02 SECONDARY
+   ```
+   - `script/start-node.sh` detecta el rol (`PRIMARY` vs `SECONDARY`), resuelve y crea `jettra.cluster_state_config_dir`, aplica `-Dcluster.config.path` automáticamente solo al rol `PRIMARY` (o cuando se indica explícitamente), y permite el arranque limpio de nodos `SECONDARY` en espera de detección/sincronización.
+
 
 

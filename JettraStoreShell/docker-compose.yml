@@ -18,13 +18,15 @@ services:
     environment:
       - MICROPROFILE_CONFIG_FILE=/app/config/microprofile-config.properties
       - JETTRA_CONNECTION_CONFIG_DIR=/app/config
+      - JETTRA_CLUSTER_STATE_CONFIG_DIR=/app/cluster-state
       - CLUSTER_IP_NODES=${CLUSTER_IP_NODES:-jettra-node-01:50001}
       - JETTRA_HOST=jettra-node-01
       - JETTRA_PORT=50001
-      - JAVA_OPTS=-Xms48m -Xmx192m -XX:MaxMetaspaceSize=128m -XX:MaxDirectMemorySize=96m -Dcluster.ip.nodes=${CLUSTER_IP_NODES:-jettra-node-01:50001}
+      - JAVA_OPTS=-Xms48m -Xmx192m -XX:MaxMetaspaceSize=128m -XX:MaxDirectMemorySize=96m -Djettra.cluster_state_config_dir=/app/cluster-state -Dcluster.ip.nodes=${CLUSTER_IP_NODES:-jettra-node-01:50001}
     volumes:
       - jettra_shell_data:/home/jettra/.jettra
       - jettra_shell_config:/app/config
+      - jettra_shell_state:/app/cluster-state
     networks:
       - jettra-cluster-net
 
@@ -34,6 +36,9 @@ volumes:
     driver: local
   jettra_shell_config:
     name: jettra_shell_config
+    driver: local
+  jettra_shell_state:
+    name: jettra_shell_state
     driver: local
 
 networks:

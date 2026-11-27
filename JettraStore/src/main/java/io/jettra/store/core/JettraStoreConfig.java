@@ -399,6 +399,12 @@ public final class JettraStoreConfig {
             "PRIMARY");
         boolean isPrimaryRole = "PRIMARY".equalsIgnoreCase(configuredRole);
         String explicitClusterPath = System.getProperty("cluster.config.path");
+        if (explicitClusterPath == null || explicitClusterPath.isBlank()) {
+            explicitClusterPath = System.getenv("JETTRA_CLUSTER_CONFIG_PATH");
+        }
+        if (explicitClusterPath == null || explicitClusterPath.isBlank()) {
+            explicitClusterPath = System.getenv("CLUSTER_CONFIG_PATH");
+        }
         boolean hasExplicitClusterProp = explicitClusterPath != null && !explicitClusterPath.isBlank();
         Path optionalSeed = (isPrimaryRole || hasExplicitClusterProp)
             ? JettraConfigValidator.locateOptionalClusterSeedFile(stateFile != null ? stateFile.getParent() : null)

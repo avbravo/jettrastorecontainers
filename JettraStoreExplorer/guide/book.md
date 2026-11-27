@@ -518,6 +518,32 @@ java -jar target/JettraStoreExplorer-1.0.0-SNAPSHOT.jar \
   2. Persiste atómicamente el archivo en el nodo **`PRIMARY`**.
   3. **Replica automáticamente los cambios a todos los nodos del clúster** (actualizando `cluster-state.config` en el `jettra.cluster_state_config_dir` de cada `SECONDARY` activo) y actualiza la vista en vivo de `/cluster`, `/map` y `/connections`.
 
+---
+
+## 20. Contenedores Docker, `script/start-node.sh` y Cierre Automático de Instancias en Pruebas (RF-36)
+
+### 1. Despliegue en `Dockerfile` y `docker-compose` sin dependencia de `cluster.config`
+* En `JettraStoreExplorer/Dockerfile`, `JettraStoreExplorer/docker-compose.yml`, `docker-compose.yml` y `docker-compose-single-node.yml`:
+  * **No** se monta `cluster.config` ni se pasa `-Dcluster.config.path` en `JettraStoreExplorer`.
+  * `CLUSTER_IP_NODES` (`cluster.ip.nodes`) define los endpoints semilla iniciales (`jettra-node-01:50001` en Compose, `127.0.0.1:50001` por defecto).
+  * `JETTRA_CONNECTION_CONFIG_DIR=/app/config` (`jettra_explorer_config:/app/config`) persiste `conecction.config`.
+  * `JETTRA_CLUSTER_STATE_CONFIG_DIR=/app/cluster-state` (`jettra_explorer_state:/app/cluster-state`) persiste el estado sincronizado del clúster.
+* En los servicios de **JettraStore** (`docker-compose.yml`, `JettraStore/docker/docker-compose.yml`, `JettraStore/docker/hub/docker-compose-hub.yml` con `avbravo/jettrastore:1.0-SNAPSHOT` y `JettraStore/docker/ip/docker-compose-node-servers.yml`), únicamente el nodo **`PRIMARY`** configura `cluster.config`, mientras cada nodo **`SECONDARY`** arranca sin `cluster.config` y persiste `cluster-state.config` en `/jettra/cluster-state` (`JETTRA_CLUSTER_STATE_CONFIG_DIR=/jettra/cluster-state`) tras ser detectado por el `PRIMARY` o agregado desde `/cluster`.
+
+### 2. Integración con `JettraStore/script/start-node.sh`
+```bash
+# Iniciar PRIMARY con semilla cluster.config si aún no existe cluster-state.config
+./script/start-node.sh node-01 PRIMARY
+
+# Iniciar SECONDARY sin cluster.config (en STANDBY hasta sincronizar cluster-state.config)
+./script/start-node.sh node-02 SECONDARY
+```
+Una vez en ejecución el nodo `SECONDARY`, puede ser administrado en `/cluster` y `/cluster-config` dentro de **JettraStoreExplorer**.
+
+### 3. Cierre Limpio de Instancias y Puertos en Pruebas (`mvn clean verify`)
+* Al ejecutar `mvn clean verify` en `jettrastorecontainers`, `App.stopAllApplications()`, `JettraStoreServer.stopAllActiveServers()`, `NodeLifecycleManager.closeAllManagedEndpoints()` y los *Shutdown Hooks* aseguran el cierre determinista de todos los servidores HTTP/REST/gRPC y procesos hijos iniciados por las pruebas (`JettraStoreExplorerTest`, `PortAvailabilityStartupTest`, `RemoteBindConfigTest`, `ConnectionConfigExplorerTest`, `ClusterStateExplorerTest`), validando la disponibilidad posterior de todos los puertos sin intervenir procesos externos del sistema.
+
+
 
 
 

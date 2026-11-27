@@ -352,5 +352,65 @@ public class ClusterStatePersistenceTest {
             if (primary != null) try { primary.stop(); } catch (Exception ignored) {}
             JettraTestCleanup.deleteRecursively(tempRoot);
         }
+        assertTrue(io.jettra.store.JettraStoreServer.awaitTcpPortAvailable("127.0.0.1", g1, 2000));
+        assertTrue(io.jettra.store.JettraStoreServer.awaitTcpPortAvailable("127.0.0.1", r1, 2000));
+        assertTrue(io.jettra.store.JettraStoreServer.awaitTcpPortAvailable("127.0.0.1", g2, 2000));
+        assertTrue(io.jettra.store.JettraStoreServer.awaitTcpPortAvailable("127.0.0.1", r2, 2000));
+    }
+
+    @Test
+    @DisplayName("RF-36: Dockerfiles, docker-compose y script/start-node.sh desacoplan PRIMARY/SECONDARY y persisten jettra.cluster_state_config_dir")
+    public void testRf36DockerComposeAndStartScriptRoleSeparation() throws Exception {
+        String storeDockerfile = Files.readString(Path.of("Dockerfile"), StandardCharsets.UTF_8);
+        assertTrue(storeDockerfile.contains("JETTRA_CLUSTER_STATE_CONFIG_DIR=/jettra/cluster-state"));
+        assertTrue(storeDockerfile.contains("ROLE_UPPER"));
+        assertTrue(storeDockerfile.contains("CLUSTER_STATE_CONFIG_DIR") && storeDockerfile.contains("cluster-state.config"));
+
+        String startScript = Files.readString(Path.of("script/start-node.sh"), StandardCharsets.UTF_8);
+        assertTrue(startScript.contains("NODE_ROLE=\"SECONDARY\"") || startScript.contains("NODE_ROLE" ));
+        assertTrue(startScript.contains("jettra.cluster_state_config_dir"));
+        assertTrue(startScript.contains("no requerida en SECONDARY"));
+
+        // Validar sintaxis bash de script/start-node.sh y script/create-nodes.sh
+        Process bashCheck = new ProcessBuilder("bash", "-n", "script/start-node.sh").start();
+        assertEquals(0, bashCheck.waitFor(), "script/start-node.sh debe tener sintaxis bash válida");
+
+        String storeCompose = Files.readString(Path.of("docker/docker-compose.yml"), StandardCharsets.UTF_8);
+        assertTrue(storeCompose.contains("JETTRA_CLUSTER_CONFIG_PATH=/jettra/config/cluster.config"));
+        assertTrue(storeCompose.contains("jettra_state_node01:/jettra/cluster-state"));
+        assertTrue(storeCompose.contains("jettra_state_node02:/jettra/cluster-state"));
+        assertTrue(storeCompose.contains("jettra_state_node03:/jettra/cluster-state"));
+
+        String hubCompose = Files.readString(Path.of("docker/hub/docker-compose-hub.yml"), StandardCharsets.UTF_8);
+        assertTrue(hubCompose.contains("JETTRA_CLUSTER_CONFIG_PATH=${JETTRA_CLUSTER_CONFIG_PATH:-}"));
+        assertTrue(hubCompose.contains("JETTRA_CLUSTER_STATE_CONFIG_DIR=/jettra/cluster-state"));
+
+        Path rootComposePath = Path.of("../docker-compose.yml");
+        if (Files.exists(rootComposePath)) {
+            String rootCompose = Files.readString(rootComposePath, StandardCharsets.UTF_8);
+            int idxNode2 = rootCompose.indexOf("\n  jettra-node-02:");
+            int idxNode3 = rootCompose.indexOf("\n  jettra-node-03:");
+            int idxShell = rootCompose.indexOf("\n  jettra-shell:");
+            assertTrue(idxNode2 > 0 && idxNode3 > idxNode2 && idxShell > idxNode3);
+            String node2Block = rootCompose.substring(idxNode2, idxNode3);
+            String node3Block = rootCompose.substring(idxNode3, idxShell);
+            assertFalse(node2Block.contains("cluster-3nodes.config"),
+                    "SECONDARY node-02 no debe montar cluster.config en docker-compose.yml");
+            assertFalse(node3Block.contains("cluster-3nodes.config"),
+                    "SECONDARY node-03 no debe montar cluster.config en docker-compose.yml");
+            assertTrue(rootCompose.contains("jettra_shell_state:/app/cluster-state"));
+            assertTrue(rootCompose.contains("jettra_explorer_state:/app/cluster-state"));
+        }
+
+        Path shellDockerfile = Path.of("../JettraStoreShell/Dockerfile");
+        if (Files.exists(shellDockerfile)) {
+            String txt = Files.readString(shellDockerfile, StandardCharsets.UTF_8);
+            assertTrue(txt.contains("JETTRA_CLUSTER_STATE_CONFIG_DIR=/app/cluster-state"));
+        }
+        Path explorerDockerfile = Path.of("../JettraStoreExplorer/Dockerfile");
+        if (Files.exists(explorerDockerfile)) {
+            String txt = Files.readString(explorerDockerfile, StandardCharsets.UTF_8);
+            assertTrue(txt.contains("JETTRA_CLUSTER_STATE_CONFIG_DIR=/app/cluster-state"));
+        }
     }
 }

@@ -18,14 +18,16 @@ services:
       - STORAGE_MODE=${STORAGE_MODE:-OFF_HEAP}
       - MICROPROFILE_CONFIG_FILE=/app/config/microprofile-config.properties
       - JETTRA_CONNECTION_CONFIG_DIR=/app/config
+      - JETTRA_CLUSTER_STATE_CONFIG_DIR=/app/cluster-state
       - CLUSTER_IP_NODES=${CLUSTER_IP_NODES:-jettra-node-01:50001}
-      - JAVA_OPTS=-Xms96m -Xmx384m -XX:MaxMetaspaceSize=192m -XX:MaxDirectMemorySize=128m -Dcluster.ip.nodes=${CLUSTER_IP_NODES:-jettra-node-01:50001}
+      - JAVA_OPTS=-Xms96m -Xmx384m -XX:MaxMetaspaceSize=192m -XX:MaxDirectMemorySize=128m -Djettra.cluster_state_config_dir=/app/cluster-state -Dcluster.ip.nodes=${CLUSTER_IP_NODES:-jettra-node-01:50001}
     mem_limit: 512m
     mem_reservation: 128m
     cpus: 1.0
     volumes:
       - jettra_explorer_config:/app/config
       - jettra_explorer_memory:/app/memory
+      - jettra_explorer_state:/app/cluster-state
     networks:
       - jettra-cluster-net
     healthcheck:
@@ -41,6 +43,9 @@ volumes:
     driver: local
   jettra_explorer_memory:
     name: jettra_explorer_memory
+    driver: local
+  jettra_explorer_state:
+    name: jettra_explorer_state
     driver: local
 
 networks:

@@ -64,11 +64,20 @@ ENTRYPOINT ["sh", "-c", "if [ \"$JETTRA_CRAC_RESTORE\" = \"true\" ] && [ -d \"$J
         echo '[CRaC] Restaurando JettraStore desde checkpoint CRIU en '$JETTRA_CRAC_CHECKPOINT_PATH'...'; \
         exec java -XX:CRaCRestoreFrom=$JETTRA_CRAC_CHECKPOINT_PATH; \
     else \
+        STATE_DIR=\"${JETTRA_CLUSTER_STATE_CONFIG_DIR:-/jettra/cluster-state}\"; \
+        mkdir -p \"$STATE_DIR\" \"${JETTRA_STORAGE_PATH:-/jettra/data}\"; \
+        ROLE_UPPER=$(printf '%s' \"${JETTRA_NODE_ROLE:-PRIMARY}\" | tr '[:lower:]' '[:upper:]'); \
         CLUSTER_ARG=\"\"; \
-        if [ -n \"${JETTRA_CLUSTER_CONFIG_PATH:-}\" ]; then CLUSTER_ARG=\"-Dcluster.config.path=${JETTRA_CLUSTER_CONFIG_PATH}\"; fi; \
+        if [ -n \"${JETTRA_CLUSTER_CONFIG_PATH:-}\" ]; then \
+            CLUSTER_ARG=\"-Dcluster.config.path=${JETTRA_CLUSTER_CONFIG_PATH}\"; \
+        elif [ \"$ROLE_UPPER\" = \"PRIMARY\" ] && [ -f \"/app/config/cluster.config\" ] && [ ! -f \"$STATE_DIR/cluster-state.config\" ]; then \
+            CLUSTER_ARG=\"-Dcluster.config.path=/app/config/cluster.config\"; \
+        fi; \
         exec java $JAVA_OPTS \
+            -Dcluster.node.id=${JETTRA_NODE_ID:-node-01} \
+            -Dcluster.node.role=${ROLE_UPPER} \
             -Djettra.storage.path=${JETTRA_STORAGE_PATH:-/jettra/data} \
-            -Djettra.cluster_state_config_dir=${JETTRA_CLUSTER_STATE_CONFIG_DIR:-/jettra/cluster-state} \
+            -Djettra.cluster_state_config_dir=${STATE_DIR} \
             -Djettra.storage.mode=${JETTRA_STORAGE_MODE:-OFF_HEAP} \
             -Dcluster.multinode.active=${JETTRA_MULTINODE_ACTIVE:-on} \
             -Djettra.samples.autoload=${JETTRA_SAMPLES_AUTOLOAD:-false} \

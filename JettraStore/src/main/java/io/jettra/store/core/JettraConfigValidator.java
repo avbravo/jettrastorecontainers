@@ -2133,9 +2133,25 @@ cluster.index.max.inmemory.keys = 100000
             Properties mpDocker = mpPathDocker != null
                 ? loadProperties(mpPathDocker, "/META-INF/microprofile-config.properties", "/microprofile-config.properties")
                 : new Properties();
+            String dockerRole = JettraStoreConfig.getPropOrEnv(mpDocker,
+                new String[]{"cluster.node.role", "jettra.node.role", "jettra.cluster.node.role", "node.role"},
+                new String[]{"CLUSTER_NODE_ROLE", "JETTRA_NODE_ROLE", "JETTRA_CLUSTER_NODE_ROLE"},
+                "PRIMARY");
+            boolean isPrimaryDocker = "PRIMARY".equalsIgnoreCase(dockerRole);
+            String explicitDockerCluster = System.getProperty("cluster.config.path");
+            if (explicitDockerCluster == null || explicitDockerCluster.isBlank()) {
+                explicitDockerCluster = System.getenv("JETTRA_CLUSTER_CONFIG_PATH");
+            }
+            if (explicitDockerCluster == null || explicitDockerCluster.isBlank()) {
+                explicitDockerCluster = System.getenv("CLUSTER_CONFIG_PATH");
+            }
+            boolean hasExplicitDockerCluster = explicitDockerCluster != null && !explicitDockerCluster.isBlank();
+
             Path dockerStateDir = ensureClusterStateConfigDirExists(mpDocker);
             Path dockerStateFile = dockerStateDir.resolve(CLUSTER_STATE_FILENAME);
-            Path dockerSeed = locateOptionalClusterSeedFile(dockerStateDir);
+            Path dockerSeed = (isPrimaryDocker || hasExplicitDockerCluster)
+                ? locateOptionalClusterSeedFile(dockerStateDir)
+                : null;
             Properties dockerState = seedOrLoadClusterState(dockerStateFile, dockerSeed);
             if (dockerState == null) {
                 bootstrapInitialPrimaryOrPeersState(dockerStateFile, mpDocker);

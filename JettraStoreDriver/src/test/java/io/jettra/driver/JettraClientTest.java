@@ -76,23 +76,30 @@ public class JettraClientTest {
 
     @AfterAll
     public static void tearDownIsolatedDriverTestEnv() {
-        if (prevClusterConfigProp == null) System.clearProperty("cluster.config.path");
-        else System.setProperty("cluster.config.path", prevClusterConfigProp);
-        if (prevStoragePathProp == null) System.clearProperty("jettra.storage.path");
-        else System.setProperty("jettra.storage.path", prevStoragePathProp);
-        if (prevNodeRoleProp == null) System.clearProperty("jettra.node.role");
-        else System.setProperty("jettra.node.role", prevNodeRoleProp);
+        try {
+            JettraClient.stopLaunchedNodeProcesses();
+            io.jettra.store.JettraStoreServer.stopAllActiveServers();
+            assertEquals(0, io.jettra.store.JettraStoreServer.getActiveServerCount());
+            assertEquals(0, io.jettra.store.cluster.JettraClusterTransportServer.getActiveTransportCount());
+        } finally {
+            if (prevClusterConfigProp == null) System.clearProperty("cluster.config.path");
+            else System.setProperty("cluster.config.path", prevClusterConfigProp);
+            if (prevStoragePathProp == null) System.clearProperty("jettra.storage.path");
+            else System.setProperty("jettra.storage.path", prevStoragePathProp);
+            if (prevNodeRoleProp == null) System.clearProperty("jettra.node.role");
+            else System.setProperty("jettra.node.role", prevNodeRoleProp);
 
-        if (tempTestDir != null && Files.exists(tempTestDir)) {
-            try (var walk = Files.walk(tempTestDir)) {
-                walk.sorted(Comparator.reverseOrder()).forEach(p -> {
-                    try { Files.deleteIfExists(p); } catch (Exception ignored) {}
-                });
-            } catch (Exception ignored) {}
-        }
-        if (suiteStateBackup != null) {
-            suiteStateBackup.close();
-            suiteStateBackup = null;
+            if (tempTestDir != null && Files.exists(tempTestDir)) {
+                try (var walk = Files.walk(tempTestDir)) {
+                    walk.sorted(Comparator.reverseOrder()).forEach(p -> {
+                        try { Files.deleteIfExists(p); } catch (Exception ignored) {}
+                    });
+                } catch (Exception ignored) {}
+            }
+            if (suiteStateBackup != null) {
+                suiteStateBackup.close();
+                suiteStateBackup = null;
+            }
         }
     }
 

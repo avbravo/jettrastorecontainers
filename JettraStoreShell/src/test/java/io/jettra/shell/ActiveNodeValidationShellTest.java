@@ -33,6 +33,7 @@ public class ActiveNodeValidationShellTest {
     private static String prevClusterProp;
     private static String prevMpProp;
     private static String prevStorageProp;
+    private static String prevNodesBaseDirProp;
     private static JettraClusterStateBackupManager.BackupHandle suiteStateBackup;
 
     private static int freePort() throws Exception {
@@ -47,6 +48,7 @@ public class ActiveNodeValidationShellTest {
         prevClusterProp = System.getProperty("cluster.config.path");
         prevMpProp = System.getProperty("jettra.shell.config.file");
         prevStorageProp = System.getProperty("jettra.storage.path");
+        prevNodesBaseDirProp = System.getProperty("jettra.nodes.base.dir");
 
         if (JettraStoreServer.getActiveInstance() != null) {
             try {
@@ -60,6 +62,7 @@ public class ActiveNodeValidationShellTest {
         tempMpFile = tempDir.resolve("microprofile-rf28.properties");
 
         System.setProperty("jettra.storage.path", tempDir.toAbsolutePath().toString());
+        System.setProperty("jettra.nodes.base.dir", tempDir.toAbsolutePath().toString());
         System.setProperty("cluster.config.path", tempClusterFile.toAbsolutePath().toString());
         System.setProperty("jettra.shell.config.file", tempMpFile.toAbsolutePath().toString());
     }
@@ -67,10 +70,12 @@ public class ActiveNodeValidationShellTest {
     @AfterAll
     public static void cleanup() {
         try {
+            JettraClient.stopLaunchedNodeProcesses();
             JettraStoreServer.stopAllActiveServers();
             JettraAssert.assertEquals(0, JettraStoreServer.getActiveServerCount());
             JettraAssert.assertEquals(0, io.jettra.store.cluster.JettraClusterTransportServer.getActiveTransportCount());
         } finally {
+            restoreProp("jettra.nodes.base.dir", prevNodesBaseDirProp);
             restoreProp("cluster.config.path", prevClusterProp);
             restoreProp("jettra.shell.config.file", prevMpProp);
             restoreProp("jettra.storage.path", prevStorageProp);

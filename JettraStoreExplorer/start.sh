@@ -35,7 +35,14 @@ fi
 
 JAVA_OPTS_DEFAULT="-Xms128m -Xmx512m -XX:MaxMetaspaceSize=256m -XX:MaxDirectMemorySize=192m -XX:+UseG1GC -XX:+UseStringDeduplication -XX:CICompilerCount=2 -XX:+UnlockExperimentalVMOptions -XX:+UseCompactObjectHeaders --enable-preview --enable-native-access=ALL-UNNAMED"
 
+STATE_DIR_ARG=""
+if [ -n "${JETTRA_CLUSTER_STATE_CONFIG_DIR:-}" ]; then
+    mkdir -p "${JETTRA_CLUSTER_STATE_CONFIG_DIR}"
+    STATE_DIR_ARG="-Djettra.cluster_state_config_dir=${JETTRA_CLUSTER_STATE_CONFIG_DIR}"
+fi
+
 exec java ${JAVA_OPTS:-$JAVA_OPTS_DEFAULT} \
     -Dmicroprofile.config.file="${CONFIG_FILE}" \
     -Djettra.explorer.config.file="${CONFIG_FILE}" \
+    ${STATE_DIR_ARG} \
     -jar "${JAR_FILE}" "$@"

@@ -24,8 +24,10 @@ services:
     environment:
       - JETTRA_NODE_ID=node-01
       - JETTRA_NODE_ROLE=PRIMARY
+      - JETTRA_NODE_IP=jettra-node-01
       - JETTRA_STORAGE_PATH=/jettra/data
       - JETTRA_CLUSTER_STATE_CONFIG_DIR=/jettra/cluster-state
+      - JETTRA_CLUSTER_CONFIG_PATH=/jettra/config/cluster.config
       - JETTRA_STORAGE_MODE=${JETTRA_STORAGE_MODE:-OFF_HEAP}
       - JETTRA_CRAC_CHECKPOINT_PATH=/jettra/checkpoint
       - JETTRA_CRAC_RESTORE=${JETTRA_CRAC_RESTORE:-false}
@@ -42,6 +44,7 @@ services:
       - jettra_data_node01:/jettra/data
       - jettra_checkpoint_node01:/jettra/checkpoint
       - jettra_state_node01:/jettra/cluster-state
+      - ../../docker/cluster-3nodes.config:/jettra/config/cluster.config:ro
     networks:
       - jettra-cluster-net
     healthcheck:
@@ -77,6 +80,7 @@ services:
     environment:
       - JETTRA_NODE_ID=node-02
       - JETTRA_NODE_ROLE=SECONDARY
+      - JETTRA_NODE_IP=jettra-node-02
       - JETTRA_STORAGE_PATH=/jettra/data
       - JETTRA_CLUSTER_STATE_CONFIG_DIR=/jettra/cluster-state
       - JETTRA_STORAGE_MODE=${JETTRA_STORAGE_MODE:-OFF_HEAP}
@@ -86,7 +90,6 @@ services:
       - JETTRA_GRPC_PORT=50002
       - JETTRA_ADMIN_USERNAME=admin
       - JETTRA_ADMIN_PASSWORD=admin-jettra
-      - JETTRA_CLUSTER_PEERS=node-01:jettra-node-01:50001:PRIMARY,node-03:jettra-node-03:50003:SECONDARY
       - JAVA_OPTS=-Xms96m -Xmx384m -XX:MaxMetaspaceSize=192m -XX:MaxDirectMemorySize=192m
     mem_limit: 640m
     mem_reservation: 128m
@@ -130,6 +133,7 @@ services:
     environment:
       - JETTRA_NODE_ID=node-03
       - JETTRA_NODE_ROLE=SECONDARY
+      - JETTRA_NODE_IP=jettra-node-03
       - JETTRA_STORAGE_PATH=/jettra/data
       - JETTRA_CLUSTER_STATE_CONFIG_DIR=/jettra/cluster-state
       - JETTRA_STORAGE_MODE=${JETTRA_STORAGE_MODE:-OFF_HEAP}
@@ -139,7 +143,6 @@ services:
       - JETTRA_GRPC_PORT=50003
       - JETTRA_ADMIN_USERNAME=admin
       - JETTRA_ADMIN_PASSWORD=admin-jettra
-      - JETTRA_CLUSTER_PEERS=node-01:jettra-node-01:50001:PRIMARY,node-02:jettra-node-02:50002:SECONDARY
       - JAVA_OPTS=-Xms96m -Xmx384m -XX:MaxMetaspaceSize=192m -XX:MaxDirectMemorySize=192m
     mem_limit: 640m
     mem_reservation: 128m

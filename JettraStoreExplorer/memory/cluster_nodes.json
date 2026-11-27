@@ -1,15 +1,15 @@
 [ {
   "id" : "node-02",
-  "name" : "node-02-replica",
+  "name" : "node-02",
   "role" : "SECONDARY",
   "host" : "127.0.0.1",
-  "port" : 59002,
+  "port" : 50002,
   "heapMaxMb" : 2048
 }, {
   "id" : "node-03",
   "name" : "node-03",
   "role" : "SECONDARY",
   "host" : "127.0.0.1",
-  "port" : 59003,
+  "port" : 50003,
   "heapMaxMb" : 2048
 } ]

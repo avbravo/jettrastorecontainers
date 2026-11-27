@@ -3100,20 +3100,26 @@ public final class JettraClient implements AutoCloseable {
             }
         }
 
-        // 2. Intentar iniciar script local ~/jettra-<nodeId>/start-node.sh si existe
-        java.nio.file.Path nodeDir = java.nio.file.Path.of(System.getProperty("user.home"), "jettra-" + cleanId);
+        // 2. Intentar iniciar script local <jettra.nodes.base.dir|user.home>/jettra-<nodeId>/start-node.sh si existe
+        String baseNodesDir = System.getProperty("jettra.nodes.base.dir");
+        if (baseNodesDir == null || baseNodesDir.isBlank()) {
+            baseNodesDir = System.getProperty("user.home");
+        }
+        java.nio.file.Path nodeDir = java.nio.file.Path.of(baseNodesDir, "jettra-" + cleanId);
         java.nio.file.Path startScript = nodeDir.resolve("start-node.sh");
         boolean launched = false;
+        Process launchedProc = null;
         if (java.nio.file.Files.isRegularFile(startScript)) {
             try {
-                java.nio.file.Path logDir = java.nio.file.Path.of(System.getProperty("user.home"), "jettra-logs");
+                java.nio.file.Path logDir = java.nio.file.Path.of(baseNodesDir, "jettra-logs");
                 java.nio.file.Files.createDirectories(logDir);
                 java.io.File logFile = logDir.resolve(cleanId + ".log").toFile();
-                new ProcessBuilder("bash", startScript.toAbsolutePath().toString(), cleanId, role)
+                launchedProc = new ProcessBuilder("bash", startScript.toAbsolutePath().toString(), cleanId, role)
                         .directory(nodeDir.toFile())
                         .redirectErrorStream(true)
                         .redirectOutput(ProcessBuilder.Redirect.appendTo(logFile))
                         .start();
+                trackLaunchedNodeProcess(launchedProc);
                 launched = true;
             } catch (Exception ignored) {}
         }
@@ -3132,6 +3138,9 @@ public final class JettraClient implements AutoCloseable {
                 markNodeRunningInClusterState(cleanId);
                 return new NodeLifecycleResult(true, true, "LOCAL_SCRIPT",
                         String.format("Nodo '%s' (%s:%d) iniciado correctamente (RUNNING) y reincorporado al clúster.", cleanId, host, grpcPort));
+            }
+            if (launchedProc != null) {
+                terminateTrackedProcessTree(launchedProc.toHandle());
             }
             ringEngine.stopPeer(cleanId);
             return new NodeLifecycleResult(false, false, "LOCAL_SCRIPT_TIMEOUT",
@@ -3159,6 +3168,62 @@ public final class JettraClient implements AutoCloseable {
         }
         return new NodeLifecycleResult(false, false, "NOT_FOUND",
                 String.format("No se encontró el nodo '%s' ni un script local en %s.", cleanId, startScript));
+    }
+
+    private static final java.util.Set<ProcessHandle> LAUNCHED_NODE_PROCESSES =
+            java.util.concurrent.ConcurrentHashMap.newKeySet();
+    private static final java.util.concurrent.atomic.AtomicBoolean LAUNCHED_PROCESS_HOOK_REGISTERED =
+            new java.util.concurrent.atomic.AtomicBoolean(false);
+
+    private static void trackLaunchedNodeProcess(Process process) {
+        if (process == null) {
+            return;
+        }
+        LAUNCHED_NODE_PROCESSES.add(process.toHandle());
+        if (LAUNCHED_PROCESS_HOOK_REGISTERED.compareAndSet(false, true)) {
+            Runtime.getRuntime().addShutdownHook(new Thread(
+                    JettraClient::stopLaunchedNodeProcesses,
+                    "jettra-driver-launched-nodes-cleanup"
+            ));
+        }
+    }
+
+    private static void terminateTrackedProcessTree(ProcessHandle handle) {
+        if (handle == null) {
+            return;
+        }
+        try {
+            handle.descendants().forEach(desc -> {
+                try {
+                    desc.destroy();
+                    desc.onExit().get(500, java.util.concurrent.TimeUnit.MILLISECONDS);
+                } catch (Exception ignored) {
+                    try { desc.destroyForcibly(); } catch (Exception ignored2) {}
+                }
+            });
+        } catch (Exception ignored) {}
+        try {
+            handle.destroy();
+            handle.onExit().get(500, java.util.concurrent.TimeUnit.MILLISECONDS);
+        } catch (Exception ignored) {
+            try { handle.destroyForcibly(); } catch (Exception ignored2) {}
+        }
+        LAUNCHED_NODE_PROCESSES.remove(handle);
+    }
+
+    /**
+     * Detiene únicamente los procesos hijo lanzados desde {@link #startClusterNode(String)}
+     * por esta JVM, sin afectar procesos externos ajenos a la ejecución actual.
+     */
+    public static int stopLaunchedNodeProcesses() {
+        int stopped = 0;
+        for (ProcessHandle ph : List.copyOf(LAUNCHED_NODE_PROCESSES)) {
+            if (ph.isAlive()) {
+                stopped++;
+            }
+            terminateTrackedProcessTree(ph);
+        }
+        return stopped;
     }
 
     private void markNodeRunningInClusterState(String nodeId) {

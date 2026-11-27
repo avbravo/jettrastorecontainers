@@ -2923,5 +2923,24 @@ SHOW CLUSTER STATE
 
 Al ejecutar `ADD NODE`, el `PRIMARY` actualiza su `cluster-state.config`, lo replica a todos los nodos del clúster (incluidos los recién incorporados, que lo guardan en su `jettra.cluster_state_config_dir`) y sincroniza las bases de datos existentes.
 
+---
+
+## Contenedores Docker, `script/start-node.sh` y Cierre Limpio en Pruebas (RF-36)
+
+### 1. Configuración Docker y Docker Compose de `JettraStoreShell`
+* En `JettraStoreShell/Dockerfile`, `JettraStoreShell/docker-compose.yml`, `docker-compose.yml` y `docker-compose-single-node.yml`, la consola ya **no** monta ni depende de `cluster.config`.
+* Las variables y volúmenes activos son:
+  * `CLUSTER_IP_NODES` (`cluster.ip.nodes`): endpoint(s) iniciales del clúster (ej. `jettra-node-01:50001`).
+  * `JETTRA_CONNECTION_CONFIG_DIR=/app/config`: persiste `conecction.config` en `jettra_shell_config:/app/config`.
+  * `JETTRA_CLUSTER_STATE_CONFIG_DIR=/app/cluster-state`: persiste la copia sincronizada de `cluster-state.config` en `jettra_shell_state:/app/cluster-state`.
+
+### 2. Arranque de Nodos con `JettraStore/script/start-node.sh` y Docker Compose
+* Solo el nodo **`PRIMARY`** monta o requiere `cluster.config` (`JETTRA_CLUSTER_CONFIG_PATH` o `./start-node.sh node-01 PRIMARY`) como semilla inicial.
+* Los nodos **`SECONDARY`** arrancan sin `cluster.config` (`./start-node.sh node-02 SECONDARY` o sin volumen `cluster.config` en `docker-compose.yml` / `docker-compose-hub.yml`), reciben `cluster-state.config` automáticamente en `jettra.cluster_state_config_dir` al ser detectados por `PRIMARY` o agregados con `ADD NODE` desde **JettraStoreShell**.
+
+### 3. Cierre Limpio de Instancias en `mvn clean verify`
+* Todas las suites de `JettraStoreShell` (`JettraStoreShellTest`, `ConnectionConfigShellTest`, `ClusterStateShellTest`, `ClusterLifecycleShellTest`, `ShowNodesConnectivityShellTest`, `ActiveNodeValidationShellTest`) detienen sus nodos de prueba en `finally` y `@AfterAll` invocando `JettraStoreServer.stopAllActiveServers()`, verifican la liberación de puertos con `awaitTcpPortAvailable(...)` y restauran cualquier `cluster-state.config` previo mediante `JettraClusterStateBackupManager`, sin afectar procesos externos del host.
+
+
 
 

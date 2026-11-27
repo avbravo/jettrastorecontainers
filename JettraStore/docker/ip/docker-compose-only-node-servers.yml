@@ -28,7 +28,8 @@ services:
       # Activación de clúster Raft e identificación de los demás nodos de la red
       - JETTRA_MULTINODE_ACTIVE=on
       - JETTRA_CLUSTER_MULTINODE_ACTIVE=on
-      - JETTRA_CLUSTER_PEERS=${JETTRA_CLUSTER_PEERS:-node-02:192.168.10.12:50001:SECONDARY,node-03:192.168.10.13:50001:SECONDARY}
+      - JETTRA_CLUSTER_CONFIG_PATH=${JETTRA_CLUSTER_CONFIG_PATH:-}
+      - JETTRA_CLUSTER_PEERS=${JETTRA_CLUSTER_PEERS:-}
       # Persistencia, motor de almacenamiento y estado de membresía (RF-32)
       - JETTRA_STORAGE_PATH=/jettra/data
       - JETTRA_INDEX_STORAGE_PATH=/jettra/data/indexes

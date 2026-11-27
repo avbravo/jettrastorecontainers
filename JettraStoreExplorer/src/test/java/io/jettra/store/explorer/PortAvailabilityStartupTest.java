@@ -199,18 +199,27 @@ public class PortAvailabilityStartupTest {
                     .redirectErrorStream(true)
                     .start();
 
+            Thread childCleanupHook = new Thread(() -> {
+                if (proc.isAlive()) {
+                    proc.destroyForcibly();
+                }
+            }, "jettra-test-child-proc-cleanup");
+            Runtime.getRuntime().addShutdownHook(childCleanupHook);
             boolean finished;
             String output;
             try {
                 finished = proc.waitFor(15, TimeUnit.SECONDS);
                 if (!finished) {
                     proc.destroyForcibly();
+                    proc.waitFor(5, TimeUnit.SECONDS);
                 }
                 output = new String(proc.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
             } finally {
                 if (proc.isAlive()) {
                     proc.destroyForcibly();
+                    try { proc.waitFor(5, TimeUnit.SECONDS); } catch (InterruptedException ignored) { Thread.currentThread().interrupt(); }
                 }
+                try { Runtime.getRuntime().removeShutdownHook(childCleanupHook); } catch (IllegalStateException ignored) {}
             }
 
             JettraAssert.assertTrue(finished, "El proceso de JettraStoreExplorer debe terminar rápidamente ante puerto ocupado");

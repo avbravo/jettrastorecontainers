@@ -27,7 +27,7 @@ RUN if command -v apk > /dev/null; then \
 
 WORKDIR /app
 
-RUN mkdir -p /home/jettra/.jettra /app/config && \
+RUN mkdir -p /home/jettra/.jettra /app/config /app/cluster-state && \
     chown -R 1000:1000 /home/jettra /app
 
 COPY --from=packager --chown=1000:1000 /staging/JettraStoreShell.jar /app/JettraStoreShell.jar
@@ -37,13 +37,15 @@ COPY --from=packager --chown=1000:1000 /staging/start.sh /app/start.sh
 ENV HOME=/home/jettra \
     MICROPROFILE_CONFIG_FILE=/app/config/microprofile-config.properties \
     JETTRA_CONNECTION_CONFIG_DIR=/app/config \
+    JETTRA_CLUSTER_STATE_CONFIG_DIR=/app/cluster-state \
+    CLUSTER_IP_NODES=127.0.0.1:50001 \
     JETTRA_HOST=jettra-node-01 \
     JETTRA_PORT=50001 \
     JAVA_TOOL_OPTIONS="-XX:+UseContainerSupport -XX:+UseG1GC -XX:+UseStringDeduplication -XX:CICompilerCount=2 -XX:+UnlockExperimentalVMOptions -XX:+UseCompactObjectHeaders -XX:MaxRAMPercentage=70.0 --enable-preview --enable-native-access=ALL-UNNAMED" \
     JAVA_OPTS="-Xms48m -Xmx192m -XX:MaxMetaspaceSize=128m -XX:MaxDirectMemorySize=96m"
 
-VOLUME ["/home/jettra/.jettra", "/app/config"]
+VOLUME ["/home/jettra/.jettra", "/app/config", "/app/cluster-state"]
 
 USER 1000:1000
 
-ENTRYPOINT ["sh", "-c", "exec java $JAVA_OPTS -Dmicroprofile.config.file=${MICROPROFILE_CONFIG_FILE} -Djettra.shell.config.file=${MICROPROFILE_CONFIG_FILE} -jar /app/JettraStoreShell.jar \"$@\"", "--"]
+ENTRYPOINT ["sh", "-c", "mkdir -p \"${JETTRA_CLUSTER_STATE_CONFIG_DIR:-/app/cluster-state}\"; exec java $JAVA_OPTS -Dmicroprofile.config.file=${MICROPROFILE_CONFIG_FILE} -Djettra.shell.config.file=${MICROPROFILE_CONFIG_FILE} -Djettra.cluster_state_config_dir=${JETTRA_CLUSTER_STATE_CONFIG_DIR:-/app/cluster-state} -Dcluster.ip.nodes=${CLUSTER_IP_NODES:-127.0.0.1:50001} -jar /app/JettraStoreShell.jar \"$@\"", "--"]

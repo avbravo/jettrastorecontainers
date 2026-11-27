@@ -27,7 +27,7 @@ RUN if command -v apk > /dev/null; then \
 
 WORKDIR /app
 
-RUN mkdir -p /app/config /app/memory && \
+RUN mkdir -p /app/config /app/memory /app/cluster-state && \
     chown -R 1000:1000 /app
 
 COPY --from=packager --chown=1000:1000 /staging/JettraStoreExplorer.jar /app/JettraStoreExplorer.jar
@@ -40,16 +40,18 @@ ENV SERVER_HOST=0.0.0.0 \
     JETTRA_DOCKER_COMPOSE=true \
     MICROPROFILE_CONFIG_FILE=/app/config/microprofile-config.properties \
     JETTRA_CONNECTION_CONFIG_DIR=/app/config \
+    JETTRA_CLUSTER_STATE_CONFIG_DIR=/app/cluster-state \
+    CLUSTER_IP_NODES=127.0.0.1:50001 \
     JAVA_TOOL_OPTIONS="-XX:+UseContainerSupport -XX:+UseG1GC -XX:+UseStringDeduplication -XX:CICompilerCount=2 -XX:+UnlockExperimentalVMOptions -XX:+UseCompactObjectHeaders -XX:MaxRAMPercentage=70.0 --enable-preview --enable-native-access=ALL-UNNAMED" \
     JAVA_OPTS="-Xms96m -Xmx384m -XX:MaxMetaspaceSize=192m -XX:MaxDirectMemorySize=128m"
 
 EXPOSE 8085
 
-VOLUME ["/app/memory", "/app/config"]
+VOLUME ["/app/memory", "/app/config", "/app/cluster-state"]
 
 HEALTHCHECK --interval=10s --timeout=5s --start-period=8s --retries=3 \
     CMD curl -fsS http://localhost:${SERVER_PORT}/health || exit 1
 
 USER 1000:1000
 
-ENTRYPOINT ["sh", "-c", "exec java $JAVA_OPTS -Dmicroprofile.config.file=${MICROPROFILE_CONFIG_FILE} -Djettra.explorer.config.file=${MICROPROFILE_CONFIG_FILE} -jar /app/JettraStoreExplorer.jar \"$@\"", "--"]
+ENTRYPOINT ["sh", "-c", "mkdir -p \"${JETTRA_CLUSTER_STATE_CONFIG_DIR:-/app/cluster-state}\"; exec java $JAVA_OPTS -Dmicroprofile.config.file=${MICROPROFILE_CONFIG_FILE} -Djettra.explorer.config.file=${MICROPROFILE_CONFIG_FILE} -Djettra.cluster_state_config_dir=${JETTRA_CLUSTER_STATE_CONFIG_DIR:-/app/cluster-state} -Dcluster.ip.nodes=${CLUSTER_IP_NODES:-127.0.0.1:50001} -jar /app/JettraStoreExplorer.jar \"$@\"", "--"]

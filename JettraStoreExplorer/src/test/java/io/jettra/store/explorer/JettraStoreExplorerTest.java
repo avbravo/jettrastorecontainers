@@ -209,6 +209,7 @@ public class JettraStoreExplorerTest {
                         JettraStorePlugin.getInstance().stopClusterHeartbeatMonitor();
                 }
                 App.stopAllApplications();
+                io.jettra.driver.JettraClient.stopLaunchedNodeProcesses();
                 io.jettra.store.JettraStoreServer.stopAllActiveServers();
                 JettraAssert.assertEquals(0, App.getActiveApplicationCount(),
                                 "No deben quedar servidores HTTP de Explorer activos al terminar la suite");

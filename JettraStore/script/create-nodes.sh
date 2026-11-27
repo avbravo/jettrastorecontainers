@@ -62,8 +62,10 @@ setup_node() {
     mkdir -p "$storage_fs_path"
     mkdir -p "$state_fs_path"
 
-    # 2. Copiar archivos base de configuración desde sus nuevas rutas en src/main/resources
-    cp "$PROJECT_ROOT/src/main/resources/cluster.config" "$node_dir/config/"
+    # 2. Copiar archivos base de configuración desde src/main/resources (cluster.config solo para PRIMARY)
+    if [ "$node_role" = "PRIMARY" ]; then
+        cp "$PROJECT_ROOT/src/main/resources/cluster.config" "$node_dir/config/"
+    fi
     cp "$PROJECT_ROOT/src/main/resources/META-INF/microprofile-config.properties" "$node_dir/config/"
 
     # 3. Copiar archivo start-node.sh desde la carpeta script/ y ajustar la ruta del jar

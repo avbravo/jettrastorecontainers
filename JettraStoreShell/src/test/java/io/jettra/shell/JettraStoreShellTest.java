@@ -26,6 +26,7 @@ public class JettraStoreShellTest {
     private static String prevStoragePathProp;
     private static String prevClusterConfigProp;
     private static String prevHealthTimeoutProp;
+    private static String prevNodesBaseDirProp;
     private static JettraClusterStateBackupManager.BackupHandle suiteStateBackup;
 
     private static int freePort() throws Exception {
@@ -62,12 +63,14 @@ public class JettraStoreShellTest {
         prevStoragePathProp = System.getProperty("jettra.storage.path");
         prevClusterConfigProp = System.getProperty("cluster.config.path");
         prevHealthTimeoutProp = System.getProperty("cluster.healthcheck.timeout.ms");
+        prevNodesBaseDirProp = System.getProperty("jettra.nodes.base.dir");
         JettraShellTestCleanup.cleanStorageDirectories();
         sharedGrpcPort = freePort();
         sharedRestPort = freePort();
         int g2 = freePort(), r2 = freePort();
         int g3 = freePort(), r3 = freePort();
         tempTestStorageDir = Files.createTempDirectory("jettra_shell_test_storage_");
+        System.setProperty("jettra.nodes.base.dir", tempTestStorageDir.toAbsolutePath().toString());
         tempTestClusterConfig = tempTestStorageDir.resolve("cluster-test_db.config");
         Files.writeString(tempTestClusterConfig,
                 "cluster.name = jettra-shell-test\n"
@@ -108,9 +111,15 @@ public class JettraStoreShellTest {
             }
             sharedTestServer = null;
         }
+        JettraClient.stopLaunchedNodeProcesses();
         io.jettra.store.JettraStoreServer.stopAllActiveServers();
         assertEquals(0, io.jettra.store.JettraStoreServer.getActiveServerCount());
         assertEquals(0, io.jettra.store.cluster.JettraClusterTransportServer.getActiveTransportCount());
+        if (prevNodesBaseDirProp == null) {
+            System.clearProperty("jettra.nodes.base.dir");
+        } else {
+            System.setProperty("jettra.nodes.base.dir", prevNodesBaseDirProp);
+        }
         if (sharedGrpcPort > 0) {
             assertTrue(io.jettra.store.JettraStoreServer.awaitTcpPortAvailable("127.0.0.1", sharedGrpcPort, 2000),
                     "Puerto gRPC compartido de Shell debe quedar libre: " + sharedGrpcPort);
