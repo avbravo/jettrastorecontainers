@@ -113,10 +113,14 @@ public class StorageModeDriverSelectionTest {
                 JettraAssert.assertEquals(StorageMode.DISK_MEMORY,
                         JettraDatabase.readPersistedStorageMode("drv_db_disk", storeCfg));
 
+                JettraAssert.assertTrue(client.updateDatabaseStorageMode("drv_db_disk", StorageMode.OFF_HEAP));
+                JettraAssert.assertEquals(StorageMode.OFF_HEAP, client.getStorageMode("drv_db_disk"));
+                JettraAssert.assertEquals(StorageMode.OFF_HEAP,
+                        JettraDatabase.readPersistedStorageMode("drv_db_disk", storeCfg));
+
                 JettraAssert.assertTrue(client.updateDatabaseStorageMode("drv_db_disk", StorageMode.JVM_RAM));
                 JettraAssert.assertEquals(StorageMode.JVM_RAM, client.getStorageMode("drv_db_disk"));
-                JettraAssert.assertEquals(StorageMode.JVM_RAM,
-                        JettraDatabase.readPersistedStorageMode("drv_db_disk", storeCfg));
+                JettraAssert.assertEquals(StorageMode.JVM_RAM, server.getDatabaseStorageMode("drv_db_disk"));
             }
         } finally {
             if (server != null) {

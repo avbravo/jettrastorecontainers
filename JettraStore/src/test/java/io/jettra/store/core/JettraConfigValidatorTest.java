@@ -402,7 +402,7 @@ public class JettraConfigValidatorTest extends JettraStoreBaseTest {
         try {
             Properties props = new Properties();
             props.setProperty("storage.path", tempDir.toAbsolutePath().toString());
-            props.setProperty("jettra.storage.mode", "JVM_RAM");
+            props.setProperty("jettra.storage.mode", "OFF_HEAP");
             JettraStoreConfig config = new JettraStoreConfig(props);
 
             try (JettraDatabase db = new JettraDatabase("custom_persist_db", config)) {
@@ -580,7 +580,7 @@ public class JettraConfigValidatorTest extends JettraStoreBaseTest {
             mpProps.setProperty("cluster.node.role", "PRIMARY");
             mpProps.setProperty("cluster.multinode.active", "on");
             mpProps.setProperty("jettra.storage.path", node1MissingDir.toAbsolutePath().toString());
-            mpProps.setProperty("jettra.storage.mode", "JVM_RAM");
+            mpProps.setProperty("jettra.storage.mode", "OFF_HEAP");
 
             // 1. Al validar durante el arranque se verifica y crea el directorio si no existe
             JettraConfigValidator.ValidationResult val = JettraConfigValidator.validate(mpProps, clusterProps);
@@ -658,7 +658,7 @@ public class JettraConfigValidatorTest extends JettraStoreBaseTest {
             baseMpProps.setProperty("cluster.node.role", "PRIMARY");
             baseMpProps.setProperty("cluster.multinode.active", "on");
             baseMpProps.setProperty("jettra.storage.path", data3.toAbsolutePath().toString());
-            baseMpProps.setProperty("jettra.storage.mode", "JVM_RAM");
+            baseMpProps.setProperty("jettra.storage.mode", "OFF_HEAP");
 
             System.setProperty("jettra.node.id", "node-03");
             System.setProperty("jettra.node.role", "SECONDARY");

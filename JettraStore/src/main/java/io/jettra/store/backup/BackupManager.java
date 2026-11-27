@@ -31,7 +31,14 @@ public final class BackupManager {
             crc.update(bytes);
             Files.copy(sstable, destinationPath, StandardCopyOption.REPLACE_EXISTING);
         } else {
-            Files.writeString(destinationPath, "JETTRA_EMPTY_SNAPSHOT");
+            byte[] metaBytes = database.serializeMetadataBytes();
+            if (metaBytes != null && metaBytes.length > 0) {
+                size = metaBytes.length;
+                crc.update(metaBytes);
+                Files.write(destinationPath, metaBytes);
+            } else {
+                Files.writeString(destinationPath, "JETTRA_EMPTY_SNAPSHOT");
+            }
         }
 
         return new BackupMetadata(database.getDatabaseName(), System.currentTimeMillis(), size, crc.getValue());

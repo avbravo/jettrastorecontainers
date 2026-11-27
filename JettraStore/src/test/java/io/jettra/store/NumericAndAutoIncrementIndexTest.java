@@ -17,7 +17,7 @@ public class NumericAndAutoIncrementIndexTest {
     private JettraStoreConfig createIsolatedConfig(Path dir) {
         Properties props = new Properties();
         props.setProperty("jettra.storage.path", dir.toAbsolutePath().toString());
-        props.setProperty("jettra.storage.mode", "JVM_RAM");
+        props.setProperty("jettra.storage.mode", "OFF_HEAP");
         props.setProperty("cluster.multinode.active", "off");
         props.setProperty("cluster.node.id", "node-01");
         props.setProperty("cluster.node.role", "PRIMARY");

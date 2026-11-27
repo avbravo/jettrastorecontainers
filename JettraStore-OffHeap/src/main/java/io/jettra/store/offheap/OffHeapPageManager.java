@@ -24,6 +24,7 @@ public final class OffHeapPageManager implements AutoCloseable {
     private final Map<Long, OffHeapPageBuffer> activePages = new ConcurrentHashMap<>();
     private final AtomicLong nextPageId = new AtomicLong(1);
     private FileChannel fileChannel;
+    private OffHeapPageBuffer currentAppendPage;
 
     public OffHeapPageManager(Path storageFile) throws IOException {
         this(storageFile, OffHeapPageBuffer.DEFAULT_PAGE_SIZE);
@@ -33,11 +34,18 @@ public final class OffHeapPageManager implements AutoCloseable {
         this.storageFile = Objects.requireNonNull(storageFile, "storageFile requerido");
         this.pageSize = pageSize > 0 ? pageSize : OffHeapPageBuffer.DEFAULT_PAGE_SIZE;
         this.sharedArena = Arena.ofShared();
+        if (storageFile.getParent() != null) {
+            java.nio.file.Files.createDirectories(storageFile.getParent());
+        }
         this.fileChannel = FileChannel.open(
                 storageFile,
                 StandardOpenOption.CREATE,
                 StandardOpenOption.READ,
                 StandardOpenOption.WRITE);
+        long existingPages = this.fileChannel.size() / this.pageSize;
+        if (existingPages > 0) {
+            this.nextPageId.set(existingPages + 1);
+        }
     }
 
     /**
@@ -72,21 +80,59 @@ public final class OffHeapPageManager implements AutoCloseable {
     }
 
     /**
+     * Inserta un registro binario en memoria nativa off-heap y sincroniza la página a disco inmediatamente.
+     */
+    public synchronized void appendRecordAndFlush(byte[] payload) throws IOException {
+        if (payload == null || payload.length == 0 || fileChannel == null || !fileChannel.isOpen()) {
+            return;
+        }
+        if (currentAppendPage == null) {
+            long existingPages = fileChannel.size() / pageSize;
+            if (existingPages > 0) {
+                currentAppendPage = getPage(existingPages);
+            }
+            if (currentAppendPage == null) {
+                currentAppendPage = allocateNewPage();
+            }
+        }
+        if (payload.length + OffHeapPageBuffer.HEADER_SIZE + OffHeapPageBuffer.SLOT_SIZE > pageSize) {
+            int needed = (int) (payload.length + OffHeapPageBuffer.HEADER_SIZE + OffHeapPageBuffer.SLOT_SIZE + 64);
+            long dedicatedId = nextPageId.getAndIncrement();
+            OffHeapPageBuffer largePage = new OffHeapPageBuffer(sharedArena, dedicatedId, needed);
+            largePage.insertRecord(payload);
+            long offset = Math.max(fileChannel.size(), (dedicatedId - 1L) * pageSize);
+            largePage.flush(fileChannel, offset);
+            fileChannel.force(true);
+            return;
+        }
+        int slot = currentAppendPage.insertRecord(payload);
+        if (slot == -1) {
+            flushPage(currentAppendPage.getPageId());
+            currentAppendPage = allocateNewPage();
+            currentAppendPage.insertRecord(payload);
+        }
+        flushPage(currentAppendPage.getPageId());
+    }
+
+    /**
      * Fuerza la sincronización de una página específica a disco.
      */
-    public void flushPage(long pageId) throws IOException {
+    public synchronized void flushPage(long pageId) throws IOException {
         OffHeapPageBuffer page = activePages.get(pageId);
-        if (page != null) {
+        if (page != null && fileChannel != null && fileChannel.isOpen()) {
             long fileOffset = (pageId - 1) * pageSize;
             page.flush(fileChannel, fileOffset);
-            fileChannel.force(false);
+            fileChannel.force(true);
         }
     }
 
     /**
      * Fuerza la sincronización de todas las páginas activas a disco.
      */
-    public void flushAll() throws IOException {
+    public synchronized void flushAll() throws IOException {
+        if (fileChannel == null || !fileChannel.isOpen()) {
+            return;
+        }
         for (Map.Entry<Long, OffHeapPageBuffer> entry : activePages.entrySet()) {
             long fileOffset = (entry.getKey() - 1) * pageSize;
             entry.getValue().flush(fileChannel, fileOffset);

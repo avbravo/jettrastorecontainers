@@ -35,6 +35,7 @@ public final class JettraIndexManager {
 
     private final String databaseName;
     private final JettraStoreConfig config;
+    private volatile boolean diskPersistenceEnabled = true;
     private final Map<String, IndexInfo> indexMetadata = new ConcurrentHashMap<>();
     // indexName -> (fieldValue -> Object (String or UnifiedSet<String>))
     private final Map<String, UnifiedMap<Object, Object>> indexData = new ConcurrentHashMap<>();
@@ -50,7 +51,15 @@ public final class JettraIndexManager {
     public JettraIndexManager(String databaseName, JettraStoreConfig config) {
         this.databaseName = databaseName;
         this.config = (config != null) ? config : JettraStoreConfig.load();
-        loadIndexesAndSequencesFromDisk();
+        this.diskPersistenceEnabled = (this.config == null || this.config.getStorageMode() == null
+                || !this.config.getStorageMode().isJvmRam());
+        if (this.diskPersistenceEnabled) {
+            loadIndexesAndSequencesFromDisk();
+        }
+    }
+
+    public void setDiskPersistenceEnabled(boolean enabled) {
+        this.diskPersistenceEnabled = enabled;
     }
 
     private static String sequenceKey(String collection, String field) {
@@ -95,6 +104,9 @@ public final class JettraIndexManager {
     }
 
     public synchronized void saveIndexesAndSequencesToDisk() {
+        if (!diskPersistenceEnabled) {
+            return;
+        }
         try {
             Path idxFile = resolveIndexesMetadataFile();
             if (idxFile.getParent() != null) Files.createDirectories(idxFile.getParent());

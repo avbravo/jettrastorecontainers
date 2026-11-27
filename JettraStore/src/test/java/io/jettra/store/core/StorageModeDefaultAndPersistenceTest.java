@@ -137,6 +137,17 @@ public class StorageModeDefaultAndPersistenceTest {
             JettraAssert.assertEquals(StorageMode.DISK_MEMORY,
                     JettraDatabase.readPersistedStorageMode("db_disk_rf38", cfg));
 
+            HttpRequest.Builder putOffHeap = HttpRequest.newBuilder()
+                    .uri(URI.create("http://127.0.0.1:" + restPort + "/api/v1/cluster/databases"))
+                    .header("Content-Type", "application/json")
+                    .PUT(HttpRequest.BodyPublishers.ofString("{\"name\":\"db_disk_rf38\",\"storageMode\":\"OFF-HEAP\"}"));
+            if (token != null) putOffHeap.header("Authorization", "Bearer " + token);
+            HttpResponse<String> putOffHeapResp = http.send(putOffHeap.build(), HttpResponse.BodyHandlers.ofString());
+            JettraAssert.assertEquals(200, putOffHeapResp.statusCode());
+            JettraAssert.assertTrue(putOffHeapResp.body().contains("OFF-HEAP"));
+            JettraAssert.assertEquals(StorageMode.OFF_HEAP,
+                    JettraDatabase.readPersistedStorageMode("db_disk_rf38", cfg));
+
             HttpRequest.Builder putB = HttpRequest.newBuilder()
                     .uri(URI.create("http://127.0.0.1:" + restPort + "/api/v1/cluster/databases"))
                     .header("Content-Type", "application/json")
@@ -145,8 +156,15 @@ public class StorageModeDefaultAndPersistenceTest {
             HttpResponse<String> putResp = http.send(putB.build(), HttpResponse.BodyHandlers.ofString());
             JettraAssert.assertEquals(200, putResp.statusCode());
             JettraAssert.assertTrue(putResp.body().contains("JVM-RAM"));
-            JettraAssert.assertEquals(StorageMode.JVM_RAM,
-                    JettraDatabase.readPersistedStorageMode("db_disk_rf38", cfg));
+            JettraAssert.assertEquals(StorageMode.JVM_RAM, server.getDatabaseStorageMode("db_disk_rf38"));
+
+            HttpRequest.Builder getB = HttpRequest.newBuilder()
+                    .uri(URI.create("http://127.0.0.1:" + restPort + "/api/v1/cluster/databases?name=db_disk_rf38"))
+                    .GET();
+            if (token != null) getB.header("Authorization", "Bearer " + token);
+            HttpResponse<String> getResp = http.send(getB.build(), HttpResponse.BodyHandlers.ofString());
+            JettraAssert.assertEquals(200, getResp.statusCode());
+            JettraAssert.assertTrue(getResp.body().contains("JVM-RAM"));
         } finally {
             if (server != null) {
                 server.stop();

@@ -1735,6 +1735,9 @@ public final class JettraStoreServer implements AutoCloseable {
                 db = getOrCreateDatabaseInternal(dbName, false);
             }
             if (db != null) {
+                if (!db.isPersistentDiskMode()) {
+                    return db.serializeMetadataBytes();
+                }
                 try {
                     db.flushMemTable();
                 } catch (Exception ignored) {}

@@ -25,6 +25,10 @@ public final class KeyValueEngine {
         return database != null && database.getStorageMode().isOffHeap();
     }
 
+    private boolean isDiskMemory() {
+        return database != null && database.getStorageMode().isDiskMemory();
+    }
+
     public void put(String key, byte[] value) {
         String effectiveKey = (key != null && !key.isBlank())
                 ? key.trim()
@@ -74,8 +78,16 @@ public final class KeyValueEngine {
     public void applyReplicatedPut(String key, byte[] value) {
         if (isOffHeap()) {
             offHeapStore.put(key, value);
+            if (database != null) {
+                database.putRecordOffHeap(namespace + ":" + key, value);
+            }
         } else {
             store.put(key, value);
+            if (isDiskMemory() && database != null) {
+                try {
+                    database.putRecordDiskMemory((byte) 2, namespace + ":" + key, value);
+                } catch (Exception ignored) {}
+            }
         }
     }
 
@@ -83,7 +95,13 @@ public final class KeyValueEngine {
         if (isOffHeap()) {
             return offHeapStore.get(key);
         }
-        return store.get(key);
+        byte[] val = store.get(key);
+        if (val == null && isDiskMemory() && database != null) {
+            try {
+                val = database.getRecordDiskMemory((byte) 2, namespace + ":" + key);
+            } catch (Exception ignored) {}
+        }
+        return val;
     }
 
     /**
@@ -106,9 +124,18 @@ public final class KeyValueEngine {
 
     public boolean applyReplicatedRemove(String key) {
         if (isOffHeap()) {
+            if (database != null) {
+                database.deleteRecordOffHeap(namespace + ":" + key);
+            }
             return offHeapStore.remove(key);
         }
-        return store.remove(key) != null;
+        boolean removed = store.remove(key) != null;
+        if (isDiskMemory() && database != null) {
+            try {
+                removed |= database.deleteRecordDiskMemory((byte) 2, namespace + ":" + key);
+            } catch (Exception ignored) {}
+        }
+        return removed;
     }
 
     public boolean containsKey(String key) {
@@ -151,9 +178,19 @@ public final class KeyValueEngine {
         if (isOffHeap()) {
             for (var entry : batch.entrySet()) {
                 offHeapStore.put(entry.getKey(), entry.getValue());
+                if (database != null) {
+                    database.putRecordOffHeap(namespace + ":" + entry.getKey(), entry.getValue());
+                }
             }
         } else {
             store.putAll(batch);
+            if (isDiskMemory() && database != null) {
+                for (var entry : batch.entrySet()) {
+                    try {
+                        database.putRecordDiskMemory((byte) 2, namespace + ":" + entry.getKey(), entry.getValue());
+                    } catch (Exception ignored) {}
+                }
+            }
         }
     }
 

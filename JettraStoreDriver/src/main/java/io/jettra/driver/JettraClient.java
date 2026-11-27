@@ -607,18 +607,48 @@ public final class JettraClient implements AutoCloseable {
     }
 
     public void replicatePutDocument(String dbName, String colName, String id, Map<String, Object> doc) {
-        if (!config.isClusterMultinodeActive()) return;
+        if (!config.isClusterMultinodeActive() && io.jettra.store.JettraStoreServer.getActiveInstance() == null) {
+            // Si hay endpoint configurado hacia servidor externo en standalone/multinodo, enviar trama Raft
+            if (config.getClusterEndpoints().isEmpty()) return;
+        }
         byte[] jsonBytes = new io.jettra.json.JettraJson().toJson(doc).getBytes(java.nio.charset.StandardCharsets.UTF_8);
         if (io.jettra.store.JettraStoreServer.getActiveInstance() != null) {
             io.jettra.store.JettraStoreServer.getActiveInstance().replicatePutDocument(dbName, colName, id, jsonBytes);
+        } else {
+            sendRemoteClusterMutation(io.jettra.store.cluster.JettraRaftFrame.putDocument(
+                    1L, 0L, "jettra-client", dbName, colName, id, jsonBytes));
         }
     }
 
     public void replicateDeleteDocument(String dbName, String colName, String id) {
-        if (!config.isClusterMultinodeActive()) return;
+        if (!config.isClusterMultinodeActive() && io.jettra.store.JettraStoreServer.getActiveInstance() == null) {
+            if (config.getClusterEndpoints().isEmpty()) return;
+        }
         if (io.jettra.store.JettraStoreServer.getActiveInstance() != null) {
             io.jettra.store.JettraStoreServer.getActiveInstance().replicateDeleteDocument(dbName, colName, id);
+        } else {
+            sendRemoteClusterMutation(io.jettra.store.cluster.JettraRaftFrame.deleteDocument(
+                    1L, 0L, "jettra-client", dbName, colName, id));
         }
+    }
+
+    private void sendRemoteClusterMutation(io.jettra.store.cluster.JettraRaftFrame frame) {
+        if (frame == null || config == null || config.getClusterEndpoints().isEmpty()) {
+            return;
+        }
+        String ep = config.getClusterEndpoints().get(0);
+        String host = "127.0.0.1";
+        int grpcPort = 50001;
+        int idx = ep.lastIndexOf(':');
+        if (idx > 0) {
+            host = ep.substring(0, idx).trim();
+            try { grpcPort = Integer.parseInt(ep.substring(idx + 1).trim()); } catch (Exception ignored) {}
+        } else if (!ep.isBlank()) {
+            host = ep.trim();
+        }
+        try {
+            sendClusterFrame(host, grpcPort, frame, 600, 1500);
+        } catch (Exception ignored) {}
     }
 
     public void replicateCreateIndex(String dbName, String colName, String indexName, String field, String type, boolean unique) {
@@ -1293,10 +1323,13 @@ public final class JettraClient implements AutoCloseable {
                 : (data != null && data.get("_id") != null && !String.valueOf(data.get("_id")).isBlank()
                         ? String.valueOf(data.get("_id")).trim()
                         : io.jettra.store.core.JettraId.generate(databaseName, bucketName).toHexString());
-        var docEngine = getDatabase(databaseName).getDocumentEngine(bucketName);
+        var db = getDatabase(databaseName);
+        var docEngine = db.getDocumentEngine(bucketName);
         boolean existed = docEngine.findById(effectiveId) != null;
         docEngine.insert(effectiveId, data);
+        db.flushPersistentStorage();
         Map<String, Object> persisted = docEngine.findById(effectiveId);
+        replicatePutDocument(databaseName, bucketName, effectiveId, persisted != null ? persisted : data);
         versionManager.recordVersion(
                 databaseName, bucketName, effectiveId,
                 existed ? VersionOperation.UPDATE : VersionOperation.CREATE,
@@ -1587,6 +1620,7 @@ public final class JettraClient implements AutoCloseable {
             map.put("raw_data", rawData);
             db.getDocumentEngine(bucketName).insert(effectiveId, map);
         }
+        db.flushPersistentStorage();
         return effectiveId;
     }
 

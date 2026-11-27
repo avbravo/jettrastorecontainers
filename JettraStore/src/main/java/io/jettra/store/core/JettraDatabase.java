@@ -74,6 +74,7 @@ public final class JettraDatabase implements AutoCloseable {
         // Los motores auxiliares (JettraMemoryEngine, OffHeapSlottedMap, OffHeapPageManager)
         // se inicializan de forma perezosa (lazy) al primer uso para minimizar el consumo de RAM y threads.
         this.storageMode = (this.config != null && this.config.getStorageMode() != null) ? this.config.getStorageMode() : StorageMode.OFF_HEAP;
+        this.indexManager.setDiskPersistenceEnabled(isPersistentDiskMode());
 
         if (this.config.isClusterMultinodeActive() && this.ringEngine.getPeers().isEmpty()) {
             for (ClusterNode peer : this.config.getParsedPeers()) {
@@ -241,6 +242,7 @@ public final class JettraDatabase implements AutoCloseable {
         if (indexManager != null) {
             indexManager.onDocumentInsert(bucketName, id, doc);
         }
+        flushPersistentStorage();
         if (config != null && config.isClusterMultinodeActive() && config.getNodeRole() == ClusterNode.Role.PRIMARY) {
             io.jettra.store.JettraStoreServer server = io.jettra.store.JettraStoreServer.getActiveInstance();
             if (server != null) {
@@ -260,6 +262,7 @@ public final class JettraDatabase implements AutoCloseable {
         if (indexManager != null) {
             indexManager.onDocumentDelete(bucketName, id, null);
         }
+        flushPersistentStorage();
         if (config != null && config.isClusterMultinodeActive() && config.getNodeRole() == ClusterNode.Role.PRIMARY) {
             io.jettra.store.JettraStoreServer server = io.jettra.store.JettraStoreServer.getActiveInstance();
             if (server != null) {
@@ -275,6 +278,7 @@ public final class JettraDatabase implements AutoCloseable {
     }
 
     public void onKeyValuePut(String namespace, String key, byte[] value) {
+        flushPersistentStorage();
         if (config != null && config.isClusterMultinodeActive() && config.getNodeRole() == ClusterNode.Role.PRIMARY) {
             io.jettra.store.JettraStoreServer server = io.jettra.store.JettraStoreServer.getActiveInstance();
             if (server != null) {
@@ -290,6 +294,7 @@ public final class JettraDatabase implements AutoCloseable {
     }
 
     public void onKeyValueDelete(String namespace, String key) {
+        flushPersistentStorage();
         if (config != null && config.isClusterMultinodeActive() && config.getNodeRole() == ClusterNode.Role.PRIMARY) {
             io.jettra.store.JettraStoreServer server = io.jettra.store.JettraStoreServer.getActiveInstance();
             if (server != null) {
@@ -369,22 +374,61 @@ public final class JettraDatabase implements AutoCloseable {
         }
     }
 
+    public boolean isPersistentDiskMode() {
+        return !getStorageMode().isJvmRam();
+    }
+
+    public Path getDatabaseDirectory() {
+        return Path.of(config.getStoragePath(), databaseName);
+    }
+
+    public void flushPersistentStorage() {
+        if (!isPersistentDiskMode()) {
+            return;
+        }
+        try {
+            if (getStorageMode().isDiskMemory()) {
+                JettraMemoryEngine me = this.memoryEngine;
+                if (me != null) {
+                    me.flush();
+                }
+            } else if (getStorageMode().isOffHeap()) {
+                OffHeapPageManager pm = this.offHeapPageManager;
+                if (pm != null) {
+                    pm.flushAll();
+                }
+            }
+        } catch (Exception ignored) {}
+        saveToDisk();
+    }
+
     public void flushMemTable() throws IOException {
+        if (!isPersistentDiskMode()) {
+            return;
+        }
+        Path dbDir = getDatabaseDirectory();
+        Files.createDirectories(dbDir);
         Path target = Path.of(config.getStoragePath(), databaseName + "_sstable" + config.getFileExtension());
         if (target.getParent() != null) {
             Files.createDirectories(target.getParent());
         }
         memTable.flushToJettraFile(target);
+        Path dbSstable = dbDir.resolve(databaseName + "_sstable" + config.getFileExtension());
+        memTable.flushToJettraFile(dbSstable);
         saveToDisk();
     }
 
     public static Path resolveMetaFile(String dbName, JettraStoreConfig config) {
         if (dbName == null) return null;
         if (config != null && config.getStoragePath() != null) {
+            Path inDbDir = Path.of(config.getStoragePath(), dbName, dbName + "_meta.json");
+            if (Files.exists(inDbDir)) return inDbDir;
             Path p = Path.of(config.getStoragePath(), dbName + "_meta.json");
             if (Files.exists(p)) return p;
         }
         if (config != null && config.getConfiguredStoragePath() != null) {
+            Path inDbDir = Path.of(config.getConfiguredStoragePath(), dbName, dbName + "_meta.json");
+            if (Files.exists(inDbDir)) return inDbDir;
             Path p = Path.of(config.getConfiguredStoragePath(), dbName + "_meta.json");
             if (Files.exists(p)) return p;
         }
@@ -465,19 +509,85 @@ public final class JettraDatabase implements AutoCloseable {
         }
     }
 
-    public boolean saveToDisk() {
-        Path metaFile = Path.of(config.getStoragePath(), databaseName + "_meta.json");
-        if (metaFile.getParent() != null) {
-            try {
-                Files.createDirectories(metaFile.getParent());
-            } catch (IOException e) {
-                return false;
-            }
+    public synchronized boolean saveToDisk() {
+        if (!isPersistentDiskMode()) {
+            return false;
         }
+        Path rootDir = Path.of(config.getStoragePath());
+        Path dbDir = getDatabaseDirectory();
+        Path metaFile = rootDir.resolve(databaseName + "_meta.json");
+        Path dbMetaFile = dbDir.resolve(databaseName + "_meta.json");
+        try {
+            Files.createDirectories(rootDir);
+            Files.createDirectories(dbDir);
+            byte[] metaBytes = serializeMetadataBytes();
+            Files.write(metaFile, metaBytes, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
+            Files.write(dbMetaFile, metaBytes, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
 
+            if (getStorageMode().isDiskMemory()) {
+                JettraMemoryEngine me = getMemoryEngine();
+                if (me != null) {
+                    me.flush();
+                }
+            } else if (getStorageMode().isOffHeap()) {
+                OffHeapPageManager pm = getOffHeapPageManager();
+                if (pm != null) {
+                    pm.flushAll();
+                }
+            }
+            saveBucketRecordsToDisk(dbDir);
+            saveBucketsToDisk();
+            return true;
+        } catch (IOException e) {
+            return false;
+        }
+    }
+
+    private void saveBucketRecordsToDisk(Path dbDir) {
+        try {
+            Path bucketsDir = dbDir.resolve("buckets");
+            Files.createDirectories(bucketsDir);
+            JettraJson json = new JettraJson();
+
+            for (var entry : documentEngines.entrySet()) {
+                String safeName = sanitizeFileSegment(entry.getKey());
+                StringBuilder sb = new StringBuilder("[\n");
+                boolean first = true;
+                for (var doc : entry.getValue().findAll()) {
+                    if (!first) sb.append(",\n");
+                    first = false;
+                    sb.append("  ").append(json.toJson(doc));
+                }
+                sb.append("\n]\n");
+                Files.writeString(bucketsDir.resolve(safeName + ".json"), sb.toString(), StandardCharsets.UTF_8,
+                        StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
+            }
+            for (var entry : keyValueEngines.entrySet()) {
+                String safeName = sanitizeFileSegment(entry.getKey());
+                StringBuilder sb = new StringBuilder("{\n");
+                boolean first = true;
+                for (var pair : entry.getValue().getAll().entrySet()) {
+                    if (!first) sb.append(",\n");
+                    first = false;
+                    String b64 = Base64.getEncoder().encodeToString(pair.getValue());
+                    sb.append("  \"").append(JettraJson.escapeString(pair.getKey())).append("\": \"").append(b64).append("\"");
+                }
+                sb.append("\n}\n");
+                Files.writeString(bucketsDir.resolve(safeName + "_kv.json"), sb.toString(), StandardCharsets.UTF_8,
+                        StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
+            }
+        } catch (Exception ignored) {}
+    }
+
+    private static String sanitizeFileSegment(String raw) {
+        if (raw == null || raw.isBlank()) return "default";
+        return raw.trim().replaceAll("[^a-zA-Z0-9._-]", "_");
+    }
+
+    public byte[] serializeMetadataBytes() {
         JettraJson json = new JettraJson();
-        try (BufferedWriter writer = Files.newBufferedWriter(metaFile, StandardCharsets.UTF_8,
-                StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE)) {
+        java.io.StringWriter writer = new java.io.StringWriter();
+        try {
             writer.write("{\n");
             writer.write("  \"databaseName\": \"" + databaseName + "\",\n");
             writer.write("  \"storageMode\": \"" + getStorageMode().getCode() + "\",\n");
@@ -690,9 +800,9 @@ public final class JettraDatabase implements AutoCloseable {
             writer.write("\n  ]\n");
 
             writer.write("}\n");
-            return true;
-        } catch (IOException e) {
-            return false;
+            return writer.toString().getBytes(StandardCharsets.UTF_8);
+        } catch (Exception e) {
+            return new byte[0];
         }
     }
 
@@ -717,7 +827,9 @@ public final class JettraDatabase implements AutoCloseable {
             }
 
             // Usar Scanner Off-Heap de Project Panama si el archivo existe
-            return loadUsingPanamaOffHeap(metaFile, shouldRing);
+            boolean loaded = loadUsingPanamaOffHeap(metaFile, shouldRing);
+            this.indexManager.setDiskPersistenceEnabled(isPersistentDiskMode());
+            return loaded;
         } catch (Throwable e) {
             return false;
         }
@@ -1935,6 +2047,9 @@ public final class JettraDatabase implements AutoCloseable {
     @Override
     public void close() {
         try {
+            flushPersistentStorage();
+        } catch (Exception ignored) {}
+        try {
             OffHeapPageManager pm = this.offHeapPageManager;
             if (pm != null) {
                 pm.close();
@@ -1971,6 +2086,10 @@ public final class JettraDatabase implements AutoCloseable {
     }
 
     private void deleteStorageFiles() {
+        deleteDiskPersistenceFiles();
+    }
+
+    public void deleteDiskPersistenceFiles() {
         String[] paths = {
             config.getStoragePath(),
             config.getConfiguredStoragePath(),
@@ -1983,7 +2102,16 @@ public final class JettraDatabase implements AutoCloseable {
             if (pStr == null || pStr.isBlank()) continue;
             try {
                 Path dir = Path.of(pStr);
+                Path dbSubDir = dir.resolve(databaseName);
+                if (Files.exists(dbSubDir) && Files.isDirectory(dbSubDir)) {
+                    try (var walk = Files.walk(dbSubDir)) {
+                        walk.sorted(Comparator.reverseOrder()).forEach(f -> {
+                            try { Files.deleteIfExists(f); } catch (Exception ignored) {}
+                        });
+                    }
+                }
                 Files.deleteIfExists(dir.resolve(databaseName + "_meta.json"));
+                Files.deleteIfExists(dir.resolve(databaseName + "_buckets.json"));
                 Files.deleteIfExists(dir.resolve(databaseName + "_sstable" + config.getFileExtension()));
                 Files.deleteIfExists(dir.resolve(databaseName + config.getFileExtension()));
                 Files.deleteIfExists(dir.resolve(databaseName + "_sstable.jettra"));
@@ -2145,6 +2273,9 @@ public final class JettraDatabase implements AutoCloseable {
 
     public void setStorageMode(StorageMode storageMode) {
         this.storageMode = (storageMode != null) ? storageMode : StorageMode.OFF_HEAP;
+        if (this.indexManager != null) {
+            this.indexManager.setDiskPersistenceEnabled(isPersistentDiskMode());
+        }
         System.out.printf("[JettraDatabase:%s] Modo de almacenamiento conmutado a: %s (%s)%n",
             databaseName, this.storageMode.getCode(), this.storageMode.getDescription());
         if (this.storageMode.isDiskMemory() && getMemoryEngine() != null) {
@@ -2159,10 +2290,46 @@ public final class JettraDatabase implements AutoCloseable {
                     } catch (Exception ignored) {}
                 }
             }
+            for (var kvEntry : keyValueEngines.entrySet()) {
+                String ns = kvEntry.getKey();
+                for (var pair : kvEntry.getValue().getAll().entrySet()) {
+                    try {
+                        putRecordDiskMemory((byte) 2, ns + ":" + pair.getKey(), pair.getValue());
+                    } catch (Exception ignored) {}
+                }
+            }
+        } else if (this.storageMode.isJvmRam()) {
+            try {
+                if (this.offHeapPageManager != null) {
+                    this.offHeapPageManager.close();
+                    this.offHeapPageManager = null;
+                }
+            } catch (Exception ignored) {}
+            try {
+                if (this.memoryEngine != null) {
+                    this.memoryEngine.close();
+                    this.memoryEngine = null;
+                }
+            } catch (Exception ignored) {}
+            deleteDiskPersistenceFiles();
+        } else if (this.storageMode.isOffHeap()) {
+            io.jettra.json.JettraJson jsonHelper = new io.jettra.json.JettraJson();
+            for (var entry : documentEngines.entrySet()) {
+                String col = entry.getKey();
+                for (var doc : entry.getValue()) {
+                    String id = String.valueOf(doc.getOrDefault("_id", java.util.UUID.randomUUID().toString()));
+                    try {
+                        putRecordOffHeap(col + ":" + id, jsonHelper.toJson(doc).getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                    } catch (Exception ignored) {}
+                }
+            }
         }
     }
 
     public JettraMemoryEngine getMemoryEngine() {
+        if (!getStorageMode().isDiskMemory()) {
+            return this.memoryEngine;
+        }
         JettraMemoryEngine me = this.memoryEngine;
         if (me != null) {
             return me;
@@ -2187,9 +2354,13 @@ public final class JettraDatabase implements AutoCloseable {
     }
 
     public void putRecordDiskMemory(byte engineId, String key, byte[] payload) throws IOException {
+        if (getStorageMode().isJvmRam()) {
+            return;
+        }
         JettraMemoryEngine me = getMemoryEngine();
         if (me != null && me.getStoreConnector() != null) {
             me.getStoreConnector().putRecord(engineId, key, payload);
+            me.flush();
         }
     }
 
@@ -2205,7 +2376,11 @@ public final class JettraDatabase implements AutoCloseable {
     public boolean deleteRecordDiskMemory(byte engineId, String key) throws IOException {
         JettraMemoryEngine me = getMemoryEngine();
         if (me != null && me.getStoreConnector() != null) {
-            return me.getStoreConnector().deleteRecord(engineId, key);
+            boolean deleted = me.getStoreConnector().deleteRecord(engineId, key);
+            if (deleted) {
+                me.flush();
+            }
+            return deleted;
         }
         return false;
     }
@@ -2216,24 +2391,58 @@ public final class JettraDatabase implements AutoCloseable {
     }
 
     public void putOffHeapBinary(String key, byte[] data) throws IOException {
+        if (getStorageMode().isJvmRam()) {
+            return;
+        }
+        if (getStorageMode().isOffHeap()) {
+            putRecordOffHeap(key, data);
+            return;
+        }
         JettraMemoryEngine me = getMemoryEngine();
         if (me != null) {
             me.put(key, data);
+            me.flush();
         }
     }
 
     public byte[] getOffHeapBinary(String key) throws IOException {
+        if (getStorageMode().isOffHeap()) {
+            return getRecordOffHeap(key);
+        }
         JettraMemoryEngine me = getMemoryEngine();
         return me != null ? me.get(key) : null;
     }
 
     public boolean deleteOffHeapBinary(String key) throws IOException {
+        if (getStorageMode().isOffHeap()) {
+            return deleteRecordOffHeap(key);
+        }
         JettraMemoryEngine me = getMemoryEngine();
-        return me != null && me.delete(key);
+        boolean deleted = me != null && me.delete(key);
+        if (deleted) {
+            me.flush();
+        }
+        return deleted;
     }
 
     public void putRecordOffHeap(String key, byte[] payload) {
         getOffHeapDatabaseStore().put(key, payload);
+        if (getStorageMode().isOffHeap()) {
+            try {
+                OffHeapPageManager pm = getOffHeapPageManager();
+                if (pm != null && payload != null) {
+                    byte[] keyBytes = (key != null ? key : "").getBytes(StandardCharsets.UTF_8);
+                    byte[] framed = new byte[4 + keyBytes.length + payload.length];
+                    framed[0] = (byte) ((keyBytes.length >>> 24) & 0xFF);
+                    framed[1] = (byte) ((keyBytes.length >>> 16) & 0xFF);
+                    framed[2] = (byte) ((keyBytes.length >>> 8) & 0xFF);
+                    framed[3] = (byte) (keyBytes.length & 0xFF);
+                    System.arraycopy(keyBytes, 0, framed, 4, keyBytes.length);
+                    System.arraycopy(payload, 0, framed, 4 + keyBytes.length, payload.length);
+                    pm.appendRecordAndFlush(framed);
+                }
+            } catch (Exception ignored) {}
+        }
     }
 
     public byte[] getRecordOffHeap(String key) {
@@ -2248,7 +2457,16 @@ public final class JettraDatabase implements AutoCloseable {
 
     public boolean deleteRecordOffHeap(String key) {
         OffHeapSlottedMap store = this.offHeapDatabaseStore;
-        return store != null && store.remove(key);
+        boolean removed = store != null && store.remove(key);
+        if (removed && getStorageMode().isOffHeap()) {
+            try {
+                OffHeapPageManager pm = getOffHeapPageManager();
+                if (pm != null) {
+                    pm.appendRecordAndFlush(("TOMBSTONE:" + key).getBytes(StandardCharsets.UTF_8));
+                }
+            } catch (Exception ignored) {}
+        }
+        return removed;
     }
 
     public OffHeapSlottedMap getOffHeapDatabaseStore() {
@@ -2265,6 +2483,9 @@ public final class JettraDatabase implements AutoCloseable {
     }
 
     public OffHeapPageManager getOffHeapPageManager() {
+        if (!getStorageMode().isOffHeap()) {
+            return this.offHeapPageManager;
+        }
         OffHeapPageManager pm = this.offHeapPageManager;
         if (pm != null) {
             return pm;
@@ -2313,9 +2534,16 @@ public final class JettraDatabase implements AutoCloseable {
         return Path.of(config.getStoragePath(), databaseName + "_buckets.json");
     }
 
+    private Path resolveDatabaseDirBucketsCatalogFile() {
+        return getDatabaseDirectory().resolve(databaseName + "_buckets.json");
+    }
+
     public final void loadBucketsFromDisk() {
         try {
-            List<JettraBucketSchema.BucketMetadata> loaded = JettraBucketSchema.loadBucketsCatalog(resolveBucketsCatalogFile());
+            Path preferred = Files.exists(resolveDatabaseDirBucketsCatalogFile())
+                    ? resolveDatabaseDirBucketsCatalogFile()
+                    : resolveBucketsCatalogFile();
+            List<JettraBucketSchema.BucketMetadata> loaded = JettraBucketSchema.loadBucketsCatalog(preferred);
             for (JettraBucketSchema.BucketMetadata meta : loaded) {
                 bucketSchemas.put(meta.compositeKey(), meta);
                 ensureEngineBucketAllocated(meta.engineType(), meta.bucketName());
@@ -2324,8 +2552,12 @@ public final class JettraDatabase implements AutoCloseable {
     }
 
     public synchronized void saveBucketsToDisk() {
+        if (!isPersistentDiskMode()) {
+            return;
+        }
         try {
             JettraBucketSchema.saveBucketsCatalog(resolveBucketsCatalogFile(), bucketSchemas.values());
+            JettraBucketSchema.saveBucketsCatalog(resolveDatabaseDirBucketsCatalogFile(), bucketSchemas.values());
         } catch (Exception ex) {
             System.err.printf("[JettraDatabase:%s] Aviso persistiendo catálogo de buckets: %s%n", databaseName, ex.getMessage());
         }

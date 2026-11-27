@@ -2417,14 +2417,15 @@ networks:
 
 ---
 
-#### 6.1.3 Almacenamiento Persistente y Mapeo de Volúmenes (`/jettra/data`)
+#### 6.1.3 Almacenamiento Persistente por Base de Datos y Mapeo de Volúmenes (`jettra.storage.path` / `/jettra/data`)
 
-Para asegurar durabilidad ACID y supervivencia de los datos ante reinicios o recreaciones de contenedores:
-* Cada nodo posee un volumen de Docker independiente (`jettra_data_node01`, `jettra_data_node02`, `jettra_data_node03`) montado en `/jettra/data`.
-* Dentro de `/jettra/data`, el motor `JettraStore` escribe los segmentos binarios `.jettra`, el registro de transacciones Write-Ahead Log (`wal.bin`) y los metadatos de índices dispersos.
-* Los volúmenes son desacoplados del ciclo de vida del contenedor, garantizando que un `docker compose down` mantenga íntegro el estado del clúster.
-* Dentro de `/app/data`, el motor `JettraStore` escribe los segmentos binarios `.jettra`, el registro de transacciones Write-Ahead Log (`wal.bin`) y los metadatos de índices dispersos.
-* Los volúmenes son desacoplados del ciclo de vida del contenedor, garantizando que un `docker compose down` mantenga íntegro el estado del clúster.
+Para asegurar durabilidad ACID y visibilidad directa de cada base de datos dentro de la ruta configurada en `jettra.storage.path` (`microprofile-config.properties`, ej. `~/jettra-storage-01/data` o `/jettra/data`):
+* **Modos persistentes (`OFF-HEAP` predeterminado y `DISK-MEMORY`):** cada base de datos `<db>` escribe, sincroniza (`flush`/`force`) y expone sus registros y metadatos dentro de `<jettra.storage.path>/<db>/`:
+  * `<jettra.storage.path>/<db>/<db>_meta.json` y `<jettra.storage.path>/<db>/buckets/<bucket>.json`: metadatos de la base de datos y snapshot legible de registros por bucket.
+  * Modo **`OFF-HEAP`** (`JettraStore-OffHeap`): archivo contiguo de páginas ranuradas nativas `<jettra.storage.path>/<db>/<db>_offheap.pages` sincronizado con `OffHeapPageManager` en cada escritura y al detener la instancia.
+  * Modo **`DISK-MEMORY`** (`JettraMemory`): archivos LSM nativos `<jettra.storage.path>/<db>/jettra_memory/<db>.jettra` y `<db>.idx` sincronizados con `DiskStorageEngine.flush()` en cada escritura y al detener la instancia.
+* **Modo volátil (`JVM-RAM`):** opera exclusivamente en la memoria RAM (Heap y Stack) de la JVM y **no** persiste archivos ni registros de base de datos dentro de `jettra.storage.path`.
+* En contenedores Docker, cada nodo posee un volumen independiente (`jettra_data_node01`, `jettra_data_node02`, `jettra_data_node03`) montado en `/jettra/data`, desacoplado del ciclo de vida del contenedor para sobrevivir a `docker compose down`.
 
 ---
 
@@ -3524,11 +3525,14 @@ networks:
     driver: bridge
 ```
 
-#### 4. Persistencia Permanente en Disco y Ciclo de Vida de Volúmenes
+#### 4. Persistencia Permanente en Disco y Ciclo de Vida de Volúmenes (RF-39)
 
-**Sí, el almacenamiento de `JettraStore` es permanente en disco.** Aunque `JETTRA_STORAGE_MODE=OFF_HEAP` utilice memoria fuera del heap JVM para acelerar lecturas y escrituras, `JettraDatabase` y `JettraStoreServer` persisten los metadatos, registros, índices, secuencias y bitácoras de transacciones directamente en disco bajo `JETTRA_STORAGE_PATH` (`/jettra/data`) y `JETTRA_INDEX_STORAGE_PATH` (`/jettra/data/indexes`), generando artefactos como `<db>_meta.json`, `<db>_sstable.jettra`, `<db>_wal.jettra`, `<db>_indexes.json`, `<db>_sequences.json`, `<db>_versions.json`, `jettra_memory/` y páginas `_offheap.pages`.
+**Sí, para los modos `OFF-HEAP` (predeterminado) y `DISK-MEMORY`, el almacenamiento de `JettraStore` es permanente en disco bajo `jettra.storage.path`.**
+* En **`OFF-HEAP`**, cada base de datos `<db>` sincroniza `<jettra.storage.path>/<db>/<db>_offheap.pages`, `<db>_meta.json` y `buckets/<bucket>.json`.
+* En **`DISK-MEMORY`**, cada base de datos `<db>` sincroniza `<jettra.storage.path>/<db>/jettra_memory/<db>.jettra`, `<db>.idx`, `<db>_meta.json` y `buckets/<bucket>.json`.
+* En **`JVM-RAM`**, la base de datos permanece únicamente en memoria de la JVM sin escribir registros en `jettra.storage.path`.
 
-Además, `docker-compose-hub.yml` define `stop_grace_period: 30s` para dar tiempo suficiente al *shutdown hook* de `JettraStoreServer` (`server.stop()`) a volcar y cerrar limpiamente todas las bases de datos al detener el contenedor.
+Además, `docker-compose-hub.yml` define `stop_grace_period: 30s` para dar tiempo suficiente al *shutdown hook* de `JettraStoreServer` (`server.stop()`) a volcar (`flushPersistentStorage()`) y cerrar limpiamente todas las bases de datos y canales NIO al detener el contenedor.
 
 ##### ¿Por qué los datos sobreviven aunque borres el contenedor o la imagen Docker?
 En Docker, el almacenamiento montado mediante **volúmenes** reside en el sistema de archivos del host, completamente desacoplado de las capas de solo lectura de la imagen y de la capa efímera del contenedor:

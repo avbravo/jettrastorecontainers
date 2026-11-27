@@ -173,10 +173,6 @@ public final class JettraClusterTransportServer implements AutoCloseable {
                         Path storageDir = Path.of(server.getConfig().getStoragePath());
                         Files.createDirectories(storageDir);
                         Path dbDir = storageDir.resolve(dbName);
-                        Files.createDirectories(dbDir);
-                        Path memDir = dbDir.resolve("jettra_memory");
-                        Files.createDirectories(memDir);
-
                         Path targetMeta = storageDir.resolve(dbName + "_meta.json");
                         if (payload != null && payload.length > 0) {
                             Files.write(targetMeta, payload, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
@@ -189,7 +185,12 @@ public final class JettraClusterTransportServer implements AutoCloseable {
                             if (Files.exists(targetMeta) && payload != null && payload.length > 0) {
                                 db.loadFromDisk(targetMeta);
                             }
-                            db.saveToDisk();
+                            if (db.isPersistentDiskMode()) {
+                                Files.createDirectories(dbDir);
+                                db.flushPersistentStorage();
+                            } else {
+                                Files.deleteIfExists(targetMeta);
+                            }
                         }
                     }
                     JettraClusterEventBus.getInstance().publish(
@@ -226,10 +227,6 @@ public final class JettraClusterTransportServer implements AutoCloseable {
                         Path storageDir = Path.of(server.getConfig().getStoragePath());
                         Files.createDirectories(storageDir);
                         Path dbDir = storageDir.resolve(dbName);
-                        Files.createDirectories(dbDir);
-                        Path memDir = dbDir.resolve("jettra_memory");
-                        Files.createDirectories(memDir);
-
                         Path targetMeta = storageDir.resolve(dbName + "_meta.json");
                         if (payload != null && payload.length > 0) {
                             Files.write(targetMeta, payload, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
@@ -242,7 +239,12 @@ public final class JettraClusterTransportServer implements AutoCloseable {
                             if (Files.exists(targetMeta) && payload != null && payload.length > 0) {
                                 db.loadFromDisk(targetMeta);
                             }
-                            db.saveToDisk();
+                            if (db.isPersistentDiskMode()) {
+                                Files.createDirectories(dbDir);
+                                db.flushPersistentStorage();
+                            } else {
+                                Files.deleteIfExists(targetMeta);
+                            }
                         }
                     }
                     JettraClusterEventBus.getInstance().publish(
@@ -340,8 +342,7 @@ public final class JettraClusterTransportServer implements AutoCloseable {
                         JettraDatabase db = server.getOrCreateDatabaseInternal(dbName, false);
                         if (db != null) {
                             db.getKeyValueEngine(colName != null && !colName.isEmpty() ? colName : "default").applyReplicatedPut(key, frame.payload());
-                            db.putOffHeapBinary(key, frame.payload());
-                            db.saveToDisk();
+                            db.flushPersistentStorage();
                         }
                     }
                     JettraClusterEventBus.getInstance().publish(
@@ -398,9 +399,10 @@ public final class JettraClusterTransportServer implements AutoCloseable {
                             Map<String, Object> doc = new io.jettra.json.JettraJson().fromJson(jsonStr, Map.class);
                             db.getDocumentEngine(colName).applyReplicatedInsert(id, doc);
                             db.getIndexManager().onDocumentInsert(colName, id, doc);
-                            db.saveToDisk();
+                            db.flushPersistentStorage();
                         }
-                        if ("jettra-explorer".equalsIgnoreCase(frame.senderNodeId())
+                        if (("jettra-explorer".equalsIgnoreCase(frame.senderNodeId())
+                                || "jettra-client".equalsIgnoreCase(frame.senderNodeId()))
                                 && server.getConfig().getNodeRole() == ClusterNode.Role.PRIMARY) {
                             server.replicatePutDocument(dbName, colName, id, frame.payload());
                         }
@@ -437,9 +439,10 @@ public final class JettraClusterTransportServer implements AutoCloseable {
                         if (db != null) {
                             db.getDocumentEngine(colName).applyReplicatedDelete(id);
                             db.getIndexManager().onDocumentDelete(colName, id, null);
-                            db.saveToDisk();
+                            db.flushPersistentStorage();
                         }
-                        if ("jettra-explorer".equalsIgnoreCase(frame.senderNodeId())
+                        if (("jettra-explorer".equalsIgnoreCase(frame.senderNodeId())
+                                || "jettra-client".equalsIgnoreCase(frame.senderNodeId()))
                                 && server.getConfig().getNodeRole() == ClusterNode.Role.PRIMARY) {
                             server.replicateDeleteDocument(dbName, colName, id);
                         }

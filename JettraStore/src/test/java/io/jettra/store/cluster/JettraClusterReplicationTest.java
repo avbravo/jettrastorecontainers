@@ -667,8 +667,10 @@ public class JettraClusterReplicationTest extends JettraStoreBaseTest {
                 Path sec2DbDir = tempDirSec2.resolve(dbName);
                 assertTrue(Files.exists(sec1DbDir));
                 assertTrue(Files.exists(sec2DbDir));
-                assertTrue(Files.exists(sec1DbDir.resolve("jettra_memory")));
-                assertTrue(Files.exists(sec2DbDir.resolve("jettra_memory")));
+                assertTrue(Files.exists(sec1DbDir.resolve(dbName + "_offheap.pages")));
+                assertTrue(Files.exists(sec2DbDir.resolve(dbName + "_offheap.pages")));
+                assertTrue(Files.exists(sec1DbDir.resolve("buckets").resolve("articulos.json")));
+                assertTrue(Files.exists(sec2DbDir.resolve("buckets").resolve("articulos.json")));
             } finally {
                 primServer.stop();
             }
