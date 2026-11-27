@@ -16,6 +16,11 @@ services:
       - "${JETTRA_NODE1_REST_PORT:-60001}:60001"
       - "${JETTRA_NODE1_GRPC_PORT:-50001}:50001"
     environment:
+      - CLUSTER_NODE_ID=node-01
+      - CLUSTER_NODE_ROLE=PRIMARY
+      - CLUSTER_NODE_IP=jettra-node-01
+      - CLUSTER_NODE_GRPC_PORT=50001
+      - CLUSTER_NODE_REST_PORT=60001
       - JETTRA_NODE_ID=node-01
       - JETTRA_NODE_ROLE=PRIMARY
       - JETTRA_NODE_IP=jettra-node-01
@@ -64,6 +69,11 @@ services:
       - "${JETTRA_NODE2_REST_PORT:-60002}:60002"
       - "${JETTRA_NODE2_GRPC_PORT:-50002}:50002"
     environment:
+      - CLUSTER_NODE_ID=node-02
+      - CLUSTER_NODE_ROLE=SECONDARY
+      - CLUSTER_NODE_IP=jettra-node-02
+      - CLUSTER_NODE_GRPC_PORT=50002
+      - CLUSTER_NODE_REST_PORT=60002
       - JETTRA_NODE_ID=node-02
       - JETTRA_NODE_ROLE=SECONDARY
       - JETTRA_NODE_IP=jettra-node-02
@@ -109,6 +119,11 @@ services:
       - "${JETTRA_NODE3_REST_PORT:-60003}:60003"
       - "${JETTRA_NODE3_GRPC_PORT:-50003}:50003"
     environment:
+      - CLUSTER_NODE_ID=node-03
+      - CLUSTER_NODE_ROLE=SECONDARY
+      - CLUSTER_NODE_IP=jettra-node-03
+      - CLUSTER_NODE_GRPC_PORT=50003
+      - CLUSTER_NODE_REST_PORT=60003
       - JETTRA_NODE_ID=node-03
       - JETTRA_NODE_ROLE=SECONDARY
       - JETTRA_NODE_IP=jettra-node-03

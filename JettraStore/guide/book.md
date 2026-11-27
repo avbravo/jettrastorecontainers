@@ -4095,5 +4095,51 @@ cd ../JettraStoreShell && mvn test
    ```
    - `script/start-node.sh` detecta el rol (`PRIMARY` vs `SECONDARY`), resuelve y crea `jettra.cluster_state_config_dir`, aplica `-Dcluster.config.path` automáticamente solo al rol `PRIMARY` (o cuando se indica explícitamente), y permite el arranque limpio de nodos `SECONDARY` en espera de detección/sincronización.
 
+---
+
+### 7.6 Arranque por Endpoints en `microprofile-config.properties`, Eventos `PRIMARY`/`SECONDARY` y Simplificación de `start-node.sh` (RF-37)
+
+Cada nodo de **JettraStore** declara su identidad y endpoints locales directamente en `microprofile-config.properties`:
+
+```properties
+cluster.node.id=node-01
+cluster.node.role=PRIMARY
+cluster.node.ip=127.0.0.1
+cluster.node.grpc.port=50001
+cluster.node.rest.port=60001
+jettra.cluster_state_config_dir=~/jettra-cluster-state/
+```
+
+#### 1. Evento 1 — Ejecución como nodo `PRIMARY`
+1. Lee `cluster.node.id`, `cluster.node.role`, `cluster.node.ip`, `cluster.node.grpc.port`, `cluster.node.rest.port` y `jettra.cluster_state_config_dir` desde `microprofile-config.properties` (o propiedades/variables equivalentes).
+2. Si aún no existe `cluster-state.config` en `jettra.cluster_state_config_dir`, localiza `cluster.config`, verifica que exista la entrada `cluster.node.<n>.id` coincidente con `cluster.node.id` y que su rol sea `PRIMARY`.
+3. Valida de forma estricta **antes de publicar el estado** que `cluster.node.ip`, `cluster.node.grpc.port` y `cluster.node.rest.port` coincidan exactamente con `cluster.node.<n>.ip`, `cluster.node.<n>.grpc.port` y `cluster.node.<n>.rest.port` en `cluster.config`; ante cualquier discrepancia o ausencia, detiene el arranque de forma explícita sin crear `cluster-state.config`.
+4. Superada la validación, inicializa o conserva `cluster-state.config` en `jettra.cluster_state_config_dir` (sin sobrescribir nunca un `cluster-state.config` existente, replicándolo a los nodos incorporados y consultándolo en caso de failover).
+
+#### 2. Evento 2 — Ejecución como nodo `SECONDARY`
+1. **Sin lectura de `cluster.config`:** Todo nodo con `cluster.node.role=SECONDARY` (por ejemplo, `node-02`, `cluster.node.ip=127.0.0.1`, `cluster.node.grpc.port=50002`, `cluster.node.rest.port=60002`) **no lee ni exige** `cluster.config`.
+2. Inicia escuchando en su IP y puertos declarados en `microprofile-config.properties` en estado `STANDBY`, esperando detección automática del `PRIMARY` o incorporación dinámica mediante **JettraStoreDriver**, **JettraStoreShell** (`ADD NODE`) o **JettraStoreExplorer** (`/cluster`).
+3. Al detectarse o incorporarse, el `PRIMARY` actualiza `cluster-state.config` y replica la copia al nodo `SECONDARY`, que la almacena atómicamente dentro de `jettra.cluster_state_config_dir`.
+
+#### 3. Simplificación de `script/start-node.sh` y variables Docker (`RF-37`)
+* `./script/start-node.sh` lee directamente `cluster.node.id`, `cluster.node.role`, `cluster.node.ip`, `cluster.node.grpc.port`, `cluster.node.rest.port` y `jettra.cluster_state_config_dir` desde `microprofile-config.properties`, pasando `-Dcluster.config.path` únicamente cuando el rol es `PRIMARY`.
+* En `JettraStore/Dockerfile` y los manifiestos `docker-compose` (`docker-compose.yml`, `docker-compose-single-node.yml`, `JettraStore/docker/docker-compose.yml`, `JettraStore/docker/hub/docker-compose-hub.yml` para `avbravo/jettrastore:1.0-SNAPSHOT` y `JettraStore/docker/ip/docker-compose-*.yml`), se inyectan `CLUSTER_NODE_IP`, `CLUSTER_NODE_GRPC_PORT`, `CLUSTER_NODE_REST_PORT` y `JETTRA_CLUSTER_STATE_CONFIG_DIR`, montando `cluster.config` únicamente en `PRIMARY`.
+
+#### 4. Diagnóstico Diferenciado y Menú Interactivo ante Incompatibilidad en `PRIMARY`
+* Si el conflicto en el arranque del `PRIMARY` ocurre contra `cluster.config` (arranque inicial sin `cluster-state.config`), el banner señala explícitamente `cluster.config`.
+* Si `cluster-state.config` ya existe en `jettra.cluster_state_config_dir` y presenta diferencias de IP o puertos respecto a `microprofile-config.properties`, el banner identifica **`cluster-state.config`** y presenta el menú de recuperación para asegurar el arranque del nodo `PRIMARY`:
+  ```text
+  Acciones:
+  1. Modifique cluster-state.config con microprofile-config.properties
+  2. Modifique microprofile-config.properties con cluster-state.config
+  3. Salir
+  ```
+  * **Opción `1`:** Actualiza atómicamente IP y puertos en `cluster-state.config` usando los valores de `microprofile-config.properties` y continúa el arranque.
+  * **Opción `2`:** Actualiza `microprofile-config.properties` (conservando comentarios y propiedades existentes) con la IP y puertos de `cluster-state.config` y continúa el arranque.
+  * **Opción `3`:** Detiene el inicio de forma segura (`exit 1`).
+* Los nodos **`SECONDARY`** no requieren `cluster.config` para validar el inicio y arrancan directamente con `microprofile-config.properties`.
+
+
+
 
 

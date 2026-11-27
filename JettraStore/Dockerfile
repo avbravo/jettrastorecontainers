@@ -66,16 +66,25 @@ ENTRYPOINT ["sh", "-c", "if [ \"$JETTRA_CRAC_RESTORE\" = \"true\" ] && [ -d \"$J
     else \
         STATE_DIR=\"${JETTRA_CLUSTER_STATE_CONFIG_DIR:-/jettra/cluster-state}\"; \
         mkdir -p \"$STATE_DIR\" \"${JETTRA_STORAGE_PATH:-/jettra/data}\"; \
-        ROLE_UPPER=$(printf '%s' \"${JETTRA_NODE_ROLE:-PRIMARY}\" | tr '[:lower:]' '[:upper:]'); \
+        NODE_ID_VAL=\"${CLUSTER_NODE_ID:-${JETTRA_NODE_ID:-node-01}}\"; \
+        ROLE_UPPER=$(printf '%s' \"${CLUSTER_NODE_ROLE:-${JETTRA_NODE_ROLE:-PRIMARY}}\" | tr '[:lower:]' '[:upper:]'); \
+        NODE_IP_VAL=\"${CLUSTER_NODE_IP:-${JETTRA_NODE_IP:-0.0.0.0}}\"; \
+        GRPC_PORT_VAL=\"${CLUSTER_NODE_GRPC_PORT:-${JETTRA_GRPC_PORT:-50001}}\"; \
+        REST_PORT_VAL=\"${CLUSTER_NODE_REST_PORT:-${JETTRA_REST_PORT:-60001}}\"; \
         CLUSTER_ARG=\"\"; \
-        if [ -n \"${JETTRA_CLUSTER_CONFIG_PATH:-}\" ]; then \
-            CLUSTER_ARG=\"-Dcluster.config.path=${JETTRA_CLUSTER_CONFIG_PATH}\"; \
-        elif [ \"$ROLE_UPPER\" = \"PRIMARY\" ] && [ -f \"/app/config/cluster.config\" ] && [ ! -f \"$STATE_DIR/cluster-state.config\" ]; then \
-            CLUSTER_ARG=\"-Dcluster.config.path=/app/config/cluster.config\"; \
+        if [ \"$ROLE_UPPER\" = \"PRIMARY\" ]; then \
+            if [ -n \"${JETTRA_CLUSTER_CONFIG_PATH:-}\" ]; then \
+                CLUSTER_ARG=\"-Dcluster.config.path=${JETTRA_CLUSTER_CONFIG_PATH}\"; \
+            elif [ -f \"/app/config/cluster.config\" ] && [ ! -f \"$STATE_DIR/cluster-state.config\" ]; then \
+                CLUSTER_ARG=\"-Dcluster.config.path=/app/config/cluster.config\"; \
+            fi; \
         fi; \
         exec java $JAVA_OPTS \
-            -Dcluster.node.id=${JETTRA_NODE_ID:-node-01} \
+            -Dcluster.node.id=${NODE_ID_VAL} \
             -Dcluster.node.role=${ROLE_UPPER} \
+            -Dcluster.node.ip=${NODE_IP_VAL} \
+            -Dcluster.node.grpc.port=${GRPC_PORT_VAL} \
+            -Dcluster.node.rest.port=${REST_PORT_VAL} \
             -Djettra.storage.path=${JETTRA_STORAGE_PATH:-/jettra/data} \
             -Djettra.cluster_state_config_dir=${STATE_DIR} \
             -Djettra.storage.mode=${JETTRA_STORAGE_MODE:-OFF_HEAP} \

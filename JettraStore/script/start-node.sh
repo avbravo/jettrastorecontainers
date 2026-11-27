@@ -1,130 +1,100 @@
 #!/bin/bash
 # ==============================================================================
-# Script de inicio para nodo JettraStore (Java 25 LTS)
+# Script simplificado de inicio para nodo JettraStore (Java 25 LTS - RF-37)
 # ==============================================================================
-# Modelo operativo PRIMARY / SECONDARY con estado persistente (RF-32 / RF-33 / RF-36):
-#   - Solo el nodo PRIMARY requiere 'cluster.config' (semilla inicial cuando aún
-#     no existe 'cluster-state.config' en 'jettra.cluster_state_config_dir').
-#   - Los nodos SECONDARY arrancan limpiamente SIN exigir 'cluster.config', esperan
-#     ser detectados o añadidos dinámicamente desde PRIMARY/Driver/Shell/Explorer
-#     y reciben/persisten 'cluster-state.config' en 'jettra.cluster_state_config_dir'.
-#
-# Uso:
-#   ./start-node.sh [NODE_ID] [NODE_ROLE] [CLUSTER_CONFIG] [MICROPROFILE_CONFIG]
-# Ejemplos:
-#   ./start-node.sh node-01 PRIMARY
-#   ./start-node.sh node-02 SECONDARY
-#   ./start-node.sh node-03 SECONDARY
-#   ./start-node.sh node-04 SECONDARY "" config/microprofile-config.properties
+# Resuelve identidad, rol, IP, puertos gRPC/REST y jettra.cluster_state_config_dir
+# directamente desde microprofile-config.properties (sin exigir cluster.config en SECONDARY).
+# Uso: ./start-node.sh [NODE_ID] [NODE_ROLE] [CLUSTER_CONFIG] [MICROPROFILE_CONFIG]
 # ==============================================================================
 
-NODE_ID=${1:-node-01}
-if [ -n "$2" ]; then
-    NODE_ROLE="$2"
-elif [ "$NODE_ID" = "node-01" ]; then
-    NODE_ROLE="PRIMARY"
-else
-    NODE_ROLE="SECONDARY"
-fi
-NODE_ROLE=$(printf '%s' "$NODE_ROLE" | tr '[:lower:]' '[:upper:]')
-
-# Detección de microprofile-config.properties
 if [ -n "$4" ]; then
     MP_CONFIG="$4"
 elif [ -n "${MICROPROFILE_CONFIG_FILE:-}" ] && [ -f "${MICROPROFILE_CONFIG_FILE}" ]; then
     MP_CONFIG="${MICROPROFILE_CONFIG_FILE}"
 elif [ -f "config/microprofile-config.properties" ]; then
     MP_CONFIG="config/microprofile-config.properties"
-elif [ -f "microprofile-config.properties" ]; then
-    MP_CONFIG="microprofile-config.properties"
 else
-    MP_CONFIG="config/microprofile-config.properties"
+    MP_CONFIG="microprofile-config.properties"
 fi
 
-# Resolver jettra.cluster_state_config_dir respetando env -> microprofile-config.properties -> default
-resolve_state_dir() {
-    local raw=""
-    if [ -n "${JETTRA_CLUSTER_STATE_CONFIG_DIR:-}" ]; then
-        raw="${JETTRA_CLUSTER_STATE_CONFIG_DIR}"
-    elif [ -f "${MP_CONFIG}" ]; then
-        raw=$(grep -E '^[[:space:]]*jettra\.cluster_state_config_dir[[:space:]]*=' "${MP_CONFIG}" | tail -n 1 | cut -d'=' -f2- | xargs 2>/dev/null || true)
+read_mp_prop() {
+    local key="$1"
+    if [ -f "${MP_CONFIG}" ]; then
+        grep -E "^[[:space:]]*${key}[[:space:]]*=" "${MP_CONFIG}" | tail -n 1 | cut -d'=' -f2- | xargs 2>/dev/null || true
     fi
-    if [ -z "${raw}" ]; then
-        raw="~/jettra-cluster-state"
-    fi
-    case "${raw}" in
-        "~") raw="${HOME}" ;;
-        "~/"*) raw="${HOME}/${raw#~/}" ;;
-    esac
-    printf '%s' "${raw}"
 }
 
-STATE_DIR="$(resolve_state_dir)"
+NODE_ID="${1:-${CLUSTER_NODE_ID:-${JETTRA_NODE_ID:-$(read_mp_prop 'cluster\.node\.id')}}}"
+NODE_ID="${NODE_ID:-node-01}"
+
+NODE_ROLE="${2:-${CLUSTER_NODE_ROLE:-${JETTRA_NODE_ROLE:-$(read_mp_prop 'cluster\.node\.role')}}}"
+if [ -z "${NODE_ROLE}" ]; then
+    [ "${NODE_ID}" = "node-01" ] && NODE_ROLE="PRIMARY" || NODE_ROLE="SECONDARY"
+fi
+NODE_ROLE=$(printf '%s' "${NODE_ROLE}" | tr '[:lower:]' '[:upper:]')
+
+NODE_IP="${CLUSTER_NODE_IP:-${JETTRA_NODE_IP:-$(read_mp_prop 'cluster\.node\.ip')}}"
+NODE_IP="${NODE_IP:-127.0.0.1}"
+GRPC_PORT="${CLUSTER_NODE_GRPC_PORT:-${JETTRA_GRPC_PORT:-$(read_mp_prop 'cluster\.node\.grpc\.port')}}"
+GRPC_PORT="${GRPC_PORT:-50001}"
+REST_PORT="${CLUSTER_NODE_REST_PORT:-${JETTRA_REST_PORT:-$(read_mp_prop 'cluster\.node\.rest\.port')}}"
+REST_PORT="${REST_PORT:-60001}"
+
+STATE_DIR="${JETTRA_CLUSTER_STATE_CONFIG_DIR:-$(read_mp_prop 'jettra\.cluster_state_config_dir')}"
+STATE_DIR="${STATE_DIR:-~/jettra-cluster-state}"
+case "${STATE_DIR}" in
+    "~") STATE_DIR="${HOME}" ;;
+    "~/"*) STATE_DIR="${HOME}/${STATE_DIR#~/}" ;;
+esac
 mkdir -p "${STATE_DIR}"
 STATE_FILE="${STATE_DIR}/cluster-state.config"
 
-# Resolución de cluster.config según rol (solo obligatorio/automático en PRIMARY)
-EXPLICIT_CLUSTER_ARG="${3:-${JETTRA_CLUSTER_CONFIG_PATH:-}}"
 CLUSTER_CONFIG=""
-if [ -n "${EXPLICIT_CLUSTER_ARG}" ]; then
-    CLUSTER_CONFIG="${EXPLICIT_CLUSTER_ARG}"
-elif [ "${NODE_ROLE}" = "PRIMARY" ]; then
-    if [ -f "config/cluster.config" ]; then
+if [ "${NODE_ROLE}" = "PRIMARY" ]; then
+    EXPLICIT_CLUSTER="${3:-${JETTRA_CLUSTER_CONFIG_PATH:-}}"
+    if [ -n "${EXPLICIT_CLUSTER}" ]; then
+        CLUSTER_CONFIG="${EXPLICIT_CLUSTER}"
+    elif [ -f "config/cluster.config" ]; then
         CLUSTER_CONFIG="config/cluster.config"
     elif [ -f "cluster.config" ]; then
         CLUSTER_CONFIG="cluster.config"
     elif [ -f "${STATE_DIR}/cluster.config" ]; then
         CLUSTER_CONFIG="${STATE_DIR}/cluster.config"
     fi
-fi
 
-MULTINODE_CFG="on"
-if [ -f "${MP_CONFIG}" ]; then
-    MULTINODE_VAL=$(grep -E '^[[:space:]]*cluster\.multinode\.active[[:space:]]*=' "${MP_CONFIG}" | tail -n 1 | cut -d'=' -f2- | xargs 2>/dev/null || true)
-    if [ -n "${MULTINODE_VAL}" ]; then
-        MULTINODE_CFG="${MULTINODE_VAL}"
+    MULTINODE_CFG="$(read_mp_prop 'cluster\.multinode\.active')"
+    MULTINODE_CFG="${MULTINODE_CFG:-on}"
+    if [ ! -f "${STATE_FILE}" ] && [ -z "${CLUSTER_CONFIG}" ] && [ "${MULTINODE_CFG}" != "off" ] && [ "${MULTINODE_CFG}" != "false" ]; then
+        echo "[ERROR] El nodo PRIMARY requiere cluster.config (o cluster-state.config existente en '${STATE_DIR}') cuando multinodo está activo."
+        exit 1
     fi
 fi
 
-if [ "${NODE_ROLE}" = "PRIMARY" ] && [ ! -f "${STATE_FILE}" ] && [ -z "${CLUSTER_CONFIG}" ] && [ "${MULTINODE_CFG}" != "off" ] && [ "${MULTINODE_CFG}" != "false" ]; then
-    echo "[ERROR] El nodo PRIMARY requiere cluster.config (o cluster-state.config existente en '${STATE_DIR}') cuando multinodo está activo."
-    exit 1
-fi
+JAR_FILE="JettraStore-1.0-SNAPSHOT-uber.jar"
+for candidate in "JettraStore-1.0-SNAPSHOT-uber.jar" "target/JettraStore-1.0-SNAPSHOT-uber.jar" "JettraStore.jar"; do
+    if [ -f "${candidate}" ]; then
+        JAR_FILE="${candidate}"
+        break
+    fi
+done
 
-# Detección de JAR ejecutable autónomo
-if [ -f "JettraStore-1.0-SNAPSHOT-uber.jar" ]; then
-    JAR_FILE="JettraStore-1.0-SNAPSHOT-uber.jar"
-elif [ -f "target/JettraStore-1.0-SNAPSHOT-uber.jar" ]; then
-    JAR_FILE="target/JettraStore-1.0-SNAPSHOT-uber.jar"
-elif [ -f "JettraStore.jar" ]; then
-    JAR_FILE="JettraStore.jar"
-else
-    JAR_FILE="JettraStore-1.0-SNAPSHOT-uber.jar"
-fi
-
-# Opciones JVM optimizadas para bajo consumo de RAM (sobrescribible con JAVA_OPTS)
 JETTRA_JAVA_OPTS="${JAVA_OPTS:--Xms128m -Xmx512m -XX:MaxMetaspaceSize=256m -XX:MaxDirectMemorySize=256m -XX:+UseG1GC -XX:+UseStringDeduplication -XX:CICompilerCount=2}"
-
-echo "=============================================================================="
-echo "Iniciando nodo JettraStore: ID=${NODE_ID}, Rol=${NODE_ROLE}"
-if [ -n "${CLUSTER_CONFIG}" ] && [ -f "${CLUSTER_CONFIG}" ]; then
-    echo "Semilla Clúster : ${CLUSTER_CONFIG}"
-elif [ "${NODE_ROLE}" = "SECONDARY" ]; then
-    echo "Semilla Clúster : (no requerida en SECONDARY; espera detección/sync desde PRIMARY)"
-else
-    echo "Semilla Clúster : (usando estado persistente existente o modo single-node)"
-fi
-echo "Estado Clúster  : ${STATE_DIR} (cluster-state.config)"
-echo "MicroProfile    : ${MP_CONFIG}"
-echo "JAR Binario     : ${JAR_FILE}"
-echo "JVM Opts        : ${JETTRA_JAVA_OPTS}"
-echo "=============================================================================="
-
 CLUSTER_FLAG=""
-if [ -n "${CLUSTER_CONFIG}" ] && [ -f "${CLUSTER_CONFIG}" ]; then
-    CLUSTER_FLAG="-Dcluster.config.path=${CLUSTER_CONFIG}"
+[ -n "${CLUSTER_CONFIG}" ] && [ -f "${CLUSTER_CONFIG}" ] && CLUSTER_FLAG="-Dcluster.config.path=${CLUSTER_CONFIG}"
+
+echo "=============================================================================="
+echo "JettraStore Node : ${NODE_ID} (${NODE_ROLE}) @ ${NODE_IP} [gRPC:${GRPC_PORT}, REST:${REST_PORT}]"
+if [ -n "${CLUSTER_FLAG}" ]; then
+    echo "Semilla Clúster  : ${CLUSTER_CONFIG}"
+elif [ "${NODE_ROLE}" = "SECONDARY" ]; then
+    echo "Semilla Clúster  : (no requerida en SECONDARY; espera detección/sync desde PRIMARY)"
+else
+    echo "Semilla Clúster  : (usando cluster-state.config existente o modo single-node)"
 fi
-STATE_DIR_FLAG="-Djettra.cluster_state_config_dir=${STATE_DIR}"
+echo "Estado Clúster   : ${STATE_DIR} (cluster-state.config)"
+echo "MicroProfile     : ${MP_CONFIG}"
+echo "JAR Binario      : ${JAR_FILE}"
+echo "=============================================================================="
 
 # shellcheck disable=SC2086
 exec java --enable-preview \
@@ -134,9 +104,10 @@ exec java --enable-preview \
      ${JETTRA_JAVA_OPTS} \
      -Dcluster.node.id="${NODE_ID}" \
      -Dcluster.node.role="${NODE_ROLE}" \
-     -Djettra.node.id="${NODE_ID}" \
-     -Djettra.node.role="${NODE_ROLE}" \
-     ${CLUSTER_FLAG} \
-     ${STATE_DIR_FLAG} \
+     -Dcluster.node.ip="${NODE_IP}" \
+     -Dcluster.node.grpc.port="${GRPC_PORT}" \
+     -Dcluster.node.rest.port="${REST_PORT}" \
+     -Djettra.cluster_state_config_dir="${STATE_DIR}" \
      -Dmicroprofile.config.file="${MP_CONFIG}" \
+     ${CLUSTER_FLAG} \
      -jar "${JAR_FILE}"

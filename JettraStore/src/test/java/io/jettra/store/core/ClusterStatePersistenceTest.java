@@ -413,4 +413,159 @@ public class ClusterStatePersistenceTest {
             assertTrue(txt.contains("JETTRA_CLUSTER_STATE_CONFIG_DIR=/app/cluster-state"));
         }
     }
+
+    @Test
+    @DisplayName("RF-37 Evento 2: SECONDARY ignora cluster.config, arranca con cluster.node.ip/grpc.port/rest.port y persiste cluster-state.config replicado")
+    public void testRf37SecondaryEvent2IgnoresClusterConfigAndPersistsSyncedState() throws Exception {
+        Path tempRoot = Files.createTempDirectory("jettra_rf37_event2_");
+        int g1, r1, g2, r2;
+        try (var s1 = new java.net.ServerSocket(0, 1, java.net.InetAddress.getByName("127.0.0.1"));
+             var s2 = new java.net.ServerSocket(0, 1, java.net.InetAddress.getByName("127.0.0.1"));
+             var s3 = new java.net.ServerSocket(0, 1, java.net.InetAddress.getByName("127.0.0.1"));
+             var s4 = new java.net.ServerSocket(0, 1, java.net.InetAddress.getByName("127.0.0.1"))) {
+            g1 = s1.getLocalPort(); r1 = s2.getLocalPort();
+            g2 = s3.getLocalPort(); r2 = s4.getLocalPort();
+        }
+
+        String prevMp = System.getProperty("microprofile.config.file");
+        String prevCluster = System.getProperty("cluster.config.path");
+        String prevStateSys = System.getProperty("jettra.cluster_state_config_dir");
+
+        io.jettra.store.JettraStoreServer primary = null;
+        io.jettra.store.JettraStoreServer secondary = null;
+        try {
+            Path unrelatedCluster = tempRoot.resolve("unrelated-cluster.config");
+            Files.writeString(unrelatedCluster, """
+                    cluster.name = unrelated
+                    cluster.node.1.id = node-99
+                    cluster.node.1.role = PRIMARY
+                    cluster.node.1.ip = 10.0.0.99
+                    cluster.node.1.grpc.port = 59999
+                    cluster.node.1.rest.port = 64999
+                    """, StandardCharsets.UTF_8);
+
+            Path secStateDir = tempRoot.resolve("sec-state");
+            Path secMpFile = tempRoot.resolve("sec-microprofile.properties");
+            Files.writeString(secMpFile, String.format("""
+                    cluster.node.id=node-02
+                    cluster.node.role=SECONDARY
+                    cluster.node.ip=127.0.0.1
+                    cluster.node.grpc.port=%d
+                    cluster.node.rest.port=%d
+                    cluster.multinode.active=on
+                    jettra.storage.path=%s
+                    jettra.cluster_state_config_dir=%s
+                    jettra.storage.mode=JVM_RAM
+                    jettrapolice.active=false
+                    """, g2, r2, tempRoot.resolve("sec-data").toAbsolutePath(), secStateDir.toAbsolutePath()),
+                    StandardCharsets.UTF_8);
+
+            System.setProperty("microprofile.config.file", secMpFile.toAbsolutePath().toString());
+            // Aunque exista -Dcluster.config.path apuntando a otro cluster.config, SECONDARY NO debe leerlo
+            System.setProperty("cluster.config.path", unrelatedCluster.toAbsolutePath().toString());
+            System.clearProperty("jettra.cluster_state_config_dir");
+
+            JettraConfigValidator.ValidationResult secVal = JettraConfigValidator.validateAndBootstrapOrHalt(false);
+            assertTrue(secVal.isValid());
+            JettraStoreConfig secCfg = JettraStoreConfig.load();
+            assertEquals("node-02", secCfg.getNodeId());
+            assertEquals("127.0.0.1", secCfg.getNodeIp());
+            assertEquals(g2, secCfg.getGrpcPort());
+            assertEquals(r2, secCfg.getRestPort());
+            assertTrue(secCfg.isStandbyMode(), "SECONDARY debe iniciar en STANDBY sin leer cluster.config");
+
+            Path secStateFile = secStateDir.resolve(JettraConfigValidator.CLUSTER_STATE_FILENAME);
+            assertFalse(Files.exists(secStateFile), "SECONDARY no debe sembrar cluster-state.config desde cluster.config");
+
+            secondary = new io.jettra.store.JettraStoreServer(secCfg);
+            secondary.start();
+
+            // Arrancar PRIMARY con cluster.config propio (node-01 + node-02)
+            Path primStateDir = tempRoot.resolve("prim-state");
+            Path primCluster = tempRoot.resolve("prim-cluster.config");
+            Files.writeString(primCluster, String.format("""
+                    cluster.name = rf37-sync-cluster
+                    cluster.node.1.id = node-01
+                    cluster.node.1.role = PRIMARY
+                    cluster.node.1.ip = 127.0.0.1
+                    cluster.node.1.grpc.port = %d
+                    cluster.node.1.rest.port = %d
+                    cluster.node.2.id = node-02
+                    cluster.node.2.role = SECONDARY
+                    cluster.node.2.ip = 127.0.0.1
+                    cluster.node.2.grpc.port = %d
+                    cluster.node.2.rest.port = %d
+                    """, g1, r1, g2, r2), StandardCharsets.UTF_8);
+
+            Properties primMp = new Properties();
+            primMp.setProperty("cluster.node.id", "node-01");
+            primMp.setProperty("cluster.node.role", "PRIMARY");
+            primMp.setProperty("cluster.node.ip", "127.0.0.1");
+            primMp.setProperty("cluster.node.grpc.port", String.valueOf(g1));
+            primMp.setProperty("cluster.node.rest.port", String.valueOf(r1));
+            primMp.setProperty("cluster.multinode.active", "on");
+            primMp.setProperty("jettra.storage.path", tempRoot.resolve("prim-data").toAbsolutePath().toString());
+            primMp.setProperty("jettra.cluster_state_config_dir", primStateDir.toAbsolutePath().toString());
+            primMp.setProperty("jettra.storage.mode", "JVM_RAM");
+            primMp.setProperty("jettrapolice.active", "false");
+
+            Properties clusterProps = JettraConfigValidator.loadProperties(primCluster);
+            assertTrue(JettraConfigValidator.validate(primMp, clusterProps).isValid());
+            primary = new io.jettra.store.JettraStoreServer(new JettraStoreConfig(primMp, clusterProps, primMp));
+            primary.setClusterConfigFilePath(primCluster);
+            primary.start();
+
+            long deadline = System.currentTimeMillis() + 5000;
+            while (System.currentTimeMillis() < deadline && (!Files.exists(secStateFile) || secCfg.isStandbyMode())) {
+                Thread.sleep(100);
+            }
+            assertTrue(Files.exists(secStateFile),
+                    "SECONDARY debe almacenar cluster-state.config replicado en jettra.cluster_state_config_dir");
+            assertFalse(secCfg.isStandbyMode(), "SECONDARY debe pasar a activo al recibir cluster-state.config");
+        } finally {
+            if (secondary != null) try { secondary.stop(); } catch (Exception ignored) {}
+            if (primary != null) try { primary.stop(); } catch (Exception ignored) {}
+            if (prevMp != null) System.setProperty("microprofile.config.file", prevMp); else System.clearProperty("microprofile.config.file");
+            if (prevCluster != null) System.setProperty("cluster.config.path", prevCluster); else System.clearProperty("cluster.config.path");
+            if (prevStateSys != null) System.setProperty("jettra.cluster_state_config_dir", prevStateSys); else System.clearProperty("jettra.cluster_state_config_dir");
+            JettraTestCleanup.deleteRecursively(tempRoot);
+        }
+        assertTrue(io.jettra.store.JettraStoreServer.awaitTcpPortAvailable("127.0.0.1", g1, 2000));
+        assertTrue(io.jettra.store.JettraStoreServer.awaitTcpPortAvailable("127.0.0.1", r1, 2000));
+        assertTrue(io.jettra.store.JettraStoreServer.awaitTcpPortAvailable("127.0.0.1", g2, 2000));
+        assertTrue(io.jettra.store.JettraStoreServer.awaitTcpPortAvailable("127.0.0.1", r2, 2000));
+    }
+
+    @Test
+    @DisplayName("RF-37: start-node.sh, Dockerfile y docker-compose inyectan cluster.node.ip/grpc.port/rest.port")
+    public void testRf37StartScriptAndDockerInjectNodeEndpoints() throws Exception {
+        String startScript = Files.readString(Path.of("script/start-node.sh"), StandardCharsets.UTF_8);
+        assertTrue(startScript.contains("cluster\\.node\\.ip"));
+        assertTrue(startScript.contains("cluster\\.node\\.grpc\\.port"));
+        assertTrue(startScript.contains("cluster\\.node\\.rest\\.port"));
+        assertTrue(startScript.contains("-Dcluster.node.ip="));
+        assertTrue(startScript.contains("-Dcluster.node.grpc.port="));
+        assertTrue(startScript.contains("-Dcluster.node.rest.port="));
+
+        Process bashCheck = new ProcessBuilder("bash", "-n", "script/start-node.sh").start();
+        assertEquals(0, bashCheck.waitFor(), "script/start-node.sh debe tener sintaxis bash válida");
+
+        String dockerfile = Files.readString(Path.of("Dockerfile"), StandardCharsets.UTF_8);
+        assertTrue(dockerfile.contains("-Dcluster.node.ip="));
+        assertTrue(dockerfile.contains("-Dcluster.node.grpc.port="));
+        assertTrue(dockerfile.contains("-Dcluster.node.rest.port="));
+
+        String hubCompose = Files.readString(Path.of("docker/hub/docker-compose-hub.yml"), StandardCharsets.UTF_8);
+        assertTrue(hubCompose.contains("CLUSTER_NODE_IP="));
+        assertTrue(hubCompose.contains("CLUSTER_NODE_GRPC_PORT="));
+        assertTrue(hubCompose.contains("CLUSTER_NODE_REST_PORT="));
+
+        Path rootComposePath = Path.of("../docker-compose.yml");
+        if (Files.exists(rootComposePath)) {
+            String rootCompose = Files.readString(rootComposePath, StandardCharsets.UTF_8);
+            assertTrue(rootCompose.contains("CLUSTER_NODE_IP=jettra-node-01"));
+            assertTrue(rootCompose.contains("CLUSTER_NODE_GRPC_PORT=50002"));
+            assertTrue(rootCompose.contains("CLUSTER_NODE_REST_PORT=60003"));
+        }
+    }
 }

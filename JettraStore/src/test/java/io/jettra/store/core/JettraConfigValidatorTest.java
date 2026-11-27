@@ -86,6 +86,7 @@ public class JettraConfigValidatorTest extends JettraStoreBaseTest {
         Properties clusterProps = createValidClusterProperties();
         Properties dbProps = createValidDatabaseProperties();
         dbProps.setProperty("cluster.node.id", "node-02");
+        dbProps.setProperty("cluster.node.role", "SECONDARY");
         dbProps.setProperty("jettra.storage.path", "~/jettra/data");
         dbProps.setProperty("jettra.network.grpc.port", "9092");
         dbProps.setProperty("jettra.network.rest.port", "8082");
@@ -105,6 +106,7 @@ public class JettraConfigValidatorTest extends JettraStoreBaseTest {
             Properties clusterProps = createValidClusterProperties();
             Properties dbProps = createValidDatabaseProperties();
             dbProps.setProperty("cluster.node.id", "node-02");
+            dbProps.setProperty("cluster.node.role", "SECONDARY");
             dbProps.setProperty("jettra.storage.path", tempDir2.toAbsolutePath().toString());
             dbProps.setProperty("jettra.network.grpc.port", "9092");
             dbProps.setProperty("jettra.network.rest.port", "8082");
@@ -762,6 +764,358 @@ public class JettraConfigValidatorTest extends JettraStoreBaseTest {
         } finally {
             Files.deleteIfExists(cfgFile);
             Files.deleteIfExists(tempDir);
+        }
+    }
+
+    @Test
+    @DisplayName("RF-37: Resuelve cluster.node.ip, cluster.node.grpc.port y cluster.node.rest.port desde microprofile-config.properties")
+    public void testRf37NodeIpAndPortsLoadedFromMicroProfileConfig() throws IOException {
+        Path tempRoot = Files.createTempDirectory("jettra_rf37_props_");
+        try {
+            Properties mpProps = new Properties();
+            mpProps.setProperty("cluster.node.id", "node-02");
+            mpProps.setProperty("cluster.node.role", "SECONDARY");
+            mpProps.setProperty("cluster.node.ip", "10.20.30.40");
+            mpProps.setProperty("cluster.node.grpc.port", "50002");
+            mpProps.setProperty("cluster.node.rest.port", "60002");
+            mpProps.setProperty("jettra.storage.path", tempRoot.resolve("data").toAbsolutePath().toString());
+            mpProps.setProperty("jettra.cluster_state_config_dir", tempRoot.resolve("state").toAbsolutePath().toString());
+            mpProps.setProperty("cluster.multinode.active", "on");
+
+            JettraStoreConfig cfg = new JettraStoreConfig(mpProps, new Properties(), mpProps);
+            assertEquals("node-02", cfg.getNodeId());
+            assertEquals(io.jettra.store.cluster.ClusterNode.Role.SECONDARY, cfg.getNodeRole());
+            assertEquals("10.20.30.40", cfg.getNodeIp());
+            assertEquals(50002, cfg.getGrpcPort());
+            assertEquals(60002, cfg.getRestPort());
+            assertTrue(cfg.isStandbyMode(), "SECONDARY sin cluster-state.config ni cluster.config debe iniciar en STANDBY");
+        } finally {
+            try (var s = Files.walk(tempRoot)) {
+                s.sorted(java.util.Comparator.reverseOrder()).forEach(p -> {
+                    try { Files.deleteIfExists(p); } catch (Exception ignored) {}
+                });
+            } catch (Exception ignored) {}
+        }
+    }
+
+    @Test
+    @DisplayName("RF-37 Evento 1: PRIMARY valida IP, puertos gRPC/REST y rol contra cluster.config antes de crear cluster-state.config")
+    public void testRf37PrimaryEvent1StrictValidationAgainstClusterConfig() throws IOException {
+        Path tempRoot = Files.createTempDirectory("jettra_rf37_event1_");
+        Path mpFile = tempRoot.resolve("microprofile-config.properties");
+        Path clusterFile = tempRoot.resolve("cluster.config");
+        Path stateDir = tempRoot.resolve("state");
+
+        String prevMp = System.getProperty("microprofile.config.file");
+        String prevCluster = System.getProperty("cluster.config.path");
+        String prevStateSys = System.getProperty("jettra.cluster_state_config_dir");
+        try {
+            Files.writeString(clusterFile, """
+                    cluster.name = rf37-cluster
+                    cluster.node.1.id = node-01
+                    cluster.node.1.role = PRIMARY
+                    cluster.node.1.ip = 127.0.0.1
+                    cluster.node.1.grpc.port = 50001
+                    cluster.node.1.rest.port = 60001
+                    """, java.nio.charset.StandardCharsets.UTF_8);
+
+            // 1. Discrepancia de puerto REST -> debe fallar ANTES de crear cluster-state.config
+            Files.writeString(mpFile, String.format("""
+                    cluster.node.id=node-01
+                    cluster.node.role=PRIMARY
+                    cluster.node.ip=127.0.0.1
+                    cluster.node.grpc.port=50001
+                    cluster.node.rest.port=60099
+                    cluster.multinode.active=on
+                    jettra.storage.path=%s
+                    jettra.cluster_state_config_dir=%s
+                    """, tempRoot.resolve("data").toAbsolutePath(), stateDir.toAbsolutePath()),
+                    java.nio.charset.StandardCharsets.UTF_8);
+
+            System.setProperty("microprofile.config.file", mpFile.toAbsolutePath().toString());
+            System.setProperty("cluster.config.path", clusterFile.toAbsolutePath().toString());
+            System.clearProperty("jettra.cluster_state_config_dir");
+
+            assertThrows(JettraConfigurationException.class, () -> JettraConfigValidator.validateAndBootstrapOrHalt(false));
+            Path stateFile = stateDir.resolve(JettraConfigValidator.CLUSTER_STATE_FILENAME);
+            assertFalse(Files.exists(stateFile), "No debe crear cluster-state.config si PRIMARY falla validación contra cluster.config");
+
+            // 2. Discrepancia de IP y puerto gRPC en validate()
+            Properties badIpMp = new Properties();
+            badIpMp.setProperty("cluster.node.id", "node-01");
+            badIpMp.setProperty("cluster.node.role", "PRIMARY");
+            badIpMp.setProperty("cluster.node.ip", "10.99.99.99");
+            badIpMp.setProperty("cluster.node.grpc.port", "50001");
+            badIpMp.setProperty("cluster.node.rest.port", "60001");
+            Properties clProps = JettraConfigValidator.loadProperties(clusterFile);
+            assertFalse(JettraConfigValidator.validate(badIpMp, clProps).isValid(), "IP discordante en PRIMARY debe fallar");
+
+            Properties badGrpcMp = new Properties();
+            badGrpcMp.setProperty("cluster.node.id", "node-01");
+            badGrpcMp.setProperty("cluster.node.role", "PRIMARY");
+            badGrpcMp.setProperty("cluster.node.ip", "127.0.0.1");
+            badGrpcMp.setProperty("cluster.node.grpc.port", "59999");
+            badGrpcMp.setProperty("cluster.node.rest.port", "60001");
+            assertFalse(JettraConfigValidator.validate(badGrpcMp, clProps).isValid(), "Puerto gRPC discordante en PRIMARY debe fallar");
+
+            // 3. Configuración consistente -> valida y siembra cluster-state.config en jettra.cluster_state_config_dir
+            Files.writeString(mpFile, String.format("""
+                    cluster.node.id=node-01
+                    cluster.node.role=PRIMARY
+                    cluster.node.ip=127.0.0.1
+                    cluster.node.grpc.port=50001
+                    cluster.node.rest.port=60001
+                    cluster.multinode.active=on
+                    jettra.storage.path=%s
+                    jettra.cluster_state_config_dir=%s
+                    """, tempRoot.resolve("data").toAbsolutePath(), stateDir.toAbsolutePath()),
+                    java.nio.charset.StandardCharsets.UTF_8);
+
+            JettraConfigValidator.ValidationResult ok = JettraConfigValidator.validateAndBootstrapOrHalt(false);
+            assertTrue(ok.isValid());
+            assertTrue(Files.exists(stateFile) && Files.size(stateFile) > 0,
+                    "Debe crear cluster-state.config en jettra.cluster_state_config_dir tras validar PRIMARY");
+        } finally {
+            if (prevMp != null) System.setProperty("microprofile.config.file", prevMp); else System.clearProperty("microprofile.config.file");
+            if (prevCluster != null) System.setProperty("cluster.config.path", prevCluster); else System.clearProperty("cluster.config.path");
+            if (prevStateSys != null) System.setProperty("jettra.cluster_state_config_dir", prevStateSys); else System.clearProperty("jettra.cluster_state_config_dir");
+            try (var s = Files.walk(tempRoot)) {
+                s.sorted(java.util.Comparator.reverseOrder()).forEach(p -> {
+                    try { Files.deleteIfExists(p); } catch (Exception ignored) {}
+                });
+            } catch (Exception ignored) {}
+        }
+    }
+
+    @Test
+    @DisplayName("RF-37: Conflicto con cluster-state.config muestra banner correcto y resuelve opciones 1, 2 y 3 en PRIMARY; SECONDARY inicia sin bloqueo")
+    public void testClusterStateConflictBannerAndInteractiveMenuOptions() throws Exception {
+        Path tempRoot = Files.createTempDirectory("jettra_rf37_conflict_menu_");
+        Path mpFile = tempRoot.resolve("microprofile-config.properties");
+        Path stateDir = tempRoot.resolve("state");
+        Path stateFile = stateDir.resolve(JettraConfigValidator.CLUSTER_STATE_FILENAME);
+        Path dataDir = tempRoot.resolve("data");
+
+        String prevMp = System.getProperty("microprofile.config.file");
+        String prevCluster = System.getProperty("cluster.config.path");
+        String prevStateSys = System.getProperty("jettra.cluster_state_config_dir");
+        String prevIp = System.getProperty("cluster.node.ip");
+        String prevGrpc = System.getProperty("cluster.node.grpc.port");
+        String prevRest = System.getProperty("cluster.node.rest.port");
+
+        try {
+            Files.createDirectories(stateDir);
+            Files.createDirectories(dataDir);
+            System.setProperty("microprofile.config.file", mpFile.toAbsolutePath().toString());
+            System.clearProperty("cluster.config.path");
+            System.clearProperty("jettra.cluster_state_config_dir");
+            System.clearProperty("cluster.node.ip");
+            System.clearProperty("cluster.node.grpc.port");
+            System.clearProperty("cluster.node.rest.port");
+
+            // Estado inicial en cluster-state.config con IP 127.0.0.1 y un SECONDARY node-02
+            JettraConfigValidator.upsertNodeInStateFile(
+                    stateFile, "node-01", "PRIMARY", "127.0.0.1", 50001, 60001, "RUNNING", "init");
+            JettraConfigValidator.upsertNodeInStateFile(
+                    stateFile, "node-02", "SECONDARY", "127.0.0.1", 50002, 60002, "RUNNING", "init");
+
+            String mpContentWithMismatch = String.format("""
+                    # Comentario preservado
+                    mp.config.profile=production
+                    cluster.node.id=node-01
+                    cluster.node.role=PRIMARY
+                    cluster.node.ip=192.168.60.243
+                    cluster.node.grpc.port=51001
+                    cluster.node.rest.port=61001
+                    cluster.multinode.active=on
+                    jettra.storage.path=%s
+                    jettra.cluster_state_config_dir=%s
+                    """, dataDir.toAbsolutePath(), stateDir.toAbsolutePath());
+            Files.writeString(mpFile, mpContentWithMismatch, java.nio.charset.StandardCharsets.UTF_8);
+
+            // Verificar que el banner y errores identifican a cluster-state.config (no cluster.config)
+            Properties dbProps = JettraConfigValidator.loadProperties(mpFile);
+            Properties stateProps = JettraConfigValidator.loadProperties(stateFile);
+            JettraConfigValidator.ValidationResult mismatch =
+                    JettraConfigValidator.validate(dbProps, stateProps, JettraConfigValidator.CLUSTER_STATE_FILENAME);
+            assertFalse(mismatch.isValid());
+            assertTrue(mismatch.getNotification().contains("Incompatibilidad entre microprofile-config.properties y cluster-state.config"),
+                    "El banner debe indicar incompatibilidad con cluster-state.config");
+            assertTrue(mismatch.getErrors().stream().allMatch(e -> e.contains("cluster-state.config") && !e.contains("cluster.config")),
+                    "Todos los mensajes deben señalar cluster-state.config y no cluster.config");
+
+            // Opción 3 (Salir): debe retornar inválido sin alterar archivos
+            java.io.ByteArrayOutputStream baos3 = new java.io.ByteArrayOutputStream();
+            JettraConfigValidator.ValidationResult res3 = JettraConfigValidator.resolvePrimaryClusterStateConflictInteractive(
+                    mpFile, dbProps, stateFile, stateProps, mismatch,
+                    new java.io.BufferedReader(new java.io.StringReader("3\n")),
+                    new java.io.PrintStream(baos3, true, java.nio.charset.StandardCharsets.UTF_8));
+            assertFalse(res3.isValid(), "Opción 3 debe abortar el arranque");
+            String out3 = baos3.toString(java.nio.charset.StandardCharsets.UTF_8);
+            assertTrue(out3.contains("Acciones:"));
+            assertTrue(out3.contains("1. Modifique cluster-state.config con microprofile-config.properties"));
+            assertTrue(out3.contains("2. Modifique microprofile-config.properties con cluster-state.config"));
+            assertTrue(out3.contains("3. Salir"));
+
+            // Opción 1: actualiza cluster-state.config con IP y puertos de microprofile-config.properties
+            java.io.ByteArrayOutputStream baos1 = new java.io.ByteArrayOutputStream();
+            JettraConfigValidator.ValidationResult res1 = JettraConfigValidator.resolvePrimaryClusterStateConflictInteractive(
+                    mpFile, dbProps, stateFile, stateProps, mismatch,
+                    new java.io.BufferedReader(new java.io.StringReader("9\n1\n")),
+                    new java.io.PrintStream(baos1, true, java.nio.charset.StandardCharsets.UTF_8));
+            assertTrue(res1.isValid(), "Opción 1 debe reconciliar cluster-state.config con microprofile-config.properties");
+            var nodesAfterOpt1 = JettraConfigValidator.parseExplicitClusterNodes(JettraConfigValidator.loadProperties(stateFile));
+            var n1AfterOpt1 = JettraConfigValidator.findNodeInCluster(nodesAfterOpt1, "node-01");
+            assertNotNull(n1AfterOpt1);
+            assertEquals("192.168.60.243", n1AfterOpt1.ip());
+            assertEquals(51001, n1AfterOpt1.grpcPort());
+            assertEquals(61001, n1AfterOpt1.restPort());
+            assertNotNull(JettraConfigValidator.findNodeInCluster(nodesAfterOpt1, "node-02"),
+                    "Opción 1 debe conservar los demás nodos en cluster-state.config");
+
+            // Opción 2: restaurar discrepancia en microprofile-config.properties y sincronizar desde cluster-state.config
+            Files.writeString(mpFile, String.format("""
+                    # Comentario preservado
+                    mp.config.profile=production
+                    cluster.node.id=node-01
+                    cluster.node.role=PRIMARY
+                    cluster.node.ip=10.10.10.10
+                    cluster.node.grpc.port=52001
+                    cluster.node.rest.port=62001
+                    cluster.multinode.active=on
+                    jettra.storage.path=%s
+                    jettra.cluster_state_config_dir=%s
+                    """, dataDir.toAbsolutePath(), stateDir.toAbsolutePath()), java.nio.charset.StandardCharsets.UTF_8);
+
+            Properties dbProps2 = JettraConfigValidator.loadProperties(mpFile);
+            Properties stateProps2 = JettraConfigValidator.loadProperties(stateFile);
+            JettraConfigValidator.ValidationResult mismatch2 =
+                    JettraConfigValidator.validate(dbProps2, stateProps2, JettraConfigValidator.CLUSTER_STATE_FILENAME);
+            assertFalse(mismatch2.isValid());
+
+            java.io.ByteArrayOutputStream baos2 = new java.io.ByteArrayOutputStream();
+            JettraConfigValidator.ValidationResult res2 = JettraConfigValidator.resolvePrimaryClusterStateConflictInteractive(
+                    mpFile, dbProps2, stateFile, stateProps2, mismatch2,
+                    new java.io.BufferedReader(new java.io.StringReader("2\n")),
+                    new java.io.PrintStream(baos2, true, java.nio.charset.StandardCharsets.UTF_8));
+            assertTrue(res2.isValid(), "Opción 2 debe actualizar microprofile-config.properties con cluster-state.config");
+
+            String updatedMpText = Files.readString(mpFile, java.nio.charset.StandardCharsets.UTF_8);
+            assertTrue(updatedMpText.contains("# Comentario preservado"), "Opción 2 debe preservar comentarios existentes");
+            Properties reloadedMp = JettraConfigValidator.loadProperties(mpFile);
+            assertEquals("192.168.60.243", reloadedMp.getProperty("cluster.node.ip"));
+            assertEquals("51001", reloadedMp.getProperty("cluster.node.grpc.port"));
+            assertEquals("61001", reloadedMp.getProperty("cluster.node.rest.port"));
+
+            // Verificar que validateAndBootstrapOrHalt(false) pasa ahora en PRIMARY y también en SECONDARY sin cluster.config
+            assertTrue(JettraConfigValidator.validateAndBootstrapOrHalt(false).isValid());
+
+            Files.writeString(mpFile, String.format("""
+                    cluster.node.id=node-02
+                    cluster.node.role=SECONDARY
+                    cluster.node.ip=192.168.60.244
+                    cluster.node.grpc.port=55002
+                    cluster.node.rest.port=65002
+                    cluster.multinode.active=on
+                    jettra.storage.path=%s
+                    jettra.cluster_state_config_dir=%s
+                    """, dataDir.toAbsolutePath(), stateDir.toAbsolutePath()), java.nio.charset.StandardCharsets.UTF_8);
+            assertTrue(JettraConfigValidator.validateAndBootstrapOrHalt(false).isValid(),
+                    "SECONDARY debe arrancar con microprofile-config.properties sin exigir ni bloquearse con cluster.config");
+        } finally {
+            if (prevMp != null) System.setProperty("microprofile.config.file", prevMp); else System.clearProperty("microprofile.config.file");
+            if (prevCluster != null) System.setProperty("cluster.config.path", prevCluster); else System.clearProperty("cluster.config.path");
+            if (prevStateSys != null) System.setProperty("jettra.cluster_state_config_dir", prevStateSys); else System.clearProperty("jettra.cluster_state_config_dir");
+            if (prevIp != null) System.setProperty("cluster.node.ip", prevIp); else System.clearProperty("cluster.node.ip");
+            if (prevGrpc != null) System.setProperty("cluster.node.grpc.port", prevGrpc); else System.clearProperty("cluster.node.grpc.port");
+            if (prevRest != null) System.setProperty("cluster.node.rest.port", prevRest); else System.clearProperty("cluster.node.rest.port");
+            try (var s = Files.walk(tempRoot)) {
+                s.sorted(java.util.Comparator.reverseOrder()).forEach(p -> {
+                    try { Files.deleteIfExists(p); } catch (Exception ignored) {}
+                });
+            } catch (Exception ignored) {}
+        }
+    }
+
+    @Test
+    @DisplayName("PRIMARY lanzado desde NetBeans/IDE (META-INF/microprofile-config.properties + resources/cluster.config) siembra cluster-state.config sin error")
+    public void testPrimaryNetBeansLayoutAndClasspathSeedTransfersClusterConfigToClusterState() throws Exception {
+        Path tempRoot = Files.createTempDirectory("jettra_netbeans_layout_");
+        Path resourcesDir = tempRoot.resolve("src/main/resources");
+        Path metaInfDir = resourcesDir.resolve("META-INF");
+        Path mpFile = metaInfDir.resolve("microprofile-config.properties");
+        Path clusterFile = resourcesDir.resolve("cluster.config");
+        Path stateDir = tempRoot.resolve("statedir");
+        Path dataDir = tempRoot.resolve("data");
+
+        String prevMp = System.getProperty("microprofile.config.file");
+        String prevCluster = System.getProperty("cluster.config.path");
+        String prevStateSys = System.getProperty("jettra.cluster_state_config_dir");
+        try {
+            Files.createDirectories(metaInfDir);
+            Files.createDirectories(dataDir);
+
+            Files.writeString(clusterFile, """
+                    cluster.name = netbeans-cluster
+                    cluster.node.1.id = node-01
+                    cluster.node.1.role = PRIMARY
+                    cluster.node.1.ip = 127.0.0.1
+                    cluster.node.1.grpc.port = 50001
+                    cluster.node.1.rest.port = 60001
+                    cluster.node.2.id = node-02
+                    cluster.node.2.role = SECONDARY
+                    cluster.node.2.ip = 127.0.0.1
+                    cluster.node.2.grpc.port = 50002
+                    cluster.node.2.rest.port = 60002
+                    """, java.nio.charset.StandardCharsets.UTF_8);
+
+            Files.writeString(mpFile, String.format("""
+                    cluster.node.id=node-01
+                    cluster.node.role=PRIMARY
+                    cluster.node.ip=127.0.0.1
+                    cluster.node.grpc.port=50001
+                    cluster.node.rest.port=60001
+                    cluster.multinode.active=on
+                    jettra.storage.path=%s
+                    jettra.cluster_state_config_dir=%s
+                    """, dataDir.toAbsolutePath(), stateDir.toAbsolutePath()), java.nio.charset.StandardCharsets.UTF_8);
+
+            System.setProperty("microprofile.config.file", mpFile.toAbsolutePath().toString());
+            System.clearProperty("cluster.config.path");
+            System.clearProperty("jettra.cluster_state_config_dir");
+
+            Path resolvedSeed = JettraConfigValidator.locatePrimarySeedFile(mpFile, stateDir);
+            assertNotNull(resolvedSeed, "Debe localizar resources/cluster.config desde META-INF/microprofile-config.properties");
+            assertEquals(clusterFile.toAbsolutePath().normalize(), resolvedSeed.toAbsolutePath().normalize());
+
+            JettraConfigValidator.ValidationResult val = JettraConfigValidator.validateAndBootstrapOrHalt(false);
+            assertTrue(val.isValid(), "PRIMARY en layout NetBeans debe validar sin exigir -Dcluster.config.path");
+
+            Path stateFile = stateDir.resolve(JettraConfigValidator.CLUSTER_STATE_FILENAME);
+            assertTrue(Files.exists(stateFile) && Files.size(stateFile) > 0,
+                    "Debe copiar el contenido de cluster.config a cluster-state.config");
+            var nodes = JettraConfigValidator.parseExplicitClusterNodes(JettraConfigValidator.loadProperties(stateFile));
+            assertEquals(2, nodes.size(), "cluster-state.config debe contener node-01 y node-02 de cluster.config");
+            assertNotNull(JettraConfigValidator.findNodeInCluster(nodes, "node-01"));
+            assertNotNull(JettraConfigValidator.findNodeInCluster(nodes, "node-02"));
+
+            // Verificar también la siembra desde recurso /cluster.config del classpath para PRIMARY
+            Path cpStateDir = tempRoot.resolve("cp-statedir");
+            Files.createDirectories(cpStateDir);
+            Path cpStateFile = cpStateDir.resolve(JettraConfigValidator.CLUSTER_STATE_FILENAME);
+            Properties cpSeeded = JettraConfigValidator.seedClusterStateFromClasspathIfApplicable(cpStateFile, null, new Properties());
+            assertNotNull(cpSeeded, "Debe inicializar cluster-state.config desde classpath:/cluster.config");
+            assertTrue(Files.exists(cpStateFile) && Files.size(cpStateFile) > 0);
+            assertTrue(JettraConfigValidator.parseExplicitClusterNodes(cpSeeded).size() >= 1);
+        } finally {
+            if (prevMp != null) System.setProperty("microprofile.config.file", prevMp); else System.clearProperty("microprofile.config.file");
+            if (prevCluster != null) System.setProperty("cluster.config.path", prevCluster); else System.clearProperty("cluster.config.path");
+            if (prevStateSys != null) System.setProperty("jettra.cluster_state_config_dir", prevStateSys); else System.clearProperty("jettra.cluster_state_config_dir");
+            try (var s = Files.walk(tempRoot)) {
+                s.sorted(java.util.Comparator.reverseOrder()).forEach(p -> {
+                    try { Files.deleteIfExists(p); } catch (Exception ignored) {}
+                });
+            } catch (Exception ignored) {}
         }
     }
 }

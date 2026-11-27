@@ -145,17 +145,17 @@ public final class JettraStoreConfig {
             ? currentNode.ip()
             : effectiveServerProps.getProperty("server.host", "127.0.0.1");
         this.nodeIp = getPropOrEnv(props, 
-            new String[]{"jettra.node.ip", "jettra.network.ip", "jettra.cluster.node.ip", "node.ip", "server.host"}, 
-            new String[]{"JETTRA_NODE_IP", "JETTRA_IP", "JETTRA_NETWORK_IP", "JETTRA_SERVER_HOST"}, 
+            new String[]{"cluster.node.ip", "jettra.node.ip", "jettra.network.ip", "jettra.cluster.node.ip", "node.ip", "server.host"}, 
+            new String[]{"CLUSTER_NODE_IP", "JETTRA_NODE_IP", "JETTRA_IP", "JETTRA_NETWORK_IP", "JETTRA_SERVER_HOST"}, 
             defaultIp);
 
-        int defaultGrpc = (currentNode != null && currentNode.grpcPort() > 0) ? currentNode.grpcPort() : 9091;
+        int defaultGrpc = (currentNode != null && currentNode.grpcPort() > 0) ? currentNode.grpcPort() : 50001;
         this.grpcPort = Integer.parseInt(getPropOrEnv(props, 
-            new String[]{"jettra.network.grpc.port", "jettra.grpc.port", "server.grpc.port", "grpc.port"}, 
-            new String[]{"JETTRA_GRPC_PORT", "JETTRA_NETWORK_GRPC_PORT"}, 
+            new String[]{"cluster.node.grpc.port", "jettra.network.grpc.port", "jettra.grpc.port", "server.grpc.port", "grpc.port"}, 
+            new String[]{"CLUSTER_NODE_GRPC_PORT", "JETTRA_GRPC_PORT", "JETTRA_NETWORK_GRPC_PORT"}, 
             String.valueOf(defaultGrpc)));
 
-        int defaultRest = (currentNode != null && currentNode.restPort() > 0) ? currentNode.restPort() : 8082;
+        int defaultRest = (currentNode != null && currentNode.restPort() > 0) ? currentNode.restPort() : 60001;
         if (effectiveServerProps.containsKey("server.port")) {
             try {
                 defaultRest = Integer.parseInt(effectiveServerProps.getProperty("server.port").trim());
@@ -166,8 +166,8 @@ public final class JettraStoreConfig {
             } catch (Exception ignored) {}
         }
         String configuredRest = getPropOrEnv(props,
-            new String[]{"jettra.network.rest.port", "jettra.rest.port", "server.rest.port", "server.port", "jettra.server.port", "rest.port"},
-            new String[]{"JETTRA_REST_PORT", "JETTRA_SERVER_PORT", "SERVER_PORT", "JETTRA_NETWORK_REST_PORT"},
+            new String[]{"cluster.node.rest.port", "jettra.network.rest.port", "jettra.rest.port", "server.rest.port", "server.port", "jettra.server.port", "rest.port"},
+            new String[]{"CLUSTER_NODE_REST_PORT", "JETTRA_REST_PORT", "JETTRA_SERVER_PORT", "SERVER_PORT", "JETTRA_NETWORK_REST_PORT"},
             String.valueOf(defaultRest));
         this.restPort = Integer.parseInt(configuredRest);
 
@@ -398,18 +398,13 @@ public final class JettraStoreConfig {
             new String[]{"CLUSTER_NODE_ROLE", "JETTRA_NODE_ROLE", "JETTRA_CLUSTER_NODE_ROLE"},
             "PRIMARY");
         boolean isPrimaryRole = "PRIMARY".equalsIgnoreCase(configuredRole);
-        String explicitClusterPath = System.getProperty("cluster.config.path");
-        if (explicitClusterPath == null || explicitClusterPath.isBlank()) {
-            explicitClusterPath = System.getenv("JETTRA_CLUSTER_CONFIG_PATH");
-        }
-        if (explicitClusterPath == null || explicitClusterPath.isBlank()) {
-            explicitClusterPath = System.getenv("CLUSTER_CONFIG_PATH");
-        }
-        boolean hasExplicitClusterProp = explicitClusterPath != null && !explicitClusterPath.isBlank();
-        Path optionalSeed = (isPrimaryRole || hasExplicitClusterProp)
-            ? JettraConfigValidator.locateOptionalClusterSeedFile(stateFile != null ? stateFile.getParent() : null)
+        Path optionalSeed = isPrimaryRole
+            ? JettraConfigValidator.locatePrimarySeedFile(configPath, stateFile != null ? stateFile.getParent() : null)
             : null;
         Properties stateProps = JettraConfigValidator.seedOrLoadClusterState(stateFile, optionalSeed);
+        if (stateProps == null && isPrimaryRole) {
+            stateProps = JettraConfigValidator.seedClusterStateFromClasspathIfApplicable(stateFile, configPath, configProps);
+        }
         if (stateProps == null && isPrimaryRole) {
             stateProps = JettraConfigValidator.bootstrapInitialPrimaryOrPeersState(stateFile, configProps);
         }

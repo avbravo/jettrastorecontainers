@@ -117,6 +117,9 @@ public final class JettraStoreServer implements AutoCloseable {
     }
 
     public Path resolveOptionalClusterSeedFile() {
+        if (this.config != null && this.config.getNodeRole() != ClusterNode.Role.PRIMARY) {
+            return null;
+        }
         if (this.clusterConfigFilePath != null) {
             return this.clusterConfigFilePath;
         }

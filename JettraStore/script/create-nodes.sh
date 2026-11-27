@@ -78,16 +78,18 @@ setup_node() {
     cp "$PROJECT_ROOT/target/JettraStore-1.0-SNAPSHOT-uber.jar" "$node_dir/"
 
     # 5. Actualizar propiedades en microprofile-config.properties dentro del nodo
+    local node_idx_num=$((10#$node_suffix))
+    local grpc_port=$((50000 + node_idx_num))
+    local rest_port=$((60000 + node_idx_num))
     update_property "$config_file" "cluster.node.id" "$node_num" "="
     update_property "$config_file" "cluster.node.role" "$node_role" "="
+    update_property "$config_file" "cluster.node.ip" "127.0.0.1" " = "
+    update_property "$config_file" "cluster.node.grpc.port" "$grpc_port" " = "
+    update_property "$config_file" "cluster.node.rest.port" "$rest_port" " = "
     update_property "$config_file" "jettra.storage.path" "$storage_prop_path" " = "
     update_property "$config_file" "jettra.cluster_state_config_dir" "$state_prop_path" "="
 
-    # 6. Actualizar variables en el script start-node.sh copiado
-    update_property "$start_node_file" "NODE_ID" "$node_num" "="
-    update_property "$start_node_file" "NODE_ROLE" "$node_role" "="
-
-    # 7. Dar permisos de ejecución al script start-node.sh del nodo
+    # 6. Dar permisos de ejecución al script start-node.sh del nodo (lee todo desde microprofile-config.properties)
     chmod +x "$start_node_file"
 
     echo "... Directorio de trabajo [$node_dir]"
@@ -102,6 +104,7 @@ setup_node "node-01" "PRIMARY"
 setup_node "node-02" "SECONDARY"
 setup_node "node-03" "SECONDARY"
 setup_node "node-04" "SECONDARY"
+#setup_node "node-05" "SECONDARY"
 
 echo ""
 echo "_____________________________________________________________________________"

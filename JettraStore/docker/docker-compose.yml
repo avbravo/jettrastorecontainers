@@ -22,6 +22,11 @@ services:
       - "60001:60001"   # API REST / Autenticación JettraJWT en Host
       - "50001:50001"   # Protocolo de Clúster / Raft Sync
     environment:
+      - CLUSTER_NODE_ID=node-01
+      - CLUSTER_NODE_ROLE=PRIMARY
+      - CLUSTER_NODE_IP=jettra-node-01
+      - CLUSTER_NODE_GRPC_PORT=50001
+      - CLUSTER_NODE_REST_PORT=60001
       - JETTRA_NODE_ID=node-01
       - JETTRA_NODE_ROLE=PRIMARY
       - JETTRA_NODE_IP=jettra-node-01
@@ -78,6 +83,11 @@ services:
       - "60002:60002"   # API REST Nodo 2
       - "50002:50002"   # Protocolo de Clúster Nodo 2
     environment:
+      - CLUSTER_NODE_ID=node-02
+      - CLUSTER_NODE_ROLE=SECONDARY
+      - CLUSTER_NODE_IP=jettra-node-02
+      - CLUSTER_NODE_GRPC_PORT=50002
+      - CLUSTER_NODE_REST_PORT=60002
       - JETTRA_NODE_ID=node-02
       - JETTRA_NODE_ROLE=SECONDARY
       - JETTRA_NODE_IP=jettra-node-02
@@ -131,6 +141,11 @@ services:
       - "60003:60003"   # API REST Nodo 3
       - "50003:50003"   # Protocolo de Clúster Nodo 3
     environment:
+      - CLUSTER_NODE_ID=node-03
+      - CLUSTER_NODE_ROLE=SECONDARY
+      - CLUSTER_NODE_IP=jettra-node-03
+      - CLUSTER_NODE_GRPC_PORT=50003
+      - CLUSTER_NODE_REST_PORT=60003
       - JETTRA_NODE_ID=node-03
       - JETTRA_NODE_ROLE=SECONDARY
       - JETTRA_NODE_IP=jettra-node-03

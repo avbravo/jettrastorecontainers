@@ -2941,6 +2941,15 @@ Al ejecutar `ADD NODE`, el `PRIMARY` actualiza su `cluster-state.config`, lo rep
 ### 3. Cierre Limpio de Instancias en `mvn clean verify`
 * Todas las suites de `JettraStoreShell` (`JettraStoreShellTest`, `ConnectionConfigShellTest`, `ClusterStateShellTest`, `ClusterLifecycleShellTest`, `ShowNodesConnectivityShellTest`, `ActiveNodeValidationShellTest`) detienen sus nodos de prueba en `finally` y `@AfterAll` invocando `JettraStoreServer.stopAllActiveServers()`, verifican la liberación de puertos con `awaitTcpPortAvailable(...)` y restauran cualquier `cluster-state.config` previo mediante `JettraClusterStateBackupManager`, sin afectar procesos externos del host.
 
+---
+
+## Compatibilidad con Endpoints `cluster.node.*` en `microprofile-config.properties` (RF-37)
+
+* **Evento 1 (`PRIMARY`):** Los nodos primarios validan `cluster.node.id`, `cluster.node.role`, `cluster.node.ip`, `cluster.node.grpc.port` y `cluster.node.rest.port` de `microprofile-config.properties` contra `cluster.config` antes de generar o propagar `cluster-state.config`.
+* **Evento 2 (`SECONDARY`):** Los nodos secundarios obtienen `cluster.node.ip`, `cluster.node.grpc.port` y `cluster.node.rest.port` exclusivamente de `microprofile-config.properties` (o variables `CLUSTER_NODE_IP`, `CLUSTER_NODE_GRPC_PORT`, `CLUSTER_NODE_REST_PORT` en Docker / `start-node.sh`) **sin leer `cluster.config`**.
+* Cuando ejecutas `ADD NODE <id> <ip> <grpcPort> SECONDARY <restPort>` en **`JettraStoreShell`**, el nodo `PRIMARY` actualiza `cluster-state.config` y replica automáticamente la topología al `jettra.cluster_state_config_dir` del `SECONDARY` incorporado.
+
+
 
 
 

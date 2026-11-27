@@ -532,12 +532,15 @@ java -jar target/JettraStoreExplorer-1.0.0-SNAPSHOT.jar \
 
 ### 2. Integración con `JettraStore/script/start-node.sh`
 ```bash
-# Iniciar PRIMARY con semilla cluster.config si aún no existe cluster-state.config
+# Iniciar nodos directamente leyendo cluster.node.* y jettra.cluster_state_config_dir desde microprofile-config.properties
 ./script/start-node.sh node-01 PRIMARY
-
-# Iniciar SECONDARY sin cluster.config (en STANDBY hasta sincronizar cluster-state.config)
 ./script/start-node.sh node-02 SECONDARY
 ```
+
+### 3. Modelo de Arranque `RF-37` (`cluster.node.ip`, `cluster.node.grpc.port`, `cluster.node.rest.port`)
+* **`PRIMARY` (Evento 1):** Valida `cluster.node.id`, `cluster.node.role`, `cluster.node.ip`, `cluster.node.grpc.port` y `cluster.node.rest.port` contra `cluster.config` antes de publicar `cluster-state.config` en `jettra.cluster_state_config_dir`.
+* **`SECONDARY` (Evento 2):** Arranca con `cluster.node.ip`, `cluster.node.grpc.port` y `cluster.node.rest.port` desde `microprofile-config.properties` (o variables Docker `CLUSTER_NODE_*`) **sin leer ni exigir `cluster.config`**; al ser detectado por `PRIMARY` o agregado desde `/cluster` en **JettraStoreExplorer**, recibe y guarda `cluster-state.config` en su `jettra.cluster_state_config_dir`.
+
 Una vez en ejecución el nodo `SECONDARY`, puede ser administrado en `/cluster` y `/cluster-config` dentro de **JettraStoreExplorer**.
 
 ### 3. Cierre Limpio de Instancias y Puertos en Pruebas (`mvn clean verify`)
