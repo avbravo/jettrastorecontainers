@@ -45,6 +45,7 @@
    - [6.5 Gestión Permanente del Estado de Membresía (`jettra.cluster_state_config_dir` y `cluster-state.config`) — RF-32](#65-gestión-permanente-del-estado-de-membresía-jettracluster_state_config_dir-y-cluster-stateconfig--rf-32)
    - [6.6 Clúster de 3 Nodos en Servidores Diferentes (IPs Distintas) y `docker-compose-node-servers.yml`](#66-clúster-de-3-nodos-en-servidores-diferentes-ips-distintas-y-docker-compose-node-serversyml)
    - [6.7 Plantilla de Un Solo Nodo Conectado al Clúster (`docker-compose-only-node-servers.yml`)](#67-plantilla-de-un-solo-nodo-conectado-al-clúster-docker-compose-only-node-serversyml)
+   - [6.8 Arranque Desacoplado (`PRIMARY` con `cluster.config`, `SECONDARY` sin `cluster.config` y Escalado sin Límite)](#68-arranque-desacoplado-primary-con-clusterconfig-secondary-sin-clusterconfig-y-escalado-sin-límite)
 7. [Integración con Clientes, Herramientas, Migrador y Pruebas (`JettraTest`)](#7-integración-con-clientes-herramientas-migrador-y-pruebas-jettratest)
    - [7.1 Cliente `JettraStoreDriver` y Proyecto de Referencia `JettraStoreExampleSE`](#71-cliente-jettrastoredriver-y-proyecto-de-referencia-jettrastoreexamplese)
    - [7.2 Consola Interactiva `JettraStoreShell` y Verificación Real de Nodos (`show nodes`)](#72-consola-interactiva-jettrastoreshell-y-verificación-real-de-nodos-show-nodes)
@@ -3997,7 +3998,21 @@ docker compose --env-file .env -f docker/docker-compose-only-node-servers.yml up
 docker compose --env-file .env -f docker/docker-compose-only-node-servers.yml logs -f
 ```
 
-> **Tip para agregar un 4.º nodo dinámicamente:** Basta con iniciar un nuevo servidor usando `docker-compose-only-node-servers.yml` con `JETTRA_NODE_ID=node-04`, `JETTRA_NODE_ROLE=SECONDARY`, su propia `JETTRA_NODE_IP` y apuntando `JETTRA_CLUSTER_PEERS` a los nodos existentes; el `PRIMARY` actualizará y replicará automáticamente `cluster-state.config` a todo el clúster.
+> **Tip para agregar un 4.º nodo dinámicamente:** Basta con iniciar un nuevo servidor usando `docker/ip/docker-compose-only-node-servers.yml` con `JETTRA_NODE_ID=node-04`, `JETTRA_NODE_ROLE=SECONDARY`, su propia `JETTRA_NODE_IP` y apuntando `JETTRA_CLUSTER_PEERS` a los nodos existentes; el `PRIMARY` actualizará y replicará automáticamente `cluster-state.config` a todo el clúster.
+
+### 6.8 Arranque Desacoplado (`PRIMARY` con `cluster.config`, `SECONDARY` sin `cluster.config` y Escalado sin Límite)
+
+A partir de esta versión, **JettraStore** desacopla completamente el requisito de configuración estática entre el nodo líder (`PRIMARY`) y los nodos secundarios (`SECONDARY`), eliminando cualquier límite en la cantidad de nodos que pueden formar parte del clúster:
+
+| Rol de Arranque | ¿Requiere `cluster.config`? | Comportamiento al Iniciar | Persistencia de `cluster-state.config` |
+| :--- | :---: | :--- | :--- |
+| **`PRIMARY`** | **Sí** (si aún no existe `cluster-state.config` y `cluster.multinode.active=on`) | Valida `cluster.config` (o recarga `cluster-state.config` previo), siembra `cluster-state.config` en `jettra.cluster_state_config_dir` e inicia el bucle de latidos Raft detectando automáticamente a los nodos `SECONDARY` configurados. | Almacena la fuente autoritativa en `<jettra.cluster_state_config_dir>/cluster-state.config`. |
+| **`SECONDARY`** | **No** | Inicia sin requerir `cluster.config` en modo **`STANDBY`** (escuchando en sus puertos gRPC/Raft y REST), esperando ser detectado por el `PRIMARY` (si figura en su `cluster.config`) o ser añadido dinámicamente desde `JettraStoreDriver`, `JettraStoreShell` o `JettraStoreExplorer`. | En cuanto es detectado o incorporado al clúster, recibe la copia actualizada de `cluster-state.config` vía Raft (`TYPE_SYNC_CLUSTER_CONFIG`), la almacena atómicamente en su directorio local `jettra.cluster_state_config_dir` y pasa a estado `RUNNING` (`SECONDARY`). |
+
+#### Ventajas Operativas
+1. **Sin límite de nodos:** Se pueden incorporar dinámicamente `node-02`, `node-03`, `node-04`, ..., `node-N` sin tener que distribuir ni mantener manualmente copias de `cluster.config` en cada servidor secundario.
+2. **Detección automática bidireccional:** Ya sea que el `SECONDARY` arranque **antes** o **después** que el `PRIMARY`, al detectarlo por latido Raft (`TYPE_HEARTBEAT_ACK`) o al ejecutar `ADD NODE` desde Driver/Shell/Explorer, el `PRIMARY` le envía inmediatamente `cluster-state.config` y replica todas las bases de datos.
+3. **Fuente única de verdad (`cluster-state.config`):** Todo cambio posterior de membresía o edición administrativa desde `JettraStoreExplorer` (`/cluster-config`) actualiza `cluster-state.config` en el `PRIMARY` y lo replica a todos los nodos del clúster.
 
 ---
 

@@ -24,6 +24,7 @@ public final class JettraClusterReplicationClient implements AutoCloseable {
     private final ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
     private static final int TIMEOUT_MS = 250;
     private volatile java.util.function.Consumer<ClusterNode> peerRecoveryListener;
+    private final java.util.Set<String> syncedPeerIds = ConcurrentHashMap.newKeySet();
 
     public void setPeerRecoveryListener(java.util.function.Consumer<ClusterNode> listener) {
         this.peerRecoveryListener = listener;
@@ -40,12 +41,15 @@ public final class JettraClusterReplicationClient implements AutoCloseable {
      */
     public synchronized void syncPeers(List<ClusterNode> updatedPeers) {
         if (updatedPeers == null) return;
+        java.util.Set<String> keepIds = new java.util.HashSet<>();
         this.peers.clear();
         for (ClusterNode peer : updatedPeers) {
             if (peer != null && !peer.getId().equalsIgnoreCase(localNodeId)) {
                 this.peers.add(peer);
+                keepIds.add(peer.getId().toLowerCase(java.util.Locale.ROOT));
             }
         }
+        this.syncedPeerIds.retainAll(keepIds);
     }
 
     /**
@@ -490,18 +494,22 @@ public final class JettraClusterReplicationClient implements AutoCloseable {
         JettraRaftFrame frame = JettraRaftFrame.heartbeat(term, localNodeId);
         for (ClusterNode peer : peers) {
             executor.submit(() -> {
+                String peerKey = peer.getId().toLowerCase(java.util.Locale.ROOT);
                 try {
                     boolean wasOffline = !peer.isOnline();
                     JettraRaftFrame resp = sendFrameToPeer(peer, frame);
                     if (resp != null && resp.frameType() == JettraRaftFrame.TYPE_HEARTBEAT_ACK) {
                         peer.start();
-                        if (wasOffline && peerRecoveryListener != null) {
+                        boolean firstDetection = syncedPeerIds.add(peerKey);
+                        if ((wasOffline || firstDetection) && peerRecoveryListener != null) {
                             peerRecoveryListener.accept(peer);
                         }
                     } else {
+                        syncedPeerIds.remove(peerKey);
                         peer.markOffline();
                     }
                 } catch (Exception e) {
+                    syncedPeerIds.remove(peerKey);
                     peer.markOffline();
                 }
             });

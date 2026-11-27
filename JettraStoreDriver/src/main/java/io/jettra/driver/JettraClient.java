@@ -2339,6 +2339,11 @@ public final class JettraClient implements AutoCloseable {
                         .build();
                 var resp = http.send(req, java.net.http.HttpResponse.BodyHandlers.ofString());
                 if (resp.statusCode() == 200 && resp.body() != null && !resp.body().isBlank()) {
+                    // Evitar colisiones de puerto REST derivado (ej. 59001 + 1000 == 60001 de otro servidor activo):
+                    // si el puerto gRPC no respondió y el state.config devuelto no declara ese grpcPort, ignorarlo.
+                    if (!resp.body().contains("= " + grpcPort) && !resp.body().contains("=" + grpcPort)) {
+                        return null;
+                    }
                     String sender = resp.headers().firstValue("X-Jettra-Node-Id").orElse("primary");
                     return new RemoteClusterConfigResult(sender, resp.body(),
                             resp.body().getBytes(java.nio.charset.StandardCharsets.UTF_8));

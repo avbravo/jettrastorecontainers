@@ -134,20 +134,25 @@ public class JettraStorePlugin {
      * Recarga la configuración MicroProfile, el estado de conexión del clúster y la topología
      * inicial de nodos a partir de las propiedades vigentes del entorno/JVM.
      */
-    public synchronized void reloadRuntimeConfiguration() {
-        this.connectionExplicitlyApplied = false;
-        this.lastConnectionSyncError = null;
-        this.latestPrimaryClusterStatus = null;
-        if (this.driverClient != null) {
-            try {
-                this.driverClient.close();
-            } catch (Exception ignored) {
+    public void reloadRuntimeConfiguration() {
+        synchronized (refreshLock) {
+            synchronized (this) {
+                this.connectionExplicitlyApplied = false;
+                this.lastConnectionSyncError = null;
+                this.latestPrimaryClusterStatus = null;
+                if (this.driverClient != null) {
+                    try {
+                        this.driverClient.close();
+                    } catch (Exception ignored) {
+                    }
+                    this.driverClient = null;
+                    this.driverClientEndpoint = "";
+                }
+                initClusterConnectionConfig();
+                initServerNodesWithoutRefresh();
             }
-            this.driverClient = null;
-            this.driverClientEndpoint = "";
+            refreshAllNodeStatuses(true);
         }
-        initClusterConnectionConfig();
-        initServerNodes();
     }
 
     public io.jettra.driver.config.JettraConnectionConfigManager.ConnectionState getClusterConnectionState() {
@@ -741,6 +746,12 @@ public class JettraStorePlugin {
 
     // --- Servidores y Nodos con Detección Real ONLINE / OFFLINE ---
     private void initServerNodes() {
+        initServerNodesWithoutRefresh();
+        // Realizar comprobación TCP real de todos los nodos
+        refreshAllNodeStatuses(true);
+    }
+
+    private void initServerNodesWithoutRefresh() {
         serverNodes.clear();
         if (loadedConfigProps.isEmpty()) {
             loadMicroprofileConfig();
@@ -773,9 +784,6 @@ public class JettraStorePlugin {
 
         // Sincronizar cluster.node.<N>.storage.path desde cluster.config
         syncStoragePathsFromClusterConfig();
-
-        // Realizar comprobación TCP real de todos los nodos
-        refreshAllNodeStatuses(true);
     }
 
     /**
@@ -1882,7 +1890,7 @@ public class JettraStorePlugin {
                 .validateClusterConfigIntegrity(content);
         if (!val.isValid()) {
             this.lastNodeOperationError = val.getSummary();
-            return new ClusterSyncReport(false, "No se pudo guardar cluster.config: " + val.getSummary(),
+            return new ClusterSyncReport(false, "No se pudo guardar cluster-state.config: " + val.getSummary(),
                     val.getErrors());
         }
 
@@ -1935,16 +1943,15 @@ public class JettraStorePlugin {
                     "Sincronización manual por Administrador");
             return report;
         }
-        logPoliceIncident("Cluster Config Edit", "cluster.config guardado y validado (" + bytes.length + " bytes)",
+        logPoliceIncident("Cluster State Edit", "cluster-state.config guardado y validado (" + bytes.length + " bytes)",
                 "OK", "Editado por Administrador");
-        return new ClusterSyncReport(true, "Archivo cluster.config guardado y validado correctamente (sin duplicados).",
+        return new ClusterSyncReport(true, "Archivo cluster-state.config guardado y validado correctamente (sin duplicados).",
                 List.of());
     }
 
     /**
-     * Sincroniza todos los archivos de configuración del clúster tomando como
-     * fuente el cluster.config
-     * validado del nodo PRIMARY (o el contenido editado si se proporciona).
+     * Sincroniza todos los archivos cluster-state.config del clúster tomando como
+     * fuente el cluster-state.config validado del nodo PRIMARY (o el contenido editado si se proporciona).
      */
     public synchronized ClusterSyncReport synchronizeAllClusterConfigFiles(String optionalContent) {
         if (optionalContent != null && !optionalContent.isBlank()) {
@@ -1953,7 +1960,7 @@ public class JettraStorePlugin {
         ClusterConfigSnapshot snap = fetchPrimaryClusterConfig();
         if (!snap.valid()) {
             return new ClusterSyncReport(false,
-                    "El archivo cluster.config del nodo PRIMARY tiene errores de integridad y no puede distribuirse: "
+                    "El archivo cluster-state.config del nodo PRIMARY tiene errores de integridad y no puede distribuirse: "
                             + String.join(" | ", snap.errors()),
                     snap.errors());
         }

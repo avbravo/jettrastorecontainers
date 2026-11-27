@@ -296,7 +296,7 @@ public class StoreExplorerFluxTemplateView extends FluxView {
         adminLinks.add(createNavLink("/connections", "🔌 Conexiones de Base de Datos", isActive("connections")));
         adminLinks.add(createNavLink("/users", "👥 Seguridad y Roles de Usuario", isActive("users", "security")));
         if (isAdmin) {
-            adminLinks.add(createNavLink("/cluster-config", "📄 Config Clúster (cluster.config)", isActive("cluster-config")));
+            adminLinks.add(createNavLink("/cluster-config", "📄 Estado Clúster (cluster-state.config)", isActive("cluster-config")));
         }
         adminLinks.add(createNavLink("/backups", "💾 Copias de Respaldo y Snapshots", isActive("backups")));
         adminLinks.add(createExternalNavLink("/swagger-ui", "📄 OpenAPI / Swagger UI"));
@@ -351,7 +351,7 @@ public class StoreExplorerFluxTemplateView extends FluxView {
         tabWidgets.add(createTabLink("/connections", "🔌 Conexiones", isActive("connections")));
         tabWidgets.add(createTabLink("/users", "👥 Usuarios", isActive("users")));
         if (isAdminTab) {
-            tabWidgets.add(createTabLink("/cluster-config", "📄 cluster.config", isActive("cluster-config")));
+            tabWidgets.add(createTabLink("/cluster-config", "📄 cluster-state.config", isActive("cluster-config")));
         }
         tabWidgets.add(createTabLink("/backups", "💾 Backups", isActive("backups")));
         Div tabs = Div.of(tabWidgets.toArray(new Widget[0]));

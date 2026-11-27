@@ -2151,9 +2151,43 @@ cluster.index.max.inmemory.keys = 100000
         Path dbPath = locateMicroProfileConfigFile();
         Properties dbProps = loadProperties(dbPath, "/META-INF/microprofile-config.properties", "/microprofile-config.properties");
         Path stateFile = resolveClusterStateFile(dbProps);
-        Path optionalSeed = locateOptionalClusterSeedFile(stateFile.getParent());
+
+        String configuredRole = JettraStoreConfig.getPropOrEnv(dbProps,
+            new String[]{"cluster.node.role", "jettra.node.role", "jettra.cluster.node.role", "node.role"},
+            new String[]{"CLUSTER_NODE_ROLE", "JETTRA_NODE_ROLE", "JETTRA_CLUSTER_NODE_ROLE"},
+            "PRIMARY");
+        boolean isPrimaryRole = "PRIMARY".equalsIgnoreCase(configuredRole);
+        String multiStr = JettraStoreConfig.getPropOrEnv(dbProps,
+            new String[]{"cluster.multinode.active", "jettra.cluster.multinode.active"},
+            new String[]{"JETTRA_CLUSTER_MULTINODE_ACTIVE", "JETTRA_MULTINODE_ACTIVE"},
+            "on");
+        boolean multinodeActive = "on".equalsIgnoreCase(multiStr) || "true".equalsIgnoreCase(multiStr);
+        String explicitClusterPath = System.getProperty("cluster.config.path");
+        boolean hasExplicitClusterProp = explicitClusterPath != null && !explicitClusterPath.isBlank();
+        String peersEnv = JettraStoreConfig.getPropOrEnv(dbProps,
+            new String[]{"jettra.cluster.peers", "cluster.peers"},
+            new String[]{"JETTRA_CLUSTER_PEERS"},
+            "");
+
+        // Solo el nodo PRIMARY requiere cluster.config (si no existe cluster-state.config previo).
+        // Los nodos SECONDARY no requieren cluster.config: arrancan en STANDBY esperando ser detectados
+        // por el PRIMARY o añadidos dinámicamente vía Driver/Shell/Explorer.
+        Path optionalSeed = (isPrimaryRole || hasExplicitClusterProp)
+            ? locateOptionalClusterSeedFile(stateFile.getParent())
+            : null;
         Properties stateProps = seedOrLoadClusterState(stateFile, optionalSeed);
-        if (stateProps == null) {
+        if (stateProps == null && isPrimaryRole) {
+            if (multinodeActive && (peersEnv == null || peersEnv.isBlank())) {
+                String msg = "Error crítico: El nodo PRIMARY requiere el archivo cluster.config (o un cluster-state.config existente en '"
+                    + stateFile.getParent().toAbsolutePath().normalize() + "') para iniciar el clúster.";
+                System.err.println("[JettraStore] " + msg);
+                boolean skipExit = Boolean.getBoolean("jettra.test.skip.exit");
+                if (haltOnFailure && !skipExit) {
+                    System.exit(1);
+                } else {
+                    throw new JettraConfigurationException(msg);
+                }
+            }
             stateProps = bootstrapInitialPrimaryOrPeersState(stateFile, dbProps);
         }
 

@@ -393,10 +393,18 @@ public final class JettraStoreConfig {
             "/META-INF/microprofile-config.properties", "/microprofile-config.properties", "/jettraserver.config");
 
         Path stateFile = JettraConfigValidator.resolveClusterStateFile(configProps);
-        Path optionalSeed = JettraConfigValidator.locateOptionalClusterSeedFile(
-            stateFile != null ? stateFile.getParent() : null);
+        String configuredRole = getPropOrEnv(configProps,
+            new String[]{"cluster.node.role", "jettra.node.role", "jettra.cluster.node.role", "node.role"},
+            new String[]{"CLUSTER_NODE_ROLE", "JETTRA_NODE_ROLE", "JETTRA_CLUSTER_NODE_ROLE"},
+            "PRIMARY");
+        boolean isPrimaryRole = "PRIMARY".equalsIgnoreCase(configuredRole);
+        String explicitClusterPath = System.getProperty("cluster.config.path");
+        boolean hasExplicitClusterProp = explicitClusterPath != null && !explicitClusterPath.isBlank();
+        Path optionalSeed = (isPrimaryRole || hasExplicitClusterProp)
+            ? JettraConfigValidator.locateOptionalClusterSeedFile(stateFile != null ? stateFile.getParent() : null)
+            : null;
         Properties stateProps = JettraConfigValidator.seedOrLoadClusterState(stateFile, optionalSeed);
-        if (stateProps == null) {
+        if (stateProps == null && isPrimaryRole) {
             stateProps = JettraConfigValidator.bootstrapInitialPrimaryOrPeersState(stateFile, configProps);
         }
 

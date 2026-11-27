@@ -1522,3 +1522,14 @@ try (JettraClient client = JettraClient.connect(config)) {
 
 > Verificación automatizada en `JettraStoreDriver`: `ClusterStateLifecycleDriverTest` valida con `JettraTest` el arranque en `STANDBY`, alta con `addClusterNode`, replicación `PRIMARY -> SECONDARY`, detención `STOPPED`, reinicio completo del clúster, reconciliación de nodos y remoción definitiva sin alterar `cluster.config`.
 
+---
+
+## Arranque de Nodos `SECONDARY` sin `cluster.config` e Incorporación Ilimitada vía `JettraStoreDriver`
+
+En el modelo de arranque desacoplado de **JettraStore**:
+1. **Solo el nodo `PRIMARY` requiere `cluster.config`** (como semilla inicial cuando aún no existe `cluster-state.config`).
+2. **Cualquier nodo `SECONDARY` arranca sin `cluster.config`** en modo `STANDBY` y queda a la espera de ser detectado por el `PRIMARY` (si estaba declarado en su `cluster.config`) o de ser incorporado dinámicamente desde **`JettraStoreDriver`** mediante `client.addClusterNode(...)`.
+3. **Sin límite de nodos:** Puede invocar `client.addClusterNode(nodeId, ip, grpcPort, restPort, "SECONDARY")` tantas veces como nodos necesite añadir al clúster.
+4. **Entrega automática de `cluster-state.config`:** Al incorporarse cada `SECONDARY`, el `PRIMARY` actualiza su `cluster-state.config` y transmite una copia actualizada al nuevo nodo y a los demás miembros; el `SECONDARY` la almacena atómicamente en su directorio local `jettra.cluster_state_config_dir` y queda sincronizado.
+5. **Administración remota de `cluster-state.config`:** Los métodos `client.readPrimaryClusterConfig()` y `client.writePrimaryClusterConfig(content, true)` permiten leer, validar y replicar cambios de `cluster-state.config` del `PRIMARY` hacia todos los nodos del clúster.
+

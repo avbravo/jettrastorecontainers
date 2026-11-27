@@ -501,6 +501,23 @@ java -jar target/JettraStoreExplorer-1.0.0-SNAPSHOT.jar \
 
 > Pruebas automatizadas (`JettraTest`): `ConnectionConfigExplorerTest` verifica la precedencia `cluster.ip.nodes` → `conecction.config`, la resolución automática `SECONDARY → PRIMARY` de `cluster-state.config` y la actualización de estado al detener nodos.
 
+---
+
+## 19. Administración de `cluster-state.config` del `PRIMARY` y Escalado Ilimitado de Nodos `SECONDARY`
+
+### 1. Requisito de `cluster.config` Exclusivo del `PRIMARY` y Detección de Nodos `SECONDARY`
+* En el ecosistema **JettraStore**, únicamente el nodo que arranca como **`PRIMARY`** requiere el archivo `cluster.config` (como semilla inicial si aún no existe `cluster-state.config`).
+* Los nodos **`SECONDARY`** arrancan sin necesidad de `cluster.config` en estado `STANDBY`, esperando a ser detectados automáticamente por el `PRIMARY` o incorporados desde **`JettraStoreExplorer`** (`/cluster` → **Agregar Nodo**), `JettraStoreShell` o `JettraStoreDriver`, sin límite en el número total de nodos.
+* Al ser detectado o añadido, cada nodo `SECONDARY` recibe automáticamente una copia actualizada de **`cluster-state.config`** y la persiste en su directorio local definido en `jettra.cluster_state_config_dir`.
+
+### 2. Página de Administración de Archivo de Estado del Clúster (`/cluster-config`)
+* En **`JettraStoreExplorer`** (menú lateral **📄 Estado Clúster (`cluster-state.config`)** y pestaña **📄 `cluster-state.config`**, reservado para perfil `ADMIN`), ya **no** se administra el archivo estático `cluster.config`.
+* El archivo administrado es exclusivamente **`cluster-state.config` del nodo `PRIMARY`**.
+* Al editar y presionar **💾 Guardar y Replicar `cluster-state.config`** (o **🔄 SINCRONIZAR TODOS LOS NODOS**), el sistema:
+  1. Valida la integridad completa de la topología (sin IDs ni puertos gRPC/REST duplicados).
+  2. Persiste atómicamente el archivo en el nodo **`PRIMARY`**.
+  3. **Replica automáticamente los cambios a todos los nodos del clúster** (actualizando `cluster-state.config` en el `jettra.cluster_state_config_dir` de cada `SECONDARY` activo) y actualiza la vista en vivo de `/cluster`, `/map` y `/connections`.
+
 
 
 

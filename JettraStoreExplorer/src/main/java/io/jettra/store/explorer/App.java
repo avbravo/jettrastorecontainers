@@ -693,8 +693,7 @@ public class App {
         redirect(resp, "/cluster");
     }
 
-    // --- Visor/Editor de cluster.config del Nodo PRIMARY y Sincronización (Solo
-    // ADMIN) ---
+    // --- Visor/Editor de cluster-state.config del Nodo PRIMARY y Replicación a todos los nodos (Solo ADMIN) ---
     private static void handleClusterConfigGet(HttpRequest req, HttpResponse resp, JettraServer server) {
         if (!requireAuth(req, resp))
             return;
@@ -703,10 +702,10 @@ public class App {
         String action = req.getQueryParam("action");
         String flash = msg;
         if ("reload".equalsIgnoreCase(action) && (flash == null || flash.isBlank())) {
-            flash = "Archivo cluster.config recargado desde el nodo PRIMARY.";
+            flash = "Archivo cluster-state.config recargado desde el nodo PRIMARY.";
         }
         Widget content = new ClusterConfigFluxView(isAdmin, flash, List.of(), null);
-        renderTemplate(resp, server, getLoggedUser(req), "Configuración del Clúster (cluster.config)", "cluster-config",
+        renderTemplate(resp, server, getLoggedUser(req), "Estado del Clúster (cluster-state.config)", "cluster-config",
                 content);
     }
 
@@ -716,10 +715,10 @@ public class App {
         boolean isAdmin = isLoggedUserAdmin(req);
         if (!isAdmin) {
             Widget denied = new ClusterConfigFluxView(false,
-                    "Error: Acceso denegado. Solo administradores pueden editar o sincronizar cluster.config.",
+                    "Error: Acceso denegado. Solo administradores pueden editar o replicar cluster-state.config.",
                     List.of(), null);
             resp.status(HttpStatus.FORBIDDEN);
-            renderTemplate(resp, server, getLoggedUser(req), "Configuración del Clúster (cluster.config)",
+            renderTemplate(resp, server, getLoggedUser(req), "Estado del Clúster (cluster-state.config)",
                     "cluster-config", denied);
             return;
         }
@@ -732,13 +731,14 @@ public class App {
         if ("sync_cluster_config".equalsIgnoreCase(action)) {
             report = plugin.synchronizeAllClusterConfigFiles(content);
         } else {
-            report = plugin.saveClusterConfigContent(content, false);
+            // Todo cambio sobre cluster-state.config del PRIMARY se replica a todos los nodos del clúster
+            report = plugin.saveClusterConfigContent(content, true);
         }
 
         String draft = report.success() ? null : content;
         String flash = report.success() ? report.message() : "Error: " + report.message();
         Widget view = new ClusterConfigFluxView(true, flash, report.nodeResults(), draft);
-        renderTemplate(resp, server, getLoggedUser(req), "Configuración del Clúster (cluster.config)", "cluster-config",
+        renderTemplate(resp, server, getLoggedUser(req), "Estado del Clúster (cluster-state.config)", "cluster-config",
                 view);
     }
 

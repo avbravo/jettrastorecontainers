@@ -163,12 +163,20 @@ public class ClusterStatePersistenceTest {
         assertTrue(dockerfile.contains("JETTRA_CLUSTER_STATE_CONFIG_DIR=/jettra/cluster-state"));
         assertTrue(dockerfile.contains("/jettra/cluster-state"));
 
-        String composeMulti = Files.readString(Path.of("docker-compose.yml"), StandardCharsets.UTF_8);
+        Path composeMultiPath = Files.exists(Path.of("docker/docker-compose.yml"))
+                ? Path.of("docker/docker-compose.yml") : Path.of("docker-compose.yml");
+        String composeMulti = Files.readString(composeMultiPath, StandardCharsets.UTF_8);
         assertTrue(composeMulti.contains("jettra_state_node01:/jettra/cluster-state"));
         assertTrue(composeMulti.contains("jettra_state_node02:/jettra/cluster-state"));
         assertTrue(composeMulti.contains("jettra_state_node03:/jettra/cluster-state"));
 
-        String composeHub = Files.readString(Path.of("docker-compose-hub.yml"), StandardCharsets.UTF_8);
+        Path composeHubPath = java.util.List.of(
+                        Path.of("docker/hub/docker-compose-hub.yml"),
+                        Path.of("docker/docker-compose-hub.yml"),
+                        Path.of("docker-compose-hub.yml"))
+                .stream().filter(Files::exists).findFirst()
+                .orElse(Path.of("docker/hub/docker-compose-hub.yml"));
+        String composeHub = Files.readString(composeHubPath, StandardCharsets.UTF_8);
         assertTrue(composeHub.contains("JETTRA_CLUSTER_STATE_CONFIG_DIR=/jettra/cluster-state"));
         assertTrue(composeHub.contains(":/jettra/cluster-state"));
     }
@@ -257,6 +265,91 @@ public class ClusterStatePersistenceTest {
             assertFalse(Files.exists(concDir.resolve(JettraClusterStateBackupManager.CLUSTER_STATE_BACKUP_FILENAME)));
             assertEquals(originalContent, Files.readString(concState, StandardCharsets.UTF_8));
         } finally {
+            JettraTestCleanup.deleteRecursively(tempRoot);
+        }
+    }
+
+    @Test
+    @DisplayName("PRIMARY requiere cluster.config si no hay estado previo; SECONDARY arranca en STANDBY sin cluster.config y recibe cluster-state.config al ser detectado")
+    public void testPrimaryRequiresClusterConfigAndSecondaryReceivesClusterStateOnDetection() throws Exception {
+        Path tempRoot = Files.createTempDirectory("jettra_primary_secondary_sync_");
+        int g1, r1, g2, r2;
+        try (var s1 = new java.net.ServerSocket(0, 1, java.net.InetAddress.getByName("127.0.0.1"));
+             var s2 = new java.net.ServerSocket(0, 1, java.net.InetAddress.getByName("127.0.0.1"));
+             var s3 = new java.net.ServerSocket(0, 1, java.net.InetAddress.getByName("127.0.0.1"));
+             var s4 = new java.net.ServerSocket(0, 1, java.net.InetAddress.getByName("127.0.0.1"))) {
+            g1 = s1.getLocalPort(); r1 = s2.getLocalPort();
+            g2 = s3.getLocalPort(); r2 = s4.getLocalPort();
+        }
+
+        io.jettra.store.JettraStoreServer primary = null;
+        io.jettra.store.JettraStoreServer secondary = null;
+        try {
+            // 1. SECONDARY arranca PRIMERO en STANDBY SIN cluster.config ni cluster-state.config
+            Path secStateDir = tempRoot.resolve("sec-state");
+            Properties pSec = new Properties();
+            pSec.setProperty("cluster.node.id", "node-02");
+            pSec.setProperty("cluster.node.role", "SECONDARY");
+            pSec.setProperty("jettra.node.ip", "127.0.0.1");
+            pSec.setProperty("jettra.network.grpc.port", String.valueOf(g2));
+            pSec.setProperty("jettra.network.rest.port", String.valueOf(r2));
+            pSec.setProperty("jettra.storage.path", tempRoot.resolve("sec-data").toAbsolutePath().toString());
+            pSec.setProperty("jettra.cluster_state_config_dir", secStateDir.toAbsolutePath().toString());
+            pSec.setProperty("jettra.storage.mode", "JVM_RAM");
+            pSec.setProperty("cluster.multinode.active", "on");
+            pSec.setProperty("jettrapolice.active", "false");
+
+            JettraStoreConfig secCfg = new JettraStoreConfig(pSec, new Properties(), pSec);
+            assertTrue(secCfg.isStandbyMode(), "SECONDARY sin cluster.config debe iniciar en STANDBY");
+            Path secStateFile = secStateDir.resolve(JettraConfigValidator.CLUSTER_STATE_FILENAME);
+            assertFalse(Files.exists(secStateFile), "SECONDARY no debe tener cluster-state.config antes de ser detectado");
+
+            secondary = new io.jettra.store.JettraStoreServer(secCfg);
+            secondary.start();
+
+            // 2. PRIMARY arranca con su cluster.config listando node-01 y node-02
+            Path primStateDir = tempRoot.resolve("prim-state");
+            Path primClusterCfg = tempRoot.resolve("cluster.config");
+            Files.writeString(primClusterCfg,
+                    "cluster.name = dynamic-test-cluster\n"
+                    + "cluster.node.1.id = node-01\ncluster.node.1.role = PRIMARY\ncluster.node.1.ip = 127.0.0.1\ncluster.node.1.grpc.port = " + g1 + "\ncluster.node.1.rest.port = " + r1 + "\n"
+                    + "cluster.node.2.id = node-02\ncluster.node.2.role = SECONDARY\ncluster.node.2.ip = 127.0.0.1\ncluster.node.2.grpc.port = " + g2 + "\ncluster.node.2.rest.port = " + r2 + "\n",
+                    StandardCharsets.UTF_8);
+
+            Properties clusterProps = new Properties();
+            try (var in = Files.newInputStream(primClusterCfg)) { clusterProps.load(in); }
+
+            Properties pPrim = new Properties();
+            pPrim.setProperty("cluster.node.id", "node-01");
+            pPrim.setProperty("cluster.node.role", "PRIMARY");
+            pPrim.setProperty("jettra.node.ip", "127.0.0.1");
+            pPrim.setProperty("jettra.network.grpc.port", String.valueOf(g1));
+            pPrim.setProperty("jettra.network.rest.port", String.valueOf(r1));
+            pPrim.setProperty("jettra.storage.path", tempRoot.resolve("prim-data").toAbsolutePath().toString());
+            pPrim.setProperty("jettra.cluster_state_config_dir", primStateDir.toAbsolutePath().toString());
+            pPrim.setProperty("jettra.storage.mode", "JVM_RAM");
+            pPrim.setProperty("cluster.multinode.active", "on");
+            pPrim.setProperty("jettrapolice.active", "false");
+
+            primary = new io.jettra.store.JettraStoreServer(new JettraStoreConfig(pPrim, clusterProps, pPrim));
+            primary.setClusterConfigFilePath(primClusterCfg);
+            primary.start();
+
+            // 3. Esperar a que PRIMARY detecte al SECONDARY en STANDBY y le replique cluster-state.config
+            long deadline = System.currentTimeMillis() + 5000;
+            while (System.currentTimeMillis() < deadline && (!Files.exists(secStateFile) || secCfg.isStandbyMode())) {
+                Thread.sleep(100);
+            }
+            assertTrue(Files.exists(secStateFile),
+                    "SECONDARY debe recibir y almacenar cluster-state.config en jettra.cluster_state_config_dir al ser detectado por PRIMARY");
+            assertFalse(secCfg.isStandbyMode(),
+                    "SECONDARY debe salir de modo STANDBY al recibir cluster-state.config del PRIMARY");
+            String syncedContent = Files.readString(secStateFile, StandardCharsets.UTF_8);
+            assertTrue(syncedContent.contains("node-01") && syncedContent.contains("node-02"),
+                    "El cluster-state.config recibido por SECONDARY debe contener la topología del clúster");
+        } finally {
+            if (secondary != null) try { secondary.stop(); } catch (Exception ignored) {}
+            if (primary != null) try { primary.stop(); } catch (Exception ignored) {}
             JettraTestCleanup.deleteRecursively(tempRoot);
         }
     }

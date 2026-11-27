@@ -73,6 +73,8 @@ public class JettraStoreExplorerTest {
                         String testStoragePath = tempTestStorageDir.toAbsolutePath().toString();
                         System.setProperty("jettra.storage.path", testStoragePath);
                         System.setProperty("storage.path", testStoragePath);
+                        String testStateDir = tempTestStorageDir.resolve("cluster-state").toAbsolutePath().toString();
+                        System.setProperty("jettra.cluster_state_config_dir", testStateDir);
 
                         tempTestMicroprofileConfig = targetDir.resolve("microprofile-config-test_db.properties");
                         java.nio.file.Files.writeString(tempTestMicroprofileConfig,
@@ -82,6 +84,7 @@ public class JettraStoreExplorerTest {
                                                         + "storage.mode=OFF_HEAP\n"
                                                         + "jettra.storage.path=" + testStoragePath + "\n"
                                                         + "storage.path=" + testStoragePath + "\n"
+                                                        + "jettra.cluster_state_config_dir=" + testStateDir + "\n"
                                                         + "app.title=JettraStore Explorer\n"
                                                         + "cluster.multinode.active=on\n"
                                                         + "cluster.healthcheck.timeout.ms=200\n"
@@ -175,6 +178,10 @@ public class JettraStoreExplorerTest {
                         System.setProperty("jettra.explorer.cluster.nodes.file",
                                         tempTestClusterNodesFile.toAbsolutePath().toString());
                 }
+                if (tempTestStorageDir != null) {
+                        System.setProperty("jettra.cluster_state_config_dir",
+                                        tempTestStorageDir.resolve("cluster-state").toAbsolutePath().toString());
+                }
                 System.clearProperty("server.host");
                 System.clearProperty("bindAddress");
                 JettraStorePlugin.getInstance().reloadRuntimeConfiguration();
@@ -223,6 +230,7 @@ public class JettraStoreExplorerTest {
                 System.clearProperty("jettra.explorer.cluster.nodes.file");
                 System.clearProperty("jettra.storage.path");
                 System.clearProperty("storage.path");
+                System.clearProperty("jettra.cluster_state_config_dir");
                 if (tempTestStorageDir != null) {
                         JettraExplorerTestCleanup.deleteRecursively(tempTestStorageDir);
                 }
@@ -2297,13 +2305,13 @@ public class JettraStoreExplorerTest {
                                 primary.getPort(), 2048);
                 JettraAssert.assertFalse(dupPortAdded, "No debe permitir agregar un nodo con puerto gRPC duplicado");
 
-                // 3. Acceso como ADMIN a /cluster-config muestra el contenido de cluster.config
+                // 3. Acceso como ADMIN a /cluster-config muestra el contenido de cluster-state.config
                 // y botón SINCRONIZAR
                 HttpResponse<String> cfgGetRes = get("/cluster-config");
                 JettraAssert.assertEquals(200, cfgGetRes.statusCode(),
                                 "GET /cluster-config como ADMIN debe responder HTTP 200");
-                JettraAssert.assertTrue(cfgGetRes.body().contains("cluster.config"),
-                                "Debe mostrar el título de cluster.config");
+                JettraAssert.assertTrue(cfgGetRes.body().contains("cluster-state.config"),
+                                "Debe mostrar el título de cluster-state.config");
                 JettraAssert.assertTrue(cfgGetRes.body().contains("SINCRONIZAR"), "Debe incluir el botón SINCRONIZAR");
                 JettraAssert.assertTrue(cfgGetRes.body().contains("clusterConfigEditor"),
                                 "Debe incluir el editor de cluster.config");
@@ -2464,8 +2472,12 @@ public class JettraStoreExplorerTest {
         @DisplayName("45. Sincronización de topología externa (Shell remove/add) actualiza /cluster y /map")
         public void testExternalTopologyRemovalUpdatesClusterAndMapViews() {
                 JettraStorePlugin plugin = JettraStorePlugin.getInstance();
-                java.util.List<io.jettra.store.explorer.model.ServerNodeInfo> backup = new java.util.ArrayList<>(
-                                plugin.getServerNodes());
+                java.util.List<io.jettra.store.core.JettraConfigValidator.ClusterNodeInfo> restore = new java.util.ArrayList<>();
+                for (var n : plugin.getServerNodes()) {
+                        restore.add(new io.jettra.store.core.JettraConfigValidator.ClusterNodeInfo(
+                                        n.getId(), n.getRole(), n.getHost(), n.getPort(), n.getRestPort(),
+                                        "./data/" + n.getId()));
+                }
                 try {
                         var n1 = new io.jettra.store.core.JettraConfigValidator.ClusterNodeInfo("node-01", "PRIMARY",
                                         "127.0.0.1", 50001, 60001, "./data/node-01");
@@ -2500,12 +2512,6 @@ public class JettraStoreExplorerTest {
                                         "/cluster debe detectar cambios de topología por firma de IDs");
                 } finally {
                         // Restaurar nodos originales del entorno de pruebas
-                        java.util.List<io.jettra.store.core.JettraConfigValidator.ClusterNodeInfo> restore = new java.util.ArrayList<>();
-                        for (var n : backup) {
-                                restore.add(new io.jettra.store.core.JettraConfigValidator.ClusterNodeInfo(
-                                                n.getId(), n.getRole(), n.getHost(), n.getPort(), n.getRestPort(),
-                                                "./data/" + n.getId()));
-                        }
                         if (!restore.isEmpty()) {
                                 plugin.applyAuthoritativeClusterNodes(restore, null);
                         }

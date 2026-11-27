@@ -2901,5 +2901,27 @@ Al iniciar **JettraStoreShell**:
 
 > Verificación automatizada (`JettraTest`): `ConnectionConfigShellTest` valida la carga inicial `127.0.0.1:50001`, el comando `/connections` conectado vía un `SECONDARY` con resolución hacia `PRIMARY`, la lectura de `cluster-state.config` y la recarga persistente desde `conecction.config`.
 
+---
+
+## Incorporación Ilimitada de Nodos `SECONDARY` sin `cluster.config` y Replicación de `cluster-state.config`
+
+Con el nuevo ciclo de arranque desacoplado de **JettraStore**:
+* **Solo el nodo `PRIMARY` necesita `cluster.config`** al iniciar por primera vez.
+* **Los nodos `SECONDARY` no requieren `cluster.config`**: inician en espera (`STANDBY`) escuchando en su puerto gRPC/Raft y REST.
+* Si un `SECONDARY` ya estaba declarado en el `cluster.config` del `PRIMARY`, el `PRIMARY` lo detecta automáticamente y le envía `cluster-state.config` para almacenarlo en su directorio local `jettra.cluster_state_config_dir`.
+* Para añadir **cualquier cantidad adicional de nodos `SECONDARY`** al clúster sin límite desde **`JettraStoreShell`**, conéctese al `PRIMARY` y ejecute:
+
+```sql
+-- Añadir nuevos nodos SECONDARY (que arrancaron sin cluster.config en STANDBY)
+ADD NODE node-04 192.168.10.14 50001 SECONDARY
+ADD NODE node-05 192.168.10.15 50001 SECONDARY
+
+-- Verificar que todos recibieron cluster-state.config y están ONLINE
+SHOW NODES
+SHOW CLUSTER STATE
+```
+
+Al ejecutar `ADD NODE`, el `PRIMARY` actualiza su `cluster-state.config`, lo replica a todos los nodos del clúster (incluidos los recién incorporados, que lo guardan en su `jettra.cluster_state_config_dir`) y sincroniza las bases de datos existentes.
+
 
 

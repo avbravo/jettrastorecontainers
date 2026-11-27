@@ -47,7 +47,7 @@ public class ClusterConfigFluxView extends FluxView {
         if (!isAdmin) {
             Header deniedTitle = Header.of(3, "⛔ Acceso Restringido — Solo Perfil Administrador");
             deniedTitle.modifier(new Modifier().style("color: #ef4444; margin: 0 0 0.5rem 0; font-size: 1.15rem;"));
-            Paragraph deniedMsg = Paragraph.of("La visualización, edición y sincronización del archivo cluster.config del nodo PRIMARY está reservada exclusivamente para usuarios con rol global ADMIN.");
+            Paragraph deniedMsg = Paragraph.of("La visualización, edición y replicación del archivo cluster-state.config del nodo PRIMARY está reservada exclusivamente para usuarios con rol global ADMIN.");
             deniedMsg.modifier(new Modifier().style("color: var(--text-muted); margin: 0 0 1rem 0;"));
             Link backLink = Link.of("/cluster", "← Volver a Nodos del Clúster");
             backLink.modifier(new Modifier().cssClass("app-btn-secondary"));
@@ -107,7 +107,7 @@ public class ClusterConfigFluxView extends FluxView {
 
         if (!currentValidation.isValid()) {
             List<Widget> errItems = new ArrayList<>();
-            errItems.add(FluxUi.coloredSpan("⚠️ Problemas de integridad detectados en cluster.config:", "font-weight: 700; color: #ef4444; display: block; margin-bottom: 0.35rem;"));
+            errItems.add(FluxUi.coloredSpan("⚠️ Problemas de integridad detectados en cluster-state.config:", "font-weight: 700; color: #ef4444; display: block; margin-bottom: 0.35rem;"));
             for (String err : currentValidation.getErrors()) {
                 errItems.add(Div.of(Text.of("• " + err)).modifier(new Modifier().style("font-size: 0.82rem; color: #fca5a5;")));
             }
@@ -126,7 +126,7 @@ public class ClusterConfigFluxView extends FluxView {
         );
         configEditor.id("clusterConfigEditor");
 
-        Button saveBtn = Button.of("💾 Guardar cluster.config");
+        Button saveBtn = Button.of("💾 Guardar y Replicar cluster-state.config");
         saveBtn.id("btnSaveClusterConfig");
         saveBtn.modifier(new Modifier()
                 .cssClass("app-btn-primary")
@@ -135,7 +135,7 @@ public class ClusterConfigFluxView extends FluxView {
                 .attribute("value", "save_config")
                 .style("height: 40px; font-weight: 700;"));
 
-        Button syncBtn = Button.of("🔄 SINCRONIZAR");
+        Button syncBtn = Button.of("🔄 SINCRONIZAR TODOS LOS NODOS");
         syncBtn.id("btnSyncClusterConfig");
         syncBtn.modifier(new Modifier()
                 .cssClass("app-btn-primary")
@@ -148,7 +148,7 @@ public class ClusterConfigFluxView extends FluxView {
         actionButtons.modifier(new Modifier().style("display: flex; gap: 0.75rem; flex-wrap: wrap; margin-top: 0.9rem;"));
 
         Form editorForm = Form.of(
-                FluxUi.fieldLabel("Contenido del archivo cluster.config (Editable solo por ADMIN)"),
+                FluxUi.fieldLabel("Contenido del archivo cluster-state.config del nodo PRIMARY (Editable solo por ADMIN)"),
                 configEditor,
                 actionButtons);
         editorForm.id("clusterConfigForm");
@@ -176,8 +176,8 @@ public class ClusterConfigFluxView extends FluxView {
             root.add(syncCard);
         }
 
-        // 4. Tabla Resumen de Nodos Parseados desde cluster.config (Datatable JettraFlux)
-        Header tableHeader = Header.of(3, "📋 Nodos Detectados en cluster.config");
+        // 4. Tabla Resumen de Nodos Parseados desde cluster-state.config (Datatable JettraFlux)
+        Header tableHeader = Header.of(3, "📋 Nodos Detectados en cluster-state.config");
         tableHeader.modifier(new Modifier().style("margin: 0 0 0.85rem 0; font-size: 1.05rem; color: var(--text-main);"));
 
         List<Widget> headers = List.of(
