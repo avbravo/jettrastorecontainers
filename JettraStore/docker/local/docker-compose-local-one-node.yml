@@ -4,7 +4,7 @@
 services:
   jettra-node-01:
     build:
-      context: .
+      context: ../..
       dockerfile: Dockerfile
     pull_policy: build
     image: ${DOCKER_REPO_PREFIX:-}jettrastore:1.0
@@ -15,20 +15,22 @@ services:
       - "${JETTRA_NODE1_REST_PORT:-60001}:60001"
       - "${JETTRA_NODE1_GRPC_PORT:-50001}:50001"
     environment:
-      - CLUSTER_NODE_ID=node-01
+      - CLUSTER_NODE_ID=${CLUSTER_NODE_ID:-node-01}
       - CLUSTER_NODE_ROLE=PRIMARY
-      - CLUSTER_NODE_IP=jettra-node-01
-      - CLUSTER_NODE_GRPC_PORT=50001
-      - CLUSTER_NODE_REST_PORT=60001
-      - JETTRA_NODE_ID=node-01
+      - CLUSTER_NODE_IP=${CLUSTER_NODE_IP:-jettra-node-01}
+      - CLUSTER_NODE_GRPC_PORT=${CLUSTER_NODE_GRPC_PORT:-50001}
+      - CLUSTER_NODE_REST_PORT=${CLUSTER_NODE_REST_PORT:-60001}
+      - JETTRA_NODE_ID=${CLUSTER_NODE_ID:-node-01}
       - JETTRA_NODE_ROLE=PRIMARY
-      - JETTRA_NODE_IP=jettra-node-01
+      - JETTRA_NODE_IP=${CLUSTER_NODE_IP:-jettra-node-01}
       - JETTRA_STORAGE_PATH=/jettra/data
       - JETTRA_CLUSTER_STATE_CONFIG_DIR=/jettra/cluster-state
+      # Semilla cluster.config opcional exclusiva del nodo PRIMARY
+      - JETTRA_CLUSTER_CONFIG_PATH=${JETTRA_CLUSTER_CONFIG_PATH:-}
       - JETTRA_STORAGE_MODE=${JETTRA_STORAGE_MODE:-OFF_HEAP}
       - JETTRA_MULTINODE_ACTIVE=off
-      - JETTRA_REST_PORT=60001
-      - JETTRA_GRPC_PORT=50001
+      - JETTRA_REST_PORT=${CLUSTER_NODE_REST_PORT:-60001}
+      - JETTRA_GRPC_PORT=${CLUSTER_NODE_GRPC_PORT:-50001}
       - JETTRA_ADMIN_USERNAME=admin
       - JETTRA_ADMIN_PASSWORD=admin-jettra
       - JAVA_OPTS=-Xms96m -Xmx384m -XX:MaxMetaspaceSize=192m -XX:MaxDirectMemorySize=192m

@@ -254,12 +254,13 @@ public class PortBindingAndDockerConfigTest extends JettraStoreBaseTest {
     @DisplayName("docker-compose-hub.yml parametriza puertos de host y contenedor sin colisión")
     public void testDockerComposeHubPortParameterization() throws Exception {
         Path composeHub = java.util.List.of(
+                        Path.of("docker/hub/docker-compose-hub-one-node.yml"),
                         Path.of("docker/hub/docker-compose-hub.yml"),
                         Path.of("docker/docker-compose-hub.yml"),
                         Path.of("docker-compose-hub.yml"))
                 .stream().filter(Files::exists).findFirst()
-                .orElse(Path.of("docker/hub/docker-compose-hub.yml"));
-        assertTrue(Files.exists(composeHub), "Debe existir JettraStore/docker/hub/docker-compose-hub.yml");
+                .orElse(Path.of("docker/hub/docker-compose-hub-one-node.yml"));
+        assertTrue(Files.exists(composeHub), "Debe existir JettraStore/docker/hub/docker-compose-hub-one-node.yml");
         String yaml = Files.readString(composeHub, StandardCharsets.UTF_8);
 
         assertTrue(yaml.contains("JETTRA_HOST_GRPC_PORT"),

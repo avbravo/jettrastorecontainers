@@ -157,28 +157,84 @@ public class ClusterStatePersistenceTest {
     }
 
     @Test
-    @DisplayName("RF-32: Dockerfile y Docker Compose montan jettra.cluster_state_config_dir en volúmenes persistentes")
+    @DisplayName("RF-32 / RF-40: Dockerfile y Docker Compose exponen CLUSTER_NODE_*, jettra.cluster_state_config_dir y cluster.conf solo en PRIMARY")
     public void testDockerFilesPersistClusterStateDir() throws Exception {
         String dockerfile = Files.readString(Path.of("Dockerfile"), StandardCharsets.UTF_8);
+        assertTrue(dockerfile.contains("CLUSTER_NODE_IP="), "Dockerfile debe definir ENV CLUSTER_NODE_IP");
+        assertTrue(dockerfile.contains("CLUSTER_NODE_GRPC_PORT="), "Dockerfile debe definir ENV CLUSTER_NODE_GRPC_PORT");
+        assertTrue(dockerfile.contains("CLUSTER_NODE_REST_PORT="), "Dockerfile debe definir ENV CLUSTER_NODE_REST_PORT");
         assertTrue(dockerfile.contains("JETTRA_CLUSTER_STATE_CONFIG_DIR=/jettra/cluster-state"));
-        assertTrue(dockerfile.contains("/jettra/cluster-state"));
+        assertTrue(dockerfile.contains("-Dcluster.node.ip="));
+        assertTrue(dockerfile.contains("-Dcluster.node.grpc.port="));
+        assertTrue(dockerfile.contains("-Dcluster.node.rest.port="));
+        assertTrue(dockerfile.contains("ROLE_UPPER") && dockerfile.contains("PRIMARY") && dockerfile.contains("cluster.conf"),
+                "Dockerfile debe aplicar cluster.conf/cluster.config condicionalmente solo al nodo PRIMARY");
 
-        Path composeMultiPath = Files.exists(Path.of("docker/docker-compose.yml"))
-                ? Path.of("docker/docker-compose.yml") : Path.of("docker-compose.yml");
+        Path composeMultiPath = java.util.List.of(
+                        Path.of("docker/local/docker-compose-local-all-nodes.yml"),
+                        Path.of("docker/local/docker-compose-lodal-all-nodes.yml"),
+                        Path.of("docker/local/docker-compose-all-nodes.yml"),
+                        Path.of("docker/docker-compose.yml"),
+                        Path.of("docker-compose.yml"))
+                .stream().filter(Files::exists).findFirst()
+                .orElse(Path.of("docker/local/docker-compose-local-all-nodes.yml"));
         String composeMulti = Files.readString(composeMultiPath, StandardCharsets.UTF_8);
         assertTrue(composeMulti.contains("jettra_state_node01:/jettra/cluster-state"));
         assertTrue(composeMulti.contains("jettra_state_node02:/jettra/cluster-state"));
         assertTrue(composeMulti.contains("jettra_state_node03:/jettra/cluster-state"));
+        assertTrue(composeMulti.contains("CLUSTER_NODE_IP="));
+        assertTrue(composeMulti.contains("CLUSTER_NODE_GRPC_PORT="));
+        assertTrue(composeMulti.contains("CLUSTER_NODE_REST_PORT="));
 
-        Path composeHubPath = java.util.List.of(
-                        Path.of("docker/hub/docker-compose-hub.yml"),
-                        Path.of("docker/docker-compose-hub.yml"),
-                        Path.of("docker-compose-hub.yml"))
-                .stream().filter(Files::exists).findFirst()
-                .orElse(Path.of("docker/hub/docker-compose-hub.yml"));
-        String composeHub = Files.readString(composeHubPath, StandardCharsets.UTF_8);
-        assertTrue(composeHub.contains("JETTRA_CLUSTER_STATE_CONFIG_DIR=/jettra/cluster-state"));
-        assertTrue(composeHub.contains(":/jettra/cluster-state"));
+        // Verificar que los servicios SECONDARY en docker-compose local all-nodes no montan cluster.config/cluster.conf
+        int node2Idx = composeMulti.indexOf("\n  jettra-node-02:");
+        assertTrue(node2Idx > 0, "Debe existir servicio jettra-node-02");
+        String secondaryBlock = composeMulti.substring(node2Idx);
+        assertFalse(secondaryBlock.contains("JETTRA_CLUSTER_CONFIG_PATH"),
+                "Los nodos SECONDARY no deben configurar JETTRA_CLUSTER_CONFIG_PATH");
+        assertFalse(secondaryBlock.contains("/jettra/config/cluster.config"),
+                "Los nodos SECONDARY no deben montar cluster.config/cluster.conf");
+
+        // Verificar docker/hub/docker-compose-hub-all-node.yml (1 PRIMARY con cluster.config + 2 SECONDARY sin cluster.config)
+        Path hubAllPath = Path.of("docker/hub/docker-compose-hub-all-node.yml");
+        assertTrue(Files.exists(hubAllPath), "Debe existir docker/hub/docker-compose-hub-all-node.yml");
+        String hubAllYaml = Files.readString(hubAllPath, StandardCharsets.UTF_8);
+        assertTrue(hubAllYaml.contains("avbravo/jettrastore:1.0-SNAPSHOT"));
+        assertTrue(hubAllYaml.contains("jettra_hub_state_node01:/jettra/cluster-state"));
+        assertTrue(hubAllYaml.contains("jettra_hub_state_node02:/jettra/cluster-state"));
+        assertTrue(hubAllYaml.contains("jettra_hub_state_node03:/jettra/cluster-state"));
+        int hubNode2Idx = hubAllYaml.indexOf("\n  jettra-node-02:");
+        assertTrue(hubNode2Idx > 0, "docker-compose-hub-all-node.yml debe definir jettra-node-02");
+        String hubSecBlock = hubAllYaml.substring(hubNode2Idx);
+        assertFalse(hubSecBlock.contains("JETTRA_CLUSTER_CONFIG_PATH"),
+                "SECONDARY en docker-compose-hub-all-node.yml no debe definir JETTRA_CLUSTER_CONFIG_PATH");
+        assertFalse(hubSecBlock.contains("/jettra/config/cluster.config"),
+                "SECONDARY en docker-compose-hub-all-node.yml no debe montar cluster.config");
+
+        for (Path composePath : java.util.List.of(
+                Path.of("docker/local/docker-compose-local-one-node.yml"),
+                Path.of("docker/local/docker-compose-local-all-nodes.yml"),
+                Path.of("docker/hub/docker-compose-hub-one-node.yml"),
+                Path.of("docker/hub/docker-compose-hub-all-node.yml"))) {
+            assertTrue(Files.exists(composePath), "Debe existir " + composePath);
+            String yaml = Files.readString(composePath, StandardCharsets.UTF_8);
+            assertTrue(yaml.contains("CLUSTER_NODE_IP="), composePath + " debe pasar CLUSTER_NODE_IP");
+            assertTrue(yaml.contains("CLUSTER_NODE_GRPC_PORT="), composePath + " debe pasar CLUSTER_NODE_GRPC_PORT");
+            assertTrue(yaml.contains("CLUSTER_NODE_REST_PORT="), composePath + " debe pasar CLUSTER_NODE_REST_PORT");
+            assertTrue(yaml.contains("JETTRA_CLUSTER_STATE_CONFIG_DIR=/jettra/cluster-state"),
+                    composePath + " debe pasar JETTRA_CLUSTER_STATE_CONFIG_DIR");
+            assertTrue(yaml.contains(":/jettra/cluster-state"),
+                    composePath + " debe montar volumen persistente en /jettra/cluster-state");
+        }
+
+        // RF-41: Verificar que guide/book.md integra dockerhub.md y enlaza imágenes válidas en guide/images/
+        String bookMd = Files.readString(Path.of("guide/book.md"), StandardCharsets.UTF_8);
+        for (String img : java.util.List.of(
+                "00-createrepository.png", "01-datosrepository.png", "02-datosgenerales.png",
+                "03-images.png", "04-creartag.png", "05-tag.png", "06-pull.png")) {
+            assertTrue(bookMd.contains("images/" + img), "guide/book.md debe enlazar images/" + img);
+            assertTrue(Files.exists(Path.of("guide/images/" + img)), "Debe existir guide/images/" + img);
+        }
     }
 
     @Test
@@ -375,13 +431,25 @@ public class ClusterStatePersistenceTest {
         Process bashCheck = new ProcessBuilder("bash", "-n", "script/start-node.sh").start();
         assertEquals(0, bashCheck.waitFor(), "script/start-node.sh debe tener sintaxis bash válida");
 
-        String storeCompose = Files.readString(Path.of("docker/docker-compose.yml"), StandardCharsets.UTF_8);
+        Path storeComposePath = java.util.List.of(
+                        Path.of("docker/local/docker-compose-local-all-nodes.yml"),
+                        Path.of("docker/local/docker-compose-lodal-all-nodes.yml"),
+                        Path.of("docker/local/docker-compose-all-nodes.yml"),
+                        Path.of("docker/docker-compose.yml"))
+                .stream().filter(Files::exists).findFirst()
+                .orElse(Path.of("docker/local/docker-compose-local-all-nodes.yml"));
+        String storeCompose = Files.readString(storeComposePath, StandardCharsets.UTF_8);
         assertTrue(storeCompose.contains("JETTRA_CLUSTER_CONFIG_PATH=/jettra/config/cluster.config"));
         assertTrue(storeCompose.contains("jettra_state_node01:/jettra/cluster-state"));
         assertTrue(storeCompose.contains("jettra_state_node02:/jettra/cluster-state"));
         assertTrue(storeCompose.contains("jettra_state_node03:/jettra/cluster-state"));
 
-        String hubCompose = Files.readString(Path.of("docker/hub/docker-compose-hub.yml"), StandardCharsets.UTF_8);
+        Path hubComposePath = java.util.List.of(
+                        Path.of("docker/hub/docker-compose-hub-one-node.yml"),
+                        Path.of("docker/hub/docker-compose-hub.yml"))
+                .stream().filter(Files::exists).findFirst()
+                .orElse(Path.of("docker/hub/docker-compose-hub-one-node.yml"));
+        String hubCompose = Files.readString(hubComposePath, StandardCharsets.UTF_8);
         assertTrue(hubCompose.contains("JETTRA_CLUSTER_CONFIG_PATH=${JETTRA_CLUSTER_CONFIG_PATH:-}"));
         assertTrue(hubCompose.contains("JETTRA_CLUSTER_STATE_CONFIG_DIR=/jettra/cluster-state"));
 
@@ -555,7 +623,12 @@ public class ClusterStatePersistenceTest {
         assertTrue(dockerfile.contains("-Dcluster.node.grpc.port="));
         assertTrue(dockerfile.contains("-Dcluster.node.rest.port="));
 
-        String hubCompose = Files.readString(Path.of("docker/hub/docker-compose-hub.yml"), StandardCharsets.UTF_8);
+        Path hubComposeRf37 = java.util.List.of(
+                        Path.of("docker/hub/docker-compose-hub-one-node.yml"),
+                        Path.of("docker/hub/docker-compose-hub.yml"))
+                .stream().filter(Files::exists).findFirst()
+                .orElse(Path.of("docker/hub/docker-compose-hub-one-node.yml"));
+        String hubCompose = Files.readString(hubComposeRf37, StandardCharsets.UTF_8);
         assertTrue(hubCompose.contains("CLUSTER_NODE_IP="));
         assertTrue(hubCompose.contains("CLUSTER_NODE_GRPC_PORT="));
         assertTrue(hubCompose.contains("CLUSTER_NODE_REST_PORT="));

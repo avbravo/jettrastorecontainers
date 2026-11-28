@@ -1,0 +1,194 @@
+# ==============================================================================
+# JettraStore - Clúster de 3 Nodos Raft desde Docker Hub (avbravo/jettrastore:1.0-SNAPSHOT)
+# Archivo: docker/hub/docker-compose-hub-all-node.yml
+#
+# Utiliza network_mode: host con IP 127.0.0.1 (configurable vía NODE1_IP..NODE3_IP)
+# para que los 3 nodos se comuniquen entre sí y sean 100% resolubles y accesibles
+# como ONLINE desde JettraStoreExplorer, JettraStoreShell y JettraStoreDriver
+# ejecutándose en el host (evitando hostnames internos Docker no resolubles).
+#
+# Topología:
+#   - jettra-node-01 (PRIMARY): único nodo que admite opcionalmente cluster.config
+#     (PRIMARY_CLUSTER_CONFIG_PATH) y persiste cluster-state.config en
+#     jettra_hub_state_node01:/jettra/cluster-state
+#   - jettra-node-02 (SECONDARY): sin cluster.config; recibe cluster-state.config
+#     desde el PRIMARY y lo persiste en jettra_hub_state_node02:/jettra/cluster-state
+#   - jettra-node-03 (SECONDARY): sin cluster.config; recibe cluster-state.config
+#     desde el PRIMARY y lo persiste en jettra_hub_state_node03:/jettra/cluster-state
+#
+# Uso:
+#   docker compose -f docker/hub/docker-compose-hub-all-node.yml up -d
+# ==============================================================================
+
+services:
+  # ============================================================================
+  # NODO 01: PRIMARY (Líder Raft — único nodo con cluster.config opcional)
+  # ============================================================================
+  jettra-node-01:
+    image: ${JETTRA_DOCKER_IMAGE:-avbravo/jettrastore:1.0-SNAPSHOT}
+    pull_policy: ${JETTRA_PULL_POLICY:-if_not_present}
+    container_name: jettra-hub-node-01
+    network_mode: host
+    restart: unless-stopped
+    stop_grace_period: 30s
+    environment:
+      - CLUSTER_NODE_ID=node-01
+      - CLUSTER_NODE_ROLE=PRIMARY
+      - CLUSTER_NODE_IP=${NODE1_IP:-127.0.0.1}
+      - CLUSTER_NODE_GRPC_PORT=${JETTRA_NODE1_GRPC_PORT:-50001}
+      - CLUSTER_NODE_REST_PORT=${JETTRA_NODE1_REST_PORT:-60001}
+      - JETTRA_NODE_ID=node-01
+      - JETTRA_NODE_ROLE=PRIMARY
+      - JETTRA_NODE_IP=${NODE1_IP:-127.0.0.1}
+      - JETTRA_GRPC_PORT=${JETTRA_NODE1_GRPC_PORT:-50001}
+      - JETTRA_REST_PORT=${JETTRA_NODE1_REST_PORT:-60001}
+      - JETTRA_STORAGE_PATH=/jettra/data
+      - JETTRA_INDEX_STORAGE_PATH=/jettra/data/indexes
+      - JETTRA_CLUSTER_STATE_CONFIG_DIR=/jettra/cluster-state
+      - JETTRA_STORAGE_MODE=${JETTRA_STORAGE_MODE:-OFF_HEAP}
+      - JETTRA_MULTINODE_ACTIVE=on
+      - JETTRA_CLUSTER_MULTINODE_ACTIVE=on
+      - JETTRA_CLUSTER_CONFIG_PATH=${PRIMARY_CLUSTER_CONFIG_PATH:-}
+      - JETTRA_CLUSTER_PEERS=node-02:${NODE2_IP:-127.0.0.1}:${JETTRA_NODE2_GRPC_PORT:-50002}:SECONDARY,node-03:${NODE3_IP:-127.0.0.1}:${JETTRA_NODE3_GRPC_PORT:-50003}:SECONDARY
+      - JETTRA_ADMIN_USERNAME=${JETTRA_ADMIN_USERNAME:-admin}
+      - JETTRA_ADMIN_PASSWORD=${JETTRA_ADMIN_PASSWORD:-admin-jettra}
+      - JETTRA_SAMPLES_AUTOLOAD=${JETTRA_SAMPLES_AUTOLOAD:-false}
+      - JAVA_OPTS=${JAVA_OPTS:--Xms96m -Xmx384m -XX:MaxMetaspaceSize=192m -XX:MaxDirectMemorySize=192m}
+    mem_limit: ${JETTRA_MEM_LIMIT:-640m}
+    mem_reservation: 128m
+    cpus: ${JETTRA_CPUS:-1.0}
+    volumes:
+      - jettra_hub_data_node01:/jettra/data
+      - jettra_hub_checkpoint_node01:/jettra/checkpoint
+      - jettra_hub_state_node01:/jettra/cluster-state
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:${JETTRA_NODE1_REST_PORT:-60001}/api/v1/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 8s
+
+  # ============================================================================
+  # NODO 02: SECONDARY (Réplica Raft 1 — sin cluster.config, sincroniza del PRIMARY)
+  # ============================================================================
+  jettra-node-02:
+    image: ${JETTRA_DOCKER_IMAGE:-avbravo/jettrastore:1.0-SNAPSHOT}
+    pull_policy: ${JETTRA_PULL_POLICY:-if_not_present}
+    container_name: jettra-hub-node-02
+    network_mode: host
+    restart: unless-stopped
+    stop_grace_period: 30s
+    depends_on:
+      jettra-node-01:
+        condition: service_healthy
+    environment:
+      - CLUSTER_NODE_ID=node-02
+      - CLUSTER_NODE_ROLE=SECONDARY
+      - CLUSTER_NODE_IP=${NODE2_IP:-127.0.0.1}
+      - CLUSTER_NODE_GRPC_PORT=${JETTRA_NODE2_GRPC_PORT:-50002}
+      - CLUSTER_NODE_REST_PORT=${JETTRA_NODE2_REST_PORT:-60002}
+      - JETTRA_NODE_ID=node-02
+      - JETTRA_NODE_ROLE=SECONDARY
+      - JETTRA_NODE_IP=${NODE2_IP:-127.0.0.1}
+      - JETTRA_GRPC_PORT=${JETTRA_NODE2_GRPC_PORT:-50002}
+      - JETTRA_REST_PORT=${JETTRA_NODE2_REST_PORT:-60002}
+      - JETTRA_STORAGE_PATH=/jettra/data
+      - JETTRA_INDEX_STORAGE_PATH=/jettra/data/indexes
+      - JETTRA_CLUSTER_STATE_CONFIG_DIR=/jettra/cluster-state
+      - JETTRA_STORAGE_MODE=${JETTRA_STORAGE_MODE:-OFF_HEAP}
+      - JETTRA_MULTINODE_ACTIVE=on
+      - JETTRA_CLUSTER_MULTINODE_ACTIVE=on
+      - JETTRA_ADMIN_USERNAME=${JETTRA_ADMIN_USERNAME:-admin}
+      - JETTRA_ADMIN_PASSWORD=${JETTRA_ADMIN_PASSWORD:-admin-jettra}
+      - JETTRA_SAMPLES_AUTOLOAD=${JETTRA_SAMPLES_AUTOLOAD:-false}
+      - JAVA_OPTS=${JAVA_OPTS:--Xms96m -Xmx384m -XX:MaxMetaspaceSize=192m -XX:MaxDirectMemorySize=192m}
+    mem_limit: ${JETTRA_MEM_LIMIT:-640m}
+    mem_reservation: 128m
+    cpus: ${JETTRA_CPUS:-1.0}
+    volumes:
+      - jettra_hub_data_node02:/jettra/data
+      - jettra_hub_checkpoint_node02:/jettra/checkpoint
+      - jettra_hub_state_node02:/jettra/cluster-state
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:${JETTRA_NODE2_REST_PORT:-60002}/api/v1/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 8s
+
+  # ============================================================================
+  # NODO 03: SECONDARY (Réplica Raft 2 — sin cluster.config, sincroniza del PRIMARY)
+  # ============================================================================
+  jettra-node-03:
+    image: ${JETTRA_DOCKER_IMAGE:-avbravo/jettrastore:1.0-SNAPSHOT}
+    pull_policy: ${JETTRA_PULL_POLICY:-if_not_present}
+    container_name: jettra-hub-node-03
+    network_mode: host
+    restart: unless-stopped
+    stop_grace_period: 30s
+    depends_on:
+      jettra-node-01:
+        condition: service_healthy
+    environment:
+      - CLUSTER_NODE_ID=node-03
+      - CLUSTER_NODE_ROLE=SECONDARY
+      - CLUSTER_NODE_IP=${NODE3_IP:-127.0.0.1}
+      - CLUSTER_NODE_GRPC_PORT=${JETTRA_NODE3_GRPC_PORT:-50003}
+      - CLUSTER_NODE_REST_PORT=${JETTRA_NODE3_REST_PORT:-60003}
+      - JETTRA_NODE_ID=node-03
+      - JETTRA_NODE_ROLE=SECONDARY
+      - JETTRA_NODE_IP=${NODE3_IP:-127.0.0.1}
+      - JETTRA_GRPC_PORT=${JETTRA_NODE3_GRPC_PORT:-50003}
+      - JETTRA_REST_PORT=${JETTRA_NODE3_REST_PORT:-60003}
+      - JETTRA_STORAGE_PATH=/jettra/data
+      - JETTRA_INDEX_STORAGE_PATH=/jettra/data/indexes
+      - JETTRA_CLUSTER_STATE_CONFIG_DIR=/jettra/cluster-state
+      - JETTRA_STORAGE_MODE=${JETTRA_STORAGE_MODE:-OFF_HEAP}
+      - JETTRA_MULTINODE_ACTIVE=on
+      - JETTRA_CLUSTER_MULTINODE_ACTIVE=on
+      - JETTRA_ADMIN_USERNAME=${JETTRA_ADMIN_USERNAME:-admin}
+      - JETTRA_ADMIN_PASSWORD=${JETTRA_ADMIN_PASSWORD:-admin-jettra}
+      - JETTRA_SAMPLES_AUTOLOAD=${JETTRA_SAMPLES_AUTOLOAD:-false}
+      - JAVA_OPTS=${JAVA_OPTS:--Xms96m -Xmx384m -XX:MaxMetaspaceSize=192m -XX:MaxDirectMemorySize=192m}
+    mem_limit: ${JETTRA_MEM_LIMIT:-640m}
+    mem_reservation: 128m
+    cpus: ${JETTRA_CPUS:-1.0}
+    volumes:
+      - jettra_hub_data_node03:/jettra/data
+      - jettra_hub_checkpoint_node03:/jettra/checkpoint
+      - jettra_hub_state_node03:/jettra/cluster-state
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:${JETTRA_NODE3_REST_PORT:-60003}/api/v1/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 8s
+
+volumes:
+  jettra_hub_data_node01:
+    name: jettra_hub_data_node01
+    driver: local
+  jettra_hub_data_node02:
+    name: jettra_hub_data_node02
+    driver: local
+  jettra_hub_data_node03:
+    name: jettra_hub_data_node03
+    driver: local
+  jettra_hub_checkpoint_node01:
+    name: jettra_hub_checkpoint_node01
+    driver: local
+  jettra_hub_checkpoint_node02:
+    name: jettra_hub_checkpoint_node02
+    driver: local
+  jettra_hub_checkpoint_node03:
+    name: jettra_hub_checkpoint_node03
+    driver: local
+  jettra_hub_state_node01:
+    name: jettra_hub_state_node01
+    driver: local
+  jettra_hub_state_node02:
+    name: jettra_hub_state_node02
+    driver: local
+  jettra_hub_state_node03:
+    name: jettra_hub_state_node03
+    driver: local

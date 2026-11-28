@@ -33,8 +33,13 @@ RUN mkdir -p /jettra/data /jettra/config /jettra/checkpoint /jettra/cluster-stat
 COPY --from=packager --chown=1000:1000 /staging/JettraStore.jar /app/JettraStore.jar
 COPY --from=packager --chown=1000:1000 /staging/config/ /app/config/
 
-# Flags Java 25+ optimizados para bajo footprint de RAM/CPU en contenedores
-ENV JETTRA_NODE_ID=node-01 \
+# Flags Java 25+ y propiedades MicroProfile Config (cluster.node.*) optimizadas para contenedores
+ENV CLUSTER_NODE_ID=node-01 \
+    CLUSTER_NODE_ROLE=PRIMARY \
+    CLUSTER_NODE_IP=0.0.0.0 \
+    CLUSTER_NODE_GRPC_PORT=50001 \
+    CLUSTER_NODE_REST_PORT=60001 \
+    JETTRA_NODE_ID=node-01 \
     JETTRA_NODE_ROLE=PRIMARY \
     JETTRA_NODE_IP=0.0.0.0 \
     JETTRA_STORAGE_PATH=/jettra/data \
@@ -56,7 +61,7 @@ EXPOSE 60001 50001
 VOLUME ["/jettra/data", "/jettra/checkpoint", "/jettra/cluster-state"]
 
 HEALTHCHECK --interval=10s --timeout=5s --start-period=8s --retries=3 \
-    CMD curl -fsS http://localhost:${JETTRA_REST_PORT}/api/v1/health || exit 1
+    CMD curl -fsS http://localhost:${CLUSTER_NODE_REST_PORT:-${JETTRA_REST_PORT:-60001}}/api/v1/health || exit 1
 
 USER 1000:1000
 
@@ -75,6 +80,10 @@ ENTRYPOINT ["sh", "-c", "if [ \"$JETTRA_CRAC_RESTORE\" = \"true\" ] && [ -d \"$J
         if [ \"$ROLE_UPPER\" = \"PRIMARY\" ]; then \
             if [ -n \"${JETTRA_CLUSTER_CONFIG_PATH:-}\" ]; then \
                 CLUSTER_ARG=\"-Dcluster.config.path=${JETTRA_CLUSTER_CONFIG_PATH}\"; \
+            elif [ -f \"/jettra/config/cluster.conf\" ] && [ ! -f \"$STATE_DIR/cluster-state.config\" ]; then \
+                CLUSTER_ARG=\"-Dcluster.config.path=/jettra/config/cluster.conf\"; \
+            elif [ -f \"/jettra/config/cluster.config\" ] && [ ! -f \"$STATE_DIR/cluster-state.config\" ]; then \
+                CLUSTER_ARG=\"-Dcluster.config.path=/jettra/config/cluster.config\"; \
             elif [ -f \"/app/config/cluster.config\" ] && [ ! -f \"$STATE_DIR/cluster-state.config\" ]; then \
                 CLUSTER_ARG=\"-Dcluster.config.path=/app/config/cluster.config\"; \
             fi; \

@@ -34,7 +34,7 @@
    - [4.4 Sincronización de Nuevos Nodos y Consistencia Zero-Downtime](#44-sincronización-de-nuevos-nodos-y-consistencia-zero-downtime)
    - [4.5 Gestión del Ciclo de Vida de Nodos y Verificación en Vivo desde `JettraStoreShell`](#45-gestión-del-ciclo-de-vida-de-nodos-y-verificación-en-vivo-desde-jettrastoreshell)
 5. [Configuración del Sistema y Optimización de Recursos](#5-configuración-del-sistema-y-optimización-de-recursos)
-   - [5.1 Archivo `microprofile-config.properties` (Identidad del Nodo y Parámetros del Motor)](#51-archivo-microprofile-configproperties-identidad-del-nodo-y-parámetros-del-motor)
+   - [5.1 Archivo `microprofile-config.properties` (Identidad del Nodo, Red, Estado Persistente y Parámetros del Motor)](#51-archivo-microprofile-configproperties-identidad-del-nodo-red-estado-persistente-y-parámetros-del-motor)
    - [5.2 Archivo `cluster.config`, Validación Cruzada en Arranque y Generación Automática](#52-archivo-clusterconfig-validación-cruzada-en-arranque-y-generación-automática)
    - [5.3 Optimización del Consumo de Recursos, Memoria RAM y Perfiles JVM (`G1GC` / `JAVA_OPTS`)](#53-optimización-del-consumo-de-recursos-memoria-ram-y-perfiles-jvm-g1gc--javaopts)
 6. [Despliegue en Docker, Docker Hub y Clúster en Producción](#6-despliegue-en-docker-docker-hub-y-clúster-en-producción)
@@ -46,6 +46,7 @@
    - [6.6 Clúster de 3 Nodos en Servidores Diferentes (IPs Distintas) y `docker-compose-node-servers.yml`](#66-clúster-de-3-nodos-en-servidores-diferentes-ips-distintas-y-docker-compose-node-serversyml)
    - [6.7 Plantilla de Un Solo Nodo Conectado al Clúster (`docker-compose-only-node-servers.yml`)](#67-plantilla-de-un-solo-nodo-conectado-al-clúster-docker-compose-only-node-serversyml)
    - [6.8 Arranque Desacoplado (`PRIMARY` con `cluster.config`, `SECONDARY` sin `cluster.config` y Escalado sin Límite)](#68-arranque-desacoplado-primary-con-clusterconfig-secondary-sin-clusterconfig-y-escalado-sin-límite)
+   - [6.9 RF-40: Variables `cluster.node.*`, Regla `cluster.conf` (`PRIMARY`/`SECONDARY`), `docker build`, `docker-compose` y Docker Hub](#69-rf-40-variables-clusternode-regla-clusterconf-primarysecondary-docker-build-docker-compose-y-docker-hub)
 7. [Integración con Clientes, Herramientas, Migrador y Pruebas (`JettraTest`)](#7-integración-con-clientes-herramientas-migrador-y-pruebas-jettratest)
    - [7.1 Cliente `JettraStoreDriver` y Proyecto de Referencia `JettraStoreExampleSE`](#71-cliente-jettrastoredriver-y-proyecto-de-referencia-jettrastoreexamplese)
    - [7.2 Consola Interactiva `JettraStoreShell` y Verificación Real de Nodos (`show nodes`)](#72-consola-interactiva-jettrastoreshell-y-verificación-real-de-nodos-show-nodes)
@@ -1790,65 +1791,105 @@ REMOVE NODE node-04
 
 ## 5. Configuración del Sistema y Optimización de Recursos
 
-### 5.1 Archivo `microprofile-config.properties` (Identidad del Nodo y Parámetros del Motor)
+### 5.1 Archivo `microprofile-config.properties` (Identidad del Nodo, Red, Estado Persistente y Parámetros del Motor)
 
 JettraStore implementa una arquitectura de configuración limpia, moderna y libre de duplicidad alineada con **Eclipse MicroProfile Config 3.1** y **Jakarta EE**, separando con precisión:
-1. **`microprofile-config.properties`:** Identifica el nodo local mediante `cluster.node.id` y `cluster.node.role`, define su ruta propia de almacenamiento físico mediante `jettra.storage.path`, y configura los parámetros internos del motor (memoria Off-Heap, modos de almacenamiento, `JettraPolice`, consultas y seguridad `JettraJWT`).
-2. **`cluster.config`:** Centraliza únicamente la topología de red de cada nodo del clúster (`id`, `role`, `ip`, `grpc.port` y `rest.port`), incluyendo los nodos agregados dinámicamente en tiempo de ejecución. Las propiedades `cluster.node.<N>.storage.path` ya no se utilizan en `cluster.config` para evitar conflictos entre nodos.
-
-Al iniciar JettraStore, el componente `JettraConfigValidator` enlaza el nodo definido en `cluster.node.id` con su bloque correspondiente `cluster.node.<N>.*` en `cluster.config`. Si el `cluster.node.id` indicado no existe en `cluster.config`, emite un mensaje de advertencia y error crítico e impide la ejecución de `JettraStore`.
-
----
-
-#### 13.1 Archivo `microprofile-config.properties` (Identidad del Nodo y Parámetros del Motor)
+1. **`microprofile-config.properties`:** Identifica el nodo local (`cluster.node.id`, `cluster.node.role`) y sus endpoints locales (`cluster.node.ip`, `cluster.node.grpc.port`, `cluster.node.rest.port`), define su ruta propia de almacenamiento físico (`jettra.storage.path`) y su directorio de estado de clúster (`jettra.cluster_state_config_dir`), y configura todos los parámetros internos del motor (memoria Off-Heap Panama FFM, modo de almacenamiento por defecto `OFF_HEAP`, `JettraPolice`, índices, consultas, seguridad `JettraJWT` y arranque limpio sin bases de muestra).
+2. **`cluster-state.config` (en `jettra.cluster_state_config_dir`):** Fuente autoritativa y persistente de la topología viva del clúster (`PRIMARY`/`SECONDARY`, IPs, puertos gRPC/REST, estado `RUNNING`/`STOPPED`/`STANDBY` y `cluster.state.version`), replicada atómicamente desde el `PRIMARY` a todos los nodos `SECONDARY`.
+3. **`cluster.config` / `cluster.conf` (opcional, exclusivo del `PRIMARY`):** Semilla estática de solo lectura que **únicamente el nodo `PRIMARY`** puede cargar de forma opcional al arrancar por primera vez (cuando aún no existe `cluster-state.config`) hacia `jettra.cluster_state_config_dir`. Los nodos **`SECONDARY`** no utilizan ni requieren `cluster.config`: arrancan con sus propios `cluster.node.ip`, `cluster.node.grpc.port` y `cluster.node.rest.port` en modo `STANDBY` y reciben `cluster-state.config` directamente desde el `PRIMARY`.
 
 El archivo estándar `microprofile-config.properties` reside en `META-INF/microprofile-config.properties` (o en la raíz del classpath), en la carpeta `config/` de cada nodo (`config/microprofile-config.properties`) o en el directorio de trabajo donde se ejecute el JAR.
 
-##### 5.1.1 Eliminación de Duplicidad y Enlace con `cluster.config`
-Para evitar duplicidad de propiedades con funciones similares entre archivos:
-* **Identidad y Rol del Nodo Local (Paso 1):**  
-  En `microprofile-config.properties` se definen únicamente:
+##### 5.1.1 Identidad Local (`cluster.node.*`), Estado Persistente (`jettra.cluster_state_config_dir`) y Comportamiento `PRIMARY` vs `SECONDARY`
+* **Identidad y Endpoints Locales del Nodo:**
   ```properties
   cluster.node.id=node-01
   cluster.node.role=PRIMARY
+  cluster.node.ip=127.0.0.1
+  cluster.node.grpc.port=50001
+  cluster.node.rest.port=60001
+  jettra.storage.path=~/jettra-storage-01/data
+  jettra.cluster_state_config_dir=~/jettra-cluster-state/
   ```
-  *(Se prescinde de las propiedades redundantes `jettra.node.id` y `jettra.node.role`).*  
-  El valor de `cluster.node.id` admite tanto el identificador completo (`node-01`, `node-02`, `node-03`) como el formato numérico abreviado (`01` o `1`), permitiendo localizar de inmediato la sección `cluster.node.<N>.*` dentro de `cluster.config`.
-
-* **Almacenamiento por Nodo en `microprofile-config.properties` y Red Centralizada en `cluster.config` (Paso 2):**  
-  Cada nodo define su propia ruta de almacenamiento en `microprofile-config.properties` mediante `jettra.storage.path` (evitando conflictos en `cluster.config`). Por su parte, los parámetros de red (`ip`, `grpc.port`, `rest.port` y `role`) se obtienen automáticamente del nodo correspondiente en `cluster.config`:
-  - **`jettra.storage.path` (en `microprofile-config.properties`):** Directorio base de persistencia física exclusivo de este nodo (ej. `~/jettra-storage-01/data`), donde JettraStore almacena las bases de datos, sus objetos y el subdirectorio de índices `<jettra.storage.path>/indexes`. En contenedores Docker/Docker Compose puede sobreescribirse mediante la variable `JETTRA_STORAGE_PATH` o `-Djettra.storage.path`.
-  - **`cluster.node.<N>.role` (en `cluster.config`):** Rol del nodo en el clúster (`PRIMARY` o `SECONDARY`).
-  - **`cluster.node.<N>.ip` (en `cluster.config`):** Dirección IP de escucha y transporte del nodo.
-  - **`cluster.node.<N>.grpc.port` (en `cluster.config`):** Puerto de transporte binario/gRPC (reemplaza a `jettra.network.grpc.port`).
-  - **`cluster.node.<N>.rest.port` (en `cluster.config`):** Puerto HTTP REST del nodo (reemplaza a `jettra.network.rest.port`).
+* **Nodo `PRIMARY`:** Puede especificar o no `cluster.config`/`cluster.conf` (validando coherencia si se suministra) para inicializar `cluster-state.config` en `jettra.cluster_state_config_dir`. Una vez creado `cluster-state.config`, éste prevalece en reinicios sucesivos.
+* **Nodo `SECONDARY`:** Ignora `cluster.config`/`cluster.conf`, inicia con `cluster.node.ip`, `cluster.node.grpc.port` y `cluster.node.rest.port` en modo `STANDBY` (escuchando en red), y al ser detectado por el `PRIMARY` o añadido mediante `JettraStoreDriver`, `JettraStoreShell` o `JettraStoreExplorer`, recibe y almacena atómicamente `cluster-state.config` dentro de su `jettra.cluster_state_config_dir`.
+* **Scripts operativos bare-metal (`script/create-nodes.sh` y `script/start-node.sh`):** Generan e inician automáticamente nodos `PRIMARY` y `SECONDARY` inyectando `cluster.node.*`, `jettra.storage.path` y `jettra.cluster_state_config_dir`, omitiendo `cluster.config` en nodos `SECONDARY`.
+* **Persistencia real por modo y respaldo de pruebas:** Los tres modos de almacenamiento (`OFF_HEAP` por defecto, `DISK_MEMORY` y `JVM_RAM`) persisten los datos en `jettra.storage.path`, y durante pruebas automatizadas `JettraClusterStateBackupManager` (RF-34) respalda y restaura `cluster-state.config-backup` para no contaminar el estado de producción.
 
 ##### 5.1.2 Prioridad de Resolución
 El orden de resolución de parámetros en tiempo de ejecución cumple la especificación MicroProfile Config:
-1. **Propiedades del sistema JVM** pasadas como argumentos `-D` (ej. `-Dcluster.node.id=node-01`, `-Dcluster.node.role=PRIMARY`). Tienen la **máxima prioridad** y sobreescriben cualquier otra fuente.
-2. **Variables de entorno del sistema** (ej. `CLUSTER_NODE_ID`, `CLUSTER_NODE_ROLE`, `JETTRA_NODE_ID`, `JETTRA_STORAGE_PATH`), ideales para despliegues en contenedores Docker y Kubernetes.
+1. **Propiedades del sistema JVM** pasadas como argumentos `-D` (ej. `-Dcluster.node.id=node-01`, `-Dcluster.node.role=PRIMARY`, `-Dcluster.node.ip=192.168.10.11`, `-Dcluster.node.grpc.port=50001`, `-Dcluster.node.rest.port=60001`, `-Djettra.cluster_state_config_dir=...`). Tienen la **máxima prioridad**.
+2. **Variables de entorno del sistema** (ej. `CLUSTER_NODE_ID`, `CLUSTER_NODE_ROLE`, `CLUSTER_NODE_IP`, `CLUSTER_NODE_GRPC_PORT`, `CLUSTER_NODE_REST_PORT`, `JETTRA_CLUSTER_STATE_CONFIG_DIR`, `JETTRA_STORAGE_PATH`), ideales para Docker y Kubernetes.
 3. **Archivo de configuración externa** especificado mediante `-Dmicroprofile.config.file=...` o variable `MP_CONFIG_FILE`.
-4. **Archivo de configuración del nodo en disco (`microprofile-config.properties`)** localizado en `config/microprofile-config.properties`, `./microprofile-config.properties`, o en el directorio hermano de `cluster.config`.
-5. **Valores de red y almacenamiento resueltos desde `cluster.config`** según el nodo indicado en `cluster.node.id` (`cluster.node.<N>.*`).
+4. **Archivo de configuración del nodo en disco (`microprofile-config.properties`)** localizado en `config/microprofile-config.properties` o `./microprofile-config.properties`.
+5. **Estado persistente `cluster-state.config`** en `jettra.cluster_state_config_dir` (o semilla opcional `cluster.config` únicamente en `PRIMARY`).
 6. **Valores predeterminados embebidos** en el classpath (`META-INF/microprofile-config.properties`).
 
 ##### 5.1.3 Parámetro `cluster.multinode.active` (Activación del Algoritmo de Consenso Distribuido)
 
 La propiedad `cluster.multinode.active` define si JettraStore opera en modo distribuido con algoritmo de consenso o en modo servidor único local (*standalone*):
 
-* **Valor `on` (Predeterminado):**  
-  Activa el sistema de distribución de datos mediante el algoritmo de consenso integrado en JettraStore (Raft / Dynamic Ring). En este modo:
-  - El motor registra y mantiene sincronizados los nodos pares (*peers*) configurados en la topología (`cluster.config`).
-  - Al saturarse la memoria RAM al umbral configurado (ej. 85%), se activan las descargas y transferencias dinámicas de particiones hacia los nodos secundarios del anillo.
-  - La replicación, el quórum y la consistencia de datos entre instancias distribuidas se encuentran plenamente operativas.
+* **Valor `on` (Predeterminado):**
+  Activa el sistema de distribución de datos mediante el algoritmo de consenso Raft y el motor de anillo dinámico (*Dynamic Ring*):
+  - Registra y mantiene sincronizados los nodos pares (*peers*) en `cluster-state.config`, sin límite en la cantidad de nodos `SECONDARY` que pueden incorporarse.
+  - Al saturarse la memoria RAM al umbral configurado (`85%`), activa las descargas y transferencias dinámicas hacia nodos secundarios.
+  - Garantiza replicación, failover automático (`PRIMARY` → `SECONDARY`) y consistencia distribuida.
 
-* **Valor `off`:**  
-  Desactiva por completo el comportamiento de distribución de datos. En este modo:
-  - Se asume que **todas las operaciones se realizarán solamente en el servidor donde se está ejecutando JettraStore**, sin distribuir los datos ni intentar transferencias hacia otros nodos.
-  - El motor de anillo dinámico (*Dynamic Ring*) se mantiene en modo local/standalone y no inicia transferencias hacia nodos pares.
-  - Ideal para entornos de desarrollo local, despliegues compactos en un único servidor dedicado, microservicios embebidos o pruebas unitarias donde no se requiere infraestructura de clúster ni tráfico de red inter-nodo.
+* **Valor `off`:**
+  Desactiva la distribución de datos y el tráfico inter-nodo (modo *standalone* local), ideal para desarrollo local, microservicios embebidos o despliegues en un único servidor.
 
-##### 5.1.4 Plantilla Completa de `microprofile-config.properties`
+##### 5.1.4 Referencia Completa de Todos los Parámetros de `microprofile-config.properties`
+
+| Categoría | Parámetro | Valor por Defecto | Descripción |
+| :--- | :--- | :--- | :--- |
+| **Perfil** | `mp.config.profile` | `production` | Perfil activo de Eclipse MicroProfile Config 3.1. |
+| **Almacenamiento** | `jettra.storage.path` | `~/jettra-storage-01/data` | Directorio físico exclusivo del nodo para archivos `.jettra` e índices (`<path>/indexes`). |
+| **Estado Clúster** | `jettra.cluster_state_config_dir` | `~/jettra-cluster-state/` | Directorio persistente donde cada nodo almacena `cluster-state.config` (creado automáticamente si no existe). |
+| **Identidad y Red** | `cluster.node.id` | `node-01` | Identificador único del nodo en el clúster. |
+| **Identidad y Red** | `cluster.node.role` | `PRIMARY` | Rol inicial del nodo (`PRIMARY` o `SECONDARY`). Solo `PRIMARY` admite semilla opcional `cluster.conf`/`cluster.config`. |
+| **Identidad y Red** | `cluster.node.ip` | `127.0.0.1` | Dirección IP o hostname anunciado por el nodo en la red. |
+| **Identidad y Red** | `cluster.node.grpc.port` | `50001` | Puerto TCP binario de replicación Raft y protocolo `JettraStoreDriver`. |
+| **Identidad y Red** | `cluster.node.rest.port` | `60001` | Puerto HTTP de API REST y endpoint `/api/v1/health`. |
+| **Topología** | `cluster.multinode.active` | `on` | Activa (`on`) o desactiva (`off`) el clúster multinodo y consenso Raft. |
+| **Motor Storage** | `jettra.storage.mode` / `storage.mode` | `OFF_HEAP` | Modo de almacenamiento: `OFF_HEAP` (Panama FFM, predeterminado), `DISK_MEMORY` o `JVM_RAM`. |
+| **Motor Storage** | `jettra.storage.file.extension` | `.jettra` | Extensión de los archivos de persistencia de bases de datos. |
+| **HTTP / Loom** | `contextpath` / `server.contextpath` | `/` | Context path base del servidor REST embebido. |
+| **HTTP / Loom** | `jettra.network.virtualthreads.enabled` / `server.virtual-threads` | `true` | Habilita Project Loom (Virtual Threads de Java 25+) para peticiones concurrentes. |
+| **MemTable / FFM** | `jettra.storage.memtable.size.mb` | `16` | Tamaño en MB de la MemTable antes del volcado a disco. |
+| **MemTable / FFM** | `jettra.storage.ram.global.limit.mb` | `512` | Límite global de RAM en MB para el motor (optimizado para bajo consumo). |
+| **MemTable / FFM** | `jettra.storage.offheap.direct` | `true` | Activa asignación directa de memoria nativa off-heap vía Panama FFM. |
+| **MemTable / FFM** | `storage.offheap.page-size` | `65536` | Tamaño de página ranurada (*Slotted-Page*) off-heap en bytes (64 KiB). |
+| **Dynamic Ring** | `jettra.ring.saturation.threshold.percent` | `85` | Porcentaje de saturación de memoria que dispara redistribución en el anillo. |
+| **Dynamic Ring** | `jettra.ring.release.target.percent` | `45` | Porcentaje objetivo tras liberar memoria mediante redistribución. |
+| **JettraPolice** | `jettrapolice.active` | `true` | Habilita el supervisor autónomo anti-OOM `JettraPolice`. |
+| **JettraPolice** | `jettrapolice.interval.ms` | `2000` | Intervalo de muestreo en milisegundos de `JettraPolice`. |
+| **JettraPolice** | `jettrapolice.ram.warning.threshold` | `75` | Umbral (%) de alerta preventiva de uso de RAM. |
+| **JettraPolice** | `jettrapolice.disk.warning.threshold` | `90` | Umbral (%) de alerta preventiva de uso de disco. |
+| **JettraPolice** | `jettrapolice.ram.critical.threshold` | `85` | Umbral crítico (%) de RAM para acciones correctivas/auto-paginación. |
+| **JettraPolice** | `jettrapolice.auto.pagination.enabled` | `true` | Activa paginación automática en consultas grandes bajo presión de memoria. |
+| **JettraPolice** | `jettrapolice.max.safe.batch.size` | `100` | Tamaño máximo seguro de lote para operaciones masivas. |
+| **Índices/Query** | `jettra.index.initial.capacity` | `256` | Capacidad inicial de tablas de índices por Bucket (bajo consumo inicial). |
+| **Índices/Query** | `jettra.index.max.inmemory.keys` | `50000` | Límite máximo de claves de índice mantenidas simultáneamente en memoria. |
+| **Índices/Query** | `jettra.index.compact.storage` | `true` | Habilita almacenamiento compacto para índices en disco. |
+| **Índices/Query** | `jettra.storage.autoflush.batch.size` | `50000` | Cantidad de operaciones por lote para auto-flush de persistencia. |
+| **Índices/Query** | `jettra.query.default.limit` | `50` | Límite predeterminado de registros retornados por consulta. |
+| **Índices/Query** | `jettra.query.max.limit` | `5000` | Límite máximo permitido por consulta individual. |
+| **Índices/Query** | `jettra.query.pagesize` | `50` | Tamaño de página por defecto para paginación de resultados. |
+| **Seguridad JWT** | `jettra.security.jwt.algorithm` | `Ed25519` | Algoritmo criptográfico de firma de tokens `JettraJWT`. |
+| **Seguridad JWT** | `jettra.security.jwt.expiration.seconds` | `86400` | Vigencia del token JWT en segundos (24 horas). |
+| **Seguridad JWT** | `jettra.security.jwt.issuer` | `jettra-store-authority` | Emisor (*issuer*) criptográfico del token JWT. |
+| **Seguridad JWT** | `jwt.secret` | `jettra_store_super_secure_jwt_key_2026` | Clave secreta compartida para firma/validación de tokens. |
+| **Seguridad JWT** | `jwt.expiration-millis` | `86400000` | Vigencia del token JWT en milisegundos (24 horas). |
+| **Superusuario** | `jettra.security.default.admin.username` | `admin` | Usuario administrador inicial con privilegios globales inmutables. |
+| **Superusuario** | `jettra.security.default.admin.password` | `admin-jettra` | Contraseña inicial del superusuario (sobreescribible por `JETTRA_ADMIN_PASSWORD`). |
+| **Métricas / MP** | `jmh.metrics.active` | `false` | Activa/desactiva recolección de microbenchmarks JMH en ejecución. |
+| **Métricas / MP** | `mp.health.default.readiness.empty.response` | `UP` | Respuesta por defecto de MicroProfile Health readiness. |
+| **Métricas / MP** | `mp.metrics.appName` | `JettraStore` | Nombre de aplicación expuesto en MicroProfile Metrics. |
+| **Métricas / MP** | `mp.metrics.tags` | `platform=JettraStore,runtime=Java25,engine=PanamaFFM` | Etiquetas globales de telemetría. |
+| **Métricas / MP** | `cors.enabled` | `true` | Habilita cabeceras CORS en los endpoints REST. |
+| **Muestras** | `jettra.samples.autoload` / `jettra.samples.enabled` | `false` | Deshabilita la precarga automática de bases de datos de ejemplo para garantizar un arranque limpio. |
+
+##### 5.1.5 Plantilla Completa Vigente de `microprofile-config.properties`
 ```properties
 # ==============================================================================
 # ECLIPSE MICROPROFILE CONFIGURATION (MicroProfile Config 3.1)
@@ -1857,11 +1898,16 @@ La propiedad `cluster.multinode.active` define si JettraStore opera en modo dist
 
 # Perfil activo de configuración MicroProfile
 mp.config.profile=production
-jettra.storage.path=~/jettra-storage-01/data
+jettra.storage.path = ~/jettra-storage-01/data
+# Configuración para almacenamiento permanente del estado persistente del clúster (cluster-state.config)
+jettra.cluster_state_config_dir=~/jettra-cluster-state/
 
-# Identificador y Rol del Nodo Local en el Clúster (enlaza con cluster.config)
+# Identificador, Rol y Endpoints del Nodo Local en el Clúster
 cluster.node.id=node-01
 cluster.node.role=PRIMARY
+cluster.node.ip = 127.0.0.1
+cluster.node.grpc.port = 50001
+cluster.node.rest.port = 60001
 
 # Topología Multinodo y Consenso
 cluster.multinode.active=on
@@ -1871,15 +1917,16 @@ jettra.storage.mode=OFF_HEAP
 storage.mode=OFF_HEAP
 jettra.storage.file.extension=.jettra
 
-# Red y Virtual Threads (IP y puertos gRPC/REST se obtienen de cluster.config; almacenamiento definido en jettra.storage.path)
+# Red y Virtual Threads (cluster.node.ip/grpc.port/rest.port definen los endpoints locales;
+# PRIMARY los valida opcionalmente contra cluster.config y almacenamiento en jettra.storage.path)
 contextpath=/
 server.contextpath=/
 jettra.network.virtualthreads.enabled=true
 server.virtual-threads=true
 
 # MemTable y Memoria Off-Heap (Panama FFM)
-jettra.storage.memtable.size.mb=128
-jettra.storage.ram.global.limit.mb=2048
+jettra.storage.memtable.size.mb=16
+jettra.storage.ram.global.limit.mb=512
 jettra.storage.offheap.direct=true
 storage.offheap.page-size=65536
 
@@ -1889,7 +1936,7 @@ jettra.ring.release.target.percent=45
 
 # JettraPolice (Supervisión Preventiva Anti-OOM)
 jettrapolice.active=true
-jettrapolice.interval.ms=500
+jettrapolice.interval.ms=2000
 jettrapolice.ram.warning.threshold=75
 jettrapolice.disk.warning.threshold=90
 jettrapolice.ram.critical.threshold=85
@@ -1897,8 +1944,8 @@ jettrapolice.auto.pagination.enabled=true
 jettrapolice.max.safe.batch.size=100
 
 # Índices y Optimización de Consultas
-jettra.index.initial.capacity=65536
-jettra.index.max.inmemory.keys=100000
+jettra.index.initial.capacity=256
+jettra.index.max.inmemory.keys=50000
 jettra.index.compact.storage=true
 jettra.storage.autoflush.batch.size=50000
 jettra.query.default.limit=50
@@ -1922,6 +1969,10 @@ mp.health.default.readiness.empty.response=UP
 mp.metrics.appName=JettraStore
 mp.metrics.tags=platform=JettraStore,runtime=Java25,engine=PanamaFFM
 cors.enabled=true
+
+# Bases de datos de muestra (deshabilitadas por defecto para una imagen y entorno limpios)
+jettra.samples.autoload=false
+jettra.samples.enabled=false
 ```
 
 
@@ -2149,76 +2200,110 @@ La imagen oficial se construye a partir de la distribución base ligera y de ult
 ```dockerfile
 # ==============================================================================
 # JettraStore Distributed Multi-Model Database (Java 25+ Panama FFM & Raft)
-# Compatible con CRaC / CRIU para arranque instantáneo en caliente (< 20 ms)
-# Optimizado para bajo consumo de RAM con G1GC, Compact Headers y límites cgroup
+# Multi-stage Alpaquita/musl build optimizado para bajo consumo de RAM y CPU
 # ==============================================================================
+FROM bellsoft/liberica-runtime-container:jre-25-stream-musl AS packager
+WORKDIR /staging
+COPY target/JettraStore-*.jar /staging/
+COPY src/main/resources/META-INF/microprofile-config.properties /staging/config/microprofile-config.properties
+COPY src/main/resources/cluster.config /staging/config/cluster.config
+RUN rm -f /staging/original-JettraStore-*.jar && \
+    if [ -f /staging/JettraStore-*-uber.jar ]; then \
+        mv /staging/JettraStore-*-uber.jar /staging/JettraStore.jar && rm -f /staging/JettraStore-*.jar; \
+    elif [ -f /staging/JettraStore-*.jar ]; then \
+        mv /staging/JettraStore-*.jar /staging/JettraStore.jar; \
+    fi && \
+    cp /staging/config/cluster.config /staging/config/jettra.config
+
 FROM bellsoft/liberica-runtime-container:jre-25-stream-musl
 LABEL maintainer="Jettra Ecosystem <dev@jettra.io>"
-LABEL description="JettraStore - Motor de Base de Datos Multimodelo Distribuido en Java 25+ con CRaC y Off-Heap FFM"
+LABEL description="JettraStore - Motor de Base de Datos Multimodelo Distribuido en Java 25+ (Bajo Consumo RAM/CPU)"
 
-# Instalar curl para healthchecks y utilidades del sistema
 RUN if command -v apk > /dev/null; then \
-        apk add --no-cache curl ca-certificates tzdata && rm -rf /var/cache/apk/*; \
+        apk add --no-cache curl ca-certificates tzdata && rm -rf /var/cache/apk/* /tmp/*; \
     elif command -v apt-get > /dev/null; then \
-        apt-get update && apt-get install -y --no-install-recommends curl ca-certificates tzdata && rm -rf /var/lib/apt/lists/*; \
+        apt-get update && apt-get install -y --no-install-recommends curl ca-certificates tzdata && rm -rf /var/lib/apt/lists/* /tmp/*; \
     fi
 
 WORKDIR /app
 
-# Crear directorio de datos persistentes, punto de checkpoint CRaC y permisos
-RUN mkdir -p /jettra/data /jettra/config /jettra/checkpoint && \
+RUN mkdir -p /jettra/data /jettra/config /jettra/checkpoint /jettra/cluster-state /app/config && \
     chown -R 1000:1000 /jettra /app
 
-# Copiar JAR autónomo optimizado y archivos de configuración base (sin capas redundantes)
-COPY target/JettraStore-*.jar /app/
-COPY src/main/resources/META-INF/microprofile-config.properties /app/config/microprofile-config.properties
-COPY src/main/resources/cluster.config /app/config/cluster.config
+COPY --from=packager --chown=1000:1000 /staging/JettraStore.jar /app/JettraStore.jar
+COPY --from=packager --chown=1000:1000 /staging/config/ /app/config/
 
-# Garantizar el archivo /app/JettraStore.jar sin duplicar capas pesadas en la imagen
-RUN if [ -f /app/JettraStore-*-uber.jar ]; then \
-        mv /app/JettraStore-*-uber.jar /app/JettraStore.jar && rm -f /app/JettraStore-*.jar; \
-    elif [ -f /app/JettraStore-*.jar ]; then \
-        mv /app/JettraStore-*.jar /app/JettraStore.jar; \
-    fi
-
-# Variables de entorno predeterminadas para nodo autónomo o clúster
-# Configuración de alto rendimiento para base de datos con ZGC (Zero Garbage Collection Pauses < 1ms):
-# -XX:+UseContainerSupport respeta los cgroups y límites de memoria del contenedor Docker.
-# -XX:+UseZGC recolector de ultra-baja latencia concurrente para bases de datos de alto rendimiento.
-# -XX:+UseCompactObjectHeaders (Java 25 Lilliput) reduce la sobrecarga de encabezados de objetos a 64 bits.
-# -Xms512m -Xmx2g balance equilibrado entre alta tasa de transacciones concurrentes y consumo controlado de RAM.
-ENV JETTRA_NODE_ID=node-01 \
+# Flags Java 25+ y propiedades MicroProfile Config (cluster.node.*) optimizadas para contenedores
+ENV CLUSTER_NODE_ID=node-01 \
+    CLUSTER_NODE_ROLE=PRIMARY \
+    CLUSTER_NODE_IP=0.0.0.0 \
+    CLUSTER_NODE_GRPC_PORT=50001 \
+    CLUSTER_NODE_REST_PORT=60001 \
+    JETTRA_NODE_ID=node-01 \
     JETTRA_NODE_ROLE=PRIMARY \
+    JETTRA_NODE_IP=0.0.0.0 \
     JETTRA_STORAGE_PATH=/jettra/data \
+    JETTRA_CLUSTER_STATE_CONFIG_DIR=/jettra/cluster-state \
     JETTRA_STORAGE_MODE=OFF_HEAP \
+    JETTRA_MULTINODE_ACTIVE=on \
     JETTRA_CRAC_CHECKPOINT_PATH=/jettra/checkpoint \
     JETTRA_CRAC_RESTORE=false \
     JETTRA_GRPC_PORT=50001 \
     JETTRA_REST_PORT=60001 \
     JETTRA_ADMIN_USERNAME=admin \
     JETTRA_ADMIN_PASSWORD=admin-jettra \
-    JAVA_OPTS="--enable-preview --enable-native-access=ALL-UNNAMED -XX:+UnlockExperimentalVMOptions -XX:+UseCompactObjectHeaders -XX:+UseContainerSupport -XX:+UseZGC -Xms512m -Xmx2g"
+    JETTRA_SAMPLES_AUTOLOAD=false \
+    JAVA_TOOL_OPTIONS="-XX:+UseContainerSupport -XX:+UseG1GC -XX:+UseStringDeduplication -XX:CICompilerCount=2 -XX:+UnlockExperimentalVMOptions -XX:+UseCompactObjectHeaders -XX:MaxRAMPercentage=70.0 --enable-preview --enable-native-access=ALL-UNNAMED" \
+    JAVA_OPTS="-Xms96m -Xmx384m -XX:MaxMetaspaceSize=192m -XX:MaxDirectMemorySize=192m"
 
-# Exponer puertos: REST HTTP (60001) y Puerto de Clúster / gRPC (50001)
 EXPOSE 60001 50001
 
-# Volúmenes para almacenamiento persistente y snapshots de memoria CRaC
-VOLUME ["/jettra/data", "/jettra/checkpoint"]
+VOLUME ["/jettra/data", "/jettra/checkpoint", "/jettra/cluster-state"]
 
-# Verificación de salud periódica mediante endpoint REST
-HEALTHCHECK --interval=10s --timeout=5s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:${JETTRA_REST_PORT}/api/v1/health || exit 1
+HEALTHCHECK --interval=10s --timeout=5s --start-period=8s --retries=3 \
+    CMD curl -fsS http://localhost:${CLUSTER_NODE_REST_PORT:-${JETTRA_REST_PORT:-60001}}/api/v1/health || exit 1
 
-# Usuario no root seguro
 USER 1000:1000
 
-# Inicio del servidor autónomo JettraStore
 ENTRYPOINT ["sh", "-c", "if [ \"$JETTRA_CRAC_RESTORE\" = \"true\" ] && [ -d \"$JETTRA_CRAC_CHECKPOINT_PATH\" ] && [ \"$(ls -A $JETTRA_CRAC_CHECKPOINT_PATH 2>/dev/null)\" ]; then \
-        echo '[CRaC] Restaurando JettraStore instantáneamente desde checkpoint CRIU en '$JETTRA_CRAC_CHECKPOINT_PATH'...'; \
+        echo '[CRaC] Restaurando JettraStore desde checkpoint CRIU en '$JETTRA_CRAC_CHECKPOINT_PATH'...'; \
         exec java -XX:CRaCRestoreFrom=$JETTRA_CRAC_CHECKPOINT_PATH; \
     else \
-        exec java $JAVA_OPTS -Djettra.storage.mode=${JETTRA_STORAGE_MODE:-OFF_HEAP} -jar /app/JettraStore.jar; \
+        STATE_DIR=\"${JETTRA_CLUSTER_STATE_CONFIG_DIR:-/jettra/cluster-state}\"; \
+        mkdir -p \"$STATE_DIR\" \"${JETTRA_STORAGE_PATH:-/jettra/data}\"; \
+        NODE_ID_VAL=\"${CLUSTER_NODE_ID:-${JETTRA_NODE_ID:-node-01}}\"; \
+        ROLE_UPPER=$(printf '%s' \"${CLUSTER_NODE_ROLE:-${JETTRA_NODE_ROLE:-PRIMARY}}\" | tr '[:lower:]' '[:upper:]'); \
+        NODE_IP_VAL=\"${CLUSTER_NODE_IP:-${JETTRA_NODE_IP:-0.0.0.0}}\"; \
+        GRPC_PORT_VAL=\"${CLUSTER_NODE_GRPC_PORT:-${JETTRA_GRPC_PORT:-50001}}\"; \
+        REST_PORT_VAL=\"${CLUSTER_NODE_REST_PORT:-${JETTRA_REST_PORT:-60001}}\"; \
+        CLUSTER_ARG=\"\"; \
+        if [ \"$ROLE_UPPER\" = \"PRIMARY\" ]; then \
+            if [ -n \"${JETTRA_CLUSTER_CONFIG_PATH:-}\" ]; then \
+                CLUSTER_ARG=\"-Dcluster.config.path=${JETTRA_CLUSTER_CONFIG_PATH}\"; \
+            elif [ -f \"/jettra/config/cluster.conf\" ] && [ ! -f \"$STATE_DIR/cluster-state.config\" ]; then \
+                CLUSTER_ARG=\"-Dcluster.config.path=/jettra/config/cluster.conf\"; \
+            elif [ -f \"/jettra/config/cluster.config\" ] && [ ! -f \"$STATE_DIR/cluster-state.config\" ]; then \
+                CLUSTER_ARG=\"-Dcluster.config.path=/jettra/config/cluster.config\"; \
+            elif [ -f \"/app/config/cluster.config\" ] && [ ! -f \"$STATE_DIR/cluster-state.config\" ]; then \
+                CLUSTER_ARG=\"-Dcluster.config.path=/app/config/cluster.config\"; \
+            fi; \
+        fi; \
+        exec java $JAVA_OPTS \
+            -Dcluster.node.id=${NODE_ID_VAL} \
+            -Dcluster.node.role=${ROLE_UPPER} \
+            -Dcluster.node.ip=${NODE_IP_VAL} \
+            -Dcluster.node.grpc.port=${GRPC_PORT_VAL} \
+            -Dcluster.node.rest.port=${REST_PORT_VAL} \
+            -Djettra.storage.path=${JETTRA_STORAGE_PATH:-/jettra/data} \
+            -Djettra.cluster_state_config_dir=${STATE_DIR} \
+            -Djettra.storage.mode=${JETTRA_STORAGE_MODE:-OFF_HEAP} \
+            -Dcluster.multinode.active=${JETTRA_MULTINODE_ACTIVE:-on} \
+            -Djettra.samples.autoload=${JETTRA_SAMPLES_AUTOLOAD:-false} \
+            -Dmicroprofile.config.file=/app/config/microprofile-config.properties \
+            ${CLUSTER_ARG} \
+            -jar /app/JettraStore.jar; \
     fi"]
+
 ```
 
 > [!TIP]
@@ -4017,6 +4102,155 @@ A partir de esta versión, **JettraStore** desacopla completamente el requisito 
 1. **Sin límite de nodos:** Se pueden incorporar dinámicamente `node-02`, `node-03`, `node-04`, ..., `node-N` sin tener que distribuir ni mantener manualmente copias de `cluster.config` en cada servidor secundario.
 2. **Detección automática bidireccional:** Ya sea que el `SECONDARY` arranque **antes** o **después** que el `PRIMARY`, al detectarlo por latido Raft (`TYPE_HEARTBEAT_ACK`) o al ejecutar `ADD NODE` desde Driver/Shell/Explorer, el `PRIMARY` le envía inmediatamente `cluster-state.config` y replica todas las bases de datos.
 3. **Fuente única de verdad (`cluster-state.config`):** Todo cambio posterior de membresía o edición administrativa desde `JettraStoreExplorer` (`/cluster-config`) actualiza `cluster-state.config` en el `PRIMARY` y lo replica a todos los nodos del clúster.
+
+### 6.9 RF-40: Variables `cluster.node.*`, Regla `cluster.conf` (`PRIMARY`/`SECONDARY`), `docker build`, `docker-compose` y Docker Hub
+
+#### 6.9.1 Regla de `cluster.conf` (`PRIMARY` vs `SECONDARY`) y `jettra.cluster_state_config_dir`
+* **Nodo `PRIMARY`:** Es el **único** nodo que puede especificar o no un archivo semilla `cluster.conf` / `cluster.config` (por ejemplo montado en `/jettra/config/cluster.conf` o mediante `JETTRA_CLUSTER_CONFIG_PATH`). Si se proporciona y aún no existe `cluster-state.config`, lo carga hacia el directorio persistente configurado en `jettra.cluster_state_config_dir` (`/jettra/cluster-state`). Si no se proporciona `cluster.conf`, opera con el `cluster-state.config` existente o se inicializa dinámicamente.
+* **Nodos `SECONDARY`:** **Nunca** usan ni montan `cluster.conf` (`JETTRA_CLUSTER_CONFIG_PATH` se omite y el `ENTRYPOINT` lo ignora cuando `CLUSTER_NODE_ROLE=SECONDARY`). Arrancan esperando la detección o incorporación desde el `PRIMARY` y persisten en su volumen local `jettra.cluster_state_config_dir` (`/jettra/cluster-state`) la copia autoritativa de `cluster-state.config` replicada desde el `PRIMARY`.
+
+#### 6.9.2 Referencia de Variables de Entorno (`microprofile-config.properties` ↔ Docker `ENV`)
+
+| Propiedad MicroProfile (`microprofile-config.properties`) | Variable de Entorno (`ENV` / `environment:`) | Valor por Defecto (`Dockerfile`) | Propósito |
+| :--- | :--- | :--- | :--- |
+| `cluster.node.id` | `CLUSTER_NODE_ID` (fallback `JETTRA_NODE_ID`) | `node-01` | Identificador único del nodo dentro del clúster Raft. |
+| `cluster.node.role` | `CLUSTER_NODE_ROLE` (fallback `JETTRA_NODE_ROLE`) | `PRIMARY` | Rol inicial (`PRIMARY` o `SECONDARY`). Solo `PRIMARY` admite `cluster.conf`. |
+| `cluster.node.ip` | `CLUSTER_NODE_IP` (fallback `JETTRA_NODE_IP`) | `0.0.0.0` | IP o hostname anunciado por el nodo en la red Docker o LAN. |
+| `cluster.node.grpc.port` | `CLUSTER_NODE_GRPC_PORT` (fallback `JETTRA_GRPC_PORT`) | `50001` | Puerto TCP interno de replicación Raft y protocolo del driver. |
+| `cluster.node.rest.port` | `CLUSTER_NODE_REST_PORT` (fallback `JETTRA_REST_PORT`) | `60001` | Puerto HTTP de API REST y endpoint `/api/v1/health`. |
+| `jettra.cluster_state_config_dir` | `JETTRA_CLUSTER_STATE_CONFIG_DIR` | `/jettra/cluster-state` | Directorio persistente donde cada nodo guarda `cluster-state.config`. |
+| `cluster.config.path` *(solo `PRIMARY`)* | `JETTRA_CLUSTER_CONFIG_PATH` | *(vacío / opcional)* | Ruta opcional a `cluster.conf` o `cluster.config` en el nodo `PRIMARY`. |
+
+#### 6.9.3 Construcción de la Imagen (`docker build`)
+
+1. **Compilar y empaquetar el Uber JAR con Maven y Java 25+ (validado con `JettraTestRunner`):**
+   ```bash
+   cd JettraStore
+   mvn clean package
+   ```
+2. **Construir la imagen Docker localmente (multi-etapa Alpaquita Linux / Liberica JRE 25):**
+   ```bash
+   docker build -t jettrastore:1.0 -t avbravo/jettrastore:1.0-SNAPSHOT .
+   ```
+
+#### 6.9.4 Ejemplos de Ejecución con `docker-compose` (`docker/hub/`, `docker/local/` y `docker/ip/`)
+
+Todos los manifiestos de `JettraStore/docker/` inyectan `CLUSTER_NODE_IP`, `CLUSTER_NODE_GRPC_PORT`, `CLUSTER_NODE_REST_PORT` y `JETTRA_CLUSTER_STATE_CONFIG_DIR=/jettra/cluster-state` (persistiendo `cluster-state.config` en el volumen de cada nodo), aplicando `cluster.config` **exclusivamente** al nodo `PRIMARY`:
+
+* **Imágenes locales (`docker/local/`):**
+  ```bash
+  # Single-Node local (1 PRIMARY standalone con volumen jettra_single_state_node01:/jettra/cluster-state)
+  docker compose -f docker/local/docker-compose-local-one-node.yml up -d --build
+
+  # Clúster local de 3 nodos (1 PRIMARY con cluster.config + 2 SECONDARY sin cluster.config)
+  docker compose -f docker/local/docker-compose-local-all-nodes.yml up -d --build
+  ```
+* **Imágenes desde Docker Hub (`docker/hub/` — `avbravo/jettrastore:1.0-SNAPSHOT`):**
+  ```bash
+  # Single-Node desde Docker Hub
+  CLUSTER_NODE_ID=node-01 CLUSTER_NODE_ROLE=PRIMARY CLUSTER_NODE_IP=127.0.0.1 \
+  CLUSTER_NODE_GRPC_PORT=50001 CLUSTER_NODE_REST_PORT=60001 \
+  docker compose -f docker/hub/docker-compose-hub-one-node.yml up -d
+
+  # Clúster de 3 nodos desde Docker Hub (1 PRIMARY con cluster.config + 2 SECONDARY sin cluster.config)
+  docker compose -f docker/hub/docker-compose-hub-all-node.yml up -d
+  ```
+* **Multi-Servidor con IPs distintas (`docker/ip/`):**
+  ```bash
+  # Servidor 1 (PRIMARY — único con cluster.conf opcional)
+  docker compose --env-file .env -f docker/ip/docker-compose-node-servers.yml --profile node-01 up -d
+  # Servidor 2 y 3 (SECONDARY — sin cluster.conf, sincronizan desde PRIMARY)
+  docker compose --env-file .env -f docker/ip/docker-compose-node-servers.yml --profile node-02 up -d
+  docker compose --env-file .env -f docker/ip/docker-compose-node-servers.yml --profile node-03 up -d
+  ```
+
+#### 6.9.5 Guía Visual Paso a Paso: Crear Repositorio, Construir Imagen y Publicar en Docker Hub (`avbravo/jettrastore`)
+
+##### Paso 1: Crear el Repositorio en Docker Hub
+1. Ingresar a `https://hub.docker.com/repositories/avbravo` y dar clic en **Create Repository**:
+
+   ![Crear repositorio en Docker Hub](images/00-createrepository.png)
+
+2. Indicar el nombre del repositorio (`jettrastore`) y la descripción:
+
+   ![Datos del repositorio](images/01-datosrepository.png)
+
+3. Verificar los datos generales y el comando sugerido `docker push avbravo/jettrastore:tagname`:
+
+   ![Datos generales del repositorio](images/02-datosgenerales.png)
+
+##### Paso 2: Generar la Imagen Local desde el `Dockerfile` Actualizado (Java 25+ Alpaquita/musl)
+El `Dockerfile` de **JettraStore** (BellSoft Liberica JRE 25 Alpaquita/musl) expone por defecto `CLUSTER_NODE_ID`, `CLUSTER_NODE_ROLE`, `CLUSTER_NODE_IP`, `CLUSTER_NODE_GRPC_PORT`, `CLUSTER_NODE_REST_PORT` y `JETTRA_CLUSTER_STATE_CONFIG_DIR=/jettra/cluster-state`, montando volúmenes persistentes `["/jettra/data", "/jettra/checkpoint", "/jettra/cluster-state"]` y pasando `-Dcluster.config.path` **únicamente** cuando `CLUSTER_NODE_ROLE=PRIMARY`:
+
+```bash
+# 1. Compilar Uber JAR con Maven y Java 25+
+cd JettraStore
+mvn clean package
+
+# 2. Construir la imagen local en el directorio actual
+docker build -t jettrastore:1.0-SNAPSHOT .
+# (Opcional) Etiquetar también como latest
+docker build -t jettrastore:latest .
+
+# 3. Verificar las imágenes generadas
+docker images
+```
+
+![Imágenes Docker locales](images/03-images.png)
+
+##### Paso 3: Iniciar Sesión, Etiquetar (`docker tag`) y Subir (`docker push`) a Docker Hub
+
+```bash
+# 1. Iniciar sesión en Docker Hub desde consola local
+docker login -u avbravo
+```
+
+En la interfaz web de Docker Hub, abrir la pestaña **Tags** para confirmar las versiones publicadas:
+
+![Pestaña Tags en Docker Hub](images/04-creartag.png)
+
+```bash
+# 2. Etiquetar la imagen local con el repositorio de Docker Hub
+docker tag jettrastore:1.0-SNAPSHOT avbravo/jettrastore:1.0-SNAPSHOT
+docker tag jettrastore:1.0-SNAPSHOT avbravo/jettrastore:1.0
+docker tag jettrastore:1.0-SNAPSHOT avbravo/jettrastore:latest
+
+# 3. Subir la imagen al registro Docker Hub
+docker push avbravo/jettrastore:1.0-SNAPSHOT
+docker push avbravo/jettrastore:1.0
+docker push avbravo/jettrastore:latest
+```
+
+![Etiqueta publicada en Docker Hub](images/05-tag.png)
+
+##### Paso 4: Descargar (`docker pull`), Crear Volumen y Ejecutar Contenedor
+
+```bash
+# Descargar la imagen desde Docker Hub
+docker pull avbravo/jettrastore:1.0-SNAPSHOT
+```
+
+![Descarga de imagen con docker pull](images/06-pull.png)
+
+```bash
+# Crear volúmenes persistentes para datos y estado del clúster
+docker volume create jettradata
+docker volume create jettrastate
+
+# Ejecutar un nodo PRIMARY pasando variables cluster.node.* y persistencia
+docker run -d \
+  --name jettrastore \
+  -p 50001:50001 -p 60001:60001 \
+  -e CLUSTER_NODE_ID=node-01 \
+  -e CLUSTER_NODE_ROLE=PRIMARY \
+  -e CLUSTER_NODE_IP=127.0.0.1 \
+  -e CLUSTER_NODE_GRPC_PORT=50001 \
+  -e CLUSTER_NODE_REST_PORT=60001 \
+  -e JETTRA_CLUSTER_STATE_CONFIG_DIR=/jettra/cluster-state \
+  -v jettradata:/jettra/data \
+  -v jettrastate:/jettra/cluster-state \
+  avbravo/jettrastore:1.0-SNAPSHOT
+```
 
 ---
 
